@@ -24,7 +24,7 @@ const _today = () => _day(new Date());
 /** Тип поля ядра → тип редактора (editor-form). */
 const TYPES = {
     string: 'String', text: 'Text', number: 'Number', money: 'Number', integer: 'Number', boolean: 'Boolean',
-    date: 'Date', datetime: 'DateTime', link: 'Link', struct: 'Struct', table: 'Table', enum: 'Select', file: 'String',
+    date: 'Date', datetime: 'DateTime', link: 'Link', struct: 'Struct', table: 'Table', enum: 'Select', file: 'File',
 };
 const STATUS = { draft: 'черновик', registered: 'проведена', cancelled: 'отменена', deleted: 'удалена' };
 const DATE_FIELD = Object.freeze({ id: 'time', label: 'Дата', type: 'Date', required: true });
@@ -203,6 +203,30 @@ export default {
     /** id объекта → название (ссылки в строках списка) */
     names: {},
     error: '',
+    /** Ошибки полей из ответа сервера (DataError.errors): { [field]: message } */
+    fieldErrors: {},
+    setError(e) {
+        this.error = String(e?.message || e || '');
+        const map = {};
+        if (Array.isArray(e?.errors)) {
+            for (const item of e.errors) {
+                if (item?.field && item?.message)
+                    map[item.field] = map[item.field] ? `${map[item.field]}; ${item.message}` : item.message;
+            }
+        }
+        else if (this.error.includes('\n')) {
+            for (const line of this.error.split('\n')) {
+                const m = /^\s*[—-]\s*([a-zA-Z0-9_.\[\]]+)\s*:\s*(.+)$/.exec(line);
+                if (m)
+                    map[m[1]] = map[m[1]] ? `${map[m[1]]}; ${m[2].trim()}` : m[2].trim();
+            }
+        }
+        this.fieldErrors = map;
+    },
+    clearError() {
+        this.error = '';
+        this.fieldErrors = {};
+    },
     /** Ключ выбранного пакета: 'now' | '*' | маска единицы | 'period:start:end'. */
     packetsKey: { $def: 'now', $type: String, $save: true },
     packetsStart: '',
@@ -786,7 +810,7 @@ export default {
         this.objectBalances = [];
         this.trajectory = [];
         this.printForms = [];
-        this.error = '';
+        this.clearError();
         try {
             await this.showEditor();
         }
@@ -807,10 +831,34 @@ export default {
                 continue;
             if (f.type === 'Table' && Array.isArray(v))
                 out[k] = v.filter(isNonEmptyRow);
+            else if (f.type === 'File' && v && typeof v === 'object')
+                out[k] = v.path || v.name || String(v);
             else
                 out[k] = v;
         }
         return out;
+    },
+    /** Загрузить выбранные в контролах File файлы на сервер перед сохранением объекта. */
+    async uploadFiles(target) {
+        if (!this.editing || typeof this.editing !== 'object')
+            return;
+        for (const f of this.fieldList()) {
+            if (f.type !== 'File')
+                continue;
+            const val = this.editing[f.id];
+            if (!val || typeof val === 'string')
+                continue;
+            const fileObj = Array.isArray(val) ? val[0] : val;
+            if (!fileObj)
+                continue;
+            if (typeof target?.save_file === 'function' && typeof File !== 'undefined' && fileObj instanceof File) {
+                const saved = await target.save_file(fileObj);
+                this.editing[f.id] = saved?.path || saved?.id || fileObj.name;
+            }
+            else {
+                this.editing[f.id] = fileObj.path || fileObj.name || String(fileObj);
+            }
+        }
     },
     /** Параметры записи: id и версия (защита от чужой правки), дата операции; у нового — место записи. */
     writeParams(extra = {}) {
@@ -834,12 +882,29 @@ export default {
         if (res?.id && this.editing)
             Object.assign(this.editing, { id: res.id, status: res.status, version: res.version });
     },
+    hasPendingUploads() {
+        if (!this.editing || typeof this.editing !== 'object' || typeof File === 'undefined')
+            return false;
+        for (const f of this.fieldList()) {
+            if (f.type !== 'File')
+                continue;
+            const val = this.editing[f.id];
+            const fileObj = Array.isArray(val) ? val[0] : val;
+            if (fileObj instanceof File)
+                return true;
+        }
+        return false;
+    },
     async save() {
         if (this.busy || !this.canSave)
             return false;
         this.busy = true;
-        this.error = '';
+        this.clearError();
         try {
+            if (this.hasPendingUploads()) {
+                const t = await this.targetItem();
+                await this.uploadFiles(t);
+            }
             const data = this.postData();
             // снимок отправленного, а не текущего: ввод во время запроса остаётся dirty
             const saved = this.fingerprint({ ...data, time: this.editing.time });
@@ -859,7 +924,7 @@ export default {
             return true;
         }
         catch (e) {
-            this.error = String(e?.message || e);
+            this.setError(e);
             return false;
         }
         finally {
@@ -935,7 +1000,7 @@ export default {
         if ((!this.editing.id || this.isDirty()) && !await this.save())
             return false;
         this.busy = true;
-        this.error = '';
+        this.clearError();
         try {
             const target = await this.targetItem();
             const res = await target.fetch('db_register', this.writeParams());
@@ -946,7 +1011,7 @@ export default {
             return true;
         }
         catch (e) {
-            this.error = String(e?.message || e);
+            this.setError(e);
             return false;
         }
         finally {
@@ -1193,7 +1258,7 @@ ODA({
                 :selected="owner.contextKeyOf($for.item) === owner.contextKeyOf(owner.context)">{{owner.contextTitle($for.item)}}</option>
         </select>
     </label>
-    <oda-editor-form :metadata="owner.activeSchema" :data="owner.editing" @input="onFormInput" @change="onFormInput" @cell-changed="onFormInput"></oda-editor-form>
+    <oda-editor-form :metadata="owner.activeSchema" :data="owner.editing" :field-errors="owner.fieldErrors" @input="onFormInput" @change="onFormInput" @cell-changed="onFormInput"></oda-editor-form>
     <div class="entries" ~if="owner.entries?.length">
         <div class="entry" ~for="owner.entries">{{owner.entryText($for.item)}}</div>
     </div>
@@ -1233,6 +1298,8 @@ ODA({
         });
     },
     onFormInput() {
+        if (this.owner && this.owner.fieldErrors && Object.keys(this.owner.fieldErrors).length)
+            this.owner.fieldErrors = {};
         this.owner?.schedulePreview?.();
     },
     async save() {

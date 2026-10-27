@@ -261,4 +261,35 @@ describe('проведение', () => {
         assert.match(bad.errors[0].message, /нет единицы «ведро»/);
         assert.throws(() => previewEntries(db, { cid: '/DATA/OPERATIONS/SALE', body: { sum: 1 } }), /обязательное поле/);
     });
+
+    it('пересчёт зависимых списаний (unit_cost) через сторно при исправлении прихода задним числом', async () => {
+        cls('DATA/OPERATIONS/WRITE_OFF', '$operation', `{ label: 'Списание товара', METADATA: {
+            FIELDS: [{ id: 'goods', type: 'Link', target: '/DATA/CATALOGS/GOODS', required: true }, { id: 'qty', type: 'Number', required: true }],
+            POSTINGS: [{ id: 'cost', amount: "round(qty * unit_cost('/DATA/REGISTER/41', goods), 2)", qty: 'qty',
+                debit: { account: '/DATA/REGISTER/26' }, credit: { account: '/DATA/REGISTER/41', analytics: { item: 'goods' } } }] } }`);
+        await refreshClasses(db, tmp);
+
+        const itemX = createObject(db, { cid: '/DATA/CATALOGS/GOODS', body: { name: 'Смазка X', base_unit: 'кг' } });
+        const rec = createObject(db, {
+            cid: '/DATA/OPERATIONS/RECEIPT', time: d('10-01'),
+            body: { supplier: supplier.id, lines: [{ goods: itemX.id, qty: 10, price: 100 }] },
+        });
+        registerOperation(db, { id: rec.id });
+
+        const wo = createObject(db, {
+            cid: '/DATA/OPERATIONS/WRITE_OFF', time: d('10-05'),
+            body: { goods: itemX.id, qty: 4 },
+        });
+        registerOperation(db, { id: wo.id });
+        assert.deepEqual(operationEntries(db, wo.id).map(e => e.amount), [400], '4 кг × 100 руб = 400');
+
+        // Исправляем приход от 10-01: цена 150 вместо 100 → списание от 10-05 должно пересчитаться через сторно (4 × 150 = 600)
+        correctOperation(db, {
+            id: rec.id,
+            body: { supplier: supplier.id, lines: [{ goods: itemX.id, qty: 10, price: 150 }] },
+        });
+        assert.deepEqual(operationEntries(db, wo.id).map(e => e.amount), [600], 'после правки прихода списание = 600');
+        const hist = operationEntries(db, wo.id, { history: true });
+        assert.deepEqual(hist.map(e => [e.amount, e.storno]), [[400, false], [-400, true], [600, false]]);
+    });
 });

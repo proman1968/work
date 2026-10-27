@@ -13,15 +13,29 @@ export default {
             .part {
                 @apply --horizontal;
                 @apply --no-flex;
+                align-items: center;
                 gap: 4px;
                 padding: 2px;
                 border-radius: 16px;
                 min-width: 20px;
             }
+            .assign-btn {
+                opacity: .55;
+                padding: 2px 4px;
+                background: rgba(0, 0, 0, .06);
+                border-radius: 4px;
+                cursor: pointer;
+                transition: opacity .15s, background .15s;
+            }
+            .assign-btn:hover {
+                opacity: 1;
+                background: rgba(59, 29, 94, .12);
+            }
         </style>
         <div class="part">
-            <oda-icon ~if="place && !selectMode && !availableUsers?.length" icon="fontawesome:s-users" :icon-size="16" style="opacity:.65; padding:2px 4px; background:rgba(0,0,0,.07); border-radius:4px;" title="Сотрудники рабочего места"></oda-icon>
-            <item-user border ~for="availableUsers" :$item="$for.item" :icon-size @tap="_tap" @contextmenu.capture="_userMenu"></item-user>
+            <oda-icon ~if="isBossRole && !selectMode && !availableUsers?.length" class="assign-btn" icon="fontawesome:s-user-plus" :icon-size="16" title="Назначить руководителя (BOSS)" @tap.stop="openAssignMenu($event)"></oda-icon>
+            <oda-icon ~if="place && !selectMode && !availableUsers?.length" class="assign-btn" icon="fontawesome:s-users" :icon-size="16" title="Назначить сотрудников рабочего места" @tap.stop="openAssignMenu($event)"></oda-icon>
+            <item-user border ~for="availableUsers" :$item="$for.item" :icon-size @tap.stop="_tap" @contextmenu.capture="_userMenu"></item-user>
         </div>
         <div flex ~if="selectMode && selectedUsers.length"></div>
         <div ~if="selectMode && selectedUsers.length" class="part success-invert">
@@ -71,6 +85,9 @@ export default {
 
         return this._sourceUsers?.length > 0;
     },
+    get isBossRole() {
+        return !this.place && this.role === 'BOSS';
+    },
     get securityKey() {
         switch (this.role) {
             case 'BOSS':  return 'BOSS';
@@ -84,7 +101,10 @@ export default {
             return this._placeUsers();
         if (!this.$item)
             return;
-        const attrName = this.securityKey.toLowerCase();
+        const roleIds = this.$item.DATA?.roleIds?.[this.securityKey];
+        if (Array.isArray(roleIds) && typeof WORK?.usersByIds === 'function')
+            return WORK.usersByIds(roleIds).then(l => (l || []).filter(Boolean));
+        const attrName = this.securityKey === 'BOSS' ? 'bosses' : (this.securityKey === 'ADMIN' ? 'admins' : (this.securityKey === 'GUEST' ? 'guests' : 'users'));
         return Promise.resolve(this.$item?.[attrName]).then(list => Array.isArray(list) ? list : []);
     },
     /** Пользователи рабочего места: поиск узла по trail в places() владельца. */
@@ -112,8 +132,10 @@ export default {
         return steps.length === 1 ? node : this._findPlace(node.roles, steps.slice(1));
     },
     _tap(e) {
-        if (!this.selectMode)
+        if (!this.selectMode) {
+            this.openAssignMenu(e);
             return;
+        }
         const id = e.target.$item?.id;
         if (!id) return;
         let selected = [...this.selected_users];
@@ -123,6 +145,61 @@ export default {
             selected.push(id);
         this.selected_users = selected;
         this.fire('selected_users-changed', selected);
+    },
+    async openAssignMenu(e) {
+        e?.stopPropagation?.();
+        const targetEl = e?.currentTarget || e?.target || this;
+        const owner = this.$item;
+        if (!owner)
+            return;
+        const canEdit = !!(WORK?.DEV_MODE || await this.canEdit);
+        const currentUsers = (await Promise.resolve(this._sourceUsers)) || [];
+        const currentIds = new Set(currentUsers.map(u => u?.id).filter(Boolean));
+        const items = [{
+            icon: 'icons:supervisor-account',
+            label: 'Роли и рабочие места…',
+            execute: () => {
+                if (typeof window?.execute === 'function')
+                    window.execute(owner, { view: 'staff', place: this.place || '' });
+            },
+        }];
+        if (canEdit) {
+            try {
+                const uRoot = (await WORK.get_item('/USERS')) || (await WORK.get_item('/users'));
+                const all = (await uRoot?.items) || [];
+                for (const u of all) {
+                    if (!u?.id || u.id[0] === '$')
+                        continue;
+                    const assigned = currentIds.has(u.id);
+                    const name = u.label || u.DATA?.label || u.id;
+                    items.push({
+                        icon: assigned ? 'icons:check' : 'icons:supervisor-account',
+                        label: (assigned ? 'Снять: ' : 'Назначить: ') + name,
+                        execute: async () => {
+                            if (assigned)
+                                await this.suspendUser(u);
+                            else
+                                await this.assignUser(u);
+                            this.availableUsers = undefined;
+                            owner.reset?.();
+                            owner.fire?.('changed', { value: null });
+                        },
+                    });
+                }
+            }
+            catch { /* ignore */ }
+        }
+        const title = this.place
+            ? 'Рабочее место: сотрудники'
+            : (this.role === 'BOSS' ? 'Руководитель (BOSS)' : 'Назначение пользователей');
+        const menu = ODA.createElement('oda-tree', {
+            items,
+            nodeTemplate: 'menu-node',
+            hideTops: 0,
+            hideRoots: 1,
+            execute(item) { this.parentElement?.close?.(item); },
+        });
+        await WORK.showDropdown(menu, { TITLE: { label: title } }, targetEl);
     },
     _clear(e) {
         this.selected_users = [];

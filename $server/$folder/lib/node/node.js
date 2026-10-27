@@ -12,9 +12,6 @@ export default {
                 @apply --flex;
                 padding: 2px;
             }
-            :host(:hover){
-                background: linear-gradient(270deg, rgba(1,1,1,.5), transparent);
-            }
             label{
                 text-overflow: ellipsis;
                 overflow: hidden;
@@ -37,8 +34,8 @@ export default {
                 overflow: hidden;
             }
             .icon{
-                scale: .8;
-                transition: scale .5s;
+                scale: {{isStructureLike ? 1 : .82}};
+                transition: scale .2s;
             }
             .size{
                 @apply --content;
@@ -88,8 +85,18 @@ export default {
         const it = this.$item;
         if (!it || ('isPlace' in Object(it) && it.isPlace))
             return '';
+        const t = it.type;
+        if (t === '$base' || t === '$structure' || t === '$server' || t === '$domain')
+            return '';
         const c = isLinkNode(it) ? it.objectCount : it.DATA?.objectCount;
         return (typeof c === 'number' && c > 0) ? String(c) : '';
+    },
+    get isStructureLike() {
+        const it = this.$item;
+        if (!it || this.isLink)
+            return false;
+        const t = it.type;
+        return t === '$base' || t === '$structure' || t === '$server' || it.id === 'ORGANIZATIONS';
     },
     // пользователи в строке дерева не показываются (шум и запросы на каждую строку); свойство оставлено для совместимости биндов
     showUsers: false,
@@ -159,13 +166,15 @@ export default {
     get iconSize(){
         if(this.isLink)
             return 24;
+        if(this.isStructureLike)
+            return 28;
         if(!this.showStatus)
             return 24;
         if(this.$item){
             if(this.$item instanceof CORE.$handler)
-                return 28;
+                return 26;
             if(this.$item instanceof CORE.$class)
-                return 28;
+                return 24;
             return 24;
         }
     },

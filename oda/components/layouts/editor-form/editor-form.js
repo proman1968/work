@@ -2,8 +2,8 @@ import '/oda/components/structure/controls.js';
 import '/oda/components/icon/icon.js';
 import { CONTROLS, controlOf } from '/oda/components/structure/controls-map.js';
 
-/** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем). */
-export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table', 'Link', 'Struct'];
+/** Типы полей (паритет FORM_SPEC_TYPES + Table как текстовый, DateTime с временем, File). */
+export const EDITOR_FIELD_TYPES = ['String', 'Text', 'Number', 'Date', 'DateTime', 'Boolean', 'Select', 'Radio', 'Table', 'Link', 'Struct', 'File'];
 
 function cleanField(f, seen) {
     if (!f || typeof f !== 'object')
@@ -138,10 +138,11 @@ ODA({is: 'oda-editor-form',
         }
     </style>
     <div class="form-title" ~if="title">{{title}}</div>
-    <oda-editor-form-field ~for="fields" :field="$for.item" :data></oda-editor-form-field>
+    <oda-editor-form-field ~for="fields" :field="$for.item" :data :field-errors="fieldErrors"></oda-editor-form-field>
     `,
     metadata: null,
     data: {},
+    fieldErrors: null,
     get spec() {
         if (this._specSrc !== this.metadata) {
             this._specSrc = this.metadata;
@@ -205,6 +206,11 @@ ODA({is: 'oda-editor-form-field',
         .req {
             color: red;
         }
+        .field-error {
+            color: var(--error-color, red);
+            font-size: smaller;
+            padding: 2px 4px 0;
+        }
     </style>
     <fieldset ~class="{ invalid: hasError }">
         <legend>{{label}}<span class="req" ~if="required"> *</span></legend>
@@ -212,14 +218,43 @@ ODA({is: 'oda-editor-form-field',
         <div class="editor-box">
             <div ~if="field?.type !== 'Struct'" ~is="editor" ::value="data[field.id]" :field :meta="field" :at="data?.time || ''" :allow-other="!!field.other" no-header :disabled="!!field.disabled"></div>
             <div ~if="children?.length && expanded" class="children-box">
-                <oda-editor-form-field ~for="children" :field="$for.item" :data="subData"></oda-editor-form-field>
+                <oda-editor-form-field ~for="children" :field="$for.item" :data="subData" :field-errors="fieldErrors" :path-prefix="fullPath"></oda-editor-form-field>
             </div>
+            <div class="field-error" ~if="serverError">{{serverError}}</div>
         </div>
     </fieldset>
     `,
     field: null,
     data: null,
+    fieldErrors: null,
+    pathPrefix: '',
     expanded: true,
+    get fullPath() {
+        const id = this.field?.id || '';
+        return this.pathPrefix && id ? `${this.pathPrefix}.${id}` : id;
+    },
+    get serverError() {
+        const map = this.fieldErrors;
+        if (!map || typeof map !== 'object')
+            return '';
+        const fp = this.fullPath;
+        const id = this.field?.id || '';
+        if (fp && map[fp])
+            return String(map[fp]);
+        if (id && map[id])
+            return String(map[id]);
+        if (fp) {
+            const bracket = fp + '[';
+            const sub = [];
+            for (const [k, v] of Object.entries(map)) {
+                if (k.startsWith(bracket) && v)
+                    sub.push(`${k.slice(fp.length)}: ${v}`);
+            }
+            if (sub.length)
+                return sub.join('; ');
+        }
+        return '';
+    },
     get subData() {
         if (!this.data || typeof this.data !== 'object')
             return {};
@@ -243,6 +278,6 @@ ODA({is: 'oda-editor-form-field',
         return this.field?.children || [];
     },
     get hasError() {
-        return this.required && isEmpty(this.data?.[this.field?.id]);
+        return !!this.serverError || (this.required && isEmpty(this.data?.[this.field?.id]));
     },
 });

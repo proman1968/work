@@ -61,7 +61,10 @@ export default {
                 );
                 if (!owner)
                     throw new Error('create класса: нужен контекст $class');
-                return owner.create({ type, id: name, label: el.name });
+                const createParams = { type, id: name, label: el.moduleLabel || el.name };
+                if (type === '$base' && Array.isArray(el.selectedModules) && el.selectedModules.length)
+                    createParams.modules = el.selectedModules.join(',');
+                return owner.create(createParams);
             }
             if (type === '$folder') {
                 return $context.ensure_folder({ id: name });
@@ -259,6 +262,26 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 font-size: small;
                 padding: 0 4px;
             }
+            .modules-box {
+                @apply --vertical;
+                gap: 6px;
+                padding: 6px 12px 8px;
+                border: 1px solid var(--subtle-border, var(--border-color));
+                border-radius: var(--radius-m, 10px);
+            }
+            .mod-chip {
+                @apply --horizontal;
+                align-items: center;
+                gap: 6px;
+                padding: 4px 8px;
+                border-radius: 6px;
+                cursor: pointer;
+                border: 1px solid var(--subtle-border, var(--border-color));
+                font-size: small;
+            }
+            .mod-chip:hover {
+                background: var(--accent-soft);
+            }
         </style>
         <label ~if="message" ~html="message" class="message"></label>
         <fieldset class="flex" :invalid="_dirty && !!validity">
@@ -281,12 +304,58 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             <type-node flex :row="typeRow" title="Выберите тип создаваемого item'а" @tap="_selectType"></type-node>
             <oda-icon class="chevron" icon="icons:chevron-right:90" title="Выберите тип создаваемого item'а" @tap="_selectType"></oda-icon>
         </fieldset>
+        <fieldset ~if="showBaseModules" class="modules-box">
+            <legend>Подключить модули:</legend>
+            <label ~for="availableModules" class="horizontal" style="align-items:center;gap:6px;cursor:pointer;font-size:small;">
+                <input type="checkbox" :checked="selectedModules.includes($for.item.id)" @change="_toggleModule($for.item.id, $event)" style="flex:0 0 auto;">
+                <oda-icon :icon="$for.item.icon || 'carbon:package'" icon-size="16"></oda-icon>
+                <span>{{$for.item.label || $for.item.id}} ({{$for.item.id}})</span>
+            </label>
+        </fieldset>
+        <fieldset ~if="showModulePicker" class="modules-box">
+            <legend>Доступные модули (/MODULES):</legend>
+            <div class="horizontal" style="flex-wrap:wrap;gap:6px;">
+                <div ~for="availableModules" class="mod-chip" @tap="_pickModule($for.item)">
+                    <oda-icon :icon="$for.item.icon || 'carbon:package'" icon-size="16"></oda-icon>
+                    <span>{{$for.item.label || $for.item.id}} (<b>{{$for.item.id}}</b>)</span>
+                </div>
+            </div>
+        </fieldset>
         <div ~if="_dirty && validity" ~text="validity" class="validity"></div>
     `,
     message: '',
     filter: '',
+    availableModules: [],
+    selectedModules: ['Register'],
+    moduleLabel: '',
+    get isInOrganizations() {
+        const p = String(this.$item?.path || '');
+        return p === '/ORGANIZATIONS' || p.startsWith('/ORGANIZATIONS/');
+    },
+    get showBaseModules() {
+        return this.isInOrganizations && this.type === '$base' && this.availableModules?.length > 0;
+    },
+    get showModulePicker() {
+        return this.isInOrganizations && this.type === '$module' && this.availableModules?.length > 0;
+    },
+    _toggleModule(id, e) {
+        const set = new Set(this.selectedModules || []);
+        if (e?.target?.checked)
+            set.add(id);
+        else
+            set.delete(id);
+        this.selectedModules = [...set];
+    },
+    _pickModule(mod) {
+        if (!mod?.id)
+            return;
+        this._dirty = true;
+        this.name = mod.id;
+        this.moduleLabel = mod.label || mod.id;
+    },
     _inputName(e) {
         this._dirty = true;
+        this.moduleLabel = '';
         this.name = e.target.value;
     },
     get cleanName() {
@@ -453,8 +522,38 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         }
     },
     async attached() {
+        if (!this.filter && this.$item && (!this.type || this.type === '$folder')) {
+            try {
+                const allowed = await this.$item?.fetch?.('allowed_child_types');
+                if (Array.isArray(allowed) && allowed.length) {
+                    const ctxType = this.$item.type;
+                    if (ctxType === '$register')
+                        this.type = allowed.includes('$account') ? '$account' : allowed[0];
+                    else {
+                        const primary = allowed.filter(t => t !== '$domain');
+                        this.type = primary[0] || allowed[0];
+                    }
+                }
+            }
+            catch { /* оставляем $folder */ }
+        }
+        if (this.isInOrganizations) {
+            try {
+                const modsNode = await WORK.fetch(location.origin + '/MODULES', '', { deep: 1, items: itemsSelector });
+                const list = (modsNode?.[itemsSelector] || []).filter(m => m?.id && m.id[0] !== '$' && m.type === '$module');
+                if (list.length) {
+                    this.availableModules = list.map(m => ({ id: m.id, label: m.label || m.id, icon: m.icon || 'carbon:package' }));
+                    if (this.type === '$module' && this.name === 'new') {
+                        const first = this.availableModules[0];
+                        this.name = first.id;
+                        this.moduleLabel = first.label;
+                    }
+                }
+            }
+            catch { /* /MODULES недоступен */ }
+        }
         this.async(() => {
-            this.$('#nameInput').focus();
+            this.$('#nameInput')?.focus();
         }, 300)
     },
     _blur(e) {

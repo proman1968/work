@@ -147,10 +147,17 @@ function sendErrorResponse(response, error) {
         return;
     }
     try {
-        response.writeHead(400, {
+        const headers = {
             'Content-Type': 'text/plain; charset=utf-8',
             'X-Content-Type-Options': 'nosniff',
-        });
+        };
+        if (Array.isArray(error?.errors) && error.errors.length) {
+            try {
+                headers['X-Work-Errors'] = encodeURIComponent(JSON.stringify(error.errors));
+            }
+            catch { /* ignore */ }
+        }
+        response.writeHead(400, headers);
         response.end(error?.toString?.() ?? String(error));
     }
     catch (err) {

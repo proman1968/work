@@ -149,7 +149,8 @@ await test('геттеры item-node: класс как раньше, ссылк
     const g = (name, h) => getterOf(name).call(h);
     eq(g('isLink', host({ $item: s.sup })), false);
     eq(g('isLink', host({ $item: link })), true);
-    eq(g('iconSize', host({ $item: s.sup, showStatus: true })), 48);
+    eq(g('iconSize', host({ $item: s.sup, showStatus: true })), 24);
+    eq(g('iconSize', host({ $item: Object.assign(Object.create(CORE.$class.prototype), { type: '$structure' }), showStatus: true })), 28);
     eq(g('iconSize', host({ $item: link, showStatus: true })), 24);
     assert(!Object.getOwnPropertyDescriptor(nodeProto, 'showBoss'), 'пользователей в строке дерева больше нет');
     assert(!nodeProto.template.includes('item-users'), 'шаблон без item-users');

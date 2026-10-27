@@ -35,7 +35,12 @@ function write(rel, content) {
     fs.writeFileSync(full, content, 'utf-8');
 }
 
-const copy = rel => write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+const copy = rel => {
+    const src = rel === 'DATA/$domain/class.js'
+        ? 'MODULES/$domain/class.js'
+        : rel.startsWith('DATA/') ? 'MODULES/Register/' + rel.slice(5) : rel;
+    write(rel, fs.readFileSync(path.join(ROOT, src), 'utf-8'));
+};
 const cls = (rel, type, body) => write(`${rel}/${type}/class.js`, `export default ${body}`);
 const item = p => WORK.get_item(p);
 const ids = res => res.items.map(o => o.id).sort();
@@ -230,7 +235,7 @@ describe('видимость данных по scope ссылок рабочих
         }) };
         return h;
     };
-    const REG = 'DATA/REGISTER/$register/$folder/$class';
+    const REG = 'MODULES/Register/REGISTER/$register/$folder/$class';
 
     it('форма объектов: место записи из нескольких, фильтр подразделения', async () => {
         const f = await form('$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js', SALE, M1);

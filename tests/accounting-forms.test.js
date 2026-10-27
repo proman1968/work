@@ -508,6 +508,47 @@ describe('форма объектов', () => {
             delete globalThis.WORK.get_item;
         }
     });
+
+    it('структурированные ошибки полей (DataError.errors → fieldErrors) и поддержка полей типа File', async () => {
+        const calls = [];
+        const h = host(objects, calls, {
+            fetch: (m, p, post) => {
+                if (m === 'db_schema') {
+                    return {
+                        schema: {
+                            cid: 'cat.docs', path: '/DATA/CATALOGS/DOCS', label: 'Документы', family: 'catalog', type: '$catalog', leaf: true,
+                            fields: [
+                                { id: 'name', label: 'Название', type: 'string', required: true },
+                                { id: 'scan', label: 'Скан', type: 'file' },
+                            ],
+                            postings: [],
+                        },
+                        errors: [],
+                    };
+                }
+                if (m === 'db_create') {
+                    if (!post?.name) {
+                        const err = new Error('Документы: данные не прошли проверку:\n  — name: обязательное поле');
+                        err.errors = [{ field: 'name', message: 'обязательное поле' }];
+                        throw err;
+                    }
+                    return { id: 'd1', status: 'active', version: 1 };
+                }
+                return null;
+            },
+        });
+        await h.loadSchema();
+        assert.equal(h.columns.find(c => c.id === 'scan')?.type, 'File');
+
+        h.editing = { name: '', scan: { name: 'contract.pdf', size: 1024 } };
+        assert.equal(await h.save(), false);
+        assert.deepEqual(h.fieldErrors, { name: 'обязательное поле' });
+
+        h.editing.name = 'Договор №1';
+        assert.equal(await h.save(), true);
+        assert.deepEqual(h.fieldErrors, {});
+        assert.equal(calls.find(c => c.method === 'db_create')?.post?.scan, 'contract.pdf');
+    });
 });
 
 const rub = v => Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

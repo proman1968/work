@@ -323,4 +323,37 @@ describe('отчёты', () => {
         assert.equal(turnsQ.groups[0].turnover, 250);
         assert.equal(turnsQ.groups[0].balance, 250);
     });
+
+    it('производительность на пакете проводок: ОСВ, двухэтапные аналитики и обороты по кварталам (< 500 мс)', () => {
+        const insE = db.prepare(`INSERT INTO entries (op_id, op_version, op_cid, rule, row, time, debit_cid, credit_cid, amount, qty, qty2, storno, created)
+            VALUES (?, 1, '/DATA/OPERATIONS/SALE', 'main', -1, ?, '/DATA/REGISTER/62/62.01', '/DATA/REGISTER/90', 10000, 0, 0, 0, ?)`);
+        const insA = db.prepare('INSERT INTO entry_analytics (entry_id, side, slot, ref_id, ref_cid) VALUES (?, ?, ?, ?, ?)');
+        const insAcc = db.prepare(`INSERT INTO account_entries (entry_id, side, account_cid, corr_cid, op_id, op_version, op_cid, rule, row, time, debit, credit, qty_in, qty_out, qty2, analytics, storno, created)
+            VALUES (?, ?, ?, ?, ?, 1, '/DATA/OPERATIONS/SALE', 'main', -1, ?, ?, ?, 0, 0, 0, ?, 0, ?)`);
+        const baseT = Date.parse(`${Y}-04-01T12:00:00Z`);
+        db.exec('BEGIN');
+        try {
+            for (let i = 0; i < 2000; i++) {
+                const t = baseT + (i % 90) * 86400000;
+                const cp = (i % 2 === 0) ? a : b;
+                const r = insE.run(saleA2.id, t, t);
+                const eid = Number(r.lastInsertRowid);
+                insA.run(eid, 'D', 'counterparty', cp.id, '/DATA/CATALOGS/SUBJECTS');
+                insAcc.run(eid, 'D', '/DATA/REGISTER/62/62.01', '/DATA/REGISTER/90', saleA2.id, t, 10000, 0, JSON.stringify({ counterparty: cp.id }), t);
+                insAcc.run(eid, 'C', '/DATA/REGISTER/90', '/DATA/REGISTER/62/62.01', saleA2.id, t, 0, 10000, '{}', t);
+            }
+            db.exec('COMMIT');
+        }
+        catch (e) {
+            db.exec('ROLLBACK');
+            throw e;
+        }
+        const t0 = performance.now();
+        const tb = trialBalance(db, { account: '/DATA/REGISTER/62', by: ['counterparty'] });
+        const turns = accountTurnovers(db, { account: '/DATA/REGISTER/62', groupBy: 'quarter', analytics: { 'counterparty.name': { contains: 'Альфа' } } });
+        const elapsed = performance.now() - t0;
+        assert.ok(tb.total.closing.debit > 100000);
+        assert.ok(turns.groups.length >= 2);
+        assert.ok(elapsed < 1500, `отчёты по 4000 записей счетов выполнились за ${Math.round(elapsed)} мс`);
+    });
 });

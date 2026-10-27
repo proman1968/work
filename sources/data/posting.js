@@ -220,7 +220,7 @@ const COST_SLOTS = ['item', 'storage', 'batch'];
  * поэтому исправление считает цену заново. Остатка нет: ошибка, а с `fallback` — он.
  * @param {object} p { account, item, storage?, batch?, at, exclude?, fallback? }
  */
-export function unitCost(db, { account, item, storage, batch, at, exclude = '', fallback } = {}) {
+export function unitCost(db, { account, item, storage, batch, at, exclude = '', excludeIds = null, fallback } = {}) {
     const cls = getClass(db, account);
     if (!cls || cls.type !== '$account')
         throw new DataError(`unit_cost(): счёт ${account} не найден`);
@@ -241,6 +241,10 @@ export function unitCost(db, { account, item, storage, batch, at, exclude = '', 
     const moment = parseTime(at ?? Date.now(), 'дата себестоимости');
     const accs = descendants(db, cls.cid);
     const marks = accs.map(() => '?').join(',');
+    const exclList = Array.isArray(excludeIds) && excludeIds.length
+        ? excludeIds.map(String)
+        : [String(exclude)];
+    const exclMarks = exclList.map(() => '?').join(',');
     let amount = 0, qty = 0, n = 0;
     for (const [side, col, sign] of [['D', 'debit_cid', 1], ['C', 'credit_cid', -1]]) {
         const exists = cond.map(() => 'EXISTS (SELECT 1 FROM entry_analytics a WHERE a.entry_id = e.id AND a.side = ? AND a.slot = ? AND a.ref_id = ?)').join(' AND ');
@@ -248,7 +252,7 @@ export function unitCost(db, { account, item, storage, batch, at, exclude = '', 
         for (let i = 0; i < args.length; i += 2)
             params.push(side, args[i], args[i + 1]);
         const r = db.prepare(`SELECT count(*) n, coalesce(sum(e.amount), 0) a, coalesce(sum(e.qty), 0) q FROM entries e
-            WHERE e.${col} IN (${marks}) AND e.time <= ? AND e.op_id <> ? AND ${exists}`).get(...accs, moment, String(exclude), ...params);
+            WHERE e.${col} IN (${marks}) AND e.time <= ? AND e.op_id NOT IN (${exclMarks}) AND ${exists}`).get(...accs, moment, ...exclList, ...params);
         n += r.n;
         amount += sign * r.a;
         qty += sign * r.q;
@@ -314,7 +318,7 @@ function sideOf(db, rule, side, scope, fns) {
  * @param {object} op { id, cid, time, body }
  * @returns {{ entries: object[], errors: Array<{field, message}> }} amount — в копейках
  */
-function computeEntries(db, schema, op) {
+function computeEntries(db, schema, op, { excludeIds = null } = {}) {
     const entries = [], errors = [];
     const basePath = classBasePath(db, schema.cid);
     const fns = {
@@ -322,7 +326,7 @@ function computeEntries(db, schema, op) {
         coef: (item, unit) => unitCoef(db, item, unit, op.time),
         unit_cost: (account, item, storage, batch, ...rest) => unitCost(db, {
             account: basePath ? resolveInBase(db, basePath, account) : account,
-            item, storage, batch, at: op.time, exclude: op.id, ...(rest.length ? { fallback: rest[0] } : {}),
+            item, storage, batch, at: op.time, exclude: op.id, excludeIds, ...(rest.length ? { fallback: rest[0] } : {}),
         }),
     };
     for (const rule of schema.postings) {
@@ -420,6 +424,85 @@ function stornoEntries(db, op, version, author, now) {
     return rows.length;
 }
 
+/** Собрать id номенклатур (слот item) из списка проводок. */
+function collectItemIds(entries) {
+    const ids = new Set();
+    for (const e of entries || []) {
+        for (const side of ['D', 'C']) {
+            const ref = e?.analytics?.[side]?.item?.ref_id;
+            if (ref)
+                ids.add(String(ref));
+        }
+    }
+    return ids;
+}
+
+function schemaUsesUnitCost(schema) {
+    for (const r of schema?.postings || []) {
+        if (/\bunit_cost\s*\(/.test(`${r.amount ?? ''} ${r.qty ?? ''} ${r.qty2 ?? ''}`))
+            return true;
+    }
+    return false;
+}
+
+function entriesEqual(curRows, nextEntries) {
+    if (curRows.length !== nextEntries.length)
+        return false;
+    for (let i = 0; i < curRows.length; i++) {
+        const a = curRows[i], b = nextEntries[i];
+        if (a.rule !== b.rule || a.row !== b.row || a.debit_cid !== b.debit_cid || a.credit_cid !== b.credit_cid)
+            return false;
+        if (a.amount !== b.amount || Math.abs((a.qty || 0) - (b.qty || 0)) > 1e-6 || Math.abs((a.qty2 || 0) - (b.qty2 || 0)) > 1e-6)
+            return false;
+    }
+    return true;
+}
+
+/**
+ * Пересчитать через сторно последующие зарегистрированные операции, зависящие от `unit_cost(...)`
+ * по затронутым номенклатурам, если приход/расход был проведён, исправлен или отменён задним числом.
+ */
+function repostDependentOperations(db, triggerOpId, minTime, itemIds, author, now) {
+    if (!itemIds || !itemIds.size || !Number.isFinite(minTime))
+        return 0;
+    const items = [...itemIds];
+    const marks = items.map(() => '?').join(',');
+    const rows = db.prepare(`SELECT DISTINCT o.id, o.time, o.created
+        FROM objects o
+        JOIN entries e ON e.op_id = o.id AND e.storno = 0
+        JOIN entry_analytics a ON a.entry_id = e.id AND a.slot = 'item' AND a.ref_id IN (${marks})
+        WHERE o.status = 'registered' AND o.id <> ? AND o.time >= ?
+        ORDER BY o.time ASC, o.created ASC, o.id ASC`).all(...items, String(triggerOpId), minTime);
+    if (!rows.length)
+        return 0;
+    const candidates = [];
+    for (const r of rows) {
+        if (isClosed(db, r.time))
+            continue;
+        const { op, schema } = mustOperation(db, r.id);
+        if (schemaUsesUnitCost(schema))
+            candidates.push({ op, schema });
+    }
+    if (!candidates.length)
+        return 0;
+    let reposted = 0;
+    for (let i = 0; i < candidates.length; i++) {
+        const { op, schema } = candidates[i];
+        const excludeIds = candidates.slice(i).map(c => c.op.id);
+        const { entries: nextEntries, errors } = computeEntries(db, schema, op, { excludeIds });
+        if (errors.length)
+            continue;
+        const curRows = effectiveRows(db, op.id);
+        if (entriesEqual(curRows, nextEntries))
+            continue;
+        const depNext = writeVersion(db, op.id, { author: author ?? op.author, system: true, force: true });
+        stornoEntries(db, depNext, depNext.version, author ?? op.author, now);
+        insertEntries(db, depNext, nextEntries, { time: depNext.time, version: depNext.version, author: author ?? op.author, now });
+        reposted++;
+    }
+    return reposted;
+}
+
 /* ---------- жизненный цикл ---------- */
 
 function mustOperation(db, id) {
@@ -456,9 +539,11 @@ export function registerOperation(db, { id, author, version } = {}) {
         throw closedError(db, `регистрировать операцию от ${localDay(op.time)} нельзя`);
     assertRules(db, schema);
     return tx(db, () => {
+        const now = Date.now();
         const entries = postOrFail(db, schema, op);
         const next = writeVersion(db, op.id, { status: 'registered', author, version, system: true });
-        insertEntries(db, next, entries, { time: next.time, version: next.version, author, now: Date.now() });
+        insertEntries(db, next, entries, { time: next.time, version: next.version, author, now });
+        repostDependentOperations(db, next.id, next.time, collectItemIds(entries), author, now);
         return next;
     });
 }
@@ -479,13 +564,18 @@ export function correctOperation(db, p = {}) {
         throw closedError(db, `перенести операцию на ${localDay(time)} нельзя`);
     assertRules(db, schema);
     return tx(db, () => {
+        const prevRows = effectiveRows(db, op.id);
         const next = writeVersion(db, op.id, { body: mergeBody(op.body, p), time, author: p.author, version: p.version, system: true });
         if (next.version === op.version)
             return op;
         const now = Date.now();
         const entries = postOrFail(db, schema, next);
         stornoEntries(db, next, next.version, p.author, now);
-        insertEntries(db, next, entries, { time: isClosed(db, next.time) ? now : next.time, version: next.version, author: p.author, now });
+        const entryTime = isClosed(db, next.time) ? now : next.time;
+        insertEntries(db, next, entries, { time: entryTime, version: next.version, author: p.author, now });
+        const affectedItems = new Set([...collectItemIds(prevRows), ...collectItemIds(entries)]);
+        const minTime = Math.min(op.time, entryTime);
+        repostDependentOperations(db, next.id, minTime, affectedItems, p.author, now);
         return next;
     });
 }
@@ -501,8 +591,12 @@ export function cancelOperation(db, { id, author, version } = {}) {
     if (op.status !== 'registered')
         throw new DataError(`операция ${opName(op)} в статусе ${op.status} — отменяется только зарегистрированная (черновик удаляют)`);
     return tx(db, () => {
+        const now = Date.now();
+        const prevRows = effectiveRows(db, op.id);
         const next = writeVersion(db, op.id, { status: 'cancelled', author, version, system: true });
-        stornoEntries(db, next, next.version, author, Date.now());
+        stornoEntries(db, next, next.version, author, now);
+        if (!isClosed(db, op.time))
+            repostDependentOperations(db, next.id, op.time, collectItemIds(prevRows), author, now);
         return next;
     });
 }

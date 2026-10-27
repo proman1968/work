@@ -45,10 +45,15 @@ ODA({
         $attr: true
     },
     get files() {
-        return [this.value ?? []].flat();
+        return [this.value ?? []].flat().filter(f => f !== '' && f !== null && f !== undefined);
     },
     get text() {
-        return this.files.map(f => f.name + ' (' + fileSize(f.size) + ')').join(', ');
+        return this.files.map(f => {
+            if (typeof f === 'string')
+                return f;
+            const name = f?.name || String(f || '');
+            return Number.isFinite(f?.size) ? `${name} (${fileSize(f.size)})` : name;
+        }).join(', ');
     },
     set_files(files) {
         files = [...files];

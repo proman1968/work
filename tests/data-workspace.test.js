@@ -133,7 +133,12 @@ describe('db_workspace: метод класса', () => {
         fs.mkdirSync(path.dirname(full), { recursive: true });
         fs.writeFileSync(full, content, 'utf-8');
     };
-    const copy = rel => write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
+    const copy = rel => {
+        const src = rel === 'DATA/$domain/class.js'
+            ? 'MODULES/$domain/class.js'
+            : rel.startsWith('DATA/') ? 'MODULES/Register/' + rel.slice(5) : rel;
+        write(rel, fs.readFileSync(path.join(ROOT, src), 'utf-8'));
+    };
     const cls = (rel, type, body) => write(`${rel}/${type}/class.js`, `export default ${body}`);
 
     before(async () => {

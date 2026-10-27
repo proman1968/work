@@ -12,7 +12,7 @@ import * as POLICY from './access/policy.js';
 import * as REFS from './access/refs.js';
 import * as LINKS from './access/links.js';
 import * as WORKPLACES from './access/workplaces.js';
-import { DATA_METHODS, classHasObjects, classObjectCount } from '../data/api.js';
+import { DATA_METHODS, classHasObjects, classObjectCount, markClassesDirty } from '../data/api.js';
 import { DATA_TYPES } from '../data/classes.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
@@ -70,6 +70,116 @@ function readDeclaredChildTypesSync(realDir, type) {
     catch {
         return [];
     }
+}
+
+const SCAFFOLD_SKIP = new Set(['node_modules', 'history', 'logs']);
+
+/**
+ * Сформировать тонкий class.js (только label, icon и $public.form) из эталонного class.js модуля:
+ * все поля (FIELDS), правила проводок (POSTINGS), структуры и обработчики наследуются по оси Ancestor.
+ */
+function extractStubClassJsSync(srcClassFile, fallbackLabel = '') {
+    let text = '';
+    try {
+        if (srcClassFile && fs.existsSync(srcClassFile))
+            text = fs.readFileSync(srcClassFile, 'utf-8');
+    }
+    catch { /* fallback */ }
+    const labelMatch = /\blabel\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(text);
+    const iconMatch = /\bicon\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(text);
+    const formMatch = /\$public\s*:\s*\{[^}]*\bform\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/s.exec(text);
+    const label = (fallbackLabel || labelMatch?.[2] || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const icon = (iconMatch?.[2] || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const form = (formMatch?.[2] || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const lines = ['export default {'];
+    if (label)
+        lines.push(`    label: '${label}',`);
+    if (icon)
+        lines.push(`    icon: '${icon}',`);
+    if (form)
+        lines.push(`    $public: {\n        form: '${form}',\n    },`);
+    lines.push('}\n');
+    return lines.join('\n');
+}
+
+/**
+ * Развернуть каркас всех вложенных классов эталонного модуля `/MODULES/<id>`
+ * в целевую папку модуля внутри организации (`<base>/MODULES/<id>`).
+ */
+function scaffoldModuleTreeSync(srcModuleDir, dstModuleDir) {
+    if (!srcModuleDir || !dstModuleDir || !fs.existsSync(srcModuleDir))
+        return 0;
+    let created = 0;
+    function walk(rel) {
+        const curSrc = rel ? path.join(srcModuleDir, rel) : srcModuleDir;
+        let entries;
+        try {
+            entries = fs.readdirSync(curSrc, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
+        const metas = dirs.filter(n => n[0] === '$' && n !== '$folder' && n !== '$file' && n !== '$class' && n !== '$handler' && n !== '$method');
+        for (const type of metas) {
+            const srcFile = path.join(curSrc, type, 'class.js');
+            if (rel && fs.existsSync(srcFile)) {
+                const dstFile = path.join(dstModuleDir, rel, type, 'class.js');
+                if (!fs.existsSync(dstFile)) {
+                    fs.mkdirSync(path.dirname(dstFile), { recursive: true });
+                    fs.writeFileSync(dstFile, extractStubClassJsSync(srcFile, path.basename(rel)), 'utf-8');
+                    created++;
+                }
+            }
+            const declDir = path.join(curSrc, type, '$folder', '$class');
+            if (fs.existsSync(declDir)) {
+                for (const d of fs.readdirSync(declDir, { withFileTypes: true })) {
+                    if (!d.isDirectory() || d.name[0] !== '$')
+                        continue;
+                    const srcDecl = path.join(declDir, d.name, 'class.js');
+                    if (!fs.existsSync(srcDecl))
+                        continue;
+                    const dstDecl = rel
+                        ? path.join(dstModuleDir, rel, type, '$folder', '$class', d.name, 'class.js')
+                        : path.join(dstModuleDir, type, '$folder', '$class', d.name, 'class.js');
+                    if (!fs.existsSync(dstDecl)) {
+                        fs.mkdirSync(path.dirname(dstDecl), { recursive: true });
+                        fs.writeFileSync(dstDecl, extractStubClassJsSync(srcDecl, d.name.slice(1)), 'utf-8');
+                    }
+                }
+            }
+        }
+        for (const name of dirs) {
+            if (name[0] === '$' || name[0] === '.' || name[0] === '#' || SCAFFOLD_SKIP.has(name))
+                continue;
+            walk(rel ? path.join(rel, name) : name);
+        }
+    }
+    walk('');
+    return created;
+}
+
+/** Гарантировать наличие домена MODULES/$domain внутри организации ($base). */
+function ensureBaseModulesDomainSync(baseDir) {
+    if (!baseDir)
+        return;
+    const domFile = path.join(baseDir, 'MODULES', '$domain', 'class.js');
+    if (!fs.existsSync(domFile)) {
+        fs.mkdirSync(path.dirname(domFile), { recursive: true });
+        fs.writeFileSync(domFile, `export default {\n    label: 'Модули',\n    icon: 'carbon:package',\n}\n`, 'utf-8');
+    }
+    const declFile = path.join(baseDir, 'MODULES', '$domain', '$folder', '$class', '$module', 'class.js');
+    if (!fs.existsSync(declFile)) {
+        fs.mkdirSync(path.dirname(declFile), { recursive: true });
+        fs.writeFileSync(declFile, `export default {\n    label: 'Модуль',\n    icon: 'carbon:package',\n}\n`, 'utf-8');
+    }
+}
+
+function parseModuleList(raw) {
+    if (!raw)
+        return [];
+    const list = Array.isArray(raw) ? raw : String(raw).split(',');
+    return [...new Set(list.map(x => safeNodeName(String(x ?? '').trim())).filter(Boolean))];
 }
 
 export class $class extends $folder{
@@ -1351,12 +1461,19 @@ export class $class extends $folder{
         if (this._isSystemItem(item))
             return true;
         const roles = await this.roles(params);
+        // Модули ($module и контейнер MODULES) в дереве напрямую видны только администраторам (остальным — через ссылки рабочих мест)
+        const isModNode = this.type === '$module'
+            || item?.type === '$module'
+            || (this.type === '$domain' && this.id === 'MODULES')
+            || (item?.type === '$domain' && item?.id === 'MODULES');
+        if (isModNode && !roles.includes($class.ROLES.ADMIN) && !(await this.allAdmins).some(u => u?.id === uid))
+            return false;
         // Ссылки рабочих мест — доступ к прикладным классам (до pass-through и ленты)
         if (await LINKS.grants(this, item, params))
             return true;
-        // Модули ($module) в дереве напрямую видны только администраторам (остальным — через ссылки рабочих мест)
-        if (this.type === '$module' && !roles.includes($class.ROLES.ADMIN) && !(await this.allAdmins).some(u => u?.id === uid))
-            return false;
+        // Каркас подразделений: родительские $domain / $base / $structure видны сотруднику вложенного подразделения
+        if (await LINKS.isStructureAncestor(this, item, params))
+            return true;
         // Класс без назначений — pass-through к родителю
         if (!this.hasAssignments() && !roles.length) {
             const parent = this.$parent;
@@ -1695,9 +1812,20 @@ export class $class extends $folder{
         if (type === '$class')
             assertClassId(id);
 
-        let post = p.post ?? `export default {
-    label: '${p.label || id}'
-}`;
+        const inOrg = this.path === '/ORGANIZATIONS' || String(this.path || '').startsWith('/ORGANIZATIONS/');
+        const srcModDir = (type === '$module' && inOrg) ? path.join('./MODULES', id) : '';
+        const srcModClassFile = srcModDir ? path.join(srcModDir, '$module', 'class.js') : '';
+
+        let post = p.post;
+        if (post == null) {
+            if (srcModClassFile && fs.existsSync(srcModClassFile)) {
+                const customLabel = (p.label && p.label !== id && p.label !== rawId) ? p.label : '';
+                post = extractStubClassJsSync(srcModClassFile, customLabel);
+            }
+            else {
+                post = `export default {\n    label: '${p.label || id}'\n}`;
+            }
+        }
         if (type === '$ai' && rawId && rawId !== id) {
             const early = await parseCreateDevice(post);
             if (!early?.model)
@@ -1729,7 +1857,38 @@ export class $class extends $folder{
             throw new Error('create: у класса есть объекты — дочерний класс того же типа сделал бы его не листом');
 
         const ctor = FS[type] || FS.$class;
-        return this._createClass(id, type, ctor, post, p);
+        const log = await this._createClass(id, type, ctor, post, p);
+        const allowScaffold = p.scaffold !== false && p.scaffold !== 'false';
+        if (allowScaffold && inOrg) {
+            const targetDir = path.join(this.real_dir, id);
+            if (type === '$module' && srcModDir && fs.existsSync(srcModDir)) {
+                scaffoldModuleTreeSync(srcModDir, targetDir);
+                const createdItem = await this._get_next_item(id, ctor);
+                createdItem?.reset?.();
+                this.reset();
+            }
+            else if (type === '$base') {
+                ensureBaseModulesDomainSync(targetDir);
+                for (const modId of parseModuleList(p.modules)) {
+                    const modSrc = path.join('./MODULES', modId);
+                    const modSrcClass = path.join(modSrc, '$module', 'class.js');
+                    if (!fs.existsSync(modSrcClass))
+                        continue;
+                    const modDst = path.join(targetDir, 'MODULES', modId);
+                    const modDstClass = path.join(modDst, '$module', 'class.js');
+                    if (!fs.existsSync(modDstClass)) {
+                        fs.mkdirSync(path.dirname(modDstClass), { recursive: true });
+                        fs.writeFileSync(modDstClass, extractStubClassJsSync(modSrcClass, modId), 'utf-8');
+                    }
+                    scaffoldModuleTreeSync(modSrc, modDst);
+                }
+                const createdItem = await this._get_next_item(id, ctor);
+                createdItem?.reset?.();
+                this.reset();
+            }
+        }
+        markClassesDirty();
+        return log;
     }
     /**
      * Физическое создание класса (без проверок доступа и инвариантов — их делает вызывающий:
@@ -1778,6 +1937,129 @@ export class $class extends $folder{
                 return true;
             });
         })
+    }
+
+    /**
+     * Глобальный поиск относительно текущего узла дерева (только среди элементов и объектов,
+     * доступных пользователю по правам canSee / data_access / scope).
+     */
+    async search_tree(params = {}) {
+        const rawQ = String(params.q ?? params.query ?? '').trim();
+        const q = rawQ.toLowerCase();
+        if (!q)
+            return { query: '', nodes: [], objects: [] };
+
+        const nodes = [];
+        const objects = [];
+        const seenPaths = new Set();
+        const seenObjIds = new Set();
+        const SKIP_SEARCH = new Set(['node_modules', 'history', 'logs', 'sources', 'oda', 'tests', 'docs', 'torus', 'vendor']);
+
+        const walk = async (cur, depth = 0) => {
+            if (!cur || depth > 7 || nodes.length >= 60)
+                return;
+            const curPath = cur.path || '/';
+            if (seenPaths.has(curPath))
+                return;
+            seenPaths.add(curPath);
+
+            try {
+                await cur.init;
+            }
+            catch { /* ignore */ }
+
+            if (cur !== this) {
+                const label = String(cur.DATA?.label || cur.label || cur.id || '');
+                const id = String(cur.id || '');
+                if (label.toLowerCase().includes(q) || id.toLowerCase().includes(q) || curPath.toLowerCase().includes(q)) {
+                    nodes.push({
+                        path: curPath,
+                        label: label || id || curPath,
+                        icon: cur.DATA?.icon || cur.icon || '',
+                        type: cur.type || '',
+                    });
+                }
+            }
+
+            // Рабочие места внутри видимого подразделения
+            if (cur.type === '$base' || cur.type === '$structure') {
+                const sec = cur.DATA?.['#security'];
+                if (sec?.ROLES) {
+                    const { places } = WORKPLACES.normalizeSecurity(sec);
+                    for (const { node: pl, trail } of WORKPLACES.walkPlaces(places)) {
+                        const plLabel = String(pl.label || pl.id || '');
+                        if (plLabel.toLowerCase().includes(q) || String(pl.id || '').toLowerCase().includes(q)) {
+                            nodes.push({
+                                path: curPath,
+                                place: WORKPLACES.trailKey(trail),
+                                label: `${plLabel} (${cur.DATA?.label || cur.id})`,
+                                icon: pl.icon || 'fontawesome:s-user-tie',
+                                type: '$place',
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Поиск объектов внутри корневых справочников и операций организации
+            if ((cur.type === '$catalog' || cur.type === '$operation') && objects.length < 50) {
+                const parentType = cur.$parent?.type;
+                if (parentType !== cur.type && typeof cur.db_query === 'function') {
+                    try {
+                        const res = await cur.db_query({ ...params, search: rawQ, limit: 20 });
+                        for (const it of res?.items || []) {
+                            if (!it?.id || seenObjIds.has(it.id))
+                                continue;
+                            seenObjIds.add(it.id);
+                            objects.push({
+                                id: it.id,
+                                cid: it.cid || curPath,
+                                title: it.title || it.body?.name || it.id,
+                                classLabel: res?.classes?.[it.cid]?.label || cur.DATA?.label || cur.id,
+                                status: it.status || '',
+                                time: it.time || 0,
+                                type: cur.type,
+                            });
+                        }
+                    }
+                    catch { /* нет доступа к объектам этого класса */ }
+                }
+            }
+
+            let children = [];
+            try {
+                children = (await cur.children) || [];
+            }
+            catch {
+                return;
+            }
+            for (const ch of children) {
+                if (!ch?.id || ch.id[0] === '$' || ch.id[0] === '.' || ch.id[0] === '#' || SKIP_SEARCH.has(ch.id))
+                    continue;
+                try {
+                    const owner = cur instanceof $class ? cur : (cur.$class || this);
+                    const visible = await owner.canSee(ch, params)
+                        || (ch instanceof $class && (await ch.data_access(params)) != null)
+                        || (ch.id === 'MODULES' && ch.type === '$domain');
+                    if (!visible)
+                        continue;
+                    await walk(ch, depth + 1);
+                }
+                catch { /* skip */ }
+            }
+        };
+
+        await walk(this, 0);
+        const isAdm = DEV_MODE || (await this.roles(params).catch(() => [])).includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
+        const filteredNodes = isAdm
+            ? nodes
+            : nodes.filter(n => n.type !== '$module' && !(n.type === '$domain' && n.path.endsWith('/MODULES')));
+
+        return {
+            query: rawQ,
+            nodes: filteredNodes.slice(0, 60),
+            objects: objects.slice(0, 60),
+        };
     }
 }
 $class.type_chain = Object.create(null);

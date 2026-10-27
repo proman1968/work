@@ -376,7 +376,7 @@ export class $folder extends $item{
 
             if(this.id === '$folder'){
                 const owner = this.$parent;
-                const m = /^\/ORGANIZATIONS\/[^/]+\/MODULES\/([^/]+)(\/.*)?$/.exec(owner?.path || '');
+                const m = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.*)?$/.exec(owner?.path || '');
                 if (m) {
                     const modPath = `/MODULES/${m[1]}${m[2] || ''}`;
                     if (modPath !== owner.path && fs.existsSync('.' + modPath)) {
@@ -872,7 +872,7 @@ export class $folder extends $item{
                             folders.add(domain);
                     }
                 }
-                const tm = /^\/ORGANIZATIONS\/[^/]+\/MODULES\/([^/]+)(\/.+)$/.exec(typeRoot.parent?.path || '');
+                const tm = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.+)$/.exec(typeRoot.parent?.path || '');
                 if (tm) {
                     const tModPath = `/MODULES/${tm[1]}${tm[2]}`;
                     if (fs.existsSync('.' + tModPath)) {
@@ -891,7 +891,7 @@ export class $folder extends $item{
 
             folders.push(...horizontal_folders);
 
-            const m = /^\/ORGANIZATIONS\/[^/]+\/MODULES\/([^/]+)(\/.+)$/.exec(this.path || '');
+            const m = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.+)$/.exec(this.path || '');
             if (m) {
                 const modPath = `/MODULES/${m[1]}${m[2]}`;
                 if (fs.existsSync('.' + modPath)) {

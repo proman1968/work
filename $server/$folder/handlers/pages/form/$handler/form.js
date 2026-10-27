@@ -474,6 +474,8 @@ ODA({is: 'work-form',
                 const ext = String(this.$item?.ext || '').toLowerCase();
                 const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
                 await n.importView(is);
+                if (this.view !== n)
+                    return;
                 if (!customElements.get(is)) {
                     // Вид не зарегистрирован под нужным тегом — создавать элемент
                     // бессмысленно: он останется пустым (как на скриншоте).
@@ -486,6 +488,11 @@ ODA({is: 'work-form',
                 if (!el) {
                     el = ODA.createComponent(is, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
                     this.controls[n.id] = el;
+                }
+                for (let id in this.controls) {
+                    let old = this.controls[id];
+                    if (old !== el && this.contains(old))
+                        this.removeChild(old);
                 }
                 if (!el.isConnected)
                     this.appendChild(el);

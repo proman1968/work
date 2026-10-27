@@ -140,4 +140,40 @@ describe('подразделения: ссылки #security', () => {
         assert.equal((await invoke(acc, 'db_journal', as(USER1))).total, 0);
         assert.equal((await sales.info({})).hasSecurity, true, 'остались USER и LINKS — панель есть');
     });
+
+    it('каркас подразделений (isStructureAncestor) и скрытие MODULES от обычного сотрудника', async () => {
+        write('ORGANIZATIONS/$domain/class.js', `export default { label: 'Организации' }`);
+        write('ORGANIZATIONS/ORG1/$base/class.js', `export default { label: 'Орг 1', '#security': { ADMIN: ['${ADMIN}'] } }`);
+        write('ORGANIZATIONS/ORG1/MODULES/$domain/class.js', `export default { label: 'Модули' }`);
+        write('ORGANIZATIONS/ORG1/MODULES/Reg/$module/class.js', `export default { label: 'Учёт' }`);
+        write('ORGANIZATIONS/ORG1/MODULES/Reg/ITEMS/$catalog/class.js', `export default { label: 'Номенклатура', ${FIELDS} }`);
+        write('ORGANIZATIONS/ORG1/warehouse/$structure/class.js', `export default { label: 'Склад',
+            '#security': { ROLES: [{ id: 'keeper', label: 'Кладовщик', USERS: ['${USER2}'],
+                LINKS: [{ id: '/ORGANIZATIONS/ORG1/MODULES/Reg/ITEMS', access: 'read' }] }] } }`);
+        write('ORGANIZATIONS/ORG1/secret_dept/$structure/class.js', `export default { label: 'Секретный отдел',
+            '#security': { ADMIN: ['${ADMIN}'] } }`);
+        globalThis.WORK.reset();
+        const LINKS = await import('../sources/server/access/links.js');
+        LINKS.reset();
+
+        const orgs = await WORK.get_item('/ORGANIZATIONS');
+        const org1 = await WORK.get_item('/ORGANIZATIONS/ORG1');
+        const wh = await WORK.get_item('/ORGANIZATIONS/ORG1/warehouse');
+        const secDept = await WORK.get_item('/ORGANIZATIONS/ORG1/secret_dept');
+        const mods = await WORK.get_item('/ORGANIZATIONS/ORG1/MODULES');
+        const regMod = await WORK.get_item('/ORGANIZATIONS/ORG1/MODULES/Reg');
+        const items = await WORK.get_item('/ORGANIZATIONS/ORG1/MODULES/Reg/ITEMS');
+
+        // Сотрудник склада USER2 (не назначенный в корне ORG1) видит цепочку /ORGANIZATIONS -> /ORGANIZATIONS/ORG1 -> warehouse
+        assert.equal(await orgs.canSee(org1, as(USER2)), true, 'видит свою организацию');
+        assert.equal(await org1.canSee(wh, as(USER2)), true, 'видит своё подразделение');
+        assert.equal(await org1.canSee(secDept, as(USER2)), false, 'чужое подразделение закрыто');
+        assert.equal(await org1.canSee(mods, as(USER2)), false, 'контейнер MODULES скрыт от обычного сотрудника в дереве');
+        assert.equal(await regMod.canSee(regMod, as(USER2)), false, 'сам $module скрыт от обычного сотрудника');
+        assert.equal(await items.canSee(items, as(USER2)), true, 'прилинкованный класс внутри модуля доступен по ссылке рабочего места');
+
+        // Администратор видит и MODULES, и все подразделения
+        assert.equal(await org1.canSee(mods, as(ADMIN)), true);
+        assert.equal(await org1.canSee(secDept, as(ADMIN)), true);
+    });
 });

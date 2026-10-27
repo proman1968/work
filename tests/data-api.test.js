@@ -42,7 +42,7 @@ before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-data-api-'));
     write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
-    for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
+    for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file', '$server/$folder/$class/$domain', '$server/$folder/$class/$module', '$server/$folder/$class/$structure'])
         write(p + '/class.js', 'export default {}');
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Продавец'], [NOBODY, 'Чужой']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
@@ -336,6 +336,25 @@ describe('методы учётного ядра у классов', () => {
         const clients = await item('/DATA/CATALOGS/CLIENTS');
         assert.deepEqual(await clients.allowed_child_types, []);
         await assert.rejects(clients.create({ id: 'VIP', type: '$virtual', ...as(ADMIN) }), /нельзя создать/);
+
+        // 6. Создание новой организации ($base) с подключением модуля ($module) из /MODULES
+        write('MODULES/MiniReg/$module/class.js', `export default { label: 'Мини-учёт', icon: 'carbon:package' }`);
+        write('MODULES/MiniReg/$module/$folder/$class/$catalog/class.js', `export default { label: 'Справочник' }`);
+        write('MODULES/MiniReg/CATALOGS/$catalog/class.js', `export default { label: 'Справочники', $public: { form: 'objects' } }`);
+        write('MODULES/MiniReg/CATALOGS/$catalog/$folder/$class/$catalog/class.js', `export default { label: 'Справочник' }`);
+        write('MODULES/MiniReg/CATALOGS/ITEMS/$catalog/class.js', `export default { label: 'Товары', ${SEC}, METADATA: { FIELDS: [{ id: 'name', required: true }] } }`);
+        globalThis.WORK.reset();
+
+        await orgs.create({ id: 'ORG_NEW', label: 'ООО «Ромашка»', modules: 'MiniReg', ...as(ADMIN), post: `export default { label: 'ООО «Ромашка»', ${SEC} }` });
+        const orgNewItems = await item('/ORGANIZATIONS/ORG_NEW/MODULES/MiniReg/CATALOGS/ITEMS');
+        assert.ok(orgNewItems, 'каркас классов модуля развёрнут внутри новой организации');
+        assert.equal(orgNewItems.type, '$catalog');
+        const schemaNew = await orgNewItems.db_schema(as(ADMIN));
+        assert.equal(schemaNew.schema.ancestor, '/MODULES/MiniReg/CATALOGS/ITEMS');
+        assert.ok(schemaNew.schema.fields.some(f => f.id === 'name' && f.required));
+        const createdItem = await orgNewItems.db_create({ post: { name: 'Товар Ромашки' }, ...as(ADMIN) });
+        assert.equal(createdItem.title, 'Товар Ромашки');
+        assert.ok(fs.existsSync(path.join(tmp, 'ORGANIZATIONS/ORG_NEW/$base/#system/work.db')));
     });
 
     it('инструменты ИИ-агента (describe_class, find_objects, register_operation, report) и сквозная цепочка ODANT', async () => {
@@ -386,5 +405,13 @@ describe('методы учётного ядра у классов', () => {
         assert.equal(entryCard.amount, 300);
         assert.equal(entryCard.debit.account, '/DATA/REGISTER/62');
         assert.equal(entryCard.credit.account, '/DATA/REGISTER/90');
+
+        // 5. Глобальный поиск (search_tree): возвращает только доступные пользователю элементы и объекты
+        const dataDom = await item('/DATA');
+        const sUser = await invoke(dataDom, 'search_tree', { q: 'Альфа', ...as(USER1) });
+        assert.ok(sUser.objects.some(o => o.id === alpha.id), 'USER1 видит объект ООО «Альфа»');
+        const sNobody = await invoke(dataDom, 'search_tree', { q: 'Альфа', ...as(NOBODY) });
+        assert.equal(sNobody.objects.length, 0, 'посторонний не видит объекты');
+        assert.equal(sNobody.nodes.length, 0, 'посторонний не видит узлы');
     });
 });

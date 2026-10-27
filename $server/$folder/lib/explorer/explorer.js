@@ -3,7 +3,7 @@ export default {
     imports: 'oda//app-layout.js, ~/lib//tree.js, ~/lib//node-explorer.js',
     extends: 'oda-app-layout',
     template: /*html*/`
-        <item-tree light slot='left-panel' :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
+        <item-tree slot='left-panel' allow-search :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
         <div flex vertical slot='main' style="overflow: hidden; position: relative;">
             <call-form ~if="showCall" id="callForm"></call-form>
             <item-hexagon-layout ~show="showHexagon" flex id="hexagon"></item-hexagon-layout>
@@ -149,8 +149,16 @@ export default {
             this.left_buttons = undefined;
             this.render?.();
         });
-        window.execute = async ($item) => {
-            let url = window.location.origin + window.location.pathname + '#' + $item.short;
+        window.execute = async ($item, nav) => {
+            const short = $item?.short ?? $item?.path ?? '';
+            if (nav && typeof nav === 'object') {
+                try {
+                    sessionStorage.setItem('work.form.nav:' + short, JSON.stringify(nav));
+                    new BroadcastChannel('work-form-nav').postMessage({ short, nav });
+                }
+                catch { /* ignore */ }
+            }
+            let url = window.location.origin + window.location.pathname + '#' + short;
             if ($item.type !== '$handler')
                 url += '/~/handlers/pages/' + ($item.page || 'form');
             location.assign(url);

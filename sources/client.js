@@ -149,7 +149,12 @@ WORK.fetch = function (url, method = '', params = {}, postObject) {
                     } break;
                     default: {
                         let text = await response.text()
-                        throw new WORK_ServerError(text);
+                        const err = new WORK_ServerError(text);
+                        const rawErrors = response.headers?.get?.('X-Work-Errors');
+                        if (rawErrors) {
+                            try { err.errors = JSON.parse(decodeURIComponent(rawErrors)); } catch { /* ignore */ }
+                        }
+                        throw err;
                     }
                 }
             }

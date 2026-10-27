@@ -11,12 +11,48 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
                 min-width: 0;
                 box-sizing: border-box;
                 overflow: hidden;
+                background: #ffffff;
+                color: #222222;
+            }
+            .tree-search {
+                @apply --horizontal;
+                align-items: center;
+                gap: 4px;
+                padding: 4px 8px;
+                border-bottom: 1px solid #e2e4e8;
+                background: #ffffff;
+                position: sticky;
+                top: 0;
+                z-index: 35;
+            }
+            .tree-search input {
+                @apply --flex;
+                border: 1px solid #d4d8dd;
+                border-radius: 4px;
+                padding: 3px 8px;
+                outline: none;
+                background: #f9fafb;
+                color: inherit;
+                font: inherit;
+                font-size: 13px;
+                min-width: 0;
+            }
+            .tree-search input:focus {
+                border-color: #3b1d5e;
+                background: #ffffff;
+            }
+            .tree-search oda-icon {
+                cursor: pointer;
+                opacity: .7;
+            }
+            .tree-search oda-icon:hover {
+                opacity: 1;
             }
         </style>
         <style>{{cells_style}}</style>
-        <div ~if="allowSearch" no-flex horizontal style="padding: var(--space-xs) var(--space-s); align-items: center; position: sticky; top: 0; z-index: 3;">
-            <input flex type="search" placeholder="Поиск" ::value="filter" style="border: none; outline: none; background: transparent; color: inherit; font: inherit; min-width: 0;">
-            <oda-icon no-flex icon="icons:search" :icon-size="18"></oda-icon>
+        <div ~if="allowSearch" no-flex class="tree-search">
+            <input flex type="search" placeholder="Поиск в дереве (Enter — глобальный)…" ::value="filter" @keydown="_onSearchKey($event)">
+            <oda-icon no-flex icon="icons:search" :icon-size="18" title="Глобальный поиск (Enter)" @tap="runGlobalSearch"></oda-icon>
         </div>
         <div vertical flex style="overflow: auto;" @scroll="_onScroll">
             <oda-tree-header dark :columns ~if=showHeader></oda-tree-header>
@@ -74,6 +110,16 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
     },
     _onScroll() {
         this._onTreeScroll?.();
+    },
+    _onSearchKey(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            this.runGlobalSearch?.();
+        }
+    },
+    runGlobalSearch() {
+        this.fire('global-search', { query: this.filter });
     },
     $public: {
         allowCategories: false,

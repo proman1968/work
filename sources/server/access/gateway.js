@@ -37,7 +37,7 @@ export const MEMBERS = Object.freeze({
     read_log_entry: L.READ, log_index: L.READ, chatSource: L.READ,
     roles: L.READ, members: L.READ, is_data_type: L.READ, reset: L.READ,
     work_zone: L.READ, places: L.READ,
-    data_access: L.READ, link_tree: L.READ,
+    data_access: L.READ, link_tree: L.READ, search_tree: L.USER,
     // геттеры (свойства и списки)
     size: L.READ, METADATA: L.READ, type: L.READ, type_chain: L.READ, label: L.READ, icon: L.READ,
     id: L.READ, name: L.READ, path: L.READ, short: L.READ, online: L.READ, lastModified: L.READ,

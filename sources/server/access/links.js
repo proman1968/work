@@ -22,10 +22,12 @@ const STRUCTURE_METAS = WORKPLACES.STRUCTURE_META_NAMES;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.svn', 'sources', 'oda', 'tests', 'docs', 'torus', 'DATA', 'INDEX', 'logs']);
 
 let cache = null;
+let structCache = null;
 
 /** Сбросить реестр (после save структуры). */
 export function reset() {
     cache = null;
+    structCache = null;
 }
 
 /** Все ссылки всех подразделений: [{ structure, place, id, access, scope? }].
@@ -35,6 +37,7 @@ async function collect() {
     if (cache)
         return cache;
     const out = [];
+    const structs = new Set();
     const root = process.cwd();
     const stack = [''];
     while (stack.length) {
@@ -67,6 +70,7 @@ async function collect() {
                     await g.init;
                     if (!(await g.type_chain).includes('$structure'))
                         continue;
+                    structs.add(clsPath);
                     const { common, places } = WORKPLACES.normalizeSecurity(g.DATA?.['#security']);
                     for (const l of common)
                         out.push({ structure: clsPath, place: null, id: l.id, access: l.access, ...(l.scope ? { scope: l.scope } : {}) });
@@ -83,7 +87,14 @@ async function collect() {
         }
     }
     cache = out;
+    structCache = [...structs];
     return out;
+}
+
+async function collectStructures() {
+    if (!structCache)
+        await collect();
+    return structCache || [];
 }
 
 /** Ссылки, покрывающие путь (на класс или его предка). */
@@ -312,4 +323,38 @@ export async function grantsWrite(cls, params) {
         return level === 'write' || level === 'admin';
     }
     catch { return false; }
+}
+
+/**
+ * Каркас дерева вверх от подразделения пользователя: если у пользователя есть роль
+ * во вложенном подразделении S, то предки S ($domain, $base, $structure) видны
+ * пользователю как каркас дерева (SYSTEM/NESTED), не открывая чужие ветки и MODULES.
+ */
+export async function isStructureAncestor(cls, item, params = {}) {
+    if (!cls || !['$domain', '$base', '$structure'].includes(cls.type))
+        return false;
+    if (item?.type === '$module' || (item?.type === '$domain' && item?.id === 'MODULES'))
+        return false;
+    const area = cls.areaOf(item).kind;
+    if (area !== POLICY.AREA.SYSTEM && area !== POLICY.AREA.NESTED)
+        return false;
+    const p = String(cls.path || '');
+    if (!p.startsWith('/') || p === '/')
+        return false;
+    const itemPath = item?.path ? String(item.path) : p;
+    for (const sPath of await collectStructures()) {
+        if (!sPath.startsWith(p + '/'))
+            continue;
+        if (itemPath !== p && sPath !== itemPath && !sPath.startsWith(itemPath + '/'))
+            continue;
+        const g = await structureItem(sPath);
+        if (!g)
+            continue;
+        try {
+            if ((await g.roles(params)).length)
+                return true;
+        }
+        catch { /* нет */ }
+    }
+    return false;
 }

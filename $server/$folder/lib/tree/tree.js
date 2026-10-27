@@ -125,6 +125,14 @@ export default {
     async nodeChildren(node) {
         return applyTreeFilters(Array.isArray(node?.[this.itemsSelector]) ? node[this.itemsSelector] : [], this);
     },
+    runGlobalSearch() {
+        const q = String(this.filter || '').trim();
+        if (!q)
+            return;
+        const target = this.$item || globalThis.WORK;
+        if (target && typeof window?.execute === 'function')
+            window.execute(target, { view: 'search', q });
+    },
     _onTreeScroll() {
         if (this._scrollRaf)
             return;
@@ -156,20 +164,20 @@ ODA({is: 'oda-tree-node',
                 min-height: 30px;
                 padding: 0 2px;
                 box-sizing: border-box;
+                background: #ffffff;
             }
             .node.is-stuck {
                 position: sticky !important;
-                background: #d8c6ec;
-                border-bottom: 1px solid #6a1b9a;
-                box-shadow: 0 1px 2px rgba(74, 20, 140, 0.12);
+                background: #f6f6f8;
+                border-bottom: 1px solid #d4d4d8;
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
             }
-            .node:hover {
-                background: var(--accent-soft, #dcc8ef);
+            .node:hover:not(.node-focused) {
+                background: rgba(0, 0, 0, 0.045);
             }
             .node.node-focused {
-                background: var(--accent-soft, #dcc8ef);
-                outline: 2px solid var(--accent-color);
-                outline-offset: -2px;
+                background: #e0e0e0;
+                box-shadow: inset 0 -2px 0 #3b1d5e;
             }
             .sub-nodes {
                 @apply --vertical;
@@ -225,7 +233,8 @@ ODA({is: 'oda-tree-node',
             <div vertical flex style="min-width: 0; overflow: hidden;">
                 <div horizontal flex style="min-width: 0; overflow: hidden;">
                     <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
-                    <item-node style="min-width: 0;" :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus">
+                    <item-node flex style="min-width: 0;" :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus">
+                        <item-users ~if="isStructureNode" :$item="$item" role="BOSS" :select-mode="false" :icon-size="20"></item-users>
                         <item-users ~if="isPlace" :$item="$item.owner" :place="$item.trail" :select-mode="false" :icon-size="20"></item-users>
                         <span class="access" ~if="isLinkWrite">A</span>
                         <span class="access" ~if="isLinkRead">R</span>
@@ -272,10 +281,20 @@ ODA({is: 'oda-tree-node',
             this.isStuck = stuck;
     },
     get nodeStickyStyle() {
-        if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon)
-            return '';
         const lvl = Number(this.stickyLevel) || 0;
-        return `position: sticky !important; top: ${lvl * 30}px; z-index: ${30 - lvl};`;
+        const step = Number(this.$pdp?.step) || 12;
+        const indent = lvl > 0 ? lvl * step : 0;
+        const padStyle = indent > 0 ? `margin-left: -${indent}px; padding-left: ${2 + indent}px;` : '';
+        if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon)
+            return padStyle;
+        return `${padStyle} position: sticky !important; top: ${lvl * 30}px; z-index: ${30 - lvl};`;
+    },
+    get isStructureNode() {
+        const it = this.$item;
+        if (!it || isLinkNode(it) || ('isPlace' in Object(it) && it.isPlace))
+            return false;
+        const t = it.type;
+        return t === '$base' || t === '$structure';
     },
     get hasSecurity(){
         // Ветка настройки — только у подразделений ($structure и наследники)
@@ -368,10 +387,18 @@ ODA({is: 'oda-tree-node',
         }
     },
     _deepMatch(item, f) {
-        if (String(item?.label || item?.id || '').toLowerCase().includes(f))
+        if (!item)
+            return false;
+        if (String(item.label || item.id || '').toLowerCase().includes(f))
             return true;
-        const kids = item?.[this.$pdp.itemsSelector];
-        return Array.isArray(kids) && kids.some(k => this._deepMatch(k, f));
+        const rawKids = item[this.$pdp.itemsSelector];
+        const cachedKids = Array.isArray(rawKids) ? rawKids : (item[R]?.cache?.[this.$pdp.itemsSelector] || []);
+        if (Array.isArray(cachedKids) && cachedKids.some(k => this._deepMatch(k, f)))
+            return true;
+        const secKids = item._secNodes;
+        if (Array.isArray(secKids) && secKids.some(k => this._deepMatch(k, f)))
+            return true;
+        return false;
     },
     $public: {
         hideTops: {
@@ -482,15 +509,15 @@ ODA({is: 'oda-tree-node',
             d = await item.fetch('places');
         }
         catch { return []; }
-        if (!d || (!d.places?.length && !d.commonTree?.length))
+        if (!d || !d.places?.length)
             return [];
         const out = [];
         for (const p of d.places || [])
             out.push(await this._placeNode(item, p, ''));
         try {
-            out.push(...await bindLinkTree(d.commonTree || [], (p) => WORK.get_item(p)));
+            Object.defineProperty(item, '_secNodes', { value: out, configurable: true, writable: true });
         }
-        catch { /* без общих ссылок */ }
+        catch { /* ignore */ }
         return out;
     },
     /** Узел рабочего места: вложенные места плюс цепочка его ссылок. */
@@ -515,7 +542,7 @@ ODA({is: 'oda-tree-node',
         };
         // владелец — вне перечисляемых: иначе JSON.stringify узла закольцуется
         Object.defineProperty(node, 'owner', { value: structItem });
-        return node;
+        return typeof Reactor?.activate === 'function' ? Reactor.activate(node) : node;
     },
     /**
      * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет

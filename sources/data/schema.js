@@ -118,8 +118,9 @@ export function classBasePath(db, cid) {
         if (chain[i].type === '$base')
             return chain[i].path;
     }
-    if (String(cid || '').startsWith('/MODULES/Register/'))
-        return '/MODULES/Register';
+    const m = /^(\/MODULES\/[^/]+)\//.exec(String(cid || ''));
+    if (m)
+        return m[1];
     return '';
 }
 
@@ -135,8 +136,11 @@ export function resolveInBase(db, basePath, refPath) {
     const candidates = [basePath + ref];
     if (ref.startsWith('/DATA/'))
         candidates.push(basePath + '/MODULES/Register' + ref.slice('/DATA'.length), basePath + ref.slice('/DATA'.length));
-    else if (ref.startsWith('/MODULES/Register/'))
-        candidates.push(basePath + '/DATA' + ref.slice('/MODULES/Register'.length), basePath + ref.slice('/MODULES/Register'.length));
+    else if (ref.startsWith('/MODULES/')) {
+        candidates.push(basePath + ref.slice('/MODULES'.length));
+        if (ref.startsWith('/MODULES/Register/'))
+            candidates.push(basePath + '/DATA' + ref.slice('/MODULES/Register'.length), basePath + ref.slice('/MODULES/Register'.length));
+    }
     for (const cand of candidates) {
         if (getClass(db, cand))
             return cand;
@@ -169,7 +173,7 @@ export function findAncestor(db, cls) {
     else if (rel.startsWith('/MODULES/Register/'))
         candidates.push('/DATA' + rel.slice('/MODULES/Register'.length));
     else if (!rel.startsWith('/MODULES/'))
-        candidates.push('/DATA' + rel, '/MODULES/Register' + rel);
+        candidates.push('/MODULES' + rel, '/DATA' + rel, '/MODULES/Register' + rel);
 
     for (const cand of candidates) {
         if (cand === cls.cid)

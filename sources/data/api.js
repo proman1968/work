@@ -119,16 +119,8 @@ export async function classObjectCount(clsPath, clsType = '') {
         const db = await dataStore(basePath);
         const cls = getClass(db, p);
         const type = cls?.type || clsType;
-        if (!type)
+        if (!type || type === '$base' || type === '$structure' || type === '$domain')
             return 0;
-        if (type === '$base')
-            return db.prepare("SELECT count(*) n FROM objects WHERE status <> 'deleted' AND ext_of IS NULL").get()?.n || 0;
-        if (type === '$structure') {
-            const units = cls ? descendants(db, cls.cid) : [p];
-            if (!units.length)
-                return 0;
-            return db.prepare(`SELECT count(*) n FROM objects WHERE status <> 'deleted' AND ext_of IS NULL AND unit IN (${units.map(() => '?').join(',')})`).get(...units)?.n || 0;
-        }
         if (type === '$virtual')
             return virtualMembers(db, { cid: cls?.cid || p }).items.length;
         if (type === '$account' || type === '$register') {

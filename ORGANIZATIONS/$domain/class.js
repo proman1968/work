@@ -1,4 +1,4 @@
 export default {
     label: 'Организации',
-    icon: 'fontawesome:s-building',
+    icon: 'odant:structure',
 }

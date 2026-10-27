@@ -337,7 +337,7 @@ export function createObject(db, p) {
  * Внутренний вход для проведения: опция `system` разрешает менять зарегистрированную операцию.
  * @returns {object} объект после записи
  */
-export function writeVersion(db, id, { body, status, time, author, valid_from, version, system = false } = {}) {
+export function writeVersion(db, id, { body, status, time, author, valid_from, version, system = false, force = false } = {}) {
     const cur = readObject(db, id);
     if (!cur)
         throw new DataError(`объект ${id} не найден`);
@@ -351,7 +351,7 @@ export function writeVersion(db, id, { body, status, time, author, valid_from, v
         throw new DataError(`статус «${nextStatus}» недопустим для ${schema.label}`);
     const nextBody = body === undefined ? cur.body : validateBody(db, schema, body);
     const nextTime = isEmpty(time) ? cur.time : parseTime(time, 'дата объекта');
-    if (nextStatus === cur.status && nextTime === cur.time && JSON.stringify(nextBody) === JSON.stringify(cur.body))
+    if (!force && nextStatus === cur.status && nextTime === cur.time && JSON.stringify(nextBody) === JSON.stringify(cur.body))
         return cur;
     const now = Date.now();
     const last = db.prepare('SELECT max(valid_from) v FROM object_versions WHERE id = ?').get(cur.id).v;

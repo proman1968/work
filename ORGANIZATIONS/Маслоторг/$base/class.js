@@ -57,15 +57,13 @@ export default {
         ADMIN: ["CA4E097FF6C1D387"],
         BOSS: ["CA4E097FF6C1D387"],
 
-        LINKS: [{
-            id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS",
-            access: "read"
-        }],
-
         ROLES: [{
             id: "heads",
             label: "Руководство",
             LINKS: [{
+                id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS",
+                access: "read"
+            },{
                 id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS",
                 access: "read",
                 scope: "all"
