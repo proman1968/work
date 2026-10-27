@@ -1,9 +1,10 @@
 export default {
     icon: 'odant:structure',
-    imports: 'oda//app-layout.js, ~/lib//tree.js, ~/lib//node-explorer.js',
+    imports: 'oda//app-layout.js, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js',
     extends: 'oda-app-layout',
     template: /*html*/`
         <item-tree slot='left-panel' allow-search :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
+        <item-consultant slot='left-panel' id="consultant" label="ИИ" icon="bootstrap:robot" :$item hidden style="height: 0"></item-consultant>
         <div flex vertical slot='main' style="overflow: hidden; position: relative;">
             <call-form ~if="showCall" id="callForm"></call-form>
             <item-hexagon-layout ~show="showHexagon" flex id="hexagon"></item-hexagon-layout>
@@ -110,6 +111,37 @@ export default {
     },
     _onFocusedIndexChanged(e) {
         this.visibleMode = 'main';
+        const drawer = this.left_drawer;
+        const activeCtrl = drawer?.controls?.[drawer.focusedIndex];
+        if (activeCtrl?.localName === 'item-consultant')
+            activeCtrl.onShow?.();
+    },
+    /**
+     * Открыть панель ИИ «Консультант» вместо дерева в левой панели
+     * и (если передан контекст открытой формы) автоматически задать вопрос.
+     */
+    async openConsultant(ctx) {
+        this.visibleMode = 'main';
+        const drawer = this.left_drawer;
+        const consultant = this.$('#consultant') || this.$('item-consultant');
+        if (drawer) {
+            const controls = drawer.controls || [];
+            const idx = controls.findIndex(c => c === consultant || c?.localName === 'item-consultant' || c?.id === 'consultant');
+            if (idx >= 0) {
+                drawer.closed = false;
+                const tabs = drawer.$?.('app-tabs');
+                if (tabs)
+                    tabs.focusedIndex = idx;
+                drawer.focusedIndex = idx;
+                drawer.updateControls?.();
+            }
+        }
+        if (consultant) {
+            consultant.onShow?.();
+            if (ctx)
+                await consultant.askAboutContext(ctx);
+        }
+        return consultant;
     },
     async _onClose(e) {
         let $item = e.detail.value;
@@ -133,6 +165,10 @@ export default {
         this.focusedPage = url;
         if(this.mobile && this.left_drawer)
             this.left_drawer.closed = true;
+        this.async(() => {
+            const cons = this.$('#consultant') || this.$('item-consultant');
+            cons?.refreshFormContext?.();
+        }, 250);
     },
     focusedPage: '',
     attached() {

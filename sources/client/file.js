@@ -1,6 +1,9 @@
 import { $folder } from './folder.js';
 
 export class $file extends $folder{
+    get path(){
+        return this.DATA?.path;
+    }
     get $public(){
         return{
             form: 'file',

@@ -206,6 +206,60 @@ await test('prefetch: info точки входа с глубиной, списк
     }
 });
 
+await test('Консультант ИИ: переключатель ИИ в проводнике, кнопка Консультант на форме и создание .task в личных логах', async () => {
+    const explorerProto = (await import('/$server/$folder/lib/explorer/explorer.js')).default;
+    await import('/$server/$folder/handlers/pages/form/$handler/form.js');
+    await import('/$server/$folder/lib/consultant/consultant.js');
+    await ODA.waitReg('work-form');
+    await ODA.waitReg('item-consultant');
+
+    assert(explorerProto.template.includes('item-consultant'), 'item-consultant в left-panel проводника');
+    assert(explorerProto.template.includes('label="ИИ"'), 'кнопка ИИ в панели переключателей');
+    assert(typeof explorerProto.openConsultant === 'function', 'метод openConsultant на проводнике');
+
+    const wfEl = document.createElement('work-form');
+    wfEl.$item = WORK.__bind({ path: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Номенклатура', id: 'Номенклатура', label: 'Номенклатура', type: '$catalog' });
+    wfEl.view = { id: 'objects', label: 'Объекты', importView: async () => {} };
+    wfEl.view_control = { total: 4, from: '2026-01-01', to: '2026-10-27', focusedRow: { name: 'Бочка 200 л' } };
+    const ctx = wfEl.buildConsultantContext();
+    assert(ctx.title.includes('Номенклатура'), 'заголовок консультации: ' + ctx.title);
+    assert(ctx.prompt.includes('/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Номенклатура'), 'путь в вопросе');
+    assert(ctx.prompt.includes('Бочка 200 л'), 'выбранная строка в вопросе');
+    assert(ctx.prompt.includes('записей на экране: 4'), 'количество записей в вопросе');
+
+    const consEl = document.createElement('item-consultant');
+    assert(consEl.label === 'ИИ', 'метка вкладки ИИ');
+    let savedFile = null, savedParams = null;
+    const fakeCabinet = {
+        id: 'CA4E097FF6C1D387',
+        path: '/USERS/CA4E097FF6C1D387',
+        save_file: async (file, params) => {
+            savedFile = file;
+            savedParams = params;
+            return { DATA: { path: '/USERS/CA4E097FF6C1D387/$user/USER/task/2026-10-27/1790000000000.CA4E097FF6C1D387.task' } };
+        },
+    };
+    const prevGetItem = WORK.get_item;
+    WORK.get_item = async (p) => WORK.__bind({
+        path: p,
+        id: p.split('/').pop(),
+        type: '$file',
+        load: async () => JSON.stringify({ name: ctx.title, prompt: ctx.prompt, status: 'running', items: [{ id: '1', type: 'user', content: ctx.prompt, time: Date.now() }] }),
+    });
+    consEl._getPersonalCabinet = async () => fakeCabinet;
+    consEl._hydrateModel = async () => { consEl.model = '/MODELS/odant/Qwen3.8 27b'; };
+    try {
+        const created = await consEl.askAboutContext(ctx);
+        assert(!!created, 'задача создана');
+        assert(savedFile && savedFile.name.endsWith('.task'), 'сохранён .task файл: ' + savedFile?.name);
+        eq(savedParams.role, 'USER', 'сохранено в зону USER личного кабинета');
+        eq(savedParams.prompt, ctx.prompt, 'вопрос по форме передан в prompt');
+    }
+    finally {
+        WORK.get_item = prevGetItem;
+    }
+});
+
 window.__done = true;
 </script>
 </body>

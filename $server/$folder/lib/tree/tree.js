@@ -60,6 +60,9 @@ export default {
     showUsers: false,
     showSize: false,
     showStatus: false,
+    get label() {
+        return this.$item?.label || 'tree';
+    },
     get expanderIconSize(){
         return ODA.states?.mobileMode ? this.iconSize * 1.5 : this.iconSize;
     },
@@ -565,7 +568,7 @@ ODA({is: 'oda-tree-node',
      * Один запрос places на узел; результат кэшируется (см. items).
      */
     async _buildSecNodes(item) {
-        if (!item || !(item instanceof CORE.$class))
+        if (!item || !item.path || item.type === '$server' || !(item instanceof CORE.$class))
             return [];
         let d = null;
         try {

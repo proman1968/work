@@ -229,8 +229,8 @@ ODA({is: 'app-layout-drawer',
     get items() {
         return this.controls?.map((el, i) => {
             const item = {};
-            item.label = el.getAttribute('label') || el.label || '';
-            item.icon = el.getAttribute('icon') || el.icon || '';
+            item.label = el.getAttribute?.('label') || el.label || '';
+            item.icon = el.getAttribute?.('icon') || el.icon || '';
             return item;
         }) || []
     },
@@ -304,6 +304,7 @@ ODA({is: 'app-tabs',
         else {
             this.$pdp.closed = false;
             this.focusedIndex = idx;
+            this.$pdp.focusedIndex = idx;
         }
     }
 });

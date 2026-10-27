@@ -75,6 +75,7 @@ ODA({is: 'work-form',
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item show-role></item-node-explorer>
                 <div flex></div>
+                <oda-button id="consultantBtn" shadow icon="bootstrap:robot" label="Консультант" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 16px; padding: 2px 10px; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
@@ -182,6 +183,78 @@ ODA({is: 'work-form',
     },
     allowZoom: true,
     iconSize: 24,
+    standaloneConsultant: false,
+    /**
+     * Собрать описание того, что сейчас открыто в форме, для автоматического вопроса ИИ-консультанту.
+     */
+    buildConsultantContext() {
+        const it = this.$item;
+        const path = it?.short || it?.path || '/';
+        const label = it?.DATA?.label || it?.label || it?.id || path;
+        const type = it?.type || '';
+        const viewId = this.view?.id || '';
+        const viewLabel = this.view?.label || viewId || '';
+        const vc = this.view_control;
+        const details = [];
+        if (vc) {
+            if (vc.from || vc.to)
+                details.push(`период: ${vc.from || '…'} — ${vc.to || '…'}`);
+            else if (vc.atDate)
+                details.push(`на дату: ${vc.atDate}`);
+            if (vc.mode && typeof vc.mode === 'string')
+                details.push(`режим: ${vc.mode}`);
+            if (vc.groupBy && vc.groupBy !== 'none')
+                details.push(`группировка: ${vc.groupBy}`);
+            if (vc.searchText)
+                details.push(`фильтр: «${vc.searchText}»`);
+            else if (vc.query)
+                details.push(`поиск: «${vc.query}»`);
+            const row = vc.editing || vc.focusedRow || vc.selectedRow || vc.current;
+            if (row && typeof row === 'object') {
+                const rowLabel = row.name || row.label || row.account || row.id || '';
+                if (rowLabel)
+                    details.push(`выбрана запись: «${rowLabel}»`);
+            }
+            const count = vc.total ?? (Array.isArray(vc.rows) ? vc.rows.length : undefined);
+            if (typeof count === 'number')
+                details.push(`записей на экране: ${count}`);
+        }
+        const extra = details.length ? ` (${details.join(', ')})` : '';
+        const title = `Консультация: ${label}${viewLabel ? ' — ' + viewLabel : ''}`;
+        const prompt = `Проконсультируй по открытой форме: «${label}» (путь: ${path}${type ? ', тип: ' + type : ''}${viewLabel ? ', представление: ' + viewLabel + ' [' + viewId + ']' : ''})${extra}. Расскажи, что здесь отображается, какие данные сейчас представлены и какие действия доступны.`;
+        return { path, label, type, viewId, viewLabel, details, title, prompt };
+    },
+    /**
+     * Открыть панель ИИ «Консультант» вместо дерева и автоматически задать вопрос по открытой форме.
+     */
+    async askConsultant(e) {
+        e?.stopPropagation?.();
+        const ctx = this.buildConsultantContext();
+        const explorer = window.top?.explorer || window.parent?.explorer || window.explorer;
+        if (explorer && typeof explorer.openConsultant === 'function') {
+            return explorer.openConsultant(ctx);
+        }
+        await import('/$server/$folder/lib/consultant/consultant.js');
+        let localCons = this.querySelector('item-consultant');
+        if (!localCons) {
+            localCons = ODA.createComponent('item-consultant', {
+                slot: 'left-panel',
+                id: 'formConsultant',
+                label: 'ИИ',
+                icon: 'bootstrap:robot',
+                $item: this.$item,
+            });
+            localCons.setAttribute('label', 'ИИ');
+            localCons.setAttribute('icon', 'bootstrap:robot');
+            this.appendChild(localCons);
+        }
+        await new Promise(r => setTimeout(r, 50));
+        if (this.left_drawer)
+            this.left_drawer.closed = false;
+        localCons.onShow?.();
+        await localCons.askAboutContext(ctx);
+        return localCons;
+    },
     openView(e) {
         if (e.button === 0 && this.view)
             window.open(this.view.short + '/');
@@ -506,6 +579,15 @@ ODA({is: 'work-form',
                 this._pendingNav = null;
                 Promise.resolve(el.applyNav(nav)).catch(err => console.error(err));
             }
+            try {
+                const exp = window.top?.explorer || window.parent?.explorer;
+                const cons = exp?.$?.('#consultant') || exp?.$?.('item-consultant');
+                if (cons) {
+                    const ctx = this.buildConsultantContext();
+                    cons.activeFormContext = ctx;
+                    cons.activeFormSummary = ctx;
+                }
+            } catch { /* ignore */ }
         }
     },
     $listeners: {
