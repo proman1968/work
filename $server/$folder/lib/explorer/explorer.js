@@ -120,7 +120,7 @@ export default {
         return this.$handler?.icon;
     },
     hideRoots: 1,
-    hideTops: 0,
+    hideTops: 1,
     itemsSelector: 'items',
     load_page(){
         let url = decodeURI(window.location.hash);

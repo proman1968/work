@@ -249,9 +249,12 @@ export function children(db, cid) {
     return db.prepare('SELECT cid, path, parent, type, label, own FROM classes WHERE parent = ? ORDER BY label').all(cid).map(row);
 }
 
-/** Лист — класс без дочерних классов. */
+/** Лист — класс без дочерних классов своего реального типа (виртуальные справочники $virtual всегда листья для своих расширений и не превращают родительский $catalog в не-лист). */
 export function isLeaf(db, cid) {
-    return !db.prepare('SELECT 1 FROM classes WHERE parent = ? LIMIT 1').get(cid);
+    const cls = getClass(db, cid);
+    if (cls?.type === '$virtual')
+        return true;
+    return !db.prepare(`SELECT 1 FROM classes WHERE parent = ? AND type <> '$virtual' LIMIT 1`).get(cid);
 }
 
 /** Все классы типа (или типов). */

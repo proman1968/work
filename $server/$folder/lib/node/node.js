@@ -23,6 +23,21 @@ export default {
                 text-decoration: underline;
                 font-weight: normal;
             }
+            label.virtual{
+                color: light-dark(#5b21b6, #c4b5fd);
+                font-style: italic;
+            }
+            .virt-badge{
+                @apply --no-flex;
+                font-size: 10px;
+                line-height: 1.2;
+                padding: 1px 4px;
+                margin-right: 2px;
+                border-radius: 4px;
+                background: light-dark(#ede9fe, rgba(139, 92, 246, 0.25));
+                color: light-dark(#5b21b6, #ddd6fe);
+                align-self: center;
+            }
             .stat{
                 white-space: nowrap;
                 overflow: hidden;
@@ -71,7 +86,8 @@ export default {
         <div horizontal flex style="align-items: center; min-width: 0; width: 100%;">
             <div vertical flex style="min-width: 0;">
                 <div horizontal flex style="min-width: 0;">
-                    <label flex style="min-width: 0;" :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink}" :title="isLink ? $item?.path : label" ~show="!hideLabel">{{label}}</label>
+                    <label flex style="min-width: 0;" :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink, virtual: isVirtual}" :title="isLink ? $item?.path : label" ~show="!hideLabel">{{label}}</label>
+                    <span class="virt-badge" ~if="isVirtual" title="Виртуальный справочник">вирт.</span>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                 </div>
             </div>
@@ -90,6 +106,9 @@ export default {
             return '';
         const c = isLinkNode(it) ? it.objectCount : it.DATA?.objectCount;
         return (typeof c === 'number' && c > 0) ? String(c) : '';
+    },
+    get isVirtual() {
+        return this.$item?.type === '$virtual';
     },
     get isStructureLike() {
         const it = this.$item;

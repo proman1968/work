@@ -359,6 +359,17 @@ export function classSchema(db, ref, seenStructs = new Set()) {
             norms = clone(own.NORMS);
     }
 
+    // Если виртуальный справочник вложен в реальный справочник ($catalog) и не задал SOURCE.registry явно —
+    // его реестром-источником по умолчанию служит ближайший родительский справочник.
+    if (cls.type === '$virtual' && source && !source.registry) {
+        for (let i = parentChain.length - 2; i >= 0; i--) {
+            if (parentChain[i].type === '$catalog' && parentChain[i].parent) {
+                source.registry = parentChain[i].cid;
+                break;
+            }
+        }
+    }
+
     // Привязываем ссылки на счета и источники виртуального справочника к контексту $base
     if (basePath) {
         postings = postings.map(r => ({

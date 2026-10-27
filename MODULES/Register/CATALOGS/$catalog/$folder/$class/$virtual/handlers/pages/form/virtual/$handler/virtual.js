@@ -219,7 +219,7 @@ export default {
         this.editing = {
             id: member.id,
             title: member.title || member.id,
-            ext: member.ext ? { id: member.ext.id, version: member.ext.version } : null,
+            ext: member.ext?.id ? { id: member.ext.id, version: member.ext.version } : null,
             data: { ...(member.ext?.body || {}) },
         };
         return true;

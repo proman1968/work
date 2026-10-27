@@ -11,6 +11,8 @@ export function knownHasItems(it, pdp = {}) {
         return undefined;
     // __version — реактивная зависимость: после события changed флаг удаляется и пересчитывается по items
     it.__version;
+    if (it.type === '$module' && (it.DATA?.enabled === false || it.DATA?.blocked === true || it.DATA?.systemBlocked === true))
+        return false;
     const v = it.DATA?.hasItems;
     return typeof v === 'boolean' ? v : undefined;
 }
@@ -164,20 +166,27 @@ ODA({is: 'oda-tree-node',
                 min-height: 30px;
                 padding: 0 2px;
                 box-sizing: border-box;
-                background: #ffffff;
+                background: var(--content-background);
+                color: var(--content-color);
             }
             .node.is-stuck {
                 position: sticky !important;
-                background: #f6f6f8;
-                border-bottom: 1px solid #d4d4d8;
-                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+                background: light-dark(#f6f6f8, color-mix(in oklch, var(--content-color) 10%, var(--content-background)));
+                border-bottom: 1px solid var(--subtle-border);
+                box-shadow: 0 1px 2px var(--shadow-color);
             }
             .node:hover:not(.node-focused) {
-                background: rgba(0, 0, 0, 0.045);
+                background: color-mix(in oklch, var(--content-color) 6%, var(--content-background));
+            }
+            .node.is-stuck:hover:not(.node-focused) {
+                background: light-dark(#ededf2, color-mix(in oklch, var(--content-color) 14%, var(--content-background)));
             }
             .node.node-focused {
-                background: #e0e0e0;
-                box-shadow: inset 0 -2px 0 #3b1d5e;
+                background: light-dark(#e0e0e0, color-mix(in oklch, var(--content-color) 18%, var(--content-background)));
+                box-shadow: inset 0 -2px 0 var(--accent-color);
+            }
+            .node.module-blocked item-node {
+                opacity: .5;
             }
             .sub-nodes {
                 @apply --vertical;
@@ -228,11 +237,11 @@ ODA({is: 'oda-tree-node',
                 padding: 0px;
             }
         </style>
-        <div draggable="true" ~if="hideTops<1" class='node' ~class="{'node-focused': isFocused, 'is-stuck': isStuck}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
+        <div draggable="true" ~if="hideTops<1" class='node' ~class="{'node-focused': isFocused, 'is-stuck': isStuck, 'module-blocked': isModuleBlocked}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <div vertical flex style="min-width: 0; overflow: hidden;">
-                <div horizontal flex style="min-width: 0; overflow: hidden;">
-                    <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon" :icon="checkboxIcon" :icon-size @tap.stop="checked = !checked"></oda-icon>
+                <div horizontal flex style="min-width: 0; overflow: hidden; align-items: center;">
+                    <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon || (isModule && $item?.DATA?.systemBlocked)" :icon="checkboxIcon" :icon-size="20" :title="moduleCheckboxTitle" @tap.stop="checked = !checked"></oda-icon>
                     <item-node flex style="min-width: 0;" :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus">
                         <item-users ~if="isStructureNode" :$item="$item" role="BOSS" :select-mode="false" :icon-size="20"></item-users>
                         <item-users ~if="isPlace" :$item="$item.owner" :place="$item.trail" :select-mode="false" :icon-size="20"></item-users>
@@ -295,6 +304,26 @@ ODA({is: 'oda-tree-node',
             return false;
         const t = it.type;
         return t === '$base' || t === '$structure';
+    },
+    get isModule() {
+        const it = this.$item;
+        return Boolean(it && !isLinkNode(it) && it.type === '$module');
+    },
+    get isModuleBlocked() {
+        if (!this.isModule)
+            return false;
+        this.$item.__version;
+        return this.$item.DATA?.enabled === false || this.$item.DATA?.blocked === true || this.$item.DATA?.systemBlocked === true;
+    },
+    get moduleCheckboxTitle() {
+        if (!this.isModule)
+            return '';
+        if (this.$item?.DATA?.systemBlocked)
+            return 'Модуль заблокирован на уровне системы WORK (/MODULES/' + this.$item.id + ')';
+        const inWorkRoot = String(this.$item?.path || '').startsWith('/MODULES/');
+        if (this.isModuleBlocked)
+            return inWorkRoot ? 'Модуль заблокирован во всей системе WORK (клик — включить)' : 'Модуль заблокирован в этой базе (клик — включить)';
+        return inWorkRoot ? 'Модуль активен в системе WORK (клик — заблокировать во всей системе)' : 'Модуль активен в базе (клик — заблокировать в базе)';
     },
     get hasSecurity(){
         // Ветка настройки — только у подразделений ($structure и наследники)
@@ -370,6 +399,8 @@ ODA({is: 'oda-tree-node',
         return !this.$pdp.expanderOrder || !!this.expanderIcon;
     },
     get showCheckbox() {
+        if (this.isModule)
+            return true;
         return (this.$pdp.checkMode !== 'none') && !this.isCategory;// || !!this.checkboxIcon;
     },
     get rootNode() {
@@ -441,6 +472,10 @@ ODA({is: 'oda-tree-node',
     checked: {
         async set(n) {
             if (n !== undefined) {
+                if (this.isModule && this.$pdp.checkMode === 'none') {
+                    await this._toggleModuleEnabled(!!n);
+                    return;
+                }
                 if (this.$pdp.checkMode === 'ternary') {
                     // todo: рекурсия
                     //await this.$pdp.getItems(this.$item);
@@ -455,10 +490,38 @@ ODA({is: 'oda-tree-node',
             }
         },
         get(){
+            if (this.isModule && this.$pdp.checkMode === 'none') {
+                this.$item.__version;
+                return !this.isModuleBlocked;
+            }
             return this.$pdp.checkedItems.includes(this.$item);
         }
     },
+    async _toggleModuleEnabled(nextEnabled) {
+        const it = this.$item;
+        if (!it?.fetch)
+            return;
+        if (nextEnabled && it.DATA?.systemBlocked)
+            return;
+        try {
+            const res = await it.fetch('set_enabled', { enabled: nextEnabled });
+            if (it.DATA && res && typeof res === 'object') {
+                it.DATA.enabled = res.enabled;
+                it.DATA.localEnabled = res.localEnabled;
+                it.DATA.systemBlocked = res.systemBlocked;
+            }
+            if (!res?.enabled)
+                this.expanded = false;
+            it.increaseVersion?.();
+            it.fire?.('changed', { value: null });
+        }
+        catch (e) {
+            console.warn('[tree] set_enabled:', e?.message || e);
+        }
+    },
     get items() {
+        if (this.isModuleBlocked)
+            return Promise.resolve([]);
         return Promise.resolve(this.$item?.[this.$pdp.itemsSelector]).then(async raw => {
             let items = applyTreeFilters(raw, this.$pdp);
             if (this.$item?.type === '$server') {
@@ -552,6 +615,8 @@ ODA({is: 'oda-tree-node',
         return knownHasItems(this.$item, this.$pdp);
     },
     get expanderIcon() {
+        if (this.isModuleBlocked)
+            return '';
         let icon = 'icons:chevron-right';
         if (this.expanded)
             icon += ':90'
@@ -568,6 +633,8 @@ ODA({is: 'oda-tree-node',
     iconUnchecked: 'icons:check-box-outline-blank',
     iconIntermediate: 'icons:check-box-indeterminate',
     get checkboxIcon() {
+        if (this.isModule && this.$pdp.checkMode === 'none')
+            return this.checked ? this.iconChecked : this.iconUnchecked;
         if (this.$pdp.checkMode === 'none') {
             return '';
         }

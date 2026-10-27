@@ -8,28 +8,28 @@ export default {
                 padding: 16px 20px;
                 gap: 16px;
                 overflow-y: auto;
-                background: #ffffff;
-                color: #222;
+                background: var(--content-background);
+                color: var(--content-color);
             }
             .card {
                 @apply --vertical;
                 gap: 10px;
                 padding: 14px 16px;
-                border: 1px solid #e2e4e8;
+                border: 1px solid var(--subtle-border);
                 border-radius: 8px;
-                background: #fafafa;
+                background: var(--subtle-background);
             }
             .place-card {
                 @apply --vertical;
                 gap: 10px;
                 padding: 12px 14px;
-                border: 1px solid #dcdce2;
+                border: 1px solid var(--subtle-border);
                 border-radius: 8px;
-                background: #ffffff;
+                background: var(--content-background);
             }
             .place-card.active-place {
-                border-color: #3b1d5e;
-                box-shadow: 0 0 0 2px rgba(59, 29, 94, 0.12);
+                border-color: var(--accent-color);
+                box-shadow: 0 0 0 2px var(--accent-soft);
             }
             .card-header {
                 @apply --horizontal;
@@ -47,7 +47,7 @@ export default {
             .role-title {
                 font-size: 13px;
                 font-weight: 600;
-                color: #444;
+                color: var(--muted-color);
                 min-width: 140px;
             }
             .user-chip {
@@ -56,8 +56,8 @@ export default {
                 gap: 6px;
                 padding: 3px 8px;
                 border-radius: 14px;
-                background: #ede9fe;
-                color: #2e1065;
+                background: var(--accent-soft);
+                color: var(--content-color);
                 font-size: 13px;
             }
             .user-chip .rm {
@@ -68,21 +68,22 @@ export default {
             }
             .user-chip .rm:hover {
                 opacity: 1;
-                color: #b91c1c;
+                color: var(--error-color);
             }
             select, input[type="text"] {
                 padding: 4px 8px;
-                border: 1px solid #cbd5e1;
+                border: 1px solid var(--control-border-color);
                 border-radius: 6px;
                 font: inherit;
                 font-size: 13px;
-                background: #fff;
+                background: var(--control-background);
+                color: var(--control-color);
             }
             .links-box {
                 @apply --vertical;
                 gap: 6px;
                 padding-top: 6px;
-                border-top: 1px dashed #e2e8f0;
+                border-top: 1px dashed var(--subtle-border);
             }
             .link-row {
                 @apply --horizontal;
@@ -90,11 +91,11 @@ export default {
                 gap: 8px;
                 font-size: 13px;
                 padding: 3px 6px;
-                background: #f8fafc;
+                background: var(--subtle-background);
                 border-radius: 6px;
             }
             .muted {
-                color: #777;
+                color: var(--muted-color);
                 font-size: 13px;
             }
         </style>

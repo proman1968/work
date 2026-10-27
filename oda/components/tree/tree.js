@@ -11,35 +11,35 @@ ODA({is: 'oda-tree', imports: 'oda//icon',
                 min-width: 0;
                 box-sizing: border-box;
                 overflow: hidden;
-                background: #ffffff;
-                color: #222222;
+                background: var(--content-background);
+                color: var(--content-color);
             }
             .tree-search {
                 @apply --horizontal;
                 align-items: center;
                 gap: 4px;
                 padding: 4px 8px;
-                border-bottom: 1px solid #e2e4e8;
-                background: #ffffff;
+                border-bottom: 1px solid var(--subtle-border);
+                background: var(--content-background);
                 position: sticky;
                 top: 0;
                 z-index: 35;
             }
             .tree-search input {
                 @apply --flex;
-                border: 1px solid #d4d8dd;
+                border: 1px solid var(--control-border-color);
                 border-radius: 4px;
                 padding: 3px 8px;
                 outline: none;
-                background: #f9fafb;
+                background: var(--subtle-background);
                 color: inherit;
                 font: inherit;
                 font-size: 13px;
                 min-width: 0;
             }
             .tree-search input:focus {
-                border-color: #3b1d5e;
-                background: #ffffff;
+                border-color: var(--accent-color);
+                background: var(--content-background);
             }
             .tree-search oda-icon {
                 cursor: pointer;

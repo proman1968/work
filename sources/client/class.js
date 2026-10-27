@@ -5,6 +5,10 @@ export class $class extends $folder{
         return {
             icon:{
                 get(){
+                    if (this.type === '$module')
+                        return 'odant:module';
+                    if (this.type === '$domain' && this.id === 'MODULES')
+                        return 'odant:folder';
                     return this.DATA?.icon || 'bootstrap:database';
                 },
                 set(n){
@@ -15,6 +19,11 @@ export class $class extends $folder{
                 this.update('label', n);
             },
         }
+    }
+    get subIcon(){
+        if (this.type === '$virtual')
+            return 'carbon:filter';
+        return '';
     }
     logs(params = {}){
         if (typeof params === 'string')

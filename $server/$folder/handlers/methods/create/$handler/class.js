@@ -308,7 +308,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             <legend>Подключить модули:</legend>
             <label ~for="availableModules" class="horizontal" style="align-items:center;gap:6px;cursor:pointer;font-size:small;">
                 <input type="checkbox" :checked="selectedModules.includes($for.item.id)" @change="_toggleModule($for.item.id, $event)" style="flex:0 0 auto;">
-                <oda-icon :icon="$for.item.icon || 'carbon:package'" icon-size="16"></oda-icon>
+                <oda-icon icon="odant:module" fill="#e600ff" icon-size="16"></oda-icon>
                 <span>{{$for.item.label || $for.item.id}} ({{$for.item.id}})</span>
             </label>
         </fieldset>
@@ -316,7 +316,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             <legend>Доступные модули (/MODULES):</legend>
             <div class="horizontal" style="flex-wrap:wrap;gap:6px;">
                 <div ~for="availableModules" class="mod-chip" @tap="_pickModule($for.item)">
-                    <oda-icon :icon="$for.item.icon || 'carbon:package'" icon-size="16"></oda-icon>
+                    <oda-icon icon="odant:module" fill="#e600ff" icon-size="16"></oda-icon>
                     <span>{{$for.item.label || $for.item.id}} (<b>{{$for.item.id}}</b>)</span>
                 </div>
             </div>
@@ -542,7 +542,7 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 const modsNode = await WORK.fetch(location.origin + '/MODULES', '', { deep: 1, items: itemsSelector });
                 const list = (modsNode?.[itemsSelector] || []).filter(m => m?.id && m.id[0] !== '$' && m.type === '$module');
                 if (list.length) {
-                    this.availableModules = list.map(m => ({ id: m.id, label: m.label || m.id, icon: m.icon || 'carbon:package' }));
+                    this.availableModules = list.map(m => ({ id: m.id, label: m.label || m.id, icon: 'odant:module' }));
                     if (this.type === '$module' && this.name === 'new') {
                         const first = this.availableModules[0];
                         this.name = first.id;

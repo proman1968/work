@@ -9,7 +9,7 @@ export default{
             LINKS: [
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты/Физ. лица", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники", access: "write" },
-                { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/В отпуске", access: "write" },
+                { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники/В отпуске", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/Кадры", access: "read", scope: "unit" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры", access: "write", scope: "unit" }
             ],
@@ -20,7 +20,7 @@ export default{
                 LINKS: [
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты/Физ. лица", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники", access: "write" },
-                    { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/В отпуске", access: "write" },
+                    { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники/В отпуске", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/Кадры", access: "read", scope: "unit" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры", access: "write", scope: "place" }
                 ]

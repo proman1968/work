@@ -33,17 +33,37 @@ export default {
     subIcon:{
         $def: '',
         get (){
-            if (!this.isUser)
+            if (!this.isUser) {
+                if (this.$item?.type === '$virtual')
+                    return 'carbon:filter';
                 return this.$item?.subIcon;
+            }
             return Promise.resolve(this.online).then(res => res ? 'unicon:check-circle' : '');
         }
     },
     subIconColor:{
         $def: '',
         get (){
-            if (!this.isUser)
+            if (!this.isUser) {
+                if (this.$item?.type === '$virtual')
+                    return '#ede9fe';
                 return '';
+            }
             return Promise.resolve(this.online).then(res => res ? 'lime' : '');
+        }
+    },
+    fill: {
+        $def: '',
+        get() {
+            const it = this.$item;
+            if (!it || this.isUser)
+                return '';
+            const t = it.type;
+            if (t === '$module' || (t === '$domain' && it.id === 'MODULES'))
+                return '#e600ff';
+            if (t === '$virtual')
+                return '#6d28d9';
+            return '';
         }
     },
     get default(){

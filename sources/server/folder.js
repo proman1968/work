@@ -182,6 +182,13 @@ export class $folder extends $item{
                 const cnt = await classObjectCount(this.path, this.type);
                 if (cnt > 0 && this.DATA)
                     this.DATA.objectCount = cnt;
+                if (this.type === '$module' && this.DATA) {
+                    const localEnabled = this._ownModuleEnabledSync();
+                    const sysBlocked = await this.isSystemModuleBlocked();
+                    this.DATA.localEnabled = localEnabled;
+                    this.DATA.systemBlocked = sysBlocked;
+                    this.DATA.enabled = localEnabled && !sysBlocked;
+                }
             }
             return this;
         })
@@ -975,6 +982,8 @@ export class $folder extends $item{
     /** Есть ли у элемента дети в списке `list` (по умолчанию items — бизнес-вид дерева). */
     async _hasItems(list = 'items'){
         try {
+            if (this instanceof FS.$class && this.type === '$module' && await this.isModuleBlocked())
+                return false;
             const items = await this[list];
             return Array.isArray(items) && items.length > 0;
         }

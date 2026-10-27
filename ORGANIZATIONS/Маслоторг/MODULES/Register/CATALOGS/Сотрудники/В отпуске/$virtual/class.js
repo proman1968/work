@@ -1,4 +1,4 @@
 export default {
     label: 'В отпуске',
-    icon: 'carbon:filter',
+    icon: 'carbon:user-activity',
 }

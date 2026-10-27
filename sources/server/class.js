@@ -42,7 +42,7 @@ export const ALLOWED_CHILD_TYPES = Object.freeze({
     $structure: Object.freeze(['$structure']),
     $module:    Object.freeze(['$domain', '$module', '$catalog', '$struct', '$operation', '$register']),
     $catalog:   Object.freeze(['$catalog', '$virtual']),
-    $virtual:   Object.freeze([]),
+    $virtual:   Object.freeze(['$virtual']),
     $struct:    Object.freeze(['$struct']),
     $operation: Object.freeze(['$operation']),
     $register:  Object.freeze(['$register', '$account']),
@@ -78,7 +78,7 @@ const SCAFFOLD_SKIP = new Set(['node_modules', 'history', 'logs']);
  * Сформировать тонкий class.js (только label, icon и $public.form) из эталонного class.js модуля:
  * все поля (FIELDS), правила проводок (POSTINGS), структуры и обработчики наследуются по оси Ancestor.
  */
-function extractStubClassJsSync(srcClassFile, fallbackLabel = '') {
+function extractStubClassJsSync(srcClassFile, fallbackLabel = '', isModule = false) {
     let text = '';
     try {
         if (srcClassFile && fs.existsSync(srcClassFile))
@@ -89,7 +89,7 @@ function extractStubClassJsSync(srcClassFile, fallbackLabel = '') {
     const iconMatch = /\bicon\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/.exec(text);
     const formMatch = /\$public\s*:\s*\{[^}]*\bform\s*:\s*(['"])((?:\\.|(?!\1).)*)\1/s.exec(text);
     const label = (fallbackLabel || labelMatch?.[2] || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const icon = (iconMatch?.[2] || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const icon = isModule ? '' : (iconMatch?.[2] || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const form = (formMatch?.[2] || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const lines = ['export default {'];
     if (label)
@@ -166,12 +166,12 @@ function ensureBaseModulesDomainSync(baseDir) {
     const domFile = path.join(baseDir, 'MODULES', '$domain', 'class.js');
     if (!fs.existsSync(domFile)) {
         fs.mkdirSync(path.dirname(domFile), { recursive: true });
-        fs.writeFileSync(domFile, `export default {\n    label: 'Модули',\n    icon: 'carbon:package',\n}\n`, 'utf-8');
+        fs.writeFileSync(domFile, `export default {\n    label: 'Модули',\n    icon: 'odant:folder',\n}\n`, 'utf-8');
     }
     const declFile = path.join(baseDir, 'MODULES', '$domain', '$folder', '$class', '$module', 'class.js');
     if (!fs.existsSync(declFile)) {
         fs.mkdirSync(path.dirname(declFile), { recursive: true });
-        fs.writeFileSync(declFile, `export default {\n    label: 'Модуль',\n    icon: 'carbon:package',\n}\n`, 'utf-8');
+        fs.writeFileSync(declFile, `export default {\n    label: 'Модуль',\n    icon: 'odant:module',\n}\n`, 'utf-8');
     }
 }
 
@@ -216,10 +216,29 @@ export class $class extends $folder{
     get $public(){
         return {
             get icon(){
+                if (this.type === '$module')
+                    return 'odant:module';
+                if (this.type === '$domain' && this.id === 'MODULES')
+                    return 'odant:folder';
                 return this.DATA.icon;
             },
             get isCustom(){
                 return !WORK.types.includes(this.type)
+            },
+            get enabled(){
+                if (this.type !== '$module')
+                    return undefined;
+                return this.DATA?.enabled !== false;
+            },
+            get localEnabled(){
+                if (this.type !== '$module')
+                    return undefined;
+                return this.DATA?.localEnabled !== false;
+            },
+            get systemBlocked(){
+                if (this.type !== '$module')
+                    return undefined;
+                return this.DATA?.systemBlocked === true;
             },
             /**
              * uid пользователей, назначенных локально в #security по базовым ролям: строки дерева
@@ -603,6 +622,13 @@ export class $class extends $folder{
         const cnt = await classObjectCount(this.path, this.type);
         if (this.DATA)
             this.DATA.objectCount = cnt > 0 ? cnt : undefined;
+        if (this.type === '$module' && this.DATA) {
+            const localEnabled = this._ownModuleEnabledSync();
+            const sysBlocked = await this.isSystemModuleBlocked();
+            this.DATA.localEnabled = localEnabled;
+            this.DATA.systemBlocked = sysBlocked;
+            this.DATA.enabled = localEnabled && !sysBlocked;
+        }
         const arg = Object.assign({}, p)
         return super.info(arg);
     }
@@ -894,11 +920,143 @@ export class $class extends $folder{
         const folder = await storage.getFolderToSaveFile(params);
         return folder.get_write_stream(params);
     }
+    /** Ближайший модуль ($module), которому принадлежит этот узел (или сам узел, если он $module). */
+    _enclosingModule() {
+        for (let cur = this; cur; cur = cur.$parent) {
+            if (cur instanceof $class && cur.type === '$module')
+                return cur;
+        }
+        return null;
+    }
+
+    /** Собственный признак активности модуля из его локального $module/class.js (по умолчанию true). */
+    _ownModuleEnabledSync() {
+        const mod = this._enclosingModule();
+        if (!mod)
+            return true;
+        try {
+            const ownFile = path.join(mod.real_dir, '$module', 'class.js');
+            if (fs.existsSync(ownFile)) {
+                const txt = fs.readFileSync(ownFile, 'utf-8');
+                if (/\benabled\s*:\s*false\b/.test(txt) || /\bblocked\s*:\s*true\b/.test(txt))
+                    return false;
+                return true;
+            }
+        }
+        catch { /* ignore */ }
+        return mod.DATA?.localEnabled !== false && mod.DATA?.blocked !== true;
+    }
+
+    /** Заблокирован ли одноимённый эталонный модуль на уровне всей системы WORK (/MODULES/<id>). */
+    async isSystemModuleBlocked() {
+        const mod = this._enclosingModule();
+        if (!mod || !mod.id)
+            return false;
+        if (String(mod.path || '').startsWith('/MODULES/'))
+            return false;
+        const rootDir = globalThis.WORK?.real_dir || '.';
+        const sysFile = path.join(rootDir, 'MODULES', mod.id, '$module', 'class.js');
+        if (fs.existsSync(sysFile)) {
+            try {
+                const txt = fs.readFileSync(sysFile, 'utf-8');
+                return /\benabled\s*:\s*false\b/.test(txt) || /\bblocked\s*:\s*true\b/.test(txt);
+            }
+            catch { /* ignore */ }
+        }
+        try {
+            const sysMod = await globalThis.WORK?.get_item('/MODULES/' + mod.id);
+            if (sysMod) {
+                await sysMod.init;
+                if (!sysMod._ownModuleEnabledSync())
+                    return true;
+            }
+        }
+        catch { /* ignore */ }
+        return false;
+    }
+
+    /** Заблокирован ли модуль (локально в базе или глобально на уровне WORK). */
+    async isModuleBlocked() {
+        const mod = this._enclosingModule();
+        if (!mod)
+            return false;
+        if (!mod._ownModuleEnabledSync())
+            return true;
+        return mod.isSystemModuleBlocked();
+    }
+
+    /**
+     * Быстрое включение/блокировка модуля ($module) чек-боксом в дереве:
+     * - на уровне базы (/ORGANIZATIONS/<Орг>/MODULES/<Модуль>) — блокирует модуль внутри этой базы;
+     * - на уровне системы WORK (/MODULES/<Модуль>) — полностью блокирует модуль во всей системе.
+     */
+    async set_enabled(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.ADMIN);
+        if (this.type !== '$module')
+            throw new Error('set_enabled: метод применим только к модулю ($module)');
+        const nextEnabled = !(params.enabled === false || params.enabled === 'false' || params.enabled === 0 || params.enabled === '0');
+        const ownFile = path.join(this.real_dir, '$module', 'class.js');
+        let ownObj = {};
+        if (fs.existsSync(ownFile)) {
+            try {
+                const raw = fs.readFileSync(ownFile, 'utf-8');
+                ownObj = (await this.constructor.importScript(raw, this.path)) || {};
+            }
+            catch { ownObj = {}; }
+        }
+        if (!ownObj.label && this.DATA?.label)
+            ownObj.label = this.DATA.label;
+        delete ownObj.icon;
+        delete ownObj.blocked;
+        if (nextEnabled)
+            delete ownObj.enabled;
+        else
+            ownObj.enabled = false;
+        const post = 'export default ' + this.constructor.toScript(ownObj) + '\n';
+        await this.meta_folder.save_file({
+            ...params,
+            role: $class.ROLES.ADMIN,
+            filename: 'class.js',
+            post,
+            ignore_save_logs: true,
+        });
+        this.reset();
+        await this.init;
+        LINKS.reset();
+        if (String(this.path || '').startsWith('/MODULES/')) {
+            try {
+                const orgsDom = await globalThis.WORK?.get_item('/ORGANIZATIONS');
+                const orgs = (await orgsDom?.children) || [];
+                for (const org of orgs) {
+                    if (!org?.id || org.id[0] === '$')
+                        continue;
+                    const peer = await globalThis.WORK?.get_item(`${org.path}/MODULES/${this.id}`).catch(() => null);
+                    if (peer) {
+                        peer.reset();
+                        await peer.init;
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }
+        const sysBlocked = await this.isSystemModuleBlocked();
+        const localEnabled = this._ownModuleEnabledSync();
+        const enabled = localEnabled && !sysBlocked;
+        if (this.DATA) {
+            this.DATA.localEnabled = localEnabled;
+            this.DATA.systemBlocked = sysBlocked;
+            this.DATA.enabled = enabled;
+        }
+        return { enabled, localEnabled, systemBlocked: sysBlocked };
+    }
+
     /**
      * Доступ пользователя к классу ('admin'|'write'|'read'|null): прямые назначения
      * плюс ссылки рабочих мест (LINKS) для прикладных классов.
      */
     async data_access(params = {}) {
+        if (await this.isModuleBlocked())
+            return null;
         return LINKS.dataAccess(this, params);
     }
     /**
@@ -957,6 +1115,16 @@ export class $class extends $folder{
         const roots = [];
         for (const [id, e] of eff) {
             const modMatch = /^(\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+|\/MODULES\/[^/]+)\/(.+)$/.exec(id);
+            if (modMatch) {
+                try {
+                    let modItem = await globalThis.WORK?.get_item(modMatch[1]);
+                    if (Array.isArray(modItem))
+                        modItem = modItem.at(-1);
+                    if (modItem && typeof modItem.isModuleBlocked === 'function' && await modItem.isModuleBlocked())
+                        continue;
+                }
+                catch { /* ignore */ }
+            }
             const segs = modMatch ? modMatch[2].split('/').filter(Boolean) : id.split('/').filter(Boolean);
             let prefix = modMatch ? modMatch[1] : '', parent = null;
             segs.forEach((seg, i) => {
@@ -1940,20 +2108,129 @@ export class $class extends $folder{
     }
 
     /**
-     * Глобальный поиск относительно текущего узла дерева (только среди элементов и объектов,
-     * доступных пользователю по правам canSee / data_access / scope).
+     * Поиск файлов, объектов данных и элементов структуры относительно текущего узла
+     * (только среди элементов, файлов и объектов, доступных пользователю по правам canSee / data_access / scope).
      */
     async search_tree(params = {}) {
         const rawQ = String(params.q ?? params.query ?? '').trim();
         const q = rawQ.toLowerCase();
         if (!q)
-            return { query: '', nodes: [], objects: [] };
+            return { query: '', files: [], nodes: [], objects: [] };
 
+        const files = [];
         const nodes = [];
         const objects = [];
         const seenPaths = new Set();
+        const seenFilePaths = new Set();
         const seenObjIds = new Set();
-        const SKIP_SEARCH = new Set(['node_modules', 'history', 'logs', 'sources', 'oda', 'tests', 'docs', 'torus', 'vendor']);
+        const linkedClassPaths = new Set();
+        const queriedClassPaths = new Set();
+        const SKIP_SEARCH = new Set(['node_modules', 'history', 'logs', 'sources', 'oda', 'tests', 'docs', 'torus', 'vendor', 'handlers', 'methods', 'triggers', 'ai', 'lib']);
+        const basePrefix = (this.path && this.path !== '/') ? this.path + '/' : '/';
+
+        const checkFile = async (fileItem, owner) => {
+            if (!fileItem || files.length >= 60)
+                return;
+            const fPath = fileItem.short || fileItem.path || '';
+            if (!fPath || seenFilePaths.has(fPath))
+                return;
+            if (fileItem.id === 'class.js' || fileItem.isHidden || fileItem.id?.[0] === '.' || fileItem.id?.[0] === '#' || fileItem.id?.[0] === '$')
+                return;
+            if (!(await owner.canSee(fileItem, params)))
+                return;
+            seenFilePaths.add(fPath);
+            const fName = String(fileItem.DATA?.label || fileItem.label || fileItem.name || fileItem.id || '');
+            const relFilePath = fPath.startsWith(basePrefix) ? fPath.slice(basePrefix.length) : fPath;
+            const nameHit = fName.toLowerCase().includes(q) || relFilePath.toLowerCase().includes(q);
+            let snippet = '';
+            let hitLine = 0;
+            if (!nameHit) {
+                try {
+                    const st = fileItem.stat;
+                    if (st && st.size > 0 && st.size <= 262144) {
+                        const content = await fileItem.load({ encoding: 'utf-8' });
+                        if (typeof content === 'string' && !content.includes('\0')) {
+                            const lines = content.split(/\r?\n/);
+                            for (let i = 0; i < lines.length; i++) {
+                                if (lines[i].toLowerCase().includes(q)) {
+                                    hitLine = i + 1;
+                                    snippet = lines[i].trim().slice(0, 180);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { /* binary or unreadable */ }
+            }
+            if (nameHit || hitLine > 0) {
+                files.push({
+                    path: fPath,
+                    label: fName || fPath,
+                    ext: fileItem.ext || '',
+                    icon: fileItem.DATA?.icon || 'files:file',
+                    line: hitLine || undefined,
+                    snippet: snippet || undefined,
+                });
+            }
+        };
+
+        const scanFolderFiles = async (folder, owner, fDepth = 0) => {
+            if (!folder || fDepth > 4 || files.length >= 60)
+                return;
+            let entries = [];
+            try {
+                entries = (await folder.children) || [];
+            }
+            catch { return; }
+            for (const entry of entries) {
+                if (!entry?.id || entry.id[0] === '.' || entry.id[0] === '#' || entry.id[0] === '$' || SKIP_SEARCH.has(entry.id))
+                    continue;
+                if (entry instanceof $class)
+                    continue;
+                if (entry instanceof FS.$file) {
+                    await checkFile(entry, owner);
+                }
+                else if (entry.constructor === FS.$folder) {
+                    if (await owner.canSee(entry, params))
+                        await scanFolderFiles(entry, owner, fDepth + 1);
+                }
+            }
+        };
+
+        const queryDataClass = async (clsItem) => {
+            if (!clsItem || objects.length >= 60)
+                return;
+            const cPath = clsItem.path || '';
+            if (!cPath || queriedClassPaths.has(cPath))
+                return;
+            if (typeof clsItem.isModuleBlocked === 'function' && await clsItem.isModuleBlocked())
+                return;
+            queriedClassPaths.add(cPath);
+            if ((clsItem.type === '$catalog' || clsItem.type === '$operation') && typeof clsItem.db_query === 'function') {
+                try {
+                    const qParams = { ...params, search: rawQ, limit: 25 };
+                    if (this.type === '$structure' && clsItem.type === '$operation')
+                        qParams.unit = this.path;
+                    const res = await clsItem.db_query(qParams);
+                    for (const it of res?.items || []) {
+                        if (!it?.id || seenObjIds.has(it.id))
+                            continue;
+                        seenObjIds.add(it.id);
+                        objects.push({
+                            id: it.id,
+                            cid: it.cid || cPath,
+                            title: it.title || it.body?.name || it.id,
+                            classLabel: res?.classes?.[it.cid]?.label || clsItem.DATA?.label || clsItem.id,
+                            status: it.status || '',
+                            time: it.time || 0,
+                            type: clsItem.type,
+                        });
+                    }
+                }
+                catch { /* нет доступа к объектам этого класса */ }
+            }
+        };
 
         const walk = async (cur, depth = 0) => {
             if (!cur || depth > 7 || nodes.length >= 60)
@@ -1968,24 +2245,39 @@ export class $class extends $folder{
             }
             catch { /* ignore */ }
 
+            if (cur.type === '$module' && typeof cur.isModuleBlocked === 'function' && await cur.isModuleBlocked())
+                return;
+
             if (cur !== this) {
                 const label = String(cur.DATA?.label || cur.label || cur.id || '');
                 const id = String(cur.id || '');
-                if (label.toLowerCase().includes(q) || id.toLowerCase().includes(q) || curPath.toLowerCase().includes(q)) {
+                const relCurPath = curPath.startsWith(basePrefix) ? curPath.slice(basePrefix.length) : curPath;
+                if (label.toLowerCase().includes(q) || id.toLowerCase().includes(q) || relCurPath.toLowerCase().includes(q)) {
                     nodes.push({
                         path: curPath,
                         label: label || id || curPath,
-                        icon: cur.DATA?.icon || cur.icon || '',
+                        icon: cur.type === '$module' ? 'odant:module' : (cur.DATA?.icon || cur.icon || ''),
                         type: cur.type || '',
                     });
                 }
             }
 
-            // Рабочие места внутри видимого подразделения
+            const owner = cur instanceof $class ? cur : (cur.$class || this);
+            if (cur !== globalThis.WORK) {
+                await scanFolderFiles(cur, owner, 0);
+                if (cur instanceof $class && cur.meta_folder)
+                    await scanFolderFiles(cur.meta_folder, cur, 0);
+            }
+
+            // Рабочие места и привязанные классы внутри видимого подразделения
             if (cur.type === '$base' || cur.type === '$structure') {
                 const sec = cur.DATA?.['#security'];
-                if (sec?.ROLES) {
-                    const { places } = WORKPLACES.normalizeSecurity(sec);
+                if (sec) {
+                    const { common, places } = WORKPLACES.normalizeSecurity(sec);
+                    for (const l of common || []) {
+                        if (l?.id)
+                            linkedClassPaths.add(l.id);
+                    }
                     for (const { node: pl, trail } of WORKPLACES.walkPlaces(places)) {
                         const plLabel = String(pl.label || pl.id || '');
                         if (plLabel.toLowerCase().includes(q) || String(pl.id || '').toLowerCase().includes(q)) {
@@ -1997,34 +2289,16 @@ export class $class extends $folder{
                                 type: '$place',
                             });
                         }
+                        for (const l of pl.LINKS || []) {
+                            if (l?.id)
+                                linkedClassPaths.add(l.id);
+                        }
                     }
                 }
             }
 
-            // Поиск объектов внутри корневых справочников и операций организации
-            if ((cur.type === '$catalog' || cur.type === '$operation') && objects.length < 50) {
-                const parentType = cur.$parent?.type;
-                if (parentType !== cur.type && typeof cur.db_query === 'function') {
-                    try {
-                        const res = await cur.db_query({ ...params, search: rawQ, limit: 20 });
-                        for (const it of res?.items || []) {
-                            if (!it?.id || seenObjIds.has(it.id))
-                                continue;
-                            seenObjIds.add(it.id);
-                            objects.push({
-                                id: it.id,
-                                cid: it.cid || curPath,
-                                title: it.title || it.body?.name || it.id,
-                                classLabel: res?.classes?.[it.cid]?.label || cur.DATA?.label || cur.id,
-                                status: it.status || '',
-                                time: it.time || 0,
-                                type: cur.type,
-                            });
-                        }
-                    }
-                    catch { /* нет доступа к объектам этого класса */ }
-                }
-            }
+            if ((cur.type === '$catalog' || cur.type === '$operation') && cur.$parent?.type !== cur.type)
+                await queryDataClass(cur);
 
             let children = [];
             try {
@@ -2036,8 +2310,11 @@ export class $class extends $folder{
             for (const ch of children) {
                 if (!ch?.id || ch.id[0] === '$' || ch.id[0] === '.' || ch.id[0] === '#' || SKIP_SEARCH.has(ch.id))
                     continue;
+                if (ch instanceof FS.$file) {
+                    await checkFile(ch, owner);
+                    continue;
+                }
                 try {
-                    const owner = cur instanceof $class ? cur : (cur.$class || this);
                     const visible = await owner.canSee(ch, params)
                         || (ch instanceof $class && (await ch.data_access(params)) != null)
                         || (ch.id === 'MODULES' && ch.type === '$domain');
@@ -2050,6 +2327,38 @@ export class $class extends $folder{
         };
 
         await walk(this, 0);
+
+        for (const lPath of linkedClassPaths) {
+            if (objects.length >= 60 && nodes.length >= 60)
+                break;
+            try {
+                let target = await globalThis.WORK?.get_item(lPath);
+                if (Array.isArray(target))
+                    target = target.at(-1);
+                if (!target || !(target instanceof $class))
+                    continue;
+                await target.init;
+                if (typeof target.isModuleBlocked === 'function' && await target.isModuleBlocked())
+                    continue;
+                if ((await target.data_access(params)) == null && !(await target.canSee(target, params)))
+                    continue;
+                if (!seenPaths.has(target.path)) {
+                    const tLabel = String(target.DATA?.label || target.label || target.id || '');
+                    if (tLabel.toLowerCase().includes(q) || String(target.id || '').toLowerCase().includes(q)) {
+                        seenPaths.add(target.path);
+                        nodes.push({
+                            path: target.path,
+                            label: tLabel || target.id,
+                            icon: target.DATA?.icon || target.icon || '',
+                            type: target.type || '',
+                        });
+                    }
+                }
+                await queryDataClass(target);
+            }
+            catch { /* ignore */ }
+        }
+
         const isAdm = DEV_MODE || (await this.roles(params).catch(() => [])).includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
         const filteredNodes = isAdm
             ? nodes
@@ -2057,6 +2366,7 @@ export class $class extends $folder{
 
         return {
             query: rawQ,
+            files: files.slice(0, 60),
             nodes: filteredNodes.slice(0, 60),
             objects: objects.slice(0, 60),
         };

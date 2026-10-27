@@ -332,13 +332,13 @@ describe('методы учётного ядра у классов', () => {
         await sales.create({ id: 'GROUP1', ...as(ADMIN), post: `export default { label: 'Группа 1', ${SEC} }` });
         assert.equal((await item('/ORGANIZATIONS/ORG_C/SALES/GROUP1')).type, '$structure');
 
-        // 5. Внутри $virtual дочерние классы запрещены (конечный лист)
+        // 5. Внутри $virtual разрешены только дочерние виртуальные справочники ($virtual), а реальные ($catalog) — запрещены
         const clients = await item('/DATA/CATALOGS/CLIENTS');
-        assert.deepEqual(await clients.allowed_child_types, []);
-        await assert.rejects(clients.create({ id: 'VIP', type: '$virtual', ...as(ADMIN) }), /нельзя создать/);
+        assert.deepEqual(await clients.allowed_child_types, ['$virtual']);
+        await assert.rejects(clients.create({ id: 'REAL_SUB', type: '$catalog', ...as(ADMIN) }), /нельзя создать/);
 
         // 6. Создание новой организации ($base) с подключением модуля ($module) из /MODULES
-        write('MODULES/MiniReg/$module/class.js', `export default { label: 'Мини-учёт', icon: 'carbon:package' }`);
+        write('MODULES/MiniReg/$module/class.js', `export default { label: 'Мини-учёт' }`);
         write('MODULES/MiniReg/$module/$folder/$class/$catalog/class.js', `export default { label: 'Справочник' }`);
         write('MODULES/MiniReg/CATALOGS/$catalog/class.js', `export default { label: 'Справочники', $public: { form: 'objects' } }`);
         write('MODULES/MiniReg/CATALOGS/$catalog/$folder/$class/$catalog/class.js', `export default { label: 'Справочник' }`);
@@ -355,6 +355,39 @@ describe('методы учётного ядра у классов', () => {
         const createdItem = await orgNewItems.db_create({ post: { name: 'Товар Ромашки' }, ...as(ADMIN) });
         assert.equal(createdItem.title, 'Товар Ромашки');
         assert.ok(fs.existsSync(path.join(tmp, 'ORGANIZATIONS/ORG_NEW/$base/#system/work.db')));
+
+        // 7. Блокировка модуля ($module) чек-боксом внутри базы и на уровне всей системы WORK
+        const baseMod = await item('/ORGANIZATIONS/ORG_NEW/MODULES/MiniReg');
+        const sysMod = await item('/MODULES/MiniReg');
+        assert.equal((await baseMod.info()).icon, 'odant:module');
+        assert.equal((await baseMod.info()).enabled, true);
+
+        const disBase = await invoke(baseMod, 'set_enabled', { enabled: false, ...as(ADMIN) });
+        assert.equal(disBase.enabled, false);
+        assert.equal(disBase.localEnabled, false);
+        assert.equal(disBase.systemBlocked, false);
+        await assert.rejects(invoke(orgNewItems, 'db_query', as(ADMIN)), /Модуль заблокирован/);
+
+        const enBase = await invoke(baseMod, 'set_enabled', { enabled: true, ...as(ADMIN) });
+        assert.equal(enBase.enabled, true);
+        assert.equal((await invoke(orgNewItems, 'db_query', as(ADMIN))).total, 1);
+
+        // Полная блокировка на уровне WORK (/MODULES/MiniReg) блокирует модуль и внутри базы
+        const disSys = await invoke(sysMod, 'set_enabled', { enabled: false, ...as(ADMIN) });
+        assert.equal(disSys.enabled, false);
+        assert.equal(await baseMod.isSystemModuleBlocked(), true);
+        assert.equal(await baseMod.isModuleBlocked(), true);
+        await assert.rejects(invoke(orgNewItems, 'db_query', as(ADMIN)), /Модуль заблокирован/);
+
+        await invoke(sysMod, 'set_enabled', { enabled: true, ...as(ADMIN) });
+        assert.equal(await baseMod.isModuleBlocked(), false);
+
+        // 8. Поиск (search_tree) внутри подразделения $structure находит файлы (по имени и тексту) и данные
+        write('ORGANIZATIONS/ORG_C/SALES/регламент-продаж.md', 'Специальный прайс-лист для ключевых партнёров');
+        sales.reset();
+        const sDept = await invoke(sales, 'search_tree', { q: 'прайс-лист', ...as(ADMIN) });
+        assert.equal(sDept.files.length, 1, 'найден файл внутри подразделения по тексту');
+        assert.match(sDept.files[0].path, /регламент-продаж\.md$/);
     });
 
     it('инструменты ИИ-агента (describe_class, find_objects, register_operation, report) и сквозная цепочка ODANT', async () => {

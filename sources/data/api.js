@@ -332,6 +332,8 @@ const admin = async (item, p) => item.assertAccess(p, item.constructor.ACCESS_LE
  */
 function method(level, fn) {
     return async (item, p = {}) => {
+        if (typeof item?.isModuleBlocked === 'function' && await item.isModuleBlocked())
+            throw new DataError('Модуль заблокирован', [], 403);
         let uid = null;
         if (level === 'read')
             await item.assertAccess(p, item.constructor.ACCESS_LEVEL.READ);

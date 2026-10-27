@@ -83,6 +83,11 @@ describe('классы демо-конфигурации', () => {
 
         const orgNorms = classSchema(db, `${P}/REGISTER/Нормативы`);
         assert.equal(orgNorms.norms, true);
+
+        const vac = classSchema(db, `${P}/CATALOGS/Сотрудники/В отпуске`);
+        assert.equal(vac.source.registry, `${P}/CATALOGS/Субъекты/Физ. лица`);
+        assert.equal(vac.source.account, `${P}/REGISTER/Кадры/В отпуске`);
+        assert.deepEqual(vac.overlay.map(f => f.id), ['position', 'salary', 'personnel_number', 'until']);
     });
 
     it('места: ссылки указывают на существующие классы, места уникальны в подразделении', () => {
@@ -207,10 +212,10 @@ describe('сквозной сценарий', () => {
         post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры/Приём на работу', '04-01', { person: ids.petrov });
         assert.equal(virtualMembers(db, { cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники', at: d('04-02') }).items.length, 2);
         post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры/Отправить в отпуск', '07-01', { person: ids.petrov, until: d('07-14') });
-        assert.deepEqual(virtualMembers(db, { cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/В отпуске', at: d('07-02') }).items.map(i => i.id), [ids.petrov]);
+        assert.deepEqual(virtualMembers(db, { cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники/В отпуске', at: d('07-02') }).items.map(i => i.id), [ids.petrov]);
         assert.equal(virtualMembers(db, { cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники', at: d('07-02') }).items.length, 2, 'в отпуске — всё ещё сотрудник');
         post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры/Вернуть из отпуска', '07-15', { person: ids.petrov });
-        assert.deepEqual(virtualMembers(db, { cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/В отпуске', at: d('07-16') }).items, []);
+        assert.deepEqual(virtualMembers(db, { cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники/В отпуске', at: d('07-16') }).items, []);
 
         const pr = post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Зарплата', '04-30', { period: d('04-01'), staff: [{ employee: ids.ivanov, sum: 100000 }] });
         assert.deepEqual(entries(pr).map(x => [x.rule, x.debit, x.credit, x.amount]), [

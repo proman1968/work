@@ -1,4 +1,4 @@
 export default {
     label: 'Модули',
-    icon: 'carbon:package',
+    icon: 'odant:folder',
 }

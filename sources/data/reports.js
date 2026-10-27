@@ -17,7 +17,7 @@
  * проверяется по счёту своей стороны, у журнала — по любой стороне.
  * Названия объектов и классов — в `names` ответа (текущие).
  */
-import { getClass, descendants, classesOfType } from './classes.js';
+import { getClass, descendants, ancestors, classesOfType } from './classes.js';
 import { classSchema, analyticSlots, objectTitle, FAMILY } from './schema.js';
 import { readObject, queryObjects, linkCids } from './objects.js';
 import { presentEntry } from './posting.js';
@@ -937,13 +937,23 @@ export function virtualMembers(db, q = {}) {
         FROM (${sql}) WHERE k0 IS NOT NULL GROUP BY k0 ${having}`).all(...args);
     const at = bound === HIGH ? undefined : bound - 1;
     const ext = db.prepare(`SELECT id FROM objects WHERE cid = ? AND ext_of = ? AND status <> 'deleted'`);
+    const vAncs = ancestors(db, schema.cid).filter(a => a.type === '$virtual');
     const items = [];
     for (const r of rows) {
         const obj = readObject(db, r.id, { at }) ?? readObject(db, r.id);
         if (!obj || !regCids.includes(obj.cid))
             continue;
-        const e = ext.get(schema.cid, obj.id);
-        const extObj = e ? readObject(db, e.id, { at }) ?? readObject(db, e.id) : null;
+        let mergedExtBody = null;
+        let ownExtObj = null;
+        for (const anc of vAncs) {
+            const e = ext.get(anc.cid, obj.id);
+            const eo = e ? readObject(db, e.id, { at }) ?? readObject(db, e.id) : null;
+            if (eo) {
+                mergedExtBody = { ...(mergedExtBody || {}), ...(eo.body || {}) };
+                if (anc.cid === schema.cid)
+                    ownExtObj = eo;
+            }
+        }
         items.push({
             id: obj.id,
             cid: obj.cid,
@@ -951,7 +961,9 @@ export function virtualMembers(db, q = {}) {
             body: obj.body,
             balance: balance(r.a, r.q, r.q2),
             turnover: { debit: rub(r.da), credit: rub(r.ca), qty_debit: q6(r.dq), qty_credit: q6(r.cq) },
-            ext: extObj ? { id: extObj.id, version: extObj.version, body: extObj.body } : null,
+            ext: ownExtObj
+                ? { id: ownExtObj.id, version: ownExtObj.version, body: mergedExtBody || ownExtObj.body }
+                : (mergedExtBody ? { id: null, version: null, body: mergedExtBody } : null),
         });
     }
     items.sort((a, b) => a.title.localeCompare(b.title, 'ru'));
