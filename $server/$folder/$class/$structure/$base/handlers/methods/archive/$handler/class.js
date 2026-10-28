@@ -6,8 +6,6 @@ export default {
     icon: 'icons:archive',
     label: 'Архивация',
     roles: ['ADMIN', 'BOSS'],
-    service: true,
-    isService: true,
     order: 10,
     async execute() {
         const ctx = await (this.$context || this.$item?.$context);

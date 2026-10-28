@@ -130,6 +130,84 @@ export function streamLead(streamed) {
     const lead = leadOf(streamed);
     return lead.text && lead.closed ? lead : null;
 }
+
+/**
+ * Попредложенческая потоковая озвучка (First-Sentence / Clause Stream):
+ * не ждёт закрытия всех 3 предложений лида, а отдаёт каждое завершённое предложение сразу по мере стрима.
+ * @param {string} content        накопленный текст ответа
+ * @param {number} [spokenCount]  сколько предложений лида уже отправлено в Speaker
+ * @param {object} [opts]
+ * @returns {{ chunks: string[], nextCount: number, done: boolean }}
+ */
+export function streamSentences(content, spokenCount = 0, { maxSentences = LEAD_MAX_SENTENCES, maxChars = LEAD_MAX_CHARS, finished = false } = {}) {
+    const raw = String(content ?? '').replace(/```[\s\S]*?(?:```|$)/g, '\n\n@@CODE@@\n\n').replace(/~~~[\s\S]*?(?:~~~|$)/g, '\n\n@@CODE@@\n\n');
+    const blocks = raw.split(/\n\s*\n/);
+    const prose = [];
+    let stopped = false;
+    let rest = false;
+    for (let i = 0; i < blocks.length; i++) {
+        const kind = blockKind(blocks[i]);
+        if (kind === 'empty')
+            continue;
+        if (kind === 'prose') {
+            const text = speakable(blocks[i]);
+            if (text)
+                prose.push(text);
+            continue;
+        }
+        if (kind === 'heading' && !prose.length)
+            continue;
+        stopped = true;
+        rest = true;
+        break;
+    }
+    if (!prose.length)
+        return { chunks: [], nextCount: spokenCount, done: finished || stopped };
+
+    const joined = prose.join(' ').replace(/:\s*$/, stopped ? '.' : ':');
+    const all = sentencesOf(joined);
+    // Сколько предложений уже гарантированно закрыто:
+    // - если началось следующее предложение (all.length - 1),
+    // - либо начался не-прозаический блок (stopped),
+    // - либо стрим завершён (finished),
+    // - либо единственное предложение заканчивается точкой/вопросом/восклицанием с пробелом/переводом строки в конце сырого текста
+    const trailingClosed = /[.!?…]\s+$/.test(String(content ?? ''));
+    const closedCount = (finished || stopped)
+        ? all.length
+        : Math.max(all.length - 1, trailingClosed ? all.length : 0);
+
+    const allowed = [];
+    let totalLen = 0;
+    let cutByLen = false;
+    for (let i = 0; i < Math.min(all.length, maxSentences); i++) {
+        const s = all[i];
+        const nextLen = totalLen ? totalLen + 1 + s.length : s.length;
+        if (nextLen > maxChars) {
+            if (i === 0)
+                allowed.push(s.slice(0, maxChars).replace(/\s+\S*$/, '') + '…');
+            cutByLen = true;
+            break;
+        }
+        allowed.push(s);
+        totalLen = nextLen;
+    }
+
+    const readyCount = Math.min(closedCount, allowed.length);
+    const done = finished || stopped || cutByLen || readyCount >= maxSentences || closedCount > maxSentences;
+    const more = cutByLen || rest || all.length > allowed.length;
+
+    const chunks = [];
+    for (let i = spokenCount; i < readyCount; i++)
+        chunks.push(allowed[i]);
+    if (done && more && spokenCount <= readyCount)
+        chunks.push(MORE_SUFFIX);
+
+    return {
+        chunks,
+        nextCount: done && more ? readyCount + 1 : readyCount,
+        done,
+    };
+}
 /** Куски для синтеза: целые предложения, не длиннее max (длинные режутся по запятым и пробелам). */
 export function chunksOf(text, max = CHUNK_MAX_CHARS) {
     const out = [];
@@ -253,4 +331,21 @@ export function voiceCommand(text) {
     if (/^(останови|прекрати|отмени|прерви|стоп) (работу|задачу|выполнение|всё|все)$/.test(t))
         return 'stop-task';
     return '';
+}
+
+/**
+ * Анализ промежуточной речи человека (для раннего подхвата реплики или проактивного вступления ИИ):
+ * - 'early-submit' (hesitation): человек замялся («эээ…», «как его…», «какой там счёт…») и сделал паузу >= 360 мс;
+ * - 'fact-check': в промежуточной фразе упомянут конкретный счёт или склад — стоит проверить в базе на лету;
+ * - 'none': продолжаем слушать.
+ */
+export function analyzeInterimSpeech(text, pauseMs = 0) {
+    const clean = String(text ?? '').replace(/\s+/g, ' ').trim();
+    if (clean.length < 4)
+        return { action: 'none' };
+    if (pauseMs >= 360 && /(?:ээ+|мм+|хм+|как\s+его|как\s+там(?:\s+\S+)?|какой\s+там(?:\s+\S+)?|забыл(?:\s+как)?|подскажи)\s*[.…,?-]*$/iu.test(clean))
+        return { action: 'early-submit', reason: 'hesitation', text: clean };
+    if (/(?:сч[её]т[ауеом]*\s*(?:№|номер)?\s*\d{2})|(?:(?:со\s+склада|на\s+склад|склад)\s+«?[А-ЯЁA-Z][а-яёa-z0-9-]{2,24})/iu.test(clean))
+        return { action: 'fact-check', text: clean };
+    return { action: 'none' };
 }

@@ -198,6 +198,7 @@ ODA({is: 'oda-chat',
                 <chat-item reply :$file="replyTarget"></chat-item>
             </div>
             <skill-tree ~if="skillSelectMode" hide-roots="2" hide-tops="1" allow-focus :$item="skillFolder"></skill-tree>
+            <microchat-voice ~if="voiceOn"></microchat-voice>
             <work-prompt-bar style="margin: 8px;" @tap="focusedItem = null"
                 ::value ::files :ai="isAIMode" :placeholder :pending="awaitTask"
                 ::model ::effort ::tts-mode :receivers :show-tts="true"
@@ -330,6 +331,64 @@ ODA({is: 'oda-chat',
     },
     focusedItem: null,
     $item: null,
+    taskItem: null,
+    data: null,
+    streams: {},
+    status: 'idle',
+    __microchatShell: true,
+    voiceOn: {
+        $def: false,
+        set(v) {
+            this.async(() => {
+                const bar = this.$('work-prompt-bar');
+                if (!v || !this._voice) {
+                    bar?.setDialogLevel?.(0);
+                    return;
+                }
+                this._voice.addEventListener('level', e => { if (this._voice?.state !== 'speaking') bar?.setDialogLevel?.(e.detail); });
+                this._voice.addEventListener('speechlevel', e => { if (this._voice?.state === 'speaking') bar?.setDialogLevel?.(e.detail); });
+            });
+        },
+    },
+    get canVoice() {
+        return !!(navigator.mediaDevices?.getUserMedia || window.SpeechRecognition || window.webkitSpeechRecognition);
+    },
+    toast(msg) {
+        ODA.showMessage?.(String(msg || ''));
+    },
+    async toggleVoice(on) {
+        const want = typeof on === 'boolean' ? on : !this.voiceOn;
+        if (!want) {
+            this._voice?.disable();
+            this.voiceOn = false;
+            return;
+        }
+        await Promise.all([
+            import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice-ui.js'),
+            import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice.js').then(m => { this._VoiceController = m.VoiceController; }),
+        ]);
+        if (!this._VoiceController)
+            return;
+        this._voice ??= new this._VoiceController(this);
+        this.voiceOn = await this._voice.enable();
+    },
+    async sendVoiceText(text, { voice = true, interrupt = true, spokenText } = {}) {
+        text = String(text ?? '').trim();
+        if (!text)
+            return;
+        if (this.taskItem) {
+            const payload = JSON.stringify({
+                prompt: text,
+                attachments: [],
+                ...(voice ? { voice: true } : {}),
+                ...(interrupt ? { interrupt: true } : {}),
+                ...(spokenText !== undefined ? { spokenText } : {}),
+            });
+            await this.taskItem.fetch('prompt', {}, payload);
+            return;
+        }
+        await this._createTask({ text, files: [], draft: { value: '', files: [], reply: null }, voice: true });
+    },
     awaitTask: false,
     ttsMode: {
         $def: 'off',
@@ -391,7 +450,7 @@ ODA({is: 'oda-chat',
      * Создание задачи: экран «создаю» → вложения → сохранение → явный запуск агента → карточка открыта по пути из ответа.
      * resume — задача уже создана (повтор запуска после сбоя), второй не создаётся.
      */
-    async _createTask({ text, files, draft }) {
+    async _createTask({ text, files, draft, voice = false }) {
         this.awaitTask = true;
         const item = this.$pdp.$item;
         try {
@@ -403,11 +462,12 @@ ODA({is: 'oda-chat',
                     attachments.push({ path: path.startsWith('/') ? path : '/' + path, name: file.name });
             }));
             const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
-            const body = { name, created: Date.now(), items: [] };
+            const useVoice = voice || !!this.voiceOn;
+            const body = { name, created: Date.now(), items: [], ...(useVoice ? { voice: true } : {}) };
             if (this.model)
                 body.model = this.model;
             body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
-            const params = { encoding: 'utf-8' };
+            const params = { encoding: 'utf-8', ...(useVoice ? { voice: true } : {}) };
             if (attachments.length) {
                 params.includes = JSON.stringify(attachments.map(a => a.path));
                 params.attachments = JSON.stringify(attachments);
@@ -415,8 +475,14 @@ ODA({is: 'oda-chat',
             const log = await item.save_file(new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' }), params);
             const path = log?.logFullPath || log?.path || '';
             this.awaitTask = false;
-            if (path)
+            if (path) {
                 await this._openCreated(path);
+                if (useVoice) {
+                    const createdTask = await WORK.get_item(path).catch(() => null);
+                    if (createdTask)
+                        this._bindChatVoiceTask(createdTask);
+                }
+            }
             else
                 this._awaitNewTask('');
         }
@@ -461,6 +527,48 @@ ODA({is: 'oda-chat',
             this.awaitTask = true;
             this._awaitNewTask(path);
         }
+    },
+    _bindChatVoiceTask(task) {
+        if (this.taskItem && this._chatTaskH) {
+            for (const [k, fn] of Object.entries(this._chatTaskH))
+                this.taskItem.unlisten?.(k, fn);
+        }
+        this.taskItem = task;
+        this.streams = {};
+        if (!task)
+            return;
+        const reload = async () => {
+            try {
+                const raw = await task.load();
+                const data = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+                this.data = data;
+                this.status = data.status || 'idle';
+                this._voice?.onData(data);
+            }
+            catch { /* ignore */ }
+        };
+        this._chatTaskH = {
+            'changed': () => reload(),
+            'chat.done': () => reload(),
+            'task.state': e => {
+                const s = e.detail?.value?.status;
+                if (s)
+                    this.status = s;
+            },
+            'task.delta': e => {
+                const d = e.detail?.value;
+                if (!d?.item || !d.token)
+                    return;
+                const cur = this.streams[d.item] || {};
+                const field = d.field === 'reasoning' ? 'reasoning' : 'content';
+                this.streams = { ...this.streams, [d.item]: { ...cur, [field]: (cur[field] || '') + d.token } };
+                this.status = 'running';
+                this._voice?.onDelta({ item: d.item, field });
+            },
+        };
+        for (const [k, fn] of Object.entries(this._chatTaskH))
+            task.listen?.(k, fn);
+        reload();
     },
     /**
      * Новая задача сохранена: день — из пути файла (…/YYYY-MM-DD/….task), а не из часов браузера.

@@ -237,7 +237,7 @@ export default {
                 if (seenIds.has(item.id))
                     return false;
                 const match = filter === 'service'
-                    ? Boolean(item.DATA?.service || item.DATA?.isService || item.service === true || item.isService === true)
+                    ? (item.id !== 'archive' && item.id !== 'restore' && Boolean(item.DATA?.service || item.DATA?.isService || item.service === true || item.isService === true))
                     : filter === 'button'
                         ? Boolean(item.DATA?.isButton || item.DATA?.button || item.isButton === true || item.button === true)
                         : false;

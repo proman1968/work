@@ -470,13 +470,18 @@ function start(s, session, file) {
         finally {
             delete body.waiting;
             s.waiters.clear();
-            aborted = !!s.controller?.signal.aborted;
+            const wasInterrupted = !!s.interrupted;
+            s.interrupted = false;
+            aborted = !!s.controller?.signal.aborted && !wasInterrupted;
             s.controller = null;
-            // реплики, пришедшие под конец (или при стопе), не теряются: в ленту; без стопа — новый прогон
+            // реплики, пришедшие под конец (или при стопе/перебивании), не теряются: в ленту; без стопа (или при перебивании) — новый прогон
             const rest = body.queue || [];
             delete body.queue;
-            for (const u of rest)
+            for (const u of rest) {
+                if (u.voice)
+                    body.voice = true;
                 body.items.push({ ...u, queued: undefined });
+            }
             restart = rest.length > 0 && !aborted && body.status !== 'error';
             await save(s, session);
             s.running = null;
@@ -550,9 +555,14 @@ export async function prompt(file, params = {}) {
     // F32: реплика из расписания (сессия с scheduled: true) не отвечает за человека:
     // ждущий вопрос/подтверждение продолжает ждать ЕГО ответа, текст встаёт в очередь
     const scheduled = params.session?.scheduled === true;
+    const voice = params.voice === true || params.voice === 'true';
+    const interrupt = params.interrupt === true || params.interrupt === 'true';
+    const spokenText = typeof params.spokenText === 'string' ? params.spokenText.trim() : undefined;
     if (s.running) {
         const w = body.waiting;
         if (w && s.waiters.has(w.call) && !scheduled) {
+            if (voice && w.kind === 'question')
+                body.voice = true;
             const resolve = s.waiters.get(w.call);
             s.waiters.delete(w.call);
             resolve(w.kind === 'question' ? { content: text } : { accept: false, content: text });
@@ -560,8 +570,40 @@ export async function prompt(file, params = {}) {
         }
         if (!text && !attachments.length)
             return { ok: false, busy: true, error: 'задача выполняется' };
+        // Перебивание (barge-in): если нет выполняющихся изменяющих инструментов — обрываем текущий стрим
+        // и сразу переключаем агента на новую реплику собеседника
+        if (interrupt && !scheduled) {
+            const unsafe = uncertainCalls(body.items);
+            body.voice = voice;
+            (body.queue ??= []).push({
+                id: genId(),
+                type: 'user',
+                time: Date.now(),
+                content: text,
+                queued: true,
+                ...(voice ? { voice: true } : {}),
+                ...(attachments.length ? { attachments } : {}),
+            });
+            if (!unsafe.length && s.controller) {
+                const lastAsst = [...body.items].reverse().find(i => i.type === 'assistant' && !i.error);
+                if (lastAsst) {
+                    if (spokenText !== undefined) {
+                        lastAsst.fullContent ??= lastAsst.content;
+                        lastAsst.content = spokenText;
+                    }
+                    lastAsst.interrupted = true;
+                    lastAsst.stopped = true;
+                }
+                s.interrupted = true;
+                s.controller.abort('barge_in');
+                await save(s, session);
+                return { ok: true, interrupted: true };
+            }
+            await save(s, session);
+            return { ok: true, queued: true };
+        }
         // реплика во время работы — в очередь: агент получит её между шагами
-        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true, ...(attachments.length ? { attachments } : {}) });
+        (body.queue ??= []).push({ id: genId(), type: 'user', time: Date.now(), content: text, queued: true, ...(voice ? { voice: true } : {}), ...(attachments.length ? { attachments } : {}) });
         await save(s, session);
         return { ok: true, queued: true };
     }
@@ -584,11 +626,22 @@ export async function prompt(file, params = {}) {
     if (body.waiting) {
         // ожидание пережило рестарт: текст — ответ на вопрос или отказ с комментарием
         const w = body.waiting;
+        if (voice && w.kind === 'question')
+            body.voice = true;
         applyOffline(body, w.kind === 'question' ? { content: text } : { accept: false, content: text });
     }
     else if (text || attachments.length) {
+        // Если человек перебил озвучку уже после того, как стрим модели завершился — фиксируем реально услышанную часть
+        if (interrupt && spokenText !== undefined) {
+            const lastAsst = [...body.items].reverse().find(i => i.type === 'assistant' && !i.error);
+            if (lastAsst && !lastAsst.interrupted) {
+                lastAsst.fullContent ??= lastAsst.content;
+                if (spokenText)
+                    lastAsst.content = spokenText;
+                lastAsst.interrupted = true;
+            }
+        }
         // voice: реплика продиктована — агент отвечает первым абзацем для озвучки (VOICE_NOTE), клиент его читает вслух
-        const voice = params.voice === true || params.voice === 'true';
         body.voice = voice;
         body.items.push({ id: genId(), type: 'user', time: Date.now(), content: text, ...(voice ? { voice: true } : {}), ...(attachments.length ? { attachments } : {}) });
         if (!body.title)
@@ -719,6 +772,39 @@ export async function stop(file, params = {}) {
     send(s, params.session, { type: 'task.state', status: 'stopped' });
     send(s, params.session, { type: 'chat.done' });
     return { ok: true, stopped: true };
+}
+
+/**
+ * Перебивание ИИ человеком в момент начала речи (barge-in до окончания распознавания новой фразы):
+ * мгновенно останавливает активный стрим генерации (если нет выполняющихся изменяющих инструментов)
+ * и фиксирует реально произнесённую часть ответа (`spokenText`), оставляя задачу готовой к следующей реплике.
+ * @param {any} file  элемент .task
+ * @param {{ spokenText?: string, [key: string]: any }} params
+ */
+export async function interrupt(file, params = {}) {
+    params = argsOf(params);
+    await assertTaskOwner(file, params);
+    const s = stateOf(file);
+    const body = await getBody(file);
+    const spokenText = typeof params.spokenText === 'string' ? params.spokenText.trim() : undefined;
+    const lastAsst = [...(body.items || [])].reverse().find(i => i.type === 'assistant' && !i.error);
+    if (lastAsst && !lastAsst.interrupted) {
+        if (spokenText !== undefined && spokenText) {
+            lastAsst.fullContent ??= lastAsst.content;
+            lastAsst.content = spokenText;
+        }
+        lastAsst.interrupted = true;
+    }
+    if (s.running && s.controller && !uncertainCalls(body.items).length) {
+        if (lastAsst)
+            lastAsst.stopped = true;
+        s.controller.abort('barge_in');
+        await s.running?.catch?.(() => {});
+        body.status = 'idle';
+    }
+    await save(s, params.session);
+    send(s, params.session, { type: 'task.state', status: body.status });
+    return { ok: true, interrupted: true };
 }
 
 /**

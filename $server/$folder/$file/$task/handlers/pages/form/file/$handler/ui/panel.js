@@ -53,7 +53,9 @@ ODA({ is: 'microchat-panel',
     },
     get hint() {
         switch (this.status) {
-            case 'running': return 'Агент работает · сообщение встанет в очередь · Esc — остановить';
+            case 'running': return this.$pdp?.voiceOn
+                ? 'Живой диалог · говорите или пишите, чтобы перебить ИИ · Esc — остановить'
+                : 'Агент работает · сообщение встанет в очередь · Esc — остановить';
             case 'waiting': return this.waiting?.kind === 'approval' ? 'Нужно ваше разрешение — выше в ленте' : 'Агент ждёт ответа — выше в ленте';
             case 'stopped': return 'Остановлено';
             case 'error': return 'Работа прервана ошибкой';
@@ -110,19 +112,32 @@ ODA({ is: 'microchat-panel',
             return;
         this.value = '';
         this.files = [];
+        const shell = findShell(this);
+        const voiceOn = !!shell?.voiceOn;
+        let spokenText;
+        if (voiceOn && shell?._voice?.speaker?.busy) {
+            spokenText = shell._voice.speaker.spokenText;
+            shell._voice.speaker.cancel('barge');
+        }
         const attachments = files.length ? await this._upload(files) : [];
-        await this.dispatch(text, attachments);
+        await this.dispatch(text, attachments, { voice: voiceOn, interrupt: voiceOn, spokenText });
         this.focus();
     },
     /** Реплика голосом (голосовой режим): та же отправка, но с пометкой — агент ответит абзацем для озвучки. */
-    async sendText(text, { voice = false } = {}) {
+    async sendText(text, { voice = false, interrupt = false, spokenText } = {}) {
         text = String(text ?? '').trim();
         if (text)
-            await this.dispatch(text, [], { voice });
+            await this.dispatch(text, [], { voice, interrupt, spokenText });
     },
-    async dispatch(text, attachments = [], { voice = false } = {}) {
+    async dispatch(text, attachments = [], { voice = false, interrupt = false, spokenText } = {}) {
         const shell = findShell(this);
-        const body = JSON.stringify({ prompt: text, attachments, ...(voice ? { voice: true } : {}) });
+        const body = JSON.stringify({
+            prompt: text,
+            attachments,
+            ...(voice ? { voice: true } : {}),
+            ...(interrupt ? { interrupt: true } : {}),
+            ...(spokenText !== undefined ? { spokenText } : {}),
+        });
         // 9.11: офлайн — реплика в очередь (localStorage), уйдёт при возврате сети
         if (navigator.onLine === false) {
             if (!this.busy)
@@ -132,8 +147,8 @@ ODA({ is: 'microchat-panel',
             this.focus();
             return { offlineQueued: true };
         }
-        // во время работы реплика уходит в очередь (видна в ленте из body.queue), иначе — сразу в ленту
-        if (!this.busy)
+        // во время работы реплика уходит в очередь (видна в ленте из body.queue), а при перебивании (interrupt) — сразу в ленту
+        if (!this.busy || interrupt)
             shell?.optimisticUser?.(text, attachments, voice);
         const res = await this.$item.fetch('prompt', {}, body);
         if (res?.busy)

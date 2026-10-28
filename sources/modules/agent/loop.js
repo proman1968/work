@@ -50,6 +50,30 @@ export const USAGE_TRUST_MIN = 0.7;
 /** Заголовок служебного сообщения с изменчивой частью среды (время, режим…), см. splitSystem/toMessages. */
 export const VOLATILE_HEAD = '[Служебный контекст среды на этот ход — не реплика пользователя]\n';
 
+const DEEP_TASK_RE = /(?:проанализируй|разработай|напиши\s+код|исправь|почему\s+не|сверь|составь\s+план|сравни|рассчитай|пересчитай|архитектур|рефактор|оптимизируй|миграци|отлад|найди\s+ошибк|сделай\s+отч[её]т|сформируй)/iu;
+
+/**
+ * Адаптивный выбор уровня рассуждения на ход:
+ * - Если явно задан 'off', 'medium' или 'high' — возвращаем как есть.
+ * - При 'low' (по умолчанию): на первом шаге (turn === 0) короткой разговорной реплики без вложений и сложного ТЗ
+ *   возвращаем 'off' (мгновенный ответ без паузы на <think>), а на шагах после инструментов (turn > 0) или на реальных задачах — 'low'.
+ */
+export function resolveTurnEffort(effort, items, turn = 0) {
+    if (!effort || effort === 'off' || effort === false || effort === 'medium' || effort === 'high')
+        return effort;
+    if (turn > 0)
+        return effort;
+    const lastUser = [...(items || [])].reverse().find(i => i?.type === 'user');
+    if (!lastUser)
+        return effort;
+    if (Array.isArray(lastUser.attachments) && lastUser.attachments.length > 0)
+        return effort;
+    const text = String(lastUser.content || '').trim();
+    if (!text || text.length > 220 || DEEP_TASK_RE.test(text))
+        return effort;
+    return 'off';
+}
+
 /**
  * system → { stable, volatile }. Строка (разовые вызовы, сжатие) — только стабильная часть.
  * stable идёт первым сообщением system и почти не меняется (префикс для кэша провайдера),
@@ -155,7 +179,8 @@ async function runLoopCore(opts) {
             const it = { id: genId(), type: 'assistant', content: '', time: Date.now(), model: llm.name };
             items.push(it);
             await host.save();
-            const calls = await streamTurn({ llm, host, it, messages, schemas: schemas.length ? schemas : undefined, effort: opts.effort });
+            const turnEffort = resolveTurnEffort(opts.effort, items, turn);
+            const calls = await streamTurn({ llm, host, it, messages, schemas: schemas.length ? schemas : undefined, effort: turnEffort });
             // 9.2: стоимость хода по тарифам модели (pricing) + учёт (agent_usage в .index/work.db)
             if (it.usage) {
                 const cost = costOf(it.usage, llm.pricing);
@@ -733,7 +758,11 @@ export function toMessages(system, items, images = null) {
                 // наши сообщения об ошибке — не реплика модели, в контекст не идут
                 if (it.error && !tools.length)
                     break;
-                const msg = { role: 'assistant', content: it.content || '' };
+                const rawContent = it.content || '';
+                const textContent = it.interrupted
+                    ? (rawContent ? rawContent + ' [прервано собеседником]' : '[прервано собеседником]')
+                    : rawContent;
+                const msg = { role: 'assistant', content: textContent };
                 if (tools.length)
                     msg.tool_calls = tools.map(t => ({
                         id: t.id,

@@ -4,7 +4,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    speakable, sentencesOf, leadOf, streamLead, chunksOf, mergeChunks, attentionText, waitingKind, replyPlan, errorPlan, voiceCommand, MORE_SUFFIX,
+    speakable, sentencesOf, leadOf, streamLead, streamSentences, analyzeInterimSpeech,
+    chunksOf, mergeChunks, attentionText, waitingKind, replyPlan, errorPlan, voiceCommand, MORE_SUFFIX,
 } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice-policy.js';
 
 describe('voice-policy: текст для озвучки', () => {
@@ -194,5 +195,36 @@ describe('voice-policy: когда говорить', () => {
         assert.equal(voiceCommand('стоп задачу'), 'stop-task');
         assert.equal(voiceCommand('останови сервер на ночь'), '');
         assert.equal(voiceCommand('разрешаю'), '');
+    });
+
+    it('streamSentences: озвучивает сразу с первого готового предложения, не дожидаясь конца 3 предложений', () => {
+        // Пока первое предложение ещё печатается без точки — ждём
+        let step = streamSentences('Проверяю обороты по счёту', 0, { finished: false });
+        assert.deepEqual(step.chunks, []);
+        assert.equal(step.nextCount, 0);
+
+        // Как только первое предложение закрылось и началось второе — сразу отдаёт первое!
+        step = streamSentences('Проверяю обороты по счёту 62. Сейчас назову', 0, { finished: false });
+        assert.deepEqual(step.chunks, ['Проверяю обороты по счёту 62.']);
+        assert.equal(step.nextCount, 1);
+        assert.equal(step.done, false);
+
+        // Закрылось второе, началось третье — отдаёт только второе (первое не повторяет)
+        step = streamSentences('Проверяю обороты по счёту 62. Остаток составляет 450 тысяч рублей. Подготовил', step.nextCount, { finished: false });
+        assert.deepEqual(step.chunks, ['Остаток составляет 450 тысяч рублей.']);
+        assert.equal(step.nextCount, 2);
+
+        // Завершился ответ со списком — отдаёт третье предложение + «Подробности на экране.»
+        step = streamSentences('Проверяю обороты по счёту 62. Остаток составляет 450 тысяч рублей. Подготовил детализацию.\n\n- ООО Ромашка\n- ООО Лютик', step.nextCount, { finished: true });
+        assert.deepEqual(step.chunks, ['Подготовил детализацию.', MORE_SUFFIX]);
+        assert.equal(step.done, true);
+    });
+
+    it('analyzeInterimSpeech: определяет заминку собеседника и упоминание счёта/склада для AI Barge-In', () => {
+        assert.equal(analyzeInterimSpeech('Покажи мне отчёт по… эээ…', 400).action, 'early-submit');
+        assert.equal(analyzeInterimSpeech('Какой там счёт…', 380).action, 'early-submit');
+        assert.equal(analyzeInterimSpeech('Проведи отгрузку со склада Северный на покупателя', 0).action, 'fact-check');
+        assert.equal(analyzeInterimSpeech('Посмотри обороты по счёту 99 за квартал', 0).action, 'fact-check');
+        assert.equal(analyzeInterimSpeech('Просто обычный разговор', 100).action, 'none');
     });
 });

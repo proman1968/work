@@ -650,6 +650,37 @@ export class $class extends $folder {
         this.reset();
         return log;
     }
+
+    /** Голосовой режим на уровне класса/подразделения/кабинета (до создания файла .task). */
+    async voice_config(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        return (await WORK_AGENT_CORE()).voice.voiceConfig(this);
+    }
+
+    async dot_look(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        return (await WORK_AGENT_CORE()).voice.dotLook(this);
+    }
+
+    async voice_speak(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        const text = params.text ?? (typeof params.post === 'string' ? params.post : params.post?.text);
+        return (await WORK_AGENT_CORE()).voice.speak(this, { text, language: params.language, instructions: params.instructions, uid: params.session?.principal?.id || params.session?.uid });
+    }
+
+    async voice_transcribe(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        const audio = Buffer.isBuffer(params.post) ? params.post : null;
+        return (await WORK_AGENT_CORE()).voice.transcribe(this, { audio, language: params.language, uid: params.session?.principal?.id || params.session?.uid });
+    }
+
+    async voice_interim(params = {}) {
+        await this.assertAccess(params, $class.ACCESS_LEVEL.READ);
+        const post = typeof params.post === 'string' ? (() => { try { return JSON.parse(params.post); } catch { return { text: params.post }; } })() : (params.post || {});
+        const text = params.text ?? post.text ?? '';
+        const pauseMs = Number(params.pauseMs ?? post.pauseMs ?? 0) || 0;
+        return (await WORK_AGENT_CORE()).voice.checkInterim(this, { text, pauseMs, uid: params.session?.principal?.id || params.session?.uid });
+    }
 }
 
 Object.assign($class, classScriptStatics);

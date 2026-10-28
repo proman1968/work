@@ -16,10 +16,13 @@ let _uiLoaded = null;
 let _activityOf = null;
 let _pathOfWorkHref = null;
 let _dotStateOfTask = null;
+let _VoiceController = null;
 
 function ensureConsultantUI() {
     return _uiLoaded ??= Promise.all([
         import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/feed.js'),
+        import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice-ui.js'),
+        import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice.js').then(m => { _VoiceController = m.VoiceController; }),
         import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js').then(m => { _activityOf = m.activityOf; }),
         import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js').then(m => { _pathOfWorkHref = m.pathOfWorkHref; }),
         import('/$server/$folder/lib/dot/dot.js'),
@@ -125,6 +128,33 @@ ODA({
                 color: var(--error-color);
                 border-color: transparent;
             }
+            .dialog-btn {
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
+                padding: 0;
+                border: none;
+                background: transparent;
+                color: inherit;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                opacity: .8;
+            }
+            .dialog-btn:hover {
+                background: var(--accent-soft);
+                opacity: 1;
+            }
+            .dialog-btn[on] {
+                background: var(--accent-soft);
+                color: var(--accent-color);
+                opacity: 1;
+            }
+            .dialog-btn work-voice-bars {
+                width: 16px;
+                height: 16px;
+            }
             .ctx-bar {
                 @apply --horizontal;
                 align-items: center;
@@ -217,7 +247,13 @@ ODA({
                 overflow-x: hidden;
                 min-height: 0;
                 padding: 10px;
+            }
+            .col {
+                @apply --vertical;
                 gap: 10px;
+                width: 100%;
+                min-height: min-content;
+                box-sizing: border-box;
             }
             .welcome {
                 @apply --vertical;
@@ -276,6 +312,31 @@ ODA({
                 border-top: 1px solid var(--subtle-border);
                 background: var(--content-background);
                 gap: 4px;
+                position: relative;
+            }
+            .down {
+                position: absolute;
+                top: -42px;
+                left: 50%;
+                transform: translateX(-50%);
+                z-index: 5;
+                width: 34px;
+                height: 34px;
+                border-radius: 50%;
+                background: var(--content-background);
+                color: var(--content-color);
+                border: 1px solid var(--subtle-border);
+                box-shadow: 0 2px 8px var(--shadow-color);
+            }
+            .down.attn {
+                width: auto;
+                padding: 0 14px 0 10px;
+                border-radius: 999px;
+                gap: 6px;
+                font-size: 12px;
+                background: var(--accent-color);
+                color: var(--accent-back);
+                border-color: transparent;
             }
             .toast {
                 position: absolute;
@@ -300,6 +361,9 @@ ODA({
             <span class="status-chip" no-flex :running="status === 'running'" :waiting="status === 'waiting'" :bad="status === 'error' || status === 'limit' || status === 'needs_review'">
                 <oda-icon :icon="statusMeta.icon" :icon-size="11"></oda-icon>{{statusMeta.label}}
             </span>
+            <button class="dialog-btn" no-flex ~if="uiReady && canVoice" :on="voiceOn" :title="voiceOn ? 'Выключить живой голосовой диалог' : 'Живой голосовой диалог (с взаимным перебиванием)'" :aria-pressed="voiceOn ? 'true' : 'false'" @tap="toggleVoice()">
+                <work-voice-bars :on="voiceOn"></work-voice-bars>
+            </button>
             <oda-button no-flex icon="carbon:recently-viewed" :icon-size="16" title="Мои консультации (из личных логов)" @tap="toggleHistory"></oda-button>
             <oda-button no-flex icon="icons:question-answer" :icon-size="16" title="Открыть ленту пользователя" @tap="openUserFeed"></oda-button>
             <oda-button no-flex ~if="taskItem" icon="box:i-expand" :icon-size="15" title="Открыть задачу полностью" @tap="openFullTask"></oda-button>
@@ -326,39 +390,44 @@ ODA({
         </div>
 
         <div class="scroller" flex @scroll="onScroll">
-            <div class="welcome" ~if="!hasMessages">
-                <div class="welcome-title">
-                    <oda-icon icon="bootstrap:robot" :icon-size="22"></oda-icon>
-                    <span>ИИ-чат «Консультант»</span>
+            <div class="col">
+                <div class="welcome" ~if="!hasMessages">
+                    <div class="welcome-title">
+                        <oda-icon icon="bootstrap:robot" :icon-size="22"></oda-icon>
+                        <span>ИИ-чат «Консультант»</span>
+                    </div>
+                    <div class="welcome-text">
+                        Задайте любой вопрос по работе в системе, структуре данных или учёту, либо нажмите кнопку <b>«Консультант»</b> в шапке открытой формы. Все вопросы сохраняются как задачи в ваших личных логах и отображаются в вашей ленте.
+                    </div>
+                    <div class="quick-chips">
+                        <button class="quick-chip" ~if="activeFormSummary" @tap="askCurrentForm">
+                            <oda-icon icon="icons:dashboard" :icon-size="15"></oda-icon>
+                            <span>Что сейчас открыто в форме «{{activeFormSummary.label}}»?</span>
+                        </button>
+                        <button class="quick-chip" @tap="sendQuickQuestion('Какие организации, подразделения и модули доступны в системе?')">
+                            <oda-icon icon="odant:structure" :icon-size="15"></oda-icon>
+                            <span>Какие организации и модули доступны в системе?</span>
+                        </button>
+                        <button class="quick-chip" @tap="sendQuickQuestion('Покажи сводку по основным справочникам и последним операциям в учёте.')">
+                            <oda-icon icon="carbon:data-table" :icon-size="15"></oda-icon>
+                            <span>Сводка по справочникам и операциям учёта</span>
+                        </button>
+                    </div>
                 </div>
-                <div class="welcome-text">
-                    Задайте любой вопрос по работе в системе, структуре данных или учёту, либо нажмите кнопку <b>«Консультант»</b> в шапке открытой формы. Все вопросы сохраняются как задачи в ваших личных логах и отображаются в вашей ленте.
-                </div>
-                <div class="quick-chips">
-                    <button class="quick-chip" ~if="activeFormSummary" @tap="askCurrentForm">
-                        <oda-icon icon="icons:dashboard" :icon-size="15"></oda-icon>
-                        <span>Что сейчас открыто в форме «{{activeFormSummary.label}}»?</span>
-                    </button>
-                    <button class="quick-chip" @tap="sendQuickQuestion('Какие организации, подразделения и модули доступны в системе?')">
-                        <oda-icon icon="odant:structure" :icon-size="15"></oda-icon>
-                        <span>Какие организации и модули доступны в системе?</span>
-                    </button>
-                    <button class="quick-chip" @tap="sendQuickQuestion('Покажи сводку по основным справочникам и последним операциям в учёте.')">
-                        <oda-icon icon="carbon:data-table" :icon-size="15"></oda-icon>
-                        <span>Сводка по справочникам и операциям учёта</span>
-                    </button>
-                </div>
-            </div>
 
-            <microchat-feed ~if="uiReady && hasMessages" :items="feedItems"></microchat-feed>
+                <microchat-feed ~if="uiReady && hasMessages" :items="feedItems"></microchat-feed>
 
-            <div class="working" ~if="activity">
-                <oda-icon icon="spinners:3-dots-scale" :icon-size="15"></oda-icon>
-                <span>{{activity.text}}</span>
+                <div class="working" ~if="activity">
+                    <oda-icon icon="spinners:3-dots-scale" :icon-size="15"></oda-icon>
+                    <span>{{activity.text}}</span>
+                </div>
             </div>
         </div>
 
         <div class="bottom" ~if="uiReady">
+            <oda-button class="down" ~if="hasMessages && !pinned && !needsHuman" icon="carbon:arrow-down" :icon-size="18" title="К последнему" @tap="toBottom"></oda-button>
+            <oda-button class="down attn" ~if="hasMessages && !pinned && needsHuman" accent-invert icon="carbon:arrow-down" :icon-size="16" label="Агент ждёт вас" title="Перейти к вопросу или разрешению" @tap="toBottom"></oda-button>
+            <microchat-voice ~if="voiceOn"></microchat-voice>
             <work-prompt-bar ai ::value ::files :pending="busy" :placeholder="placeholderText"
                 ::model ::effort
                 @model-changed.stop="onModelChanged" @effort-changed.stop="onEffortChanged"
@@ -389,7 +458,16 @@ ODA({
     activeFormContext: null,
     activeFormSummary: null,
     _sending: false,
+    voiceOn: {
+        $def: false,
+        set(v) {
+            this.async(() => this._bindVoiceBars(v ? this._voice : null));
+        },
+    },
 
+    get canVoice() {
+        return !!(navigator.mediaDevices?.getUserMedia || window.SpeechRecognition || window.webkitSpeechRecognition);
+    },
     get statusMeta() {
         return STATUS_LABELS[this.status] || STATUS_LABELS.idle;
     },
@@ -421,6 +499,9 @@ ODA({
     },
     get hasMessages() {
         return this.feedItems.length > 0;
+    },
+    get needsHuman() {
+        return this.status === 'waiting';
     },
     get activity() {
         if (this._sending && !this.feedItems.length)
@@ -458,13 +539,62 @@ ODA({
             if (this.status === 'running')
                 this._clock = Date.now();
         }, 1000);
+        this._ro ??= new ResizeObserver(() => this._stick());
+        this.async(() => {
+            const col = this.$('.col');
+            if (col)
+                this._ro.observe(col);
+        }, 50);
     },
     detached() {
         this._unbindTask();
+        this._voice?.disable();
+        this.voiceOn = false;
+        this._bindVoiceBars(null);
+        this._ro?.disconnect();
         if (this._mdLinkHandler)
             this.removeEventListener('md-link', this._mdLinkHandler);
         clearInterval(this._activityTimer);
         this._activityTimer = null;
+    },
+
+    async toggleVoice(on) {
+        await ensureConsultantUI();
+        this.uiReady = true;
+        const want = typeof on === 'boolean' ? on : !this.voiceOn;
+        if (!want) {
+            this._voice?.disable();
+            this.voiceOn = false;
+            return;
+        }
+        if (!_VoiceController)
+            return;
+        this._voice ??= new _VoiceController(this);
+        this.voiceOn = await this._voice.enable();
+    },
+
+    _bindVoiceBars(v) {
+        for (const [k, fn] of Object.entries(this._vOn || {}))
+            this._vRef?.removeEventListener(k, fn);
+        this._vOn = this._vRef = null;
+        const setLv = lv => {
+            for (const el of this.$$('work-voice-bars') || [])
+                el?.setLevel?.(lv);
+            this.$('work-prompt-bar')?.setDialogLevel?.(lv);
+        };
+        setLv(0);
+        if (!v)
+            return;
+        let user = 0, speech = 0, state = v.state;
+        const push = () => setLv(state === 'speaking' ? speech : user);
+        this._vRef = v;
+        this._vOn = {
+            level: e => { user = e.detail; push(); },
+            speechlevel: e => { speech = e.detail; push(); },
+            state: e => { state = e.detail; if (state !== 'speaking') speech = 0; if (state !== 'hearing' && state !== 'listening') user = 0; push(); },
+        };
+        for (const [k, fn] of Object.entries(this._vOn))
+            v.addEventListener(k, fn);
     },
 
     async onShow() {
@@ -630,7 +760,7 @@ ODA({
     },
 
     async send() {
-        if (this._sending)
+        if (this._sending && !this.taskItem)
             return;
         await ensureConsultantUI();
         this.uiReady = true;
@@ -641,12 +771,24 @@ ODA({
             return;
         this.value = '';
         this.files = [];
-        await this._submitQuestion({ text, files });
+        let spokenText;
+        if (this._voice?.speaker?.busy) {
+            spokenText = this._voice.speaker.spokenText;
+            this._voice.speaker.cancel('barge');
+        }
+        await this._submitQuestion({ text, files, voice: !!this.voiceOn, interrupt: true, spokenText });
         this.async(() => bar?.focusInput?.(), 50);
     },
 
-    async _submitQuestion({ text, title = '', files = [], contextPath = '' }) {
-        if (this._sending)
+    async sendVoiceText(text, { voice = true, interrupt = true, spokenText } = {}) {
+        text = String(text ?? '').trim();
+        if (!text)
+            return null;
+        return this._submitQuestion({ text, voice, interrupt, spokenText });
+    },
+
+    async _submitQuestion({ text, title = '', files = [], contextPath = '', voice = false, interrupt = false, spokenText } = {}) {
+        if (this._sending && !this.taskItem)
             return null;
         this._sending = true;
         try {
@@ -666,10 +808,16 @@ ODA({
                 }
             }
 
-            // Если в текущем диалоге уже есть открытая задача .task — отправляем реплику в неё
+            // Если в текущем диалоге уже есть открытая задача .task — отправляем реплику в неё (с поддержкой перебивания)
             if (this.taskItem) {
-                this.optimisticUser(text, attachments);
-                const payload = JSON.stringify({ prompt: text, attachments });
+                this.optimisticUser(text, attachments, voice);
+                const payload = JSON.stringify({
+                    prompt: text,
+                    attachments,
+                    ...(voice ? { voice: true } : {}),
+                    ...(interrupt ? { interrupt: true } : {}),
+                    ...(spokenText !== undefined ? { spokenText } : {}),
+                });
                 const res = await this.taskItem.fetch('prompt', {}, payload);
                 if (res?.busy)
                     this.toast(res.error || 'Консультант занят');
@@ -677,7 +825,7 @@ ODA({
             }
 
             // Иначе создаём новый .task в личном кабинете пользователя (попадает в личные логи и ленту пользователя)
-            this.optimisticUser(text, attachments);
+            this.optimisticUser(text, attachments, voice);
             const rawTitle = title || text.split('\n')[0] || 'Консультация';
             const safeName = String(rawTitle).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || 'Консультация';
             const body = {
@@ -687,6 +835,7 @@ ODA({
                 created: Date.now(),
                 items: [],
                 effort: this.effort || 'low',
+                ...(voice ? { voice: true } : {}),
             };
             if (this.model)
                 body.model = this.model;
@@ -701,6 +850,7 @@ ODA({
                 role,
                 sender: WORK.uid || cabinet?.id || '',
                 prompt: text,
+                ...(voice ? { voice: true } : {}),
             };
             if (attachments.length) {
                 saveParams.includes = JSON.stringify(attachments.map(a => a.path));
@@ -774,6 +924,7 @@ ODA({
         if (this.status !== 'running')
             this.status = 'running';
         this._stick();
+        this._voice?.onDelta({ item: d.item, field });
     },
 
     _reloadTask() {
@@ -791,7 +942,7 @@ ODA({
                     try {
                         const raw = await this.taskItem?.load();
                         const data = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
-                        const done = new Set((data.items || []).filter(i => i.type === 'assistant' && i.durationMs).map(i => i.id));
+                        const done = new Set((data.items || []).filter(i => i.type === 'assistant' && (i.durationMs || i.stopped || i.interrupted)).map(i => i.id));
                         if (Object.keys(this.streams).some(id => done.has(id))) {
                             const s = {};
                             for (const [id, v] of Object.entries(this.streams)) {
@@ -806,6 +957,7 @@ ODA({
                             this.optimistic = null;
                         this._lastDelta = Date.now();
                         this._stick();
+                        this._voice?.onData(data);
                         tries = 0;
                     }
                     catch {
@@ -822,10 +974,10 @@ ODA({
         })();
     },
 
-    optimisticUser(text, attachments = []) {
+    optimisticUser(text, attachments = [], voice = false) {
         if (!text && !attachments?.length)
             return;
-        this.optimistic = { id: 'optimistic', type: 'user', content: text, attachments, time: Date.now() };
+        this.optimistic = { id: 'optimistic', type: 'user', content: text, attachments, time: Date.now(), ...(voice ? { voice: true } : {}) };
         this.pinned = true;
         this.status = 'running';
         this._stick();
@@ -956,10 +1108,28 @@ ODA({
     },
 
     onScroll(e) {
+        if (this._sticking)
+            return;
         const el = e.target;
-        const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-        if (pinned !== this.pinned)
-            this.pinned = pinned;
+        const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+        const movedUp = this._lastScrollTop != null && el.scrollTop < this._lastScrollTop - 4;
+        this._lastScrollTop = el.scrollTop;
+        if (dist < 60) {
+            if (!this.pinned)
+                this.pinned = true;
+        }
+        else if (movedUp && this.pinned) {
+            this.pinned = false;
+        }
+    },
+
+    toBottom() {
+        this.pinned = true;
+        const el = this.$('.scroller');
+        if (el) {
+            el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+            this._lastScrollTop = el.scrollHeight;
+        }
     },
 
     _stick() {
@@ -968,8 +1138,18 @@ ODA({
         cancelAnimationFrame(this._raf);
         this._raf = requestAnimationFrame(() => {
             const el = this.$('.scroller');
-            if (el)
-                el.scrollTop = el.scrollHeight;
+            if (!el || !this.pinned)
+                return;
+            this._sticking = true;
+            el.scrollTop = el.scrollHeight;
+            this._lastScrollTop = el.scrollTop;
+            requestAnimationFrame(() => {
+                if (this.pinned && el) {
+                    el.scrollTop = el.scrollHeight;
+                    this._lastScrollTop = el.scrollTop;
+                }
+                this._sticking = false;
+            });
         });
     },
 

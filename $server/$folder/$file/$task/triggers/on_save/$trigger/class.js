@@ -35,6 +35,7 @@ export default {
             prompt: params.prompt || body.prompt || body.name,
             attachments,
             location,
+            voice: params.voice ?? body.voice,
         });
     },
 };

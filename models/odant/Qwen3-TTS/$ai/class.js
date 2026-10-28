@@ -7,12 +7,16 @@
 export default {
     label: 'Qwen3-TTS',
     icon: 'carbon:volume-up',
-    model: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+    model: 'vllm-tts-qwen3-vd/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
     maxTokens: 2048,
     capabilities: ['tts'],
     ttsTask: 'VoiceDesign',
     voice: 'default',
     language: 'Russian',
-    instructions: 'Спокойный дружелюбный женский голос, средний темп, чёткая дикция, ровные интонации без театральности',
+    seed: 42,
+    temperature: 0.2,
+    topP: 0.6,
+    topK: 20,
+    instructions: 'Gender: Female. Age: 30 years old, adult woman. Pitch: Medium-low, warm contralto, steady and consistent pitch. Speed: Moderate, calm conversational pace. Emotion: Calm, confident, friendly business assistant. Studio quality microphone, single consistent speaker, no child voice, no male voice.',
     trustLevel: 0
 }

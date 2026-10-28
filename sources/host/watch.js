@@ -41,9 +41,13 @@ function flush($server) {
         }
     }
     if (files.some(f => /class\.js$/i.test(f))) {
+        FS.$folder?.__script_cache__?.clear?.();
+        if ($server.__merge_pairs__ instanceof Map)
+            $server.__merge_pairs__.clear();
         FS.$file.__ext_scripts__ = Object.create(null);
         FS.$file.__type_data__ = Object.create(null);
         markClassesDirty();
+        Promise.resolve(globalThis.WORK_AGENT_CORE?.()).then(c => c?.voice?.resetVoiceProbes?.()).catch(() => {});
     }
     for (const f of files) {
         const p = '/' + f.replace(/\\/g, '/');
@@ -51,6 +55,14 @@ function flush($server) {
             if (item && !Array.isArray(item))
                 item.reset?.();
         }).catch(() => {});
+        // Если изменился /X/$type/class.js — сбрасываем также сам узел класса /X
+        const clsMatch = p.match(/^(\/.*?)\/\$[^/]+\/class\.js$/i);
+        if (clsMatch?.[1]) {
+            Promise.resolve(globalThis.WORK?.get_item(clsMatch[1])).then(clsItem => {
+                if (clsItem && !Array.isArray(clsItem))
+                    clsItem.reset?.();
+            }).catch(() => {});
+        }
     }
     if (process.env.WORK_WATCH_LOG)
         console.log('[watch]', files.length, 'файл(ов), сборок сброшено:', dropped);

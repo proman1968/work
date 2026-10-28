@@ -863,6 +863,22 @@ describe('голосовой режим: модели речи на сервер
         const sub = await (async () => { const env = await createEnv({ place, host: { mode: 'auto' }, voice: true }); return env.makeSystem(env.agents.get('explore')); })();
         assert.ok(!sub.includes('# Голосовой режим'), 'субагенту голосовая заметка не нужна');
     });
+
+    it('checkInterim: проактивное перебивание со стороны ИИ при несуществующем счёте и подхват на заминке', async () => {
+        const { voice } = await import('../sources/modules/agent/index.js');
+        write('MODULES/Register/REGISTER/62/$account/class.js', `export default { label: '62 Расчёты с покупателями' }`);
+        const { markClassesDirty } = await import('../sources/data/api.js');
+        markClassesDirty();
+        const fact = await voice.checkInterim({ path: '/MODULES/Register' }, { text: 'Посмотри обороты по счёту 99', pauseMs: 100 });
+        assert.equal(fact.interject, true);
+        assert.equal(fact.kind, 'fact_check');
+        assert.match(fact.text, /счёта 99 в плане счетов нет/);
+
+        const hes = await voice.checkInterim({ path: '/MODULES/Register' }, { text: 'Открой мне ведомость по… эээ…', pauseMs: 420 });
+        assert.equal(hes.interject, true);
+        assert.equal(hes.kind, 'hesitation');
+        assert.equal(hes.submitEarly, true);
+    });
 });
 
 describe('сессия .task', () => {
@@ -1308,6 +1324,40 @@ describe('сессия .task', () => {
         assert.ok(!body.queue);
         assert.deepEqual(seen[1], ['первое', 'и ещё вот это']);
         assert.equal(body.items.at(-1).content, 'учёл: и ещё вот это');
+    });
+
+    it('перебивание во время ответа (interrupt: true, spokenText): обрывает стрим, режет ответ до услышанного и сразу переключается на новую реплику', async () => {
+        const file = await newTask('t5-barge');
+        const seenAsst = [];
+        let firstStarted;
+        const started = new Promise(r => firstStarted = r);
+        const human = req => req.messages.filter(m => m.role === 'user' && !String(m.content).startsWith(VOLATILE_HEAD)).map(m => m.content);
+        globalThis.__MOCK_STREAM__ = (req) => (async function* () {
+            const asst = req.messages.filter(m => m.role === 'assistant').map(m => m.content);
+            seenAsst.push(asst);
+            if (seenAsst.length === 1) {
+                yield 'Начинаю длинный рассказ. А вот второе и третье предложение, которые человек ещё не услышал.';
+                firstStarted();
+                await new Promise(resolve => req.signal?.addEventListener('abort', resolve, { once: true }));
+                return;
+            }
+            yield 'переключился: ' + human(req).at(-1);
+        })();
+        await session.prompt(file, { prompt: 'расскажи подробно', voice: true });
+        await started;
+        const b = await session.prompt(file, {
+            prompt: 'подожди, бери только 2025 год',
+            voice: true,
+            interrupt: true,
+            spokenText: 'Начинаю длинный рассказ.',
+        });
+        assert.equal(b.interrupted, true);
+        const body = await session.idle(file);
+        const firstAsst = body.items.find(i => i.type === 'assistant');
+        assert.equal(firstAsst.content, 'Начинаю длинный рассказ.', 'ответ обрезан до реально услышанной фразы');
+        assert.equal(firstAsst.interrupted, true);
+        assert.match(seenAsst[1]?.[0] || '', /Начинаю длинный рассказ\. \[прервано собеседником\]/);
+        assert.equal(body.items.at(-1).content, 'переключился: подожди, бери только 2025 год');
     });
 
     it('картинка во вложении уходит модели только при vision', async () => {

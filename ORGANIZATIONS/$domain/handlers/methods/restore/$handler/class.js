@@ -33,8 +33,6 @@ export default {
     roles: ['ADMIN', 'BOSS'],
     button: true,
     isButton: true,
-    service: true,
-    isService: true,
     order: 1,
     async execute(directFile, directOpts) {
         const ctx = await (this.$context || this.$item?.$context || WORK.get_item('/ORGANIZATIONS'));

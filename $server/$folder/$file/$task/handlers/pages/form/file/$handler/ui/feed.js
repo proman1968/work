@@ -130,7 +130,8 @@ ODA({ is: 'microchat-assistant',
         <div class="meta" ~if="text && !streamingText">
             <oda-button icon="carbon:copy" :icon-size="14" title="Копировать" @tap="copy"></oda-button>
             <span>{{info}}</span>
-            <span ~if="data?.stopped">· остановлено</span>
+            <span ~if="data?.interrupted">· прервано собеседником</span>
+            <span ~if="data?.stopped && !data?.interrupted">· остановлено</span>
         </div>
     `,
     data: null,

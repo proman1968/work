@@ -7,7 +7,7 @@
 export default {
     label: 'Qwen3-ASR',
     icon: 'carbon:microphone',
-    model: 'Qwen/Qwen3-ASR-1.7B',
+    model: 'vllm-qwen-asr-1.7b/Qwen/Qwen3-ASR-1.7B',
     maxTokens: 2048,
     capabilities: ['stt'],
     language: 'ru',

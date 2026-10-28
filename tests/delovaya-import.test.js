@@ -219,7 +219,7 @@ describe('Архивация $base и развёртывание из архив
         const archiveHandler = (baseMethods?.items || []).find(i => i.id === 'archive');
         assert.ok(archiveHandler, 'У $base должен быть хендлер archive');
         assert.equal(archiveHandler.label, 'Архивация');
-        assert.equal(archiveHandler.isService, true);
+        assert.equal(!!archiveHandler.isService, false);
 
         const orgsDomain = await WORK.get_item('/ORGANIZATIONS');
         assert.ok(orgsDomain, 'Домен /ORGANIZATIONS должен существовать');

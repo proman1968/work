@@ -27,9 +27,10 @@ function capsOf(item) {
     return Array.isArray(c) ? c.map(String) : String(c || '').split(/[\s,]+/).filter(Boolean);
 }
 
-/** Конфиг места задачи (слои ai/config.js) для файла .task. */
+/** Конфиг места задачи (слои ai/config.js) для файла .task или узла класса. */
 async function configFor(file) {
-    const place = file?.$class || file?.$owner || null;
+    const isTask = file?.ext === 'task' || String(file?.path || '').endsWith('.task') || file?.$class?.id === '$task';
+    const place = isTask ? (file?.$class || file?.$owner || null) : (file || file?.$class || file?.$owner || null);
     return loadConfig(place);
 }
 
@@ -63,7 +64,7 @@ async function listedRemote(item) {
         const res = await item.list_remote?.({});
         const tag = String(item.model || '');
         if (Array.isArray(res?.models) && tag)
-            value = res.models.some(id => id === tag || String(id).endsWith('/' + tag));
+            value = res.models.some(id => id === tag || String(id).endsWith('/' + tag) || tag.endsWith('/' + String(id)));
     }
     catch {
         value = null;
@@ -179,4 +180,84 @@ export async function transcribe(file, { audio, language, uid } = {}) {
     if (!m)
         throw new Error('voice_transcribe: модель распознавания речи не настроена (ai/config.js sttModel)');
     return m.item.transcribe({ audio, language });
+}
+
+const GENERIC_WAREHOUSE_WORDS = new Set(['основной', 'главный', 'наш', 'этот', 'какой', 'любой', 'товары', 'материалы', 'склад']);
+
+/**
+ * Быстрая проверка промежуточной речи человека (AI Barge-In / проактивное перебивание со стороны ИИ):
+ * 1) Если человек на лету назвал несуществующий счёт или склад в текущей организации ($base) — ИИ сразу мягко перебивает и уточняет.
+ * 2) Если человек замялся (пауза >= 350 мс на «эээ…», «как его…», «какой там счёт…») — сигнал раннего подхвата реплики (submitEarly).
+ */
+export async function checkInterim(file, { text, pauseMs = 0 } = {}) {
+    const clean = speechInput(text, 600);
+    if (!clean || clean.length < 4)
+        return { interject: false };
+
+    try {
+        const { resolveBasePath, dataStore } = await import('../../data/api.js');
+        const { classesOfType } = await import('../../data/classes.js');
+        const { queryObjects } = await import('../../data/objects.js');
+        const rawPath = String(file?.path || file?.$owner?.path || file?.$class?.path || '');
+        const basePath = resolveBasePath(rawPath) || '';
+        const db = await dataStore(basePath);
+
+        // 1. Проверка названного вслух счёта («по счёту 99», «на счёт 77»)
+        const accMatch = /(?:сч[её]т[ауеом]*)\s*(?:№|номер)?\s*(\d{2}(?:\.\d{1,2})?)\b/iu.exec(clean);
+        if (accMatch) {
+            const code = accMatch[1];
+            const accounts = classesOfType(db, '$account') || [];
+            if (accounts.length > 0) {
+                const found = accounts.some(a => {
+                    const id = a.name || String(a.cid || a.path || '').split('/').pop() || '';
+                    return id === code || id.startsWith(code + '.') || String(a.label || '').startsWith(code + ' ');
+                });
+                if (!found) {
+                    const topCodes = [...new Set(accounts.map(a => (a.name || String(a.cid || a.path || '').split('/').pop() || '').split('.')[0]).filter(Boolean))].slice(0, 8).join(', ');
+                    return {
+                        interject: true,
+                        kind: 'fact_check',
+                        text: `Секунду, перебью: счёта ${code} в плане счетов нет. Доступны счета: ${topCodes}. Какой берём?`,
+                    };
+                }
+            }
+        }
+
+        // 2. Проверка названного вслух склада («со склада Северный», «на склад Южный»)
+        const whMatch = /(?:со\s+склада|на\s+склад|склад)\s+«?([А-ЯЁA-Z][а-яёa-z0-9-]{2,24})»?/u.exec(clean);
+        if (whMatch) {
+            const whName = whMatch[1].trim();
+            if (!GENERIC_WAREHOUSE_WORDS.has(whName.toLowerCase())) {
+                const catalogs = classesOfType(db, '$catalog') || [];
+                const whClass = catalogs.find(c => /Склады$/i.test(c.cid || c.path || ''));
+                if (whClass) {
+                    const res = queryObjects(db, { cid: whClass.cid || whClass.path, limit: 20 });
+                    const items = res?.items || [];
+                    if (items.length > 0) {
+                        const hit = items.some(it => String(it.name || '').toLowerCase().includes(whName.toLowerCase()));
+                        if (!hit) {
+                            const names = items.map(it => it.name).filter(Boolean).slice(0, 3);
+                            return {
+                                interject: true,
+                                kind: 'fact_check',
+                                text: `Секунду, перебью: склада «${whName}» в базе нет, есть «${names.join('», «')}». Какой указать?`,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+    catch { /* если база недоступна — не мешаем потоку речи */ }
+
+    // 3. Подхват при заминке человека (пауза >= 350 мс на незаконченной мысли)
+    if (pauseMs >= 350 && /(?:ээ+|мм+|хм+|как\s+его|как\s+там(?:\s+\S+)?|какой\s+там(?:\s+\S+)?|забыл(?:\s+как)?|подскажи)\s*[.…,?-]*$/iu.test(clean)) {
+        return {
+            interject: true,
+            kind: 'hesitation',
+            submitEarly: true,
+        };
+    }
+
+    return { interject: false };
 }

@@ -142,4 +142,88 @@ describe('Speaker: очередь', () => {
         assert.ok(levels.every(v => v >= 0 && v <= 1));
         assert.equal(levels.at(-1), 0);
     });
+
+    it('spokenText: при перебивании (barge) фиксирует реально прозвучавшие куски и префикс текущего', async () => {
+        let playCount = 0;
+        globalThis.Audio = class {
+            play() {
+                playCount++;
+                // Первый кусок отыгрывает быстро (5 мс), второй играет долго (300 мс) — перебьём посреди второго
+                const delay = playCount === 1 ? 5 : 300;
+                setTimeout(() => this.onended?.(), delay);
+                return Promise.resolve();
+            }
+            pause() { this.paused = true; }
+        };
+        const sp = new Speaker({ fetchWav: async text => blobOf(text.slice(0, 8)) });
+        sp.say('Первое короткое предложение.');
+        sp.say('Второе очень длинное предложение, которое собеседник перебьёт прямо на середине фразы, не дожидаясь его окончания.');
+        await wait(40);
+        sp.cancel('barge');
+        const heard = sp.spokenText;
+        assert.match(heard, /^Первое короткое предложение\./, 'первый отыгранный кусок сохранён полностью');
+        assert.ok(heard.includes('Второе'), 'начало второго куска сохранено');
+        assert.ok(!heard.includes('окончания'), 'хвост перебитого куска отрезан: ' + heard);
+    });
+
+    it('VoiceController: взаимное перебивание (User Barge-In и AI Barge-In) + попредложенческий стрим', async () => {
+        const { VoiceController } = await import('../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice.js');
+        const { toMessages } = await import('../sources/modules/agent/loop.js');
+
+        const fetched = [];
+        const sent = [];
+        const shell = {
+            status: 'running',
+            data: { status: 'running', items: [{ id: 'u1', type: 'user', content: 'Расскажи про 62 счёт', voice: true }] },
+            streams: {},
+            $item: {
+                short: '/USERS/test/1.task',
+                async fetch(method, params) {
+                    fetched.push({ method, params });
+                    return {};
+                },
+            },
+            async sendVoiceText(text, opts) {
+                sent.push({ text, opts });
+            },
+        };
+
+        const vc = new VoiceController(shell);
+        vc.state = 'listening';
+        vc.speaker.fetchWav = async text => blobOf(text.slice(0, 6));
+
+        // 1. Озвучка устного абзаца целиком одним голосом (single: true), без нарезки на отдельные голоса по предложениям
+        shell.streams.a1 = { content: 'По счёту 62 числится дебиторская задолженность. Основной должник — ООО Ромашка.\n\n- Детализация' };
+        vc.onDelta({ item: 'a1', field: 'content' });
+        await wait(25);
+        assert.equal(vc.spoken.has('reply:a1'), true, 'устный лид целиком отправлен в озвучку одним куском');
+
+        // 2. Человек перебивает ИИ (_onUserBargeIn) и говорит уточнение
+        vc._onUserBargeIn();
+        assert.equal(vc.state, 'hearing');
+        assert.ok(fetched.some(f => f.method === 'interrupt'), 'на сервер сразу ушёл сигнал interrupt');
+
+        await vc.submit('Нет, покажи только за третий квартал');
+        assert.equal(sent.length, 1);
+        assert.equal(sent[0].text, 'Нет, покажи только за третий квартал');
+        assert.equal(sent[0].opts.interrupt, true);
+        assert.equal(sent[0].opts.voice, true);
+
+        // 3. В контексте модели прерванный ответ помечается [прервано собеседником]
+        const msgs = toMessages('sys', [
+            { id: 'u1', type: 'user', content: 'Расскажи про 62 счёт' },
+            { id: 'a1', type: 'assistant', content: 'По счёту 62 числится дебиторская задолженность.', interrupted: true },
+            { id: 'u2', type: 'user', content: 'Нет, покажи только за третий квартал' },
+        ]);
+        const asstMsg = msgs.find(m => m.role === 'assistant');
+        assert.match(asstMsg.content, /\[прервано собеседником\]/);
+
+        // 4. ИИ перебивает человека (aiBargeIn)
+        const bargedEvents = [];
+        vc.addEventListener('barge', e => bargedEvents.push(e.detail));
+        vc.aiBargeIn('Секунду, перебью: счёта 99 в плане счетов нет.');
+        await wait(30);
+        assert.equal(bargedEvents.at(-1)?.by, 'ai');
+        assert.match(bargedEvents.at(-1)?.text, /счёта 99/);
+    });
 });

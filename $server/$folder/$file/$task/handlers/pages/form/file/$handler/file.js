@@ -370,7 +370,7 @@ export default {
                     try {
                         const raw = await this.$item?.load();
                         const data = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
-                        const done = new Set((data.items || []).filter(i => i.type === 'assistant' && i.durationMs).map(i => i.id));
+                        const done = new Set((data.items || []).filter(i => i.type === 'assistant' && (i.durationMs || i.stopped || i.interrupted)).map(i => i.id));
                         if (Object.keys(this.streams).some(id => done.has(id))) {
                             const s = {};
                             for (const [id, v] of Object.entries(this.streams))
@@ -435,10 +435,19 @@ export default {
             this.freshDocs += files.length + reports.length;
     },
     onScroll(e) {
+        if (this._sticking)
+            return;
         const el = e.target;
-        const pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-        if (pinned !== this.pinned)
-            this.pinned = pinned;
+        const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
+        const movedUp = this._lastScrollTop != null && el.scrollTop < this._lastScrollTop - 4;
+        this._lastScrollTop = el.scrollTop;
+        if (dist < 80) {
+            if (!this.pinned)
+                this.pinned = true;
+        }
+        else if (movedUp && this.pinned) {
+            this.pinned = false;
+        }
     },
     /** Прилипание к низу, пока пользователь не отмотал вверх. */
     _stick() {
@@ -447,15 +456,27 @@ export default {
         cancelAnimationFrame(this._raf);
         this._raf = requestAnimationFrame(() => {
             const el = this.$('.scroller');
-            if (el)
-                el.scrollTop = el.scrollHeight;
+            if (!el || !this.pinned)
+                return;
+            this._sticking = true;
+            el.scrollTop = el.scrollHeight;
+            this._lastScrollTop = el.scrollTop;
+            requestAnimationFrame(() => {
+                if (this.pinned && el) {
+                    el.scrollTop = el.scrollHeight;
+                    this._lastScrollTop = el.scrollTop;
+                }
+                this._sticking = false;
+            });
         });
     },
     toBottom() {
         this.pinned = true;
         const el = this.$('.scroller');
-        if (el)
+        if (el) {
             el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+            this._lastScrollTop = el.scrollHeight;
+        }
     },
     /** Голосовой режим: вкл/выкл (включение просит микрофон — только по клику человека). */
     async toggleVoice(on) {

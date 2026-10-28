@@ -326,7 +326,7 @@ await test('карточка задачи в ленте: быстрые дейс
 });
 
 await test('save_file: ошибка сервера отклоняет промис, а не вешает отправку задачи', async () => {
-    const item = await WORK.get_item('/BASE');
+    const item = await WORK.get_item('/ORGANIZATIONS/Маслоторг');
     assert(item?.save_file, 'элемент с save_file');
     const real = WORK.fetch;
     WORK.fetch = () => Promise.reject(new Error('Доступ запрещён'));
@@ -342,11 +342,15 @@ await test('save_file: ошибка сервера отклоняет проми
     }
 });
 
-await test('модули формы задачи и чата импортируются без ошибок', async () => {
+await test('модули формы задачи, чата и Консультанта поддерживают голосовой диалог с перебиванием', async () => {
     const file = (await import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/file.js')).default;
     assert(typeof file.toggleVoice === 'function' && typeof file._bindItem === 'function', 'шелл задачи');
     const task = await import('/$server/$folder/$class/$structure/handlers/pages/form/chat/$handler/chat-task.js');
     eq(task.taskKeyOf('/a/2026-10-08/5.U.task'), '5.U.task');
+    await import('/$server/$folder/lib/consultant/consultant.js');
+    await ODA.waitReg('item-consultant');
+    const cons = document.createElement('item-consultant');
+    assert(typeof cons.toggleVoice === 'function' && typeof cons.sendVoiceText === 'function', 'живой диалог в Консультанте');
 });
 
 window.__done = true;
