@@ -252,9 +252,9 @@ export default {
                 <div class="cell num">Кредит</div>
             </div>
         </div>
-        <div class="grid-body">
+        <div class="grid-body" @tap="onGridBodyTap($event)">
             <div class="row" ~class="{group: !$for.item.leaf, 'top-level': $for.item.level === 0, detail: $for.item.detail, selected: selectedRow?.account === $for.item.account && selectedRow?.label === $for.item.label}"
-                ~for="displayRows" @tap="selectRow($for.item)" @dblclick="open($for.item)">
+                ~for="displayRows" @tap.stop="selectRow($for.item)" @dblclick="open($for.item)">
                 <div class="cell acc" ~style="{paddingLeft: $for.item.indent + 'px'}">{{$for.item.label}}</div>
                 <div class="cell num debit-col">{{$for.item.open_debit}}</div>
                 <div class="cell num credit-col group-sep">{{$for.item.open_credit}}</div>
@@ -294,6 +294,7 @@ export default {
     rows: [],
     selectedRow: null,
     focusedItem: null,
+    fallbackFocusedItem: null,
     total: null,
     names: { objects: {}, classes: {}, paths: {} },
     error: '',
@@ -320,6 +321,40 @@ export default {
             return label;
         return `${code} ${label}`;
     },
+    rowHasPostings(r) {
+        if (!r)
+            return false;
+        if (typeof r.hasPostings === 'boolean')
+            return r.hasPostings;
+        if (r.opening || r.turnover || r.closing) {
+            return Boolean(
+                Number(r.opening?.debit) || Number(r.opening?.credit)
+                || Number(r.turnover?.debit) || Number(r.turnover?.credit)
+                || Number(r.closing?.debit) || Number(r.closing?.credit)
+                || Number(r.qty?.opening) || Number(r.qty?.debit) || Number(r.qty?.credit) || Number(r.qty?.closing)
+            );
+        }
+        return Boolean(r.open_debit || r.open_credit || r.debit || r.credit || r.close_debit || r.close_credit);
+    },
+    rowHasAnalytics(r) {
+        if (!r)
+            return false;
+        if (typeof r.hasAnalytics === 'boolean')
+            return r.hasAnalytics;
+        if (r.key && typeof r.key === 'object' && Object.keys(r.key).length)
+            return true;
+        if ((this.rows || []).some(x => x.account === r.account && x.key))
+            return true;
+        return Array.isArray(this.slots) && this.slots.length > 0;
+    },
+    isToolDisabled(tool) {
+        const row = this.selectedRow;
+        if (!row || !this.rowHasPostings(row))
+            return true;
+        if (tool?.id === 'analysis' && !this.rowHasAnalytics(row))
+            return true;
+        return false;
+    },
     get displayRows() {
         return (this.rows || []).map(r => ({
             account: r.account,
@@ -327,32 +362,82 @@ export default {
             label: this.rowLabel(r),
             leaf: !!r.leaf,
             detail: !!r.key,
+            hasAnalytics: this.rowHasAnalytics(r),
+            hasPostings: this.rowHasPostings(r),
             level: Number(r.level) || 0,
             indent: (Number(r.level) || 0) * 16,
             ...this.cells(r),
         }));
     },
+    _findFormHost() {
+        if (this.$form && ('focusedItem' in this.$form || typeof this.$form.syncFromView === 'function'))
+            return this.$form;
+        for (let p = this.parentElement || this.domHost; p; p = p.parentElement || p.domHost) {
+            if (p.localName === 'work-form' || typeof p.syncFromView === 'function' || 'focusedItem' in p)
+                return p;
+        }
+        return null;
+    },
+    _notifyForm() {
+        const host = this._findFormHost();
+        if (!host)
+            return;
+        if (typeof host.syncFromView === 'function')
+            host.syncFromView(this);
+        else
+            host.focusedItem = this.focusedItem;
+    },
+    onGridBodyTap(e) {
+        if (!e?.target?.closest?.('.row'))
+            this.selectRow(null);
+    },
     selectRow(row) {
         this.selectedRow = row || null;
         this._syncFocusedAccount(this.selectedRow);
     },
+    async _ensureFallbackFocused() {
+        if (this.fallbackFocusedItem)
+            return this.fallbackFocusedItem;
+        if (typeof WORK === 'undefined' || typeof WORK.get_item !== 'function')
+            return null;
+        const firstRow = this.displayRows?.[0];
+        const firstPath = (firstRow && (this.names?.paths?.[firstRow.account] || firstRow.account))
+            || (this.$item?.short ? `${this.$item.short}/$register/$folder/$class/$account` : '');
+        if (!firstPath)
+            return null;
+        try {
+            this.fallbackFocusedItem = await WORK.get_item(firstPath);
+        }
+        catch {
+            this.fallbackFocusedItem = null;
+        }
+        return this.fallbackFocusedItem;
+    },
     async _syncFocusedAccount(row) {
-        const path = this.names?.paths?.[row?.account] || row?.account;
-        if (!path || typeof WORK === 'undefined' || typeof WORK.get_item !== 'function') {
+        const path = this.names?.paths?.[row?.account] || row?.account || '';
+        if (!row || !path) {
             this.focusedItem = null;
+            await this._ensureFallbackFocused();
+            this._notifyForm();
             return;
         }
+        // Мгновенно выставляем фокус с путём, чтобы кнопки переключились без ожидания сети
+        this.focusedItem = { path, short: path };
+        this._notifyForm();
+        if (typeof WORK === 'undefined' || typeof WORK.get_item !== 'function')
+            return;
         try {
+            await this._ensureFallbackFocused();
             const item = await WORK.get_item(path);
             if (this.selectedRow !== row)
                 return;
-            this.focusedItem = item || null;
-            const host = this.domHost || this.parentElement;
-            if (host && 'focusedItem' in host)
-                host.focusedItem = this.focusedItem;
+            if (item) {
+                this.focusedItem = item;
+                this._notifyForm();
+            }
         }
         catch {
-            this.focusedItem = null;
+            /* оставляем { path, short: path } */
         }
     },
     buildDrilldownNav(viewId = 'postings') {
@@ -519,8 +604,8 @@ export default {
             this.total = res?.total || null;
             if (this.displayRows.length) {
                 const prevAcc = this.selectedRow?.account;
-                const found = prevAcc && this.displayRows.find(r => r.account === prevAcc && r.label === this.selectedRow?.label);
-                this.selectRow(found || this.displayRows[0]);
+                const found = prevAcc ? this.displayRows.find(r => r.account === prevAcc && r.label === this.selectedRow?.label) : null;
+                this.selectRow(found || null);
             }
             else {
                 this.selectRow(null);
@@ -528,11 +613,16 @@ export default {
         }
         catch (e) {
             this.error = String(e?.message || e);
+            this.selectRow(null);
         }
     },
-    /** Открыть форму счёта (у строки разворота — её счёта) в заданном режиме (по умолчанию — карточка/проводки). */
+    /** Открыть форму счёта: при 2-м клике без mode — в «Обороты» (если Анализ disabled), иначе в «Анализ». */
     async open(row, mode = '') {
-        const target = row || this.selectedRow || this.displayRows?.[0];
+        const target = row || this.selectedRow;
+        if (!target || !this.rowHasPostings(target))
+            return;
+        if (mode === 'analysis' && !this.rowHasAnalytics(target))
+            return;
         const path = this.names?.paths?.[target?.account] || target?.account;
         if (!path)
             return;
@@ -540,7 +630,8 @@ export default {
             const t = await WORK.get_item(path);
             if (!t || !window.execute)
                 return;
-            const view = mode === 'turnovers' ? 'turnovers' : mode === 'analysis' ? 'analysis' : 'postings';
+            const effectiveMode = mode || (target.detail ? '' : (this.rowHasAnalytics(target) ? 'analysis' : 'turnovers'));
+            const view = effectiveMode === 'turnovers' ? 'turnovers' : effectiveMode === 'analysis' ? 'analysis' : 'postings';
             const nav = {
                 view,
                 from: this.from,
@@ -549,8 +640,8 @@ export default {
             };
             if (typeof this.packetsKey === 'string' && this.packetsKey !== '*')
                 nav.packetsKey = this.packetsKey;
-            if (mode)
-                nav.mode = mode;
+            if (effectiveMode)
+                nav.mode = effectiveMode;
             if (target?.key && typeof target.key === 'object') {
                 const filters = Object.fromEntries(Object.entries(target.key).filter(([, v]) => v));
                 if (Object.keys(filters).length)

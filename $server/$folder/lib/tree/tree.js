@@ -601,16 +601,16 @@ ODA({is: 'oda-tree-node',
         catch { /* ignore */ }
         return out;
     },
-    /** Узел рабочего места: вложенные места плюс цепочка его ссылок. */
+    /** Узел рабочего места: сначала цепочка его ссылок (классы), затем вложенные рабочие места. */
     async _placeNode(structItem, p, trail) {
         const t = trail ? trail + '/' + p.id : p.id;
         const kids = [];
-        for (const c of p.roles || [])
-            kids.push(await this._placeNode(structItem, c, t));
         try {
             kids.push(...await bindLinkTree(p.tree || [], (path) => WORK.get_item(path)));
         }
         catch { /* без ссылок места */ }
+        for (const c of p.roles || [])
+            kids.push(await this._placeNode(structItem, c, t));
         const node = {
             id: p.id,
             label: p.label || p.id,

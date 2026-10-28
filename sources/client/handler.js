@@ -4,6 +4,30 @@ export class $handler extends $class{
     get size(){
         return 0;
     }
+    get service(){
+        return Boolean(this.DATA?.service || this.DATA?.isService);
+    }
+    get isService(){
+        return Boolean(this.DATA?.isService || this.DATA?.service);
+    }
+    get button(){
+        return Boolean(this.DATA?.button || this.DATA?.isButton);
+    }
+    get isButton(){
+        return Boolean(this.DATA?.isButton || this.DATA?.button);
+    }
+    get allowList(){
+        return Boolean(this.DATA?.allowList);
+    }
+    get order(){
+        return this.DATA?.order ?? 99;
+    }
+    get usable(){
+        return this.DATA?.usable;
+    }
+    get allowUse(){
+        return this.DATA?.allowUse;
+    }
     async import(path, is){
         path = this.short + '/~/' + (path || this.id);
         if(!path.endsWith('.js'))

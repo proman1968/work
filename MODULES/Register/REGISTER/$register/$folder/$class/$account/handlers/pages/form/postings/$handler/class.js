@@ -4,5 +4,6 @@ export default {
     label: 'Проводки',
     roles: ['BOSS', 'USER'],
     service: true,
+    isService: true,
     order: 3,
 }

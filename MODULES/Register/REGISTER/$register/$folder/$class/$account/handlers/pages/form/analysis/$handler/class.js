@@ -4,5 +4,6 @@ export default {
     label: 'Анализ',
     roles: ['BOSS', 'USER'],
     service: true,
+    isService: true,
     order: 2,
 }

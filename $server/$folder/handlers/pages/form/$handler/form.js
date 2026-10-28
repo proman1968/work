@@ -129,12 +129,27 @@ ODA({is: 'work-form',
             <oda-button @tap="toggleFullscreen" ~if="$item?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div id="formFooter" slot="footer" ~show="hasFooter" footer horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; box-sizing: border-box; border-top: 1px solid light-dark(#c8c8c0, #3a3b42);">
-            <item-tools id="mainTools" :$item filter="service" ::tool-items="mainToolItems" @tools-changed="mainToolItems = $event.detail?.value || []" show-labels></item-tools>
-            <item-tools id="focusedTools" focused-only :target-item="focusedItem" :$item="focusedItem" filter="service" ::tool-items="focusedToolItems" @tools-changed="focusedToolItems = $event.detail?.value || []" show-labels></item-tools>
+        <div id="formToolbar" slot="top" ~show="hasToolbar" horizontal no-flex style="align-items: center; padding: 3px 8px; min-height: 32px; gap: 8px; box-sizing: border-box; background: light-dark(#efeee6, #25262c); border-bottom: 1px solid light-dark(#c8c8c0, #3a3b42);">
+            <div class="toolbar-zone left" horizontal no-flex style="align-items: center; gap: 6px;">
+                <item-tools id="topMainTools" :$item :state-version="focusedStateVersion" filter="button" ::tool-items="topMainToolItems" @tools-changed="onToolsListChanged('topMainToolItems', $event)" show-labels></item-tools>
+                <item-tools id="topFocusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topFocusedToolItems" @tools-changed="onToolsListChanged('topFocusedToolItems', $event)" show-labels></item-tools>
+                <slot name="tool-left" @slotchange="_checkToolbarSlots()"></slot>
+            </div>
+            <div class="toolbar-zone center" horizontal flex style="align-items: center; justify-content: center; gap: 6px; min-width: 0;">
+                <slot name="tool-center" @slotchange="_checkToolbarSlots()"></slot>
+            </div>
+            <div class="toolbar-zone right" horizontal no-flex style="align-items: center; gap: 6px; margin-left: auto;">
+                <slot name="tool-right" @slotchange="_checkToolbarSlots()"></slot>
+            </div>
+        </div>
+        <div id="formFooter" slot="footer" ~show="hasFooter" footer horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; gap: 6px; box-sizing: border-box; border-top: 1px solid light-dark(#c8c8c0, #3a3b42);">
+            <item-tools id="mainTools" :$item :state-version="focusedStateVersion" filter="service" ::tool-items="mainToolItems" @tools-changed="onToolsListChanged('mainToolItems', $event)" show-labels></item-tools>
+            <item-tools id="focusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="service" ::tool-items="focusedToolItems" @tools-changed="onToolsListChanged('focusedToolItems', $event)" show-labels></item-tools>
+            <slot name="footer-left"></slot>
             <div flex></div>
-            <div no-flex horizontal ~show="dialog">
-                <oda-button info-invert icon="icons:check" :icon-size @tap="ok" label="Apply"></oda-button>
+            <div no-flex horizontal ~show="dialog" style="gap: 6px;">
+                <oda-button info-invert icon="icons:check" :icon-size @tap="ok" label="OK"></oda-button>
+                <oda-button icon="icons:close" :icon-size @tap="cancel" label="Отмена"></oda-button>
             </div>
         </div>
     `,
@@ -429,19 +444,77 @@ ODA({is: 'work-form',
             }
         }
     },
+    topMainToolItems: [],
+    topFocusedToolItems: [],
     mainToolItems: [],
     focusedToolItems: [],
+    hasSlottedToolbar: false,
+    focusedStateVersion: 0,
+    fallbackFocusedItem: null,
+    get hasToolbar() {
+        return Boolean(this.topMainToolItems?.length || this.topFocusedToolItems?.length || this.hasSlottedToolbar);
+    },
     get hasFooter() {
         return Boolean(this.dialog || this.mainToolItems?.length || this.focusedToolItems?.length);
+    },
+    _checkToolbarSlots() {
+        const names = ['tool-left', 'tool-center', 'tool-right'];
+        this.hasSlottedToolbar = names.some(name => {
+            const slot = this.$?.(`slot[name="${name}"]`);
+            return (slot?.assignedElements?.()?.length || 0) > 0;
+        });
+    },
+    onToolsListChanged(prop, e) {
+        this[prop] = e?.detail?.value || [];
+        this.async(() => this._wakeBars(), 5);
+    },
+    _wakeBars() {
+        for (const sel of ['#formToolbar', '#topMainTools', '#topFocusedTools', '#formFooter', '#mainTools', '#focusedTools']) {
+            const node = this.$?.(sel);
+            if (node) {
+                if (node[R]?.states)
+                    node[R].states.sleep = false;
+                node.render?.(true);
+            }
+        }
+    },
+    syncFromView(vc = this.view_control) {
+        if (!vc)
+            return;
+        this.fallbackFocusedItem = vc.fallbackFocusedItem || null;
+        this.focusedItem = vc.$focusedItem !== undefined ? vc.$focusedItem : (vc.focusedItem || null);
+        this.focusedStateVersion++;
+        for (const [sel, isFocused] of [['#topMainTools', false], ['#topFocusedTools', true], ['#mainTools', false], ['#focusedTools', true]]) {
+            const t = this.$?.(sel);
+            if (t) {
+                t.$item = this.$item;
+                if (isFocused) {
+                    t.fallbackItem = this.fallbackFocusedItem;
+                    t.targetItem = this.focusedItem;
+                }
+                t.stateVersion = this.focusedStateVersion;
+                t._scheduleSync?.();
+            }
+        }
+        this.async(() => this._wakeBars(), 10);
+    },
+    get $focusedItem() {
+        return this.focusedItem;
+    },
+    set $focusedItem(n) {
+        this.focusedItem = n;
     },
     focusedItem: {
         $def: null,
         set(n) {
-            if (!n)
-                this.focusedToolItems = [];
-            const ft = this.$?.('#focusedTools');
-            if (ft)
-                ft.targetItem = n;
+            for (const sel of ['#topFocusedTools', '#focusedTools']) {
+                const ft = this.$?.(sel);
+                if (ft) {
+                    ft.targetItem = n;
+                    ft._scheduleSync?.();
+                }
+            }
+            this.async(() => this._wakeBars(), 5);
         }
     },
     /** Роль формы — эффективная роль элемента (общая предпочитаемая + доступность). */
@@ -580,6 +653,7 @@ ODA({is: 'work-form',
                 el = this.controls[n.id];
                 if (!el) {
                     el = ODA.createComponent(is, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
+                    el.$form = this;
                     this.controls[n.id] = el;
                 }
                 for (let id in this.controls) {
@@ -592,8 +666,15 @@ ODA({is: 'work-form',
             }
             else if (!el.isConnected)
                 this.appendChild(el);
+            el.$form = this;
+            for (const oldSlotEl of [...this.querySelectorAll('[slot="tool-left"], [slot="tool-center"], [slot="tool-right"], [slot="footer-left"]')]) {
+                if (oldSlotEl._ownerView && oldSlotEl._ownerView !== el)
+                    oldSlotEl.remove();
+            }
             this.view_control = el;
-            this.focusedItem = el?.focusedItem || null;
+            el.mountToolbarSlots?.(this);
+            this._checkToolbarSlots();
+            this.syncFromView(el);
             this.host.view_name = n.id;
             const nav = this._pendingNav || this._takeNav(this.$item?.short || this.$item?.path);
             if (nav && typeof el?.applyNav === 'function') {

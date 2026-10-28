@@ -882,6 +882,83 @@ describe('ОСВ (form/sheet)', () => {
             delete globalThis.WORK.get_item;
         }
     });
+
+    it('название представления «Обороты», блокировка нижних сервисов (нет выбора / нет проводок / нет аналитик) и dblclick в Анализ или Обороты', async () => {
+        const sheetMeta = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$register/handlers/pages/form/sheet/$handler/class.js')).default;
+        assert.equal(sheetMeta.label, 'Обороты');
+
+        const opened = [];
+        globalThis.WORK.get_item = async p => ({ path: p });
+        globalThis.window = { execute: (t, nav) => opened.push({ path: t.path, nav }) };
+        try {
+            const SHEET_MIX = {
+                rows: [
+                    { account: '/DATA/REGISTER/51', label: '51 Расчётные счета', level: 0, leaf: true, hasAnalytics: false,
+                        opening: { debit: 0, credit: 0 }, turnover: { debit: 500, credit: 200 }, closing: { debit: 300, credit: 0 } },
+                    { account: '/DATA/REGISTER/62', label: '62 Покупатели', level: 0, leaf: true, hasAnalytics: true,
+                        opening: { debit: 0, credit: 0 }, turnover: { debit: 1000, credit: 400 }, closing: { debit: 600, credit: 0 } },
+                    { account: '/DATA/REGISTER/99', label: '99 Пустой счёт', level: 0, leaf: true, hasAnalytics: false,
+                        opening: { debit: 0, credit: 0 }, turnover: { debit: 0, credit: 0 }, closing: { debit: 0, credit: 0 } },
+                ],
+                total: { opening: { debit: 0, credit: 0 }, turnover: { debit: 1500, credit: 600 }, closing: { debit: 900, credit: 0 } },
+                names: { objects: {}, classes: {}, paths: { '/DATA/REGISTER/51': '/DATA/REGISTER/51', '/DATA/REGISTER/62': '/DATA/REGISTER/62', '/DATA/REGISTER/99': '/DATA/REGISTER/99' } },
+            };
+            const h = host(sheet, [], { fetch: () => SHEET_MIX });
+            await h.reload();
+            const serviceIds = ['turnovers', 'analysis', 'postings'];
+            const statesOf = () => serviceIds.map(id => [id, h.isToolDisabled({ id })]);
+
+            // 1. Счёт не выбран -> все нижние сервисы disabled
+            assert.equal(h.selectedRow, null);
+            assert.equal(h.focusedItem, null);
+            assert.deepEqual(statesOf(), [
+                ['turnovers', true],
+                ['analysis', true],
+                ['postings', true],
+            ]);
+
+            // 2. Счёт без проводок -> все нижние сервисы disabled
+            h.selectRow(h.displayRows[2]);
+            await new Promise(r => setTimeout(r, 10));
+            assert.deepEqual(statesOf(), [
+                ['turnovers', true],
+                ['analysis', true],
+                ['postings', true],
+            ]);
+            await h.open(h.displayRows[2]);
+            assert.equal(opened.length, 0, 'по счёту без проводок переход не выполняется');
+
+            // 3. Счёт 51 (есть проводки, нет аналитик) -> Анализ disabled, 2-й клик ведёт в Обороты
+            h.selectRow(h.displayRows[0]);
+            await new Promise(r => setTimeout(r, 10));
+            assert.deepEqual(statesOf(), [
+                ['turnovers', false],
+                ['analysis', true],
+                ['postings', false],
+            ]);
+            await h.open(h.displayRows[0]);
+            assert.equal(opened.at(-1)?.path, '/DATA/REGISTER/51');
+            assert.equal(opened.at(-1)?.nav?.view, 'turnovers');
+            assert.equal(opened.at(-1)?.nav?.mode, 'turnovers');
+
+            // 4. Счёт 62 (есть проводки и есть аналитики) -> все 3 сервиса активны, 2-й клик ведёт в Анализ
+            h.selectRow(h.displayRows[1]);
+            await new Promise(r => setTimeout(r, 10));
+            assert.deepEqual(statesOf(), [
+                ['turnovers', false],
+                ['analysis', false],
+                ['postings', false],
+            ]);
+            await h.open(h.displayRows[1]);
+            assert.equal(opened.at(-1)?.path, '/DATA/REGISTER/62');
+            assert.equal(opened.at(-1)?.nav?.view, 'analysis');
+            assert.equal(opened.at(-1)?.nav?.mode, 'analysis');
+        }
+        finally {
+            delete globalThis.window;
+            delete globalThis.WORK.get_item;
+        }
+    });
 });
 
 describe('состав виртуального справочника (form/virtual)', () => {
@@ -963,6 +1040,10 @@ describe('архитектура представлений формы (VIEW п�
         const svgSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/tools/icons/lib/svg/odant.svg'), 'utf-8');
         assert.match(formSrc, /id="consultantBtn"[^>]*icon="icons:help"/, 'кнопка Консультант с иконкой ?');
         assert.ok(!/id="consultantBtn"[^>]*label="Консультант"/.test(formSrc), 'без громоздкой текстовой метки Консультант');
+        assert.match(formSrc, /id="formToolbar"[^>]*slot="top"[^>]*~show="hasToolbar"/, 'верхний тулбар формы с 3 зонами');
+        assert.match(formSrc, /slot name="tool-left"/, 'левая зона тулбара');
+        assert.match(formSrc, /slot name="tool-center"/, 'центральная зона тулбара');
+        assert.match(formSrc, /slot name="tool-right"/, 'правая зона тулбара');
         assert.match(formSrc, /slot="footer"[^>]*~show="hasFooter"/, 'футер формы виден только при наличии содержимого (hasFooter)');
         assert.match(formSrc, /<item-tools[^>]*:\$item="focusedItem"[^>]*filter="service"[^>]*show-labels>/, 'сервисная панель focusedItem с подписями в футере');
         assert.match(svgSrc, /<symbol id="calendar"/, 'иконка odant:calendar для кнопки Обороты определена в odant.svg');

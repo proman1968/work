@@ -4,5 +4,6 @@ export default {
     label: 'Обороты',
     roles: ['BOSS', 'USER'],
     service: true,
+    isService: true,
     order: 1,
 }

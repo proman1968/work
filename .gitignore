@@ -52,9 +52,26 @@ torus/binnet/models/
 .vscode/tasks.json
 /#system/oauth/
 
-# ��������� ������� ������� (������ �� ������, RAG)
+# Пересборные индексы сервера (поиск по текстам, RAG)
 /.index/
 
 # Data organization DB (source of truth, backup separately)
 /.data/
+**/#system/work.db*
+
+# Локальные организации ($base) — переносятся архивами и не хранятся в Git/SVN
+ORGANIZATIONS/*/
+!ORGANIZATIONS/$domain/
+!ORGANIZATIONS/$domain/**
+!ORGANIZATIONS/Маслоторг/
+!ORGANIZATIONS/Маслоторг/**
+**/logs/
+**/.RAG/
+**/*.webm
+**/history/
+**/$*/work/
+**/$*/DATA/
+**/$*/ADMIN/
+**/$*/USER/
+**/$*/BOSS/
 **/#system/work.db*

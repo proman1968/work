@@ -131,7 +131,7 @@ export default {
     <div class="body">
         <div class="list">
             <div class="bar">
-                <oda-button ~if="canCreate" icon="icons:plus" @tap="create">Создать</oda-button>
+                <oda-button ~if="canCreate && !inWorkForm" icon="icons:plus" @tap="create">Создать</oda-button>
                 <oda-button icon="icons:refresh" @tap="reload">Обновить</oda-button>
                 <input class="search" type="search" :value="searchQuery" placeholder="Поиск…" @change="onSearch($this.value)">
                 <select title="Статус" @change="filterStatus($this.value)">
@@ -153,7 +153,7 @@ export default {
             </div>
             <div class="error" ~if="error && !editorOpen">{{error}}</div>
             <oda-table allow-focus readonly ::focused-row="focusedRow" :metadata="tableMetadata" :data-set="tableRows"
-                :$save-key="$item?.short"></oda-table>
+                :$save-key="$item?.short" @dblclick="onTableDblClick($event)"></oda-table>
         </div>
     </div>
     `,
@@ -180,6 +180,7 @@ export default {
     /** печатные формы открытой операции (db_print_list): [{ name, label }] */
     printForms: [],
     focusedRow: null,
+    focusedItem: null,
     /** окно редактора открыто: второй клик по таблице не открывает ещё одно */
     editorOpen: false,
     /** идёт сохранение/удаление/проведение: повторные действия и закрытие ждут */
@@ -193,10 +194,118 @@ export default {
     total: 0,
     page: 1,
     pageSize: 200,
+    _findFormHost() {
+        if (this.$form && ('focusedItem' in this.$form || typeof this.$form.syncFromView === 'function'))
+            return this.$form;
+        for (let p = this.parentElement || this.domHost; p; p = p.parentElement || p.domHost) {
+            if (p.localName === 'work-form' || typeof p.syncFromView === 'function' || 'focusedItem' in p)
+                return p;
+        }
+        return null;
+    },
+    get inWorkForm() {
+        return Boolean(this._findFormHost());
+    },
+    _notifyForm() {
+        const host = this._findFormHost();
+        if (!host)
+            return;
+        if (typeof host.syncFromView === 'function')
+            host.syncFromView(this);
+        else
+            host.focusedItem = this.focusedItem;
+    },
+    get itemButtons() {
+        return [
+            {
+                id: 'create',
+                label: 'Новый',
+                icon: 'icons:add',
+                isButton: true,
+                order: 1,
+                disabled: !this.canCreate,
+                execute: () => this.create(),
+            },
+        ];
+    },
+    canDeleteRow(row = this.focusedRow) {
+        if (!row?.id || !this.canCreate)
+            return false;
+        if (this.isOperation)
+            return row.status === 'draft';
+        return row.status !== 'deleted';
+    },
+    get focusedButtons() {
+        const row = this.focusedRow;
+        return [
+            {
+                id: 'copy',
+                label: 'Копия',
+                icon: 'icons:content-copy',
+                isButton: true,
+                order: 2,
+                disabled: !row?.id || !this.canCreate,
+                execute: () => this.copyRow(row),
+            },
+            {
+                id: 'open',
+                label: 'Открыть',
+                icon: 'icons:launch',
+                isButton: true,
+                order: 3,
+                disabled: !row?.id,
+                execute: () => this.openEditor(row),
+            },
+            {
+                id: 'delete',
+                label: 'Удалить',
+                icon: 'icons:delete',
+                isButton: true,
+                allowList: true,
+                order: 4,
+                disabled: !this.canDeleteRow(row),
+                execute: () => this.deleteRow(row),
+            },
+        ];
+    },
+    get focusedServices() {
+        if (!this.isOperation)
+            return [];
+        const row = this.focusedRow;
+        const isReg = row?.status === 'registered';
+        return [
+            {
+                id: 'post',
+                label: isReg ? 'Проведен' : 'Провести',
+                icon: 'icons:settings',
+                isService: true,
+                service: true,
+                order: 1,
+                disabled: !row?.id || !this.canCreate || row?.status === 'cancelled',
+                execute: () => this.openEditor(row),
+            },
+            {
+                id: 'print',
+                label: 'Печать',
+                icon: 'icons:print',
+                isService: true,
+                service: true,
+                order: 2,
+                disabled: !row?.id,
+                execute: () => this.openEditor(row),
+            },
+        ];
+    },
+    onTableDblClick() {
+        if (this.focusedRow?.id && !this.editorOpen)
+            this.openEditor(this.focusedRow);
+    },
     $observers: {
-        /** клик по строке таблицы открывает объект; пока окно открыто — второй не нужен */
+        /** внутри work-form одиночный клик фокусирует строку ($focusedItem), автономно — открывает редактор */
         select(focusedRow) {
-            if (focusedRow?.id && !this.editorOpen)
+            this.focusedItem = focusedRow?.id ? focusedRow : null;
+            this._notifyForm();
+            if (!this.inWorkForm && focusedRow?.id && !this.editorOpen)
                 this.openEditor(focusedRow);
         }
     },
@@ -613,10 +722,13 @@ export default {
             this.rows = (Array.isArray(res?.items) ? res.items : []).map(o => this.rowOf(o));
             this.total = Number(res?.total) || this.rows.length;
             // строки пересозданы: выделение возвращаем на открытый объект по id
-            this.focusedRow = this.tableRows.find(r => r.id === this.editing?.id) ?? null;
+            this.focusedRow = this.tableRows.find(r => r.id === (this.editing?.id || this.focusedRow?.id)) ?? null;
+            this.focusedItem = this.focusedRow?.id ? this.focusedRow : null;
+            this._notifyForm();
         }
         catch (e) {
             this.error = String(e?.message || e);
+            this._notifyForm();
         }
     },
     async select(row) {
@@ -817,6 +929,56 @@ export default {
         finally {
             this.focusedRow = null;
             this.editorOpen = false;
+        }
+    },
+    /** Клонирование выбранного объекта: открывает окно создания нового объекта с заполненными полями оригинала. */
+    async copyRow(row = this.focusedRow) {
+        if (!row?.id || this.editorOpen || !this.canCreate)
+            return;
+        this.editorOpen = true;
+        this.clearError();
+        try {
+            const found = await this.$item.fetch('db_read', { id: row.id });
+            if (found?.names && typeof found.names === 'object')
+                this.names = { ...(this.names || {}), ...found.names };
+            await this.loadLeafSchema(found?.cid || row.cid || '');
+            const baseBody = { ...(found?.body || {}) };
+            delete baseBody.id;
+            delete baseBody.version;
+            delete baseBody.status;
+            this.editing = this.isOperation ? { ...baseBody, time: _today() } : baseBody;
+            this.entries = [];
+            this.entryNames = { objects: {}, classes: {} };
+            this.objectBalances = [];
+            this.trajectory = [];
+            this.printForms = [];
+            await this.showEditor();
+        }
+        catch (e) {
+            this.setError(e);
+        }
+        finally {
+            this.editorOpen = false;
+        }
+    },
+    /** Удаление выбранного объекта из тулбара. */
+    async deleteRow(row = this.focusedRow) {
+        if (!row?.id || this.busy || !this.canDeleteRow(row))
+            return;
+        this.busy = true;
+        this.clearError();
+        try {
+            const target = await this.targetItem(row.cid || '');
+            await target.fetch('db_delete', { id: row.id });
+            this.focusedRow = null;
+            this.focusedItem = null;
+            await this.reload();
+        }
+        catch (e) {
+            this.setError(e);
+        }
+        finally {
+            this.busy = false;
         }
     },
     /** Только поля схемы (без даты операции — она уходит параметром); пустые строки таблиц отбрасываются. */

@@ -37,6 +37,7 @@ import { classScriptStatics } from './class/script.js';
 import { classFeedMethods } from './class/feed.js';
 import { classSecurityMethods } from './class/security.js';
 import { classSearchMethods } from './class/search.js';
+import { classArchiveMethods } from './class/archive.js';
 
 export { looksLikeFileId, ALLOWED_CHILD_TYPES };
 
@@ -640,6 +641,7 @@ Object.assign($class, classScriptStatics);
 Object.defineProperties($class.prototype, Object.getOwnPropertyDescriptors(classFeedMethods));
 Object.defineProperties($class.prototype, Object.getOwnPropertyDescriptors(classSecurityMethods));
 Object.defineProperties($class.prototype, Object.getOwnPropertyDescriptors(classSearchMethods));
+Object.defineProperties($class.prototype, Object.getOwnPropertyDescriptors(classArchiveMethods));
 
 $class.type_chain = Object.create(null);
 

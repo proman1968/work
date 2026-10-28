@@ -1994,9 +1994,9 @@ export class $folder extends $item{
     sortItems(files, reverse = false, isType = this.isType) {
         const rootOrder = { ORGANIZATIONS: 0, MODULES: 1, MODELS: 2, NODES: 3, nodes: 3, SERVICES: 4, USERS: 5 };
         const typeGroup = (t) => {
-            if (t === '$structure' || t === '$base')
-                return 0;
             if (t === '$catalog' || t === '$virtual' || t === '$struct' || t === '$operation' || t === '$register' || t === '$account')
+                return 0;
+            if (t === '$structure' || t === '$base')
                 return 1;
             if (t === '$module' || t === '$domain')
                 return 3;

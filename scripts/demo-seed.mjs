@@ -6,6 +6,7 @@
  *
  *   node scripts/demo-seed.mjs        — в `.data/work.db` (только в пустую базу)
  */
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { openDataDb } from '../sources/data/db.js';
@@ -161,5 +162,26 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
             console.log(`[${prefix}] Проведены стартовые демо-операции.`);
         }
         db.close();
+    }
+
+    const delovayaDb = path.join(root, 'ORGANIZATIONS', 'Деловая сфера', '$base', '#system', 'work.db');
+    const workParent = 'D:/business/d.WORK';
+    if (!fs.existsSync(delovayaDb) && fs.existsSync(workParent)) {
+        const found = fs.readdirSync(workParent).find(d => d.includes('Деловая'));
+        if (found) {
+            const { importDelovayaData } = await import('./import-delovaya.mjs');
+            const res = await importDelovayaData(path.join(workParent, found));
+            console.log(`[/ORGANIZATIONS/Деловая сфера] Импортировано объектов: ${res.stats.catalogs + res.stats.operations}, двойных проводок: ${res.stats.doubleEntries}.`);
+        }
+    }
+
+    const bisDb = path.join(root, 'ORGANIZATIONS', 'Бизнес Интер Софт', '$base', '#system', 'work.db');
+    if (!fs.existsSync(bisDb) && fs.existsSync(workParent)) {
+        const found = fs.readdirSync(workParent).find(d => d.includes('Бизнес_Инт'));
+        if (found) {
+            const { importBisData } = await import('./import-bis.mjs');
+            const res = await importBisData(path.join(workParent, found));
+            console.log(`[/ORGANIZATIONS/Бизнес Интер Софт] Импортировано объектов: ${res.stats.catalogs + res.stats.operations}, двойных проводок: ${res.stats.doubleEntries}.`);
+        }
     }
 }

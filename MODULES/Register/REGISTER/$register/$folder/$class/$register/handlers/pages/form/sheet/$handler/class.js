@@ -1,6 +1,6 @@
 /** Мета хендлера form/sheet. Визуалка — sheet.js. */
 export default {
     icon: 'odant:grid',
-    label: 'Ведомость',
+    label: 'Обороты',
     roles: ['BOSS', 'USER'],
 }

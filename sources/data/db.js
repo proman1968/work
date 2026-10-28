@@ -220,6 +220,46 @@ export async function dataDb(basePath = '') {
     return p;
 }
 
+/**
+ * Сбросить WAL-журнал БД организации в основной файл `work.db` перед архивацией.
+ * @param {string} basePath Путь организации (например, '/ORGANIZATIONS/Деловая сфера')
+ */
+export async function checkpointBaseDb(basePath = '') {
+    const key = String(basePath ?? '').trim().replace(/\/+$/, '');
+    const file = baseDbFile(process.cwd(), key);
+    if (!fs.existsSync(file))
+        return;
+    const p = openedByBase.get(key);
+    if (p) {
+        const db = await p;
+        try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* ignore */ }
+        return;
+    }
+    if (fs.existsSync(file + '-wal')) {
+        const db = await openDataDb(file);
+        try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* ignore */ }
+        try { db.close(); } catch { /* ignore */ }
+    }
+}
+
+/**
+ * Закрыть соединение с БД конкретной организации (перед перезаписью из архива).
+ * @param {string} basePath Путь организации
+ */
+export async function closeBaseDb(basePath = '') {
+    const key = String(basePath ?? '').trim().replace(/\/+$/, '');
+    const p = openedByBase.get(key);
+    if (!p)
+        return;
+    openedByBase.delete(key);
+    try {
+        const db = await p;
+        try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* ignore */ }
+        db.close();
+    }
+    catch { /* ignore */ }
+}
+
 /** Закрыть открытые БД данных (тесты, остановка сервера). */
 export async function closeDataDb() {
     const p = opened;

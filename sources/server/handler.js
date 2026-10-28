@@ -91,8 +91,16 @@ export class $handler extends $class {
             data.usable = await this._usable(p.$context, p);
         }
         catch { data.usable = true; }
-        if (this.DATA?.service)
+        if (this.DATA?.service || this.DATA?.isService) {
             data.service = true;
+            data.isService = true;
+        }
+        if (this.DATA?.isButton || this.DATA?.button) {
+            data.isButton = true;
+            data.button = true;
+        }
+        if (this.DATA?.allowList)
+            data.allowList = true;
         if (this.DATA?.order != null)
             data.order = this.DATA.order;
         return data;

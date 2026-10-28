@@ -614,7 +614,16 @@ export function createRequestHandler() {
             }
         }
         else if (Buffer.isBuffer(result)) {
-            header["Content-Type"] = "audio/wav";
+            if (method === 'export_archive' || (result.length >= 4 && result[0] === 0x50 && result[1] === 0x4b)) {
+                const rawName = String(params.filename || `${item?.id || 'archive'}.zip`);
+                const safeAscii = rawName.replace(/[^\x20-\x7E]|[\r\n"\\;]/g, '_');
+                header["Content-Type"] = "application/zip";
+                header["Content-Disposition"] = `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(rawName)}`;
+                header["Cache-Control"] = "no-cache";
+            }
+            else {
+                header["Content-Type"] = "audio/wav";
+            }
         }
         else if (typeof result === 'object') {
             result = JSON.stringify(result, null, +params.space || 2);

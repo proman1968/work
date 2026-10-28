@@ -531,15 +531,17 @@ export function trialBalance(db, q = {}) {
         const children = [...n.children].sort(byPath).map(c => walk(c, level + 1));
         for (const c of children)
             addTotals(t, c.t);
-        return { n, level, t, children };
+        const ownSlots = analyticSlots(classSchema(db, n.cid) || { fields: [] });
+        const hasAnalytics = ownSlots.length > 0 || children.some(c => c.hasAnalytics);
+        return { n, level, t, children, hasAnalytics };
     };
-    const emit = ({ n, level, t, children }) => {
+    const emit = ({ n, level, t, children, hasAnalytics }) => {
         if (isZero(t))
             return;
-        out.push({ account: n.cid, label: n.label, level, parent: nodes.has(n.parent) ? n.parent : null, leaf: !n.children.length, ...presentTotals(t) });
+        out.push({ account: n.cid, label: n.label, level, parent: nodes.has(n.parent) ? n.parent : null, leaf: !n.children.length, hasAnalytics: !!hasAnalytics, ...presentTotals(t) });
         for (const d of [...n.details].sort((a, b) => title(a.key).localeCompare(title(b.key), 'ru'))) {
             if (!isZero(d.totals))
-                out.push({ account: n.cid, label: n.label, level: level + 1, parent: n.cid, leaf: true, key: d.key, ...presentTotals(d.totals) });
+                out.push({ account: n.cid, label: n.label, level: level + 1, parent: n.cid, leaf: true, key: d.key, hasAnalytics: true, ...presentTotals(d.totals) });
         }
         children.forEach(emit);
     };

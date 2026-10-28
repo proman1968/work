@@ -17,7 +17,7 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { getClass, ancestors, classesOfType } from './classes.js';
-import { classSchema, findAncestor } from './schema.js';
+import { classSchema, findAncestor, classBasePath } from './schema.js';
 import { readObject } from './objects.js';
 import { normValue } from './posting.js';
 import { compile, round, toNumber } from './expr.js';
@@ -241,8 +241,9 @@ function displayBody(db, fields, body, at, cache) {
 /** Реквизиты организации: название и значения из class.js корня `$base` (ИНН, КПП, адрес, банк …). */
 const ORG_FIELDS = ['inn', 'kpp', 'ogrn', 'address', 'phone', 'email', 'bank', 'bik', 'account', 'corr'];
 
-function orgOf(db) {
-    const root = getClass(db, 'org') ?? classesOfType(db, '$base')[0];
+function orgOf(db, op = null) {
+    const bp = (op?.cid && classBasePath(db, op.cid)) || (op?.unit && classBasePath(db, op.unit)) || '';
+    const root = (bp && getClass(db, bp)) ?? getClass(db, 'org') ?? classesOfType(db, '$base')[0];
     const own = root?.own ?? {};
     const org = { name: root?.label ?? '' };
     for (const k of ORG_FIELDS)
@@ -343,7 +344,7 @@ export async function renderPrint(db, { id, name, root }) {
             unit: o.unit ? getClass(db, o.unit)?.label || '' : '',
             place: o.place || '',
         },
-        org: orgOf(db),
+        org: orgOf(db, o),
     };
     return { name: t.name, label: t.label, source: t.source, html: render(nodes, base, {}, what, { ...FUNCTIONS, norm: (kind, object) => normValue(db, kind, object, o.time) }) };
 }
