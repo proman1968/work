@@ -127,14 +127,15 @@ ODA({is: 'oda-editor-form',
     <style>
         :host {
             @apply --vertical;
-            gap: 8px;
-            padding: 16px;
+            gap: 6px;
+            padding: 10px 12px;
             overflow-x: hidden;
             overflow-y: auto;
         }
         .form-title {
-            font-size: 120%;
-            font-weight: bold;
+            font-size: 14px;
+            font-weight: 700;
+            padding-bottom: 2px;
         }
     </style>
     <div class="form-title" ~if="title">{{title}}</div>
@@ -186,8 +187,17 @@ ODA({is: 'oda-editor-form-field',
         fieldset {
             @apply --horizontal;
             flex: auto;
-            font-size: inherit;
-            border-radius: 8px;
+            font-size: 13px;
+            border: 1px solid light-dark(#c8c8c0, #3a3b42);
+            border-radius: 4px;
+            padding: 2px 8px 4px;
+            margin: 0;
+        }
+        legend {
+            font-size: 11.5px;
+            font-weight: 600;
+            color: light-dark(#4b5563, #9ca3af);
+            padding: 0 4px;
         }
         fieldset.invalid {
             border-color: red;
@@ -195,13 +205,14 @@ ODA({is: 'oda-editor-form-field',
         .editor-box {
             @apply --vertical;
             @apply --flex;
+            min-width: 0;
         }
         .children-box {
             @apply --horizontal;
             @apply --flex;
             flex-wrap: wrap;
-            margin: 4px -8px -4px -16px;
-            gap: 8px;
+            margin: 4px -4px -2px -8px;
+            gap: 6px;
         }
         .req {
             color: red;
@@ -214,9 +225,9 @@ ODA({is: 'oda-editor-form-field',
     </style>
     <fieldset ~class="{ invalid: hasError }">
         <legend>{{label}}<span class="req" ~if="required"> *</span></legend>
-        <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="32" @click="expanded = !expanded"></oda-icon>
+        <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="24" @click="expanded = !expanded"></oda-icon>
         <div class="editor-box">
-            <div ~if="field?.type !== 'Struct'" ~is="editor" ::value="data[field.id]" :field :meta="field" :at="data?.time || ''" :allow-other="!!field.other" no-header :disabled="!!field.disabled"></div>
+            <div ~if="field?.type !== 'Struct'" ~is="editor" ::value="data[field.id]" :field :meta="field" :at="data?.time || ''" :allow-other="!!field.other" :borderless="field?.type !== 'Table'" :dense="field?.type !== 'Table'" no-header :disabled="!!field.disabled"></div>
             <div ~if="children?.length && expanded" class="children-box">
                 <oda-editor-form-field ~for="children" :field="$for.item" :data="subData" :field-errors="fieldErrors" :path-prefix="fullPath"></oda-editor-form-field>
             </div>

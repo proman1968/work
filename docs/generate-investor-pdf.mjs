@@ -22,6 +22,10 @@ const variants = {
         html: path.join(__dirname, 'ODANT-investor-presentation.html'),
         pdf: path.join(__dirname, 'ODANT-investor-presentation.pdf'),
     },
+    work: {
+        html: path.join(__dirname, 'WORK-presentation.html'),
+        pdf: path.join(__dirname, 'WORK-presentation.pdf'),
+    },
 };
 
 const key = process.argv[2] || 'overview';

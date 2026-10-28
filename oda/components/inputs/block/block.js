@@ -27,12 +27,13 @@ ODA({
             .header {
                 @apply --horizontal;
                 @apply --no-flex;
+                @apply --header;
                 align-items: center;
-                gap: var(--space-s);
-                min-height: var(--control-height);
-                padding: 0 var(--space-xs) 0 var(--space-s);
-                background-color: var(--subtle-background);
-                border-bottom: 1px solid var(--control-border-color);
+                gap: 6px;
+                min-height: 28px;
+                padding: 2px 8px;
+                border-bottom: 1px solid var(--border-color);
+                font-size: 12px;
             }
             :host([collapsed]) .header {
                 border-bottom-color: transparent;
@@ -48,6 +49,8 @@ ODA({
                 overflow: hidden;
                 white-space: nowrap;
                 text-overflow: ellipsis;
+                text-align: right;
+                font-size: 12px;
             }
             .body {
                 flex: none;
@@ -58,22 +61,24 @@ ODA({
                 @apply --horizontal;
                 @apply --no-flex;
                 align-items: center;
+                gap: 4px;
             }
             :host([collapsed]:not([no-header])) .body {
                 display: none;
             }
             .tool {
                 @apply --no-flex;
-                border-radius: var(--radius-s);
+                border-radius: 3px;
+                font-size: 12px;
             }
         </style>
         <div class="header" ~show="!noHeader || visibleTools.length">
             <oda-button ~if="collapsible && !noHeader" class="tool" :icon="collapsed ? 'icons:chevron-right' : 'icons:expand-more'" :icon-size title="Свернуть / развернуть" @tap.stop="toggle()"></oda-button>
             <label class="caption" ~if="caption && !noHeader">{{caption}}</label>
-            <span class="summary" :title="summary">{{summary}}</span>
             <div class="tools" @tap.stop @dblclick.stop>
-                <oda-button ~for="visibleTools" class="tool" :icon="$for.item.icon" :title="$for.item.title || ''" :disabled="!!$for.item.disabled" :icon-size @tap="runTool($for.item, $event)"></oda-button>
+                <oda-button ~for="visibleTools" class="tool" :icon="$for.item.icon" :label="$for.item.label || ''" :title="$for.item.title || ''" :disabled="!!$for.item.disabled" icon-size="16" @tap="runTool($for.item, $event)"></oda-button>
             </div>
+            <span class="summary" :title="summary">{{summary}}</span>
         </div>
     `,
     $public: {

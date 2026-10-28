@@ -128,7 +128,8 @@ describe('форма объектов', () => {
         await h.loadSchema();
         await h.onPackets({ detail: { value: { period: { start: '2026-10-01', end: '2026-10-14' } } } });
         assert.deepEqual(calls.find(c => c.method === 'db_query').params, { limit: 200, order: '-time', from: '2026-10-01', to: '2026-10-14' });
-        assert.deepEqual(h.tableMetadata.map(c => c.id), ['time', 'name', 'client', 'state']);
+        assert.deepEqual(h.tableMetadata.map(c => c.id), ['name', 'time', 'client', 'state']);
+        assert.equal(h.tableMetadata[0].stickyLeft, true);
         assert.equal(h.tableRows[0].time, '2026-10-14');
         assert.equal(h.tableRows[0].state, 'проведена');
         await h.select({ id: 'o1' });
@@ -448,8 +449,12 @@ describe('форма объектов', () => {
             assert.equal(h.canCreate, true, 'в группе с листьями создание доступно');
             assert.equal(h.showLeafSelect, true);
             assert.equal(h.showClassCol, true);
-            assert.deepEqual(h.tableMetadata.map(c => c.id), ['time', 'cls', 'name', 'client', 'state']);
+            assert.deepEqual(h.tableMetadata.map(c => c.id), ['name', 'time', 'client', 'state', 'cls']);
+            assert.equal(h.tableMetadata[0].stickyLeft, true);
+            assert.equal(h.tableMetadata.at(-1).label, 'Группа');
+            assert.equal(h.tableMetadata.at(-1).stickyRight, true);
             assert.equal(h.tableRows[0].cls, 'Покупателю');
+            assert.equal(h.tableRows[0].group, 'Покупателю');
 
             await h.selectLeaf('op.sale');
             assert.equal(h.activeSchema.title, 'Покупателю');
@@ -459,6 +464,103 @@ describe('форма объектов', () => {
             assert.equal(h.entryText(h.entries[0]), `Дт 62 Расчёты (ООО «Альфа») — Кт 90 Выручка: ${rub(200)}`);
             assert.equal(await h.save(), true);
             assert.equal(leafCalls.find(c => c.method === 'db_create')?.path, '/DATA/OPERATIONS/Реализация/Покупателю');
+        }
+        finally {
+            delete globalThis.WORK.get_item;
+        }
+    });
+
+    it('промежуточный справочник: колонка Группа с путём хранения, дерево классов для Новый и множественный выбор с allowList', async () => {
+        const deletedIds = [];
+        globalThis.WORK.get_item = async (p) => ({
+            path: p,
+            fetch: async (m, params) => {
+                if (m === 'db_delete') {
+                    deletedIds.push({ path: p, id: params?.id });
+                    return { id: params?.id, status: 'deleted' };
+                }
+                return null;
+            },
+        });
+        try {
+            const h = host(objects, [], {
+                fetch: (m) => {
+                    if (m === 'db_schema')
+                        return {
+                            ...SCHEMA('catalog', { cid: '/DATA/CATALOGS/Номенклатура', path: '/DATA/CATALOGS/Номенклатура', leaf: false, label: 'Номенклатура' }),
+                            leaves: [
+                                { cid: '/DATA/CATALOGS/Номенклатура/Прайс/Оборудование', path: '/DATA/CATALOGS/Номенклатура/Прайс/Оборудование', label: 'Оборудование', count: 10 },
+                                { cid: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги/1. Предпроектное обследование', path: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги/1. Предпроектное обследование', label: '1. Предпроектное обследование', count: 8 },
+                            ],
+                            classes: {
+                                '/DATA/CATALOGS/Номенклатура': { cid: '/DATA/CATALOGS/Номенклатура', path: '/DATA/CATALOGS/Номенклатура', parent: '/DATA/CATALOGS', label: 'Номенклатура', leaf: false },
+                                '/DATA/CATALOGS/Номенклатура/Прайс': { cid: '/DATA/CATALOGS/Номенклатура/Прайс', path: '/DATA/CATALOGS/Номенклатура/Прайс', parent: '/DATA/CATALOGS/Номенклатура', label: 'Прайс', leaf: false },
+                                '/DATA/CATALOGS/Номенклатура/Прайс/Оборудование': { cid: '/DATA/CATALOGS/Номенклатура/Прайс/Оборудование', path: '/DATA/CATALOGS/Номенклатура/Прайс/Оборудование', parent: '/DATA/CATALOGS/Номенклатура/Прайс', label: 'Оборудование', leaf: true, count: 10 },
+                                '/DATA/CATALOGS/Номенклатура/Прайс/Услуги': { cid: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги', path: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги', parent: '/DATA/CATALOGS/Номенклатура/Прайс', label: 'Услуги', leaf: false },
+                                '/DATA/CATALOGS/Номенклатура/Прайс/Услуги/1. Предпроектное обследование': { cid: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги/1. Предпроектное обследование', path: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги/1. Предпроектное обследование', parent: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги', label: '1. Предпроектное обследование', leaf: true, count: 8 },
+                            },
+                        };
+                    if (m === 'db_query')
+                        return {
+                            total: 2,
+                            items: [
+                                { id: 'i1', cid: '/DATA/CATALOGS/Номенклатура/Прайс/Оборудование', status: 'active', version: 1, body: { name: 'Видеокарта' } },
+                                { id: 'i2', cid: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги/1. Предпроектное обследование', status: 'active', version: 1, body: { name: 'Обследование' } },
+                            ],
+                            names: {},
+                        };
+                    return null;
+                },
+            });
+            await h.loadSchema();
+            await h.reload();
+
+            // 1. Колонка «Группа» справа показывает относительный путь места хранения
+            assert.equal(h.tableMetadata.at(-1).id, 'cls');
+            assert.equal(h.tableMetadata.at(-1).label, 'Группа');
+            assert.equal(h.tableRows[0].cls, 'Прайс/Оборудование');
+            assert.equal(h.tableRows[1].cls, 'Прайс/Услуги/1. Предпроектное обследование');
+
+            // 2. Дерево подклассов для диалога «Выберите класс для создания объекта»
+            const tree = h.buildClassTree();
+            assert.equal(tree.length, 1);
+            assert.equal(tree[0].label, 'Прайс');
+            assert.equal(tree[0].leaf, false);
+            assert.deepEqual(tree[0].children.map(c => ({ label: c.label, leaf: c.leaf, count: c.count })), [
+                { label: 'Оборудование', leaf: true, count: 10 },
+                { label: 'Услуги', leaf: false, count: 0 },
+            ]);
+            assert.equal(tree[0].children[1].children[0].label, '1. Предпроектное обследование');
+            assert.equal(tree[0].children[1].children[0].leaf, true);
+            assert.equal(tree[0].children[1].children[0].count, 8);
+
+            // 3. Одиночный vs множественный выбор и allowList
+            h.selectedRows = [h.tableRows[0]];
+            h.focusedRow = h.tableRows[0];
+            h._syncFocusedItem();
+            assert.equal(h.focusedItem?.id, 'i1');
+            assert.deepEqual(h.focusedButtons.map(b => [b.id, b.disabled]), [
+                ['copy', false],
+                ['open', false],
+                ['delete', false],
+            ]);
+
+            h.selectedRows = [h.tableRows[0], h.tableRows[1]];
+            h._syncFocusedItem();
+            assert.equal(Array.isArray(h.focusedItem), true);
+            assert.equal(h.focusedItem.length, 2);
+            assert.deepEqual(h.focusedButtons.map(b => [b.id, b.disabled, Boolean(b.allowList)]), [
+                ['copy', true, false],
+                ['open', true, false],
+                ['delete', false, true],
+            ]);
+
+            // Пакетное удаление всех выбранных строк по кнопке «Удалить»
+            await h.deleteRow();
+            assert.deepEqual(deletedIds, [
+                { path: '/DATA/CATALOGS/Номенклатура/Прайс/Оборудование', id: 'i1' },
+                { path: '/DATA/CATALOGS/Номенклатура/Прайс/Услуги/1. Предпроектное обследование', id: 'i2' },
+            ]);
         }
         finally {
             delete globalThis.WORK.get_item;

@@ -46,16 +46,35 @@ ODA({
     extends: 'oda-block-input',
     template: /*html*/`
         <style>
+            :host {
+                border: 1px solid var(--border-color);
+                border-radius: 0;
+            }
             .body {
                 @apply --vertical;
-                min-height: 10em;
-                max-height: 28em;
+                min-height: 150px;
+                max-height: 320px;
+            }
+            .table-footer {
+                @apply --horizontal;
+                @apply --header;
+                align-items: center;
+                justify-content: space-between;
+                min-height: 22px;
+                padding: 2px 8px;
+                border-top: 1px solid var(--border-color);
+                font-size: 11.5px;
+                font-weight: 600;
             }
         </style>
         <div class="body">
-            <oda-table flex show-header allow-focus col-lines row-lines allow-row-panel :editable="!isReadonly && !disabled"
-                :data-set="rows" :metadata="tableColumns" :controls ::focused-row @cell-changed="changed()"
+            <oda-table flex show-header allow-focus allow-selection col-lines row-lines :readonly="Boolean(isReadonly || disabled)"
+                :data-set="rows" :metadata="tableColumns" :controls ::focused-row :$save-key="field?.id || 'table'" @cell-changed="changed()"
                 @value-changed.stop="true"></oda-table>
+            <div class="table-footer">
+                <span>{{(value ?? []).length}}</span>
+                <span>{{totalsText}}</span>
+            </div>
         </div>
     `,
     $public: {
@@ -77,8 +96,10 @@ ODA({
     get tableColumns() {
         return this.columns.map(c => {
             const path = typeof c.type === 'string' && c.type.startsWith('/') ? c.type : '';
+            const rawType = path ? 'link' : (c.type && String(c.type).toLowerCase());
             return {
-                id: c.id, label: c.label || c.id, type: path ? 'link' : c.type && String(c.type).toLowerCase(),
+                id: c.id, label: c.label || c.id, type: rawType === 'money' ? 'number' : rawType,
+                formatMoney: rawType === 'money',
                 options: c.options ?? c.items, readonly: !!c.calc || !!c.readonly, width: c.width,
                 catalog: c.catalog || path || undefined, placeholder: c.placeholder
             };
@@ -89,18 +110,21 @@ ODA({
         const columns = this.columns;
         return (this.value ?? []).map(row => lens(row, columns));
     },
+    get totalsText() {
+        return this.columns.filter(c => c.total)
+            .map(c => `${c.label || c.id}: ${this.rows.reduce((s, r) => s + num(r[c.id]), 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+            .join(' · ');
+    },
     get summary() {
         const n = (this.value ?? []).length;
-        const totals = this.columns.filter(c => c.total)
-            .map(c => `${c.label || c.id}: ${this.rows.reduce((s, r) => s + num(r[c.id]), 0).toLocaleString()}`);
-        return [n ? n + ' стр.' : '', ...totals].filter(Boolean).join(' · ');
+        return [n ? n + ' стр.' : '', this.totalsText].filter(Boolean).join(' · ');
     },
     get tools() {
         return [
-            { icon: 'icons:add', title: 'Добавить строку', edit: true, action: () => this.value = [...(this.value ?? []), {}] },
-            { icon: 'icons:content-copy', title: 'Дублировать строку', edit: true, disabled: !this.focusedRow,
+            { icon: 'icons:add', label: 'Новый', title: 'Добавить строку', edit: true, action: () => this.value = [...(this.value ?? []), {}] },
+            { icon: 'icons:content-copy', label: 'Копия', title: 'Дублировать строку', edit: true, disabled: !this.focusedRow,
                 action: () => this.value = [...(this.value ?? []), { ...sourceOf(this.focusedRow) }] },
-            { icon: 'icons:delete', title: 'Удалить строку', edit: true, disabled: !this.focusedRow,
+            { icon: 'icons:delete', label: 'Удалить', title: 'Удалить строку', edit: true, disabled: !this.focusedRow,
                 action: () => this.value = (this.value ?? []).filter(r => raw(r) !== raw(sourceOf(this.focusedRow))) }
         ];
     },

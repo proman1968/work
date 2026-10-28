@@ -129,7 +129,7 @@ ODA({is: 'work-form',
             <oda-button @tap="toggleFullscreen" ~if="$item?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div id="formToolbar" slot="top" ~show="hasToolbar" horizontal no-flex style="align-items: center; padding: 3px 8px; min-height: 32px; gap: 8px; box-sizing: border-box; background: light-dark(#efeee6, #25262c); border-bottom: 1px solid light-dark(#c8c8c0, #3a3b42);">
+        <div id="formToolbar" slot="top" ~show="hasToolbar" header horizontal no-flex style="align-items: center; padding: 3px 8px; min-height: 32px; gap: 8px; box-sizing: border-box; border-bottom: 1px solid var(--border-color);">
             <div class="toolbar-zone left" horizontal no-flex style="align-items: center; gap: 6px;">
                 <item-tools id="topMainTools" :$item :state-version="focusedStateVersion" filter="button" ::tool-items="topMainToolItems" @tools-changed="onToolsListChanged('topMainToolItems', $event)" show-labels></item-tools>
                 <item-tools id="topFocusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topFocusedToolItems" @tools-changed="onToolsListChanged('topFocusedToolItems', $event)" show-labels></item-tools>
@@ -142,7 +142,7 @@ ODA({is: 'work-form',
                 <slot name="tool-right" @slotchange="_checkToolbarSlots()"></slot>
             </div>
         </div>
-        <div id="formFooter" slot="footer" ~show="hasFooter" footer horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; gap: 6px; box-sizing: border-box; border-top: 1px solid light-dark(#c8c8c0, #3a3b42);">
+        <div id="formFooter" slot="footer" ~show="hasFooter" header horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; gap: 6px; box-sizing: border-box; border-top: 1px solid var(--border-color);">
             <item-tools id="mainTools" :$item :state-version="focusedStateVersion" filter="service" ::tool-items="mainToolItems" @tools-changed="onToolsListChanged('mainToolItems', $event)" show-labels></item-tools>
             <item-tools id="focusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="service" ::tool-items="focusedToolItems" @tools-changed="onToolsListChanged('focusedToolItems', $event)" show-labels></item-tools>
             <slot name="footer-left"></slot>
@@ -459,10 +459,12 @@ ODA({is: 'work-form',
     },
     _checkToolbarSlots() {
         const names = ['tool-left', 'tool-center', 'tool-right'];
-        this.hasSlottedToolbar = names.some(name => {
+        const slotted = names.some(name => {
             const slot = this.$?.(`slot[name="${name}"]`);
             return (slot?.assignedElements?.()?.length || 0) > 0;
         });
+        const direct = Boolean(this.$?.('#formToolbar [data-toolbar-widget]'));
+        this.hasSlottedToolbar = slotted || direct;
     },
     onToolsListChanged(prop, e) {
         this[prop] = e?.detail?.value || [];
@@ -667,7 +669,10 @@ ODA({is: 'work-form',
             else if (!el.isConnected)
                 this.appendChild(el);
             el.$form = this;
-            for (const oldSlotEl of [...this.querySelectorAll('[slot="tool-left"], [slot="tool-center"], [slot="tool-right"], [slot="footer-left"]')]) {
+            for (const oldSlotEl of [
+                ...this.querySelectorAll('[slot="tool-left"], [slot="tool-center"], [slot="tool-right"], [slot="footer-left"]'),
+                ...(this.$?.('#formToolbar')?.querySelectorAll?.('[data-toolbar-widget]') || []),
+            ]) {
                 if (oldSlotEl._ownerView && oldSlotEl._ownerView !== el)
                     oldSlotEl.remove();
             }

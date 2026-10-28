@@ -20,6 +20,7 @@ ODA({
             :host {
                 @apply --horizontal;
                 @apply --no-flex;
+                width: max(100%, var(--table-min-total, 100%));
                 /* тот же минимум, что у шапки: при переполнении строка и шапка одной ширины */
                 min-width: var(--table-min-total, auto);
             }
@@ -31,27 +32,28 @@ ODA({
                 align-items: stretch;
                 grid-template-columns: var(--table-tracks, 1fr);
                 min-width: var(--table-min-total, min-content);
+                min-height: 24px;
                 background-color: var(--row-surface, var(--content-background));
             }
-            /* Системные состояния строки: --focused даёт position: relative под полосу. */
+            :host(:hover:not([selected]):not([focused])) .rgrid {
+                --row-surface: color-mix(in oklch, var(--accent-color) 10%, var(--content-background));
+            }
+            /* Системные состояния строки: --focused и [selected] в теме приложения */
             :host([focused]) {
-                @apply --focused;
+                --row-surface: var(--selected-background);
+                --row-color: var(--selected-color);
             }
-            /* Состояние строки — через наследуемые переменные. Ячейка непрозрачна
-               (@apply --content ставит ей фон), поэтому фон на :host строки не виден;
-               ячейка красит свою поверхность из --row-surface/--row-color (см. cell.js).
-               Зебра — заметный тон: 4% у --subtle-background на тёмной теме не читается. */
-            :host([odd]) {
-                --row-surface: color-mix(in oklch, var(--content-color) 8%, var(--content-background));
+            :host([odd]:not([selected]):not([focused])) {
+                --row-surface: color-mix(in oklch, var(--content-color) 4%, var(--content-background));
             }
-            /* selected — токены системного вида; фильтр миксина не берём: он затемнял строку */
+            /* selected — системные токены выделенной строки */
             :host([selected]) {
                 --row-surface: var(--selected-background);
                 --row-color: var(--selected-color);
             }
         </style>
         <div class="rgrid">
-            <oda-table-cell class="cell" ~for="columns" ~is="cellKind($for.item)" :column="$for.item" :row :table="host" :last="isLast($for.index)" :readonly="cellReadonly($for.item)" :expander-disabled :col-lines :row-lines></oda-table-cell>
+            <oda-table-cell class="cell" ~for="columns" ~is="cellKind($for.item)" :column="$for.item" :row :table="host" :last="isLast($for.index)" :sticky-left="isStickyLeft($for.index, $for.item)" :sticky-right="isStickyRight($for.index, $for.item)" :readonly="cellReadonly($for.item)" :expander-disabled :col-lines :row-lines></oda-table-cell>
         </div>
     `,
     $public: {
@@ -66,15 +68,52 @@ ODA({
     },
     /** клик по строке делает её текущей; маркер гасит всплытие и фокус не ставит */
     $listeners: {
-        click() {
+        mousedown(e) {
+            if (e?.shiftKey && this.host?.allowSelection)
+                e.preventDefault();
+        },
+        click(e) {
             const host = this.host;
-            if (!host?.allowFocus || this.row?.isGroup)
+            if ((!host?.allowFocus && !host?.allowSelection) || this.row?.isGroup)
                 return;
-            for (const node of host.items ?? [])
-                if (node.focused)
-                    node.focused = false;
-            this.row.focused = true;
-            host.focusedRow = this.row.data;
+            const items = (host.items ?? []).filter(n => !n.isGroup);
+            const anchor = host._selectionAnchor || items.find(n => n.focused) || this.row;
+            if (host.allowFocus) {
+                for (const node of host.items ?? [])
+                    if (node.focused)
+                        node.focused = false;
+                this.row.focused = true;
+                host.focusedRow = this.row.data;
+            }
+            if (host.allowSelection) {
+                const isCtrl = !!(e?.ctrlKey || e?.metaKey);
+                const isShift = !!e?.shiftKey;
+                if (isShift && items.length) {
+                    e?.preventDefault?.();
+                    const i1 = items.indexOf(anchor);
+                    const i2 = items.indexOf(this.row);
+                    if (i1 !== -1 && i2 !== -1) {
+                        const [from, to] = i1 <= i2 ? [i1, i2] : [i2, i1];
+                        for (let i = 0; i < items.length; i++) {
+                            const inRange = i >= from && i <= to;
+                            if (inRange)
+                                items[i].checked = 'checked';
+                            else if (!isCtrl)
+                                items[i].checked = 'unchecked';
+                        }
+                    }
+                }
+                else if (isCtrl) {
+                    this.row.checked = this.row.checked === 'checked' ? 'unchecked' : 'checked';
+                    host._selectionAnchor = this.row;
+                }
+                else {
+                    for (const node of items)
+                        node.checked = node === this.row ? 'checked' : 'unchecked';
+                    host._selectionAnchor = this.row;
+                }
+                host._syncSelectedRows?.();
+            }
         }
     },
     get columns() {
@@ -84,6 +123,12 @@ ODA({
     /** последняя ячейка — край сетки (без правой линии), если за ней нет хвоста `@filler` */
     isLast(index) {
         return index === this.columns.length - 1 && !this.host?.hasFiller;
+    },
+    isStickyLeft(index, column) {
+        return index === 0 && Boolean(column?.field?.stickyLeft || column?.key === 'name');
+    },
+    isStickyRight(index, column) {
+        return index === this.columns.length - 1 && Boolean(column?.field?.stickyRight || column?.field?.isGroupCol);
     },
     /** вид ячейки: дерево — наследник с маркером и спейсером, остальные — базовые.
      * Только вид; редактор подбирает сама ячейка (`cell.js: editorTag`) */

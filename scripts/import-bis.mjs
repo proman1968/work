@@ -286,7 +286,7 @@ export function scaffoldBisClasses() {
             label: "Инженер-разработчик",
             USERS: ["CA4E097FF6C1D387"],
             LINKS: [
-                { id: "${REG_PREFIX}/CATALOGS/Номенклатура/Продукты и услуги", access: "write" },
+                { id: "${REG_PREFIX}/CATALOGS/Номенклатура/Прайс", access: "write" },
                 { id: "${REG_PREFIX}/CATALOGS/Посетители выставок", access: "write" },
                 { id: "${REG_PREFIX}/OPERATIONS/Задания на разработку", access: "write", scope: "unit" }
             ]
@@ -554,6 +554,11 @@ export function scaffoldBisClasses() {
         ]
     }
 }`);
+    for (const obsolete of ['Затраты и ТМЦ', 'Продукты и услуги']) {
+        const obsoleteDir = path.join(ORG_DIR_DISK, 'MODULES/Register/CATALOGS/Номенклатура', obsolete);
+        if (fs.existsSync(obsoleteDir))
+            fs.rmSync(obsoleteDir, { recursive: true, force: true });
+    }
     writeClassJs('MODULES/Register/CATALOGS/Номенклатура/ОС и НМА', '$catalog', `{
     label: "ОС и НМА",
     icon: "carbon:laptop",
@@ -567,8 +572,8 @@ export function scaffoldBisClasses() {
         ]
     }
 }`);
-    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Затраты и ТМЦ', '$catalog', `{
-    label: "Затраты, оборудование и ПО",
+    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Затраты', '$catalog', `{
+    label: "Затраты",
     icon: "carbon:tool-box",
     METADATA: {
         FIELDS: [
@@ -578,17 +583,54 @@ export function scaffoldBisClasses() {
         ]
     }
 }`);
-    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Продукты и услуги', '$catalog', `{
-    label: "Продукты и услуги (Прайс)",
-    icon: "carbon:Catalog",
+    for (const sub of ['Мебель', 'Оборудование', 'Работы', 'Стороннее ПО', 'Сторонние услуги']) {
+        writeClassJs(`MODULES/Register/CATALOGS/Номенклатура/Затраты/${sub}`, '$catalog', `{
+    label: "${sub}"
+}`);
+    }
+    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Прайс', '$catalog', `{
+    label: "Прайс",
+    icon: "carbon:catalog",
     METADATA: {
         FIELDS: [
             { id: "category", label: "Раздел прайса" },
+            { id: "provider_name", label: "Поставщик" },
             { id: "pricetype", label: "Тип цены" },
             { id: "overhead_proc", label: "Накладные, доля", type: "Number" }
         ]
     }
 }`);
+    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Прайс/Оборудование', '$catalog', `{
+    label: "Оборудование"
+}`);
+    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Прайс/Продукты', '$catalog', `{
+    label: "Продукты"
+}`);
+    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Прайс/Продукты/Классы', '$catalog', `{
+    label: "Классы"
+}`);
+    for (const sub of ['Документы', 'Сервисы', 'Справочники']) {
+        writeClassJs(`MODULES/Register/CATALOGS/Номенклатура/Прайс/Продукты/Классы/${sub}`, '$catalog', `{
+    label: "${sub}"
+}`);
+    }
+    writeClassJs('MODULES/Register/CATALOGS/Номенклатура/Прайс/Услуги', '$catalog', `{
+    label: "Услуги"
+}`);
+    for (const sub of [
+        '1. Предпроектное обследование',
+        '2. Создание инфраструктуры',
+        '3. Разработка конфигурации',
+        '4. Внедрение',
+        '5. Опытная эксплуатация',
+        '6. Создание технической документации',
+        '7. Сопровождение',
+        'Прочие услуги',
+    ]) {
+        writeClassJs(`MODULES/Register/CATALOGS/Номенклатура/Прайс/Услуги/${sub}`, '$catalog', `{
+    label: "${sub}"
+}`);
+    }
     writeClassJs('MODULES/Register/CATALOGS/Виды налогов', '$catalog', `{
     label: "Виды налогов и взносов",
     icon: "carbon:receipt",
@@ -983,7 +1025,14 @@ export function scaffoldBisClasses() {
 
     // 1.7. Раздел OPERATIONS ($operation — классы первичных документов и операций)
     writeClassJs('MODULES/Register/OPERATIONS', '$operation', `{
-    label: "Операции и документы"
+    label: "Операции и документы",
+    METADATA: {
+        FIELDS: [
+            { id: "num", label: "Номер" },
+            { id: "sum", label: "Сумма", type: "Money" },
+            { id: "comment", label: "Комментарий", type: "Text" }
+        ]
+    }
 }`);
 
     writeClassJs('MODULES/Register/OPERATIONS/Заказы', '$operation', `{
@@ -1237,7 +1286,7 @@ export function scaffoldBisClasses() {
                 id: "Начисление ЗП",
                 each: "lines",
                 amount: "row.credited",
-                debit: { account: "${REG_PREFIX}/REGISTER/26", analytics: { item: "row.employee" } },
+                debit: { account: "${REG_PREFIX}/REGISTER/26", analytics: { item: "row.item" } },
                 credit: { account: "${REG_PREFIX}/REGISTER/70", analytics: { employee: "row.employee" } }
             },
             {
@@ -1607,13 +1656,30 @@ function shortFioKey(s) {
 export async function importBisData(srcOrgDir) {
     scaffoldBisClasses();
 
-    // Пересоздаём чистую БД организации
+    // Пересоздаём чистую БД организации (если файл открыт сервером — очищаем таблицы на месте)
     for (const ext of ['', '-wal', '-shm']) {
         const f = DB_FILE + ext;
-        if (fs.existsSync(f)) fs.rmSync(f, { force: true });
+        if (fs.existsSync(f)) {
+            try {
+                fs.rmSync(f, { force: true });
+            } catch {
+                // Файл удерживается запущенным dev-сервером — очистим таблицы ниже через SQL
+            }
+        }
     }
 
     const db = await openDataDb(DB_FILE);
+    db.exec(`
+        DELETE FROM account_entries;
+        DELETE FROM entry_analytics;
+        DELETE FROM entries;
+        DELETE FROM refs;
+        DELETE FROM objects_fts;
+        DELETE FROM object_versions;
+        DELETE FROM objects;
+        DELETE FROM class_tree;
+        DELETE FROM classes;
+    `);
     const { problems } = await refreshClasses(db, ROOT_DIR);
     if (problems.length)
         console.warn('Предупреждения сканирования классов:', problems);
@@ -1780,7 +1846,8 @@ export async function importBisData(srcOrgDir) {
         if (extra.oid && nomByOid.has(extra.oid)) return nomByOid.get(extra.oid);
         const low = s.toLowerCase();
         if (nomByName.has(low)) return nomByName.get(low);
-        const cid = `${REG_PREFIX}/CATALOGS/Номенклатура/${defaultSub}`;
+        const subPath = defaultSub === 'Затраты и ТМЦ' ? 'Затраты/Оборудование' : defaultSub;
+        const cid = `${REG_PREFIX}/CATALOGS/Номенклатура/${subPath}`;
         const id = insertRawObject({
             id: extra.oid || undefined,
             cid,
@@ -1813,16 +1880,18 @@ export async function importBisData(srcOrgDir) {
         ['Сторонние услуги', readClassObjects(srcOrgDir, 'nomenclature/Затраты/Сторонние_услуг')],
     ];
     const rawPriceGroups = [
-        ['Оборудование', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Оборудование')],
-        ['Продукты ODANT', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Продукты/Классы/Документы')],
-        ['1. Предпроектное обследование', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/1__Предпроектно')],
-        ['2. Создание инфраструктуры', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/2__Создание_инф')],
-        ['3. Разработка конфигурации', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/3__Разработка_к')],
-        ['4. Внедрение', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/4__Внедрение')],
-        ['5. Опытная эксплуатация', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/5__Опытная_эксп')],
-        ['6. Тех. документация', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/6__Создание_тех')],
-        ['7. Сопровождение', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/7__Сопровождени')],
-        ['Прочие услуги', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/Прочие_услуги')],
+        ['Прайс/Оборудование', 'Оборудование', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Оборудование')],
+        ['Прайс/Продукты/Классы/Документы', 'Документы', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Продукты/Классы/Документы')],
+        ['Прайс/Продукты/Классы/Сервисы', 'Сервисы', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Продукты/Классы/Сервисы')],
+        ['Прайс/Продукты/Классы/Справочники', 'Справочники', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Продукты/Классы/Справочники')],
+        ['Прайс/Услуги/1. Предпроектное обследование', '1. Предпроектное обследование', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/1__Предпроектно')],
+        ['Прайс/Услуги/2. Создание инфраструктуры', '2. Создание инфраструктуры', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/2__Создание_инф')],
+        ['Прайс/Услуги/3. Разработка конфигурации', '3. Разработка конфигурации', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/3__Разработка_к')],
+        ['Прайс/Услуги/4. Внедрение', '4. Внедрение', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/4__Внедрение')],
+        ['Прайс/Услуги/5. Опытная эксплуатация', '5. Опытная эксплуатация', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/5__Опытная_эксп')],
+        ['Прайс/Услуги/6. Создание технической документации', '6. Создание технической документации', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/6__Создание_тех')],
+        ['Прайс/Услуги/7. Сопровождение', '7. Сопровождение', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/7__Сопровождени')],
+        ['Прайс/Услуги/Прочие услуги', 'Прочие услуги', readClassObjects(srcOrgDir, 'nomenclature/Прайс/Услуги/Прочие_услуги')],
     ];
 
     const rawPositions = readClassObjects(srcOrgDir, 'Должности');
@@ -2138,15 +2207,15 @@ export async function importBisData(srcOrgDir) {
             stats.catalogs++;
         }
 
-        const costNomCid = `${REG_PREFIX}/CATALOGS/Номенклатура/Затраты и ТМЦ`;
         for (const [category, list] of rawCostGroups) {
+            const costLeafCid = `${REG_PREFIX}/CATALOGS/Номенклатура/Затраты/${category}`;
             for (const o of list) {
                 const a = o.attrs;
                 const name = cleanStr(a.name);
                 if (!name) continue;
                 const id = insertRawObject({
                     id: a.oid,
-                    cid: costNomCid,
+                    cid: costLeafCid,
                     time: cleanTimeMs(a.date, '2013-05-01'),
                     body: {
                         name,
@@ -2165,15 +2234,15 @@ export async function importBisData(srcOrgDir) {
             }
         }
 
-        const priceNomCid = `${REG_PREFIX}/CATALOGS/Номенклатура/Продукты и услуги`;
-        for (const [category, list] of rawPriceGroups) {
+        for (const [subRel, category, list] of rawPriceGroups) {
+            const priceLeafCid = `${REG_PREFIX}/CATALOGS/Номенклатура/${subRel}`;
             for (const o of list) {
                 const a = o.attrs;
                 const name = cleanStr(a.name);
                 if (!name) continue;
                 const id = insertRawObject({
                     id: a.oid,
-                    cid: priceNomCid,
+                    cid: priceLeafCid,
                     time: cleanTimeMs(a.date, '2013-08-14'),
                     body: {
                         name,
@@ -2181,6 +2250,7 @@ export async function importBisData(srcOrgDir) {
                         price: cleanNum(a.price),
                         cost: cleanNum(a.cost),
                         category,
+                        provider_name: cleanStr(a.provider),
                         pricetype: cleanStr(a.pricetype),
                         overhead_proc: cleanNum(a.overhead_proc),
                         description: cleanStr(a.description)

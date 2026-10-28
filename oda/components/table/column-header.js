@@ -32,8 +32,12 @@ ODA({
                 @apply --header;
                 position: sticky;
                 top: 0;
-                z-index: 1;
+                z-index: 4;
+                width: max(100%, var(--table-min-total, 100%));
                 min-width: var(--table-min-total, auto);
+                border-bottom: 1px solid var(--border-color);
+                font-size: 12px;
+                font-weight: 600;
             }
             /* Сетка шапки — те же треки, что у строк (одна проекция модели в переменной таблицы);
                спаны ставит модель. Промежуточные ~for-обёртки — display: contents, поэтому ячейки
@@ -47,15 +51,52 @@ ODA({
             }
             .hcell {
                 @apply --horizontal;
+                position: relative;
                 align-items: center;
-                gap: var(--space-xs);
+                gap: 4px;
                 box-sizing: border-box;
                 min-width: 0;
-                padding: var(--space-s) var(--space-m);
+                min-height: 25px;
+                padding: 3px 8px;
                 overflow: hidden;
+                border-right: 1px solid var(--border-color);
+                background-color: var(--header-background);
+                color: var(--header-color);
                 /* вся ячейка — зона сортировки (8-c); выделение текста при Ctrl-клике не нужно */
                 cursor: pointer;
                 user-select: none;
+            }
+            .hcell.end {
+                border-right: none;
+            }
+            .hcell.sticky-left {
+                position: sticky;
+                left: 0;
+                z-index: 3;
+                box-shadow: 1px 0 0 var(--border-color);
+            }
+            .hcell.sticky-right {
+                position: sticky;
+                right: 0;
+                z-index: 3;
+                border-left: 1px solid var(--border-color);
+                box-shadow: -1px 0 0 var(--border-color);
+            }
+            .resizer {
+                position: absolute;
+                top: 0;
+                right: 0;
+                bottom: 0;
+                width: 6px;
+                cursor: col-resize;
+                z-index: 5;
+                user-select: none;
+                touch-action: none;
+            }
+            .resizer:hover,
+            .resizer.active {
+                background-color: var(--accent-color);
+                opacity: 0.7;
             }
             .title {
                 min-width: 0;
@@ -98,11 +139,12 @@ ODA({
             }
         </style>
         <div class="hgrid">
-            <div class="hcell" ~for="cells" ~style="cellStyle($for.item)" ~class="{end: isEnd($for.item)}" @click="sortColumn($for.item.node, $event)">
+            <div class="hcell" ~for="cells" ~style="cellStyle($for.item)" ~class="{end: isEnd($for.item), 'sticky-left': isStickyLeft($for.item), 'sticky-right': isStickyRight($for.item)}" @click="sortColumn($for.item.node, $event)">
                 <oda-icon ~if="$for.item.node.allowExpand" class="marker" icon="icons:chevron-right" :rotate="$for.item.node.expanded ? 90 : 0" @click.stop="toggleColumn($for.item.node)"></oda-icon>
                 <span class="title">{{$for.item.node.label}}</span>
                 <span class="sort" ~if="sortMark($for.item.node)">{{sortMark($for.item.node)}}</span>
                 <oda-icon ~if="isLeaf($for.item)" class="tool" icon="icons:filter" :icon-size="16" :fill="filterFill($for.item.node)" title="Фильтр колонки" @click.stop="openFilter($for.item.node, $event)"></oda-icon>
+                <div class="resizer" ~if="isLeaf($for.item)" title="Потяните для изменения ширины (двойной клик — авто)" @pointerdown.stop.prevent="startResize($for.item.node, $event)" @click.stop @dblclick.stop="resetResize($for.item.node)"></div>
             </div>
         </div>
     `,
@@ -148,6 +190,38 @@ ODA({
     isEnd(cell) {
         const cols = this.layout?.leaves?.length ?? 0;
         return (cell?.start ?? 0) + (cell?.colSpan ?? 1) === cols && !this.host?.hasFiller;
+    },
+    isStickyLeft(cell) {
+        return (cell?.start ?? 0) === 0 && Boolean(cell?.node?.field?.stickyLeft || cell?.node?.key === 'name');
+    },
+    isStickyRight(cell) {
+        const cols = this.layout?.leaves?.length ?? 0;
+        const isLastCol = (cell?.start ?? 0) + (cell?.colSpan ?? 1) === cols;
+        return isLastCol && Boolean(cell?.node?.field?.stickyRight || cell?.node?.field?.isGroupCol);
+    },
+    startResize(node, e) {
+        if (!node?.key || !this.host)
+            return;
+        const hcell = e.currentTarget?.closest?.('.hcell');
+        const resizer = e.currentTarget;
+        const startW = Math.round(hcell?.getBoundingClientRect()?.width || node.width || 120);
+        const startX = e.clientX;
+        resizer?.classList?.add('active');
+        const onMove = (ev) => {
+            const nextW = Math.max(52, Math.round(startW + (ev.clientX - startX)));
+            this.host?.setColumnState?.(node.key, { width: nextW });
+        };
+        const onUp = () => {
+            resizer?.classList?.remove('active');
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+    },
+    resetResize(node) {
+        if (node?.key)
+            this.host?.setColumnState?.(node.key, { width: undefined });
     },
     /** раскрытие колонки — через API таблицы (состояние в `columnView`); `layout` пересчитается сам */
     toggleColumn(node) {

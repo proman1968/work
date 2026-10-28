@@ -49,7 +49,7 @@ function nodesOf(list) {
             type: canonicalType(field.type, field.catalog),
             required: field.required === true,
             readonly: field.readonly === true,
-            system: field.system === true || SYSTEM_IDS.includes(id),
+            system: field.system === true || (field.system !== false && SYSTEM_IDS.includes(id)),
             children: nodesOf(Array.isArray(fields) ? fields : Array.isArray(children) ? children : []),
         });
     }

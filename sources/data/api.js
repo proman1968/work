@@ -40,6 +40,7 @@ import {
     scopeGrants, entryGrants, withoutBranches, objectCond, visibleUnits, writeContexts, resolvePlace,
 } from './scope.js';
 import { DataError } from './errors.js';
+import { localDay } from './time.js';
 import { buildWorkspace } from './workspace.js';
 import { normalizeSecurity, walkPlaces, trailKey } from '../server/access/workplaces.js';
 
@@ -416,14 +417,31 @@ function schemaSubtree(db, cls) {
     const slots = [];
     const seenSlots = new Set();
     const fam = familyOf(cls);
-    for (const cid of descendants(db, cls.cid)) {
+    const desc = descendants(db, cls.cid);
+    const counts = {};
+    if (desc.length && (fam === 'catalog' || fam === 'operation')) {
+        for (const r of db.prepare(`SELECT cid, count(*) n FROM objects WHERE cid IN (${desc.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL GROUP BY cid`).all(...desc)) {
+            counts[r.cid] = Number(r.n) || 0;
+        }
+    }
+    for (const cid of desc) {
         const c = getClass(db, cid);
         if (!c)
             continue;
         const leaf = isLeaf(db, cid);
-        classes[cid] = { cid, path: c.path, label: c.label, type: c.type, leaf };
+        const count = counts[cid] || 0;
+        classes[cid] = {
+            cid,
+            path: c.path,
+            parent: c.parent || '',
+            label: c.label,
+            type: c.type,
+            icon: c.own?.icon || '',
+            leaf,
+            count,
+        };
         if (leaf && ['$catalog', '$registry', '$operation'].includes(c.type))
-            leaves.push({ cid, path: c.path, label: c.label });
+            leaves.push({ cid, path: c.path, label: c.label, count });
         if (fam === 'account') {
             const s = withTargetPaths(db, classSchema(db, cid));
             for (const f of analyticSlots(s || { fields: [] })) {
@@ -434,8 +452,36 @@ function schemaSubtree(db, cls) {
             }
         }
     }
+    const rootModPath = cls.path.replace(/^\/(ORGANIZATIONS|BASES)\/[^/]+/, '');
+    const defaultIcon = cls.own?.icon
+        || (rootModPath !== cls.path ? getClass(db, rootModPath)?.own?.icon : '')
+        || (fam === 'operation' ? 'carbon:task-complete' : 'carbon:catalog');
+    for (const c of Object.values(classes)) {
+        const parts = [];
+        let cur = c;
+        let icon = c.icon;
+        const seen = new Set();
+        while (cur && cur.cid !== cls.cid && !seen.has(cur.cid)) {
+            seen.add(cur.cid);
+            parts.unshift(cur.label || cur.cid.split('/').pop());
+            cur = cur.parent ? classes[cur.parent] : null;
+            if (!icon && cur?.icon)
+                icon = cur.icon;
+        }
+        c.icon = icon || defaultIcon;
+        c.group = parts.join('/');
+    }
     leaves.sort((a, b) => a.label.localeCompare(b.label, 'ru'));
-    return { classes, leaves, ...(fam === 'account' ? { slots } : {}) };
+    let opDays = undefined;
+    if (desc.length && fam === 'operation') {
+        const daySet = new Set();
+        for (const r of db.prepare(`SELECT DISTINCT time FROM objects WHERE cid IN (${desc.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL AND time IS NOT NULL ORDER BY time`).all(...desc)) {
+            if (Number.isFinite(r.time))
+                daySet.add(localDay(r.time));
+        }
+        opDays = [...daySet].sort();
+    }
+    return { classes, leaves, ...(fam === 'account' ? { slots } : {}), ...(opDays ? { days: opDays } : {}) };
 }
 
 /** Пути мест подразделения (дерево ROLES его #security). */

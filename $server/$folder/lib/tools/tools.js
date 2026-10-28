@@ -24,24 +24,23 @@ export default {
             button.service-btn {
                 @apply --horizontal;
                 @apply --no-flex;
+                @apply --content;
                 align-items: center;
                 gap: 6px;
                 padding: 3px 12px;
                 min-height: 24px;
                 font-size: 12.5px;
                 font-weight: 600;
-                border: 1px solid light-dark(#b8b8b0, #4a4b52);
+                border: 1px solid var(--border-color);
                 border-radius: 3px;
-                background: light-dark(linear-gradient(180deg, #fafaf8 0%, #e8e7de 100%), linear-gradient(180deg, #32343a 0%, #26282d 100%));
-                color: light-dark(#222, #e2e8f0);
                 cursor: pointer;
                 user-select: none;
                 box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
                 transition: background 0.12s ease, border-color 0.12s ease;
             }
             button.service-btn:hover:not(:disabled) {
-                border-color: light-dark(#7c8ea6, #60a5fa);
-                background: light-dark(linear-gradient(180deg, #ffffff 0%, #dfe8f6 100%), linear-gradient(180deg, #3b4252 0%, #2e3440 100%));
+                border-color: var(--accent-color);
+                background: var(--accent-soft);
             }
             button.service-btn:active:not(:disabled) {
                 transform: translateY(0.5px);
@@ -104,6 +103,7 @@ export default {
         this._scheduleSync();
     },
     _scheduleSync() {
+        this._syncToolsNow();
         this.debounce('sync-tools', () => {
             this._syncToolsNow();
         }, 5);
@@ -167,9 +167,13 @@ export default {
         // 1. Декларативные инструменты от активной вьюшки (для объектов БД и кастомных режимов)
         if (vc) {
             const vcList = filter === 'button'
-                ? (focusedOnly ? vc.focusedButtons : vc.itemButtons)
+                ? (focusedOnly
+                    ? (typeof vc.getFocusedButtons === 'function' ? vc.getFocusedButtons() : vc.focusedButtons)
+                    : (typeof vc.getItemButtons === 'function' ? vc.getItemButtons() : vc.itemButtons))
                 : filter === 'service'
-                    ? (focusedOnly ? vc.focusedServices : vc.itemServices)
+                    ? (focusedOnly
+                        ? (typeof vc.getFocusedServices === 'function' ? vc.getFocusedServices() : vc.focusedServices)
+                        : (typeof vc.getItemServices === 'function' ? vc.getItemServices() : vc.itemServices))
                     : null;
             if (Array.isArray(vcList)) {
                 this._setTools(this._wrapWithState(vcList, hasFocus, isMulti, vc, rawTarget, singleTarget || this.$item));

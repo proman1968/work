@@ -31,18 +31,21 @@ const DATE_FIELD = Object.freeze({ id: 'time', label: 'Дата', type: 'Date', 
 
 /** Поле схемы ядра → поле редактора: тип, справочник ссылки, варианты, вложенные поля структуры и колонки табличной части. */
 function formField(f) {
-    const out = { id: f.id, label: f.label || f.id, type: TYPES[f.type] || 'String' };
+    const rawType = String(f.type || '').toLowerCase();
+    const out = { id: f.id, label: f.label || f.id, type: TYPES[rawType] || TYPES[f.type] || 'String' };
+    if (rawType === 'money')
+        out.formatMoney = true;
     if (f.required)
         out.required = true;
-    if (f.type === 'link')
+    if (rawType === 'link')
         out.catalog = f.targetPath || f.target;
-    if (f.type === 'enum')
+    if (rawType === 'enum')
         out.options = (f.values || f.options || []).map(v => (v && typeof v === 'object'
             ? { value: String(v.id ?? v.value), label: String(v.label ?? v.id ?? v.value) }
             : { value: String(v), label: String(v) }));
-    if (f.type === 'struct')
+    if (rawType === 'struct')
         out.children = (f.fields || []).map(formField);
-    if (f.type === 'table')
+    if (rawType === 'table')
         out.columns = (f.fields || []).map(formField);
     return out;
 }
@@ -83,14 +86,16 @@ export default {
         :host {
             @apply --vertical;
             @apply --flex;
-            gap: 8px;
-            padding: 8px;
+            @apply --content;
+            gap: 0;
+            padding: 0;
             overflow: hidden;
+            font-size: 13px;
         }
         .body {
             @apply --horizontal;
             flex: 1;
-            gap: 8px;
+            gap: 0;
             overflow: hidden;
         }
         .list {
@@ -103,34 +108,62 @@ export default {
         }
         .bar {
             @apply --horizontal;
+            @apply --header;
+            flex-shrink: 0;
             gap: 8px;
             align-items: center;
             flex-wrap: wrap;
+            padding: 3px 8px;
+            min-height: 28px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 12px;
+        }
+        .bar input.search,
+        .bar select {
+            @apply --content;
+            min-width: 0;
+            padding: 2px 6px;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
         }
         .bar input.search {
-            min-width: 140px;
-            padding: 4px 8px;
-            border: 1px solid var(--border-color, #ccc);
-            border-radius: 4px;
+            width: 170px;
         }
         .pager {
             @apply --horizontal;
             gap: 4px;
             align-items: center;
             margin-left: auto;
-            font-size: small;
+            font-size: 12px;
         }
         .error {
+            padding: 6px 10px;
             color: var(--error-color);
+            background: var(--error-soft);
+            border-bottom: 1px solid var(--error-color);
             white-space: break-spaces;
+        }
+        .grid-footer {
+            @apply --horizontal;
+            @apply --header;
+            flex-shrink: 0;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 24px;
+            padding: 2px 10px;
+            border-top: 1px solid var(--border-color);
+            font-size: 11.5px;
+            font-weight: 600;
+            user-select: none;
         }
     </style>
     <oda-packets no-flex mode="day" ~if="packetsStart && isOperation"
-        :start="packetsStart" :end="packetsEnd"
+        :start="packetsStart" :end="packetsEnd" :days="packetsDays"
         ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
     <div class="body">
         <div class="list">
-            <div class="bar">
+            <div class="bar" ~if="!inWorkForm">
                 <oda-button ~if="canCreate && !inWorkForm" icon="icons:plus" @tap="create">Создать</oda-button>
                 <oda-button icon="icons:refresh" @tap="reload">Обновить</oda-button>
                 <input class="search" type="search" :value="searchQuery" placeholder="Поиск…" @change="onSearch($this.value)">
@@ -145,24 +178,29 @@ export default {
                     <option value="" :selected="!unitFilter">Все подразделения</option>
                     <option ~for="units" :value="$for.item.cid" :selected="$for.item.cid === unitFilter">{{$for.item.label}}</option>
                 </select>
-                <div class="pager" ~if="total > pageSize || page > 1">
-                    <span>{{pageText}}</span>
-                    <oda-button ~if="page > 1" icon="icons:chevron-left" title="Предыдущая страница" @tap="setPage(page - 1)"></oda-button>
-                    <oda-button ~if="page * pageSize < total" icon="icons:chevron-right" title="Следующая страница" @tap="setPage(page + 1)"></oda-button>
-                </div>
             </div>
             <div class="error" ~if="error && !editorOpen">{{error}}</div>
-            <oda-table allow-focus readonly ::focused-row="focusedRow" :metadata="tableMetadata" :data-set="tableRows"
-                :$save-key="$item?.short" @dblclick="onTableDblClick($event)"></oda-table>
+            <oda-table id="objectsTable" allow-focus allow-selection col-lines row-lines readonly ::focused-row="focusedRow" ::selected-rows="selectedRows"
+                :metadata="tableMetadata" :data-set="tableRows"
+                :$save-key="$item?.short || $item?.path" @click="onTableClick($event)" @dblclick="onTableDblClick($event)"></oda-table>
+            <div class="grid-footer">
+                <span>{{total || rows.length}}</span>
+                <span ~if="selectedRows?.length > 1">Выбрано: {{selectedRows.length}}</span>
+                <div class="pager" ~if="total > pageSize || page > 1">
+                    <span>{{pageText}}</span>
+                    <oda-button ~if="page > 1" icon="icons:chevron-left" icon-size="16" title="Предыдущая страница" @tap="setPage(page - 1)"></oda-button>
+                    <oda-button ~if="page * pageSize < total" icon="icons:chevron-right" icon-size="16" title="Следующая страница" @tap="setPage(page + 1)"></oda-button>
+                </div>
+            </div>
         </div>
     </div>
     `,
     rows: [],
     columns: [],
     schema: null,
-    /** листья поддерева для создания объектов в группе (db_schema.leaves): [{ cid, path, label }] */
+    /** листья поддерева для создания объектов в группе (db_schema.leaves): [{ cid, path, label, count }] */
     leaves: [],
-    /** описание классов поддерева (db_schema.classes): cid → { cid, path, label, leaf } */
+    /** описание классов поддерева (db_schema.classes): cid → { cid, path, parent, label, icon, leaf, count, group } */
     classes: {},
     /** выбранный лист при создании/редактировании в группе и его схема */
     leafCid: '',
@@ -180,6 +218,7 @@ export default {
     /** печатные формы открытой операции (db_print_list): [{ name, label }] */
     printForms: [],
     focusedRow: null,
+    selectedRows: [],
     focusedItem: null,
     /** окно редактора открыто: второй клик по таблице не открывает ещё одно */
     editorOpen: false,
@@ -215,7 +254,29 @@ export default {
         else
             host.focusedItem = this.focusedItem;
     },
-    get itemButtons() {
+    /** Вынести поле поиска в правую зону тулбара work-form (.toolbar-zone.right). */
+    mountToolbarSlots(formHost = this._findFormHost()) {
+        if (!formHost || typeof document === 'undefined')
+            return;
+        const container = formHost.$?.('.toolbar-zone.right') || formHost;
+        let searchInput = container.querySelector?.('input[data-objects-search]');
+        if (!searchInput) {
+            searchInput = document.createElement('input');
+            searchInput.setAttribute('slot', 'tool-right');
+            searchInput.setAttribute('data-toolbar-widget', '1');
+            searchInput.setAttribute('data-objects-search', '1');
+            searchInput.type = 'search';
+            searchInput.placeholder = 'Поиск…';
+            searchInput.style.cssText = 'width: 210px; min-height: 24px; padding: 2px 8px; font-size: 12.5px; border: 1px solid var(--border-color); border-radius: 3px; background: var(--content-background); color: var(--content-color); outline: none;';
+            searchInput.addEventListener('change', () => this.onSearch(searchInput.value));
+            searchInput.addEventListener('search', () => this.onSearch(searchInput.value));
+            container.appendChild(searchInput);
+        }
+        searchInput._ownerView = this;
+        searchInput.value = this.searchQuery || '';
+        formHost._checkToolbarSlots?.();
+    },
+    getItemButtons() {
         return [
             {
                 id: 'create',
@@ -228,6 +289,20 @@ export default {
             },
         ];
     },
+    get itemButtons() {
+        return this.getItemButtons();
+    },
+    getActiveSelection() {
+        const tblSel = this.$?.('#objectsTable')?.selectedRows;
+        const rawSel = Array.isArray(tblSel) && tblSel.length ? tblSel : this.selectedRows;
+        const sel = Array.isArray(rawSel) ? rawSel.filter(r => r?.id) : [];
+        if (sel.length > 0)
+            return sel;
+        return this.focusedRow?.id ? [this.focusedRow] : [];
+    },
+    get activeSelection() {
+        return this.getActiveSelection();
+    },
     canDeleteRow(row = this.focusedRow) {
         if (!row?.id || !this.canCreate)
             return false;
@@ -235,8 +310,14 @@ export default {
             return row.status === 'draft';
         return row.status !== 'deleted';
     },
-    get focusedButtons() {
-        const row = this.focusedRow;
+    canDeleteSelection(rows = this.getActiveSelection()) {
+        const list = Array.isArray(rows) ? rows : (rows?.id ? [rows] : []);
+        return list.length > 0 && list.every(r => this.canDeleteRow(r));
+    },
+    getFocusedButtons() {
+        const sel = this.getActiveSelection();
+        const isMulti = sel.length > 1;
+        const row = sel[0] || this.focusedRow;
         return [
             {
                 id: 'copy',
@@ -244,7 +325,7 @@ export default {
                 icon: 'icons:content-copy',
                 isButton: true,
                 order: 2,
-                disabled: !row?.id || !this.canCreate,
+                disabled: isMulti || !row?.id || !this.canCreate,
                 execute: () => this.copyRow(row),
             },
             {
@@ -253,7 +334,7 @@ export default {
                 icon: 'icons:launch',
                 isButton: true,
                 order: 3,
-                disabled: !row?.id,
+                disabled: isMulti || !row?.id,
                 execute: () => this.openEditor(row),
             },
             {
@@ -263,15 +344,20 @@ export default {
                 isButton: true,
                 allowList: true,
                 order: 4,
-                disabled: !this.canDeleteRow(row),
-                execute: () => this.deleteRow(row),
+                disabled: !this.canDeleteSelection(sel),
+                execute: () => this.deleteRow(sel),
             },
         ];
     },
-    get focusedServices() {
+    get focusedButtons() {
+        return this.getFocusedButtons();
+    },
+    getFocusedServices() {
         if (!this.isOperation)
             return [];
-        const row = this.focusedRow;
+        const sel = this.getActiveSelection();
+        const isMulti = sel.length > 1;
+        const row = sel[0] || this.focusedRow;
         const isReg = row?.status === 'registered';
         return [
             {
@@ -281,7 +367,7 @@ export default {
                 isService: true,
                 service: true,
                 order: 1,
-                disabled: !row?.id || !this.canCreate || row?.status === 'cancelled',
+                disabled: isMulti || !row?.id || !this.canCreate || row?.status === 'cancelled',
                 execute: () => this.openEditor(row),
             },
             {
@@ -291,22 +377,47 @@ export default {
                 isService: true,
                 service: true,
                 order: 2,
-                disabled: !row?.id,
+                disabled: isMulti || !row?.id,
                 execute: () => this.openEditor(row),
             },
         ];
+    },
+    get focusedServices() {
+        return this.getFocusedServices();
+    },
+    onTableClick() {
+        const tbl = this.$?.('#objectsTable');
+        if (tbl) {
+            if (tbl.focusedRow !== undefined)
+                this.focusedRow = tbl.focusedRow;
+            if (Array.isArray(tbl.selectedRows))
+                this.selectedRows = tbl.selectedRows;
+        }
+        this._syncFocusedItem();
     },
     onTableDblClick() {
         if (this.focusedRow?.id && !this.editorOpen)
             this.openEditor(this.focusedRow);
     },
+    _syncFocusedItem() {
+        const sel = this.getActiveSelection();
+        if (sel.length > 1)
+            this.focusedItem = sel;
+        else if (sel.length === 1)
+            this.focusedItem = sel[0];
+        else
+            this.focusedItem = null;
+        this._notifyForm();
+    },
     $observers: {
-        /** внутри work-form одиночный клик фокусирует строку ($focusedItem), автономно — открывает редактор */
+        /** внутри work-form одиночный клик фокусирует строку ($focusedItem), множественный — массив ($focusedItem), автономно — открывает редактор */
         select(focusedRow) {
-            this.focusedItem = focusedRow?.id ? focusedRow : null;
-            this._notifyForm();
+            this._syncFocusedItem();
             if (!this.inWorkForm && focusedRow?.id && !this.editorOpen)
                 this.openEditor(focusedRow);
+        },
+        onSelectedRowsChanged(selectedRows) {
+            this._syncFocusedItem();
         }
     },
     /** id объекта → название (ссылки в строках списка) */
@@ -338,8 +449,11 @@ export default {
     },
     /** Ключ выбранного пакета: 'now' | '*' | маска единицы | 'period:start:end'. */
     packetsKey: { $def: 'now', $type: String, $save: true },
+    /** Режим гранулярности пакета: 'day' | 'week' | 'month' | 'quarter' | 'year'. */
+    packetsMode: { $def: 'day', $type: String, $save: true },
     packetsStart: '',
     packetsEnd: '',
+    packetsDays: [],
     /** Период, который показал пакет, — единственный источник границ для выборки операций. */
     period: null,
     /** Подразделения, данные которых видны (db_scope): больше одного — фильтр списка. */
@@ -469,21 +583,77 @@ export default {
             return title;
         return title + ' · ' + object;
     },
-    /** Колонки таблицы: у операций — дата и статус, у группы — вид/операция; ссылки показываются названиями (текстом). */
+    /** Относительный путь места хранения объекта внутри промежуточного класса (для колонки «Группа»). */
+    groupLabelOf(cid) {
+        if (!cid)
+            return '';
+        const entry = this.classes?.[cid];
+        if (!entry)
+            return String(cid);
+        if (typeof entry.group === 'string' && entry.group)
+            return entry.group;
+        const rootCid = this.schema?.cid || '';
+        const rootPath = this.schema?.path || this.$item?.path || this.$item?.short || '';
+        if (entry.parent) {
+            const parts = [];
+            let cur = entry;
+            const seen = new Set();
+            while (cur && cur.cid !== rootCid && cur.path !== rootPath && !seen.has(cur.cid)) {
+                seen.add(cur.cid);
+                parts.unshift(cur.label || cur.cid.split('/').pop());
+                cur = cur.parent ? this.classes?.[cur.parent] : null;
+            }
+            if (parts.length)
+                return parts.join('/');
+        }
+        let basePath = rootPath;
+        if (!basePath) {
+            const rootEntry = Object.values(this.classes || {}).find(c => !c.leaf);
+            basePath = rootEntry?.path || '';
+        }
+        if (basePath && entry.path && entry.path.startsWith(basePath + '/')) {
+            const rel = entry.path.slice(basePath.length + 1).split('/').filter(Boolean);
+            const byPath = new Map(Object.values(this.classes || {}).filter(c => c?.path).map(c => [c.path, c.label]));
+            let acc = basePath;
+            const labels = rel.map(seg => {
+                acc += '/' + seg;
+                return byPath.get(acc) || seg;
+            });
+            if (labels.length)
+                return labels.join('/');
+        }
+        return entry.label || String(cid);
+    },
+    /** Колонки таблицы: первым всегда «Наименование» (прилипает слева), у операций — дата и статус, у промежуточного класса — колонка «Группа» справа (прилипает справа). */
     get tableMetadata() {
-        const cols = (this.columns || []).map(c => (c.type === 'Link' || c.type === 'Table' || c.type === 'Struct' ? { ...c, type: 'String' } : c));
-        const clsCol = this.showClassCol ? [{ id: 'cls', label: this.isOperation ? 'Операция' : 'Вид', type: 'String' }] : [];
+        const rawCols = (this.columns || []).map(c => (c.type === 'Link' || c.type === 'Table' || c.type === 'Struct' ? { ...c, type: 'String' } : c));
+        const existingName = rawCols.find(c => c.id === 'name');
+        const nameCol = {
+            ...(existingName || { id: 'name', type: 'String' }),
+            id: 'name',
+            label: (!existingName?.label || existingName.label === 'name') ? 'Наименование' : existingName.label,
+            stickyLeft: true,
+            minWidth: 200,
+        };
+        const restCols = rawCols.filter(c => c.id !== 'name');
+        const orderedCols = this.isOperation && restCols.length > 1
+            ? [...rawCols.filter(c => c.id !== 'name' && c.id !== 'comment'), ...rawCols.filter(c => c.id === 'comment')]
+            : restCols;
+        const clsCol = this.showClassCol ? [{ id: 'cls', label: 'Группа', type: 'String', isGroupCol: true, stickyRight: true, minWidth: 170 }] : [];
         return this.isOperation
-            ? [{ id: 'time', label: 'Дата' }, ...clsCol, ...cols, { id: 'state', label: 'Статус' }]
-            : [...clsCol, ...cols];
+            ? [nameCol, { id: 'time', label: 'Дата', type: 'String', system: false, minWidth: 96 }, ...orderedCols, { id: 'state', label: 'Статус', type: 'String', minWidth: 96 }, ...clsCol]
+            : [nameCol, ...orderedCols, ...clsCol];
     },
     /** Строки таблицы: названия вместо id ссылок, число строк табличной части, выжимка структуры, статус текстом; id сохраняется. */
     get tableRows() {
         const cols = this.columns || [];
         return (this.rows || []).map(r => {
             const out = { ...r };
-            if (this.showClassCol)
-                out.cls = this.classes?.[r.cid]?.label || r.cid || '';
+            if (this.showClassCol) {
+                const grp = this.groupLabelOf(r.cid);
+                out.cls = grp;
+                out.group = grp;
+            }
             for (const c of cols) {
                 const v = r[c.id];
                 if (c.type === 'Link' && v)
@@ -554,7 +724,10 @@ export default {
         this.columns = built.columns;
         this.leaves = Array.isArray(res?.leaves) ? res.leaves : [];
         this.classes = res?.classes && typeof res.classes === 'object' ? res.classes : {};
+        this.packetsDays = Array.isArray(res?.days) ? res.days : [];
         this.schema = {
+            cid: built.cid,
+            path: built.path,
             title: built.title,
             family: built.family,
             type: built.type,
@@ -614,6 +787,7 @@ export default {
             this.schedulePreview();
     },
     async attached() {
+        this.mountToolbarSlots();
         try {
             await this.loadSchema();
         }
@@ -655,10 +829,20 @@ export default {
             this.contexts = [];
         }
     },
-    /** Границы полосы: от самой ранней операции до самой поздней, но не раньше сегодня. */
+    /** Границы полосы: по реально существующим дням операций (db_schema.days) либо от первой до последней операции. */
     async loadRange() {
         if (!this.$item)
             return;
+        if (Array.isArray(this.packetsDays) && this.packetsDays.length > 0) {
+            const firstDay = this.packetsDays[0];
+            const lastDay = this.packetsDays[this.packetsDays.length - 1];
+            const today = _today();
+            if (this.packetsKey === 'now' && !this.packetsDays.includes(today))
+                this.packetsKey = '*';
+            this.packetsStart = firstDay;
+            this.packetsEnd = lastDay;
+            return;
+        }
         const edge = order => this.$item.fetch('db_query', { order, limit: 1 })
             .then(r => r?.items?.[0]?.time).catch(() => undefined);
         const [first, last] = await Promise.all([edge('time'), edge('-time')]);
@@ -681,11 +865,26 @@ export default {
     },
     /** Объект ядра → строка формы: поля тела, id, статус, версия; у операции — день даты; у группы — cid. */
     rowOf(o) {
-        const row = { ...(o?.body || {}), id: o.id, status: o.status, version: o.version };
+        const b = o?.body || {};
+        const row = { ...b, id: o.id, status: o.status, version: o.version };
         if (o?.cid)
             row.cid = o.cid;
-        if (this.isOperation)
+        if (this.isOperation) {
             row.time = o.time ? _day(new Date(o.time)) : '';
+            if (row.sum === undefined) {
+                const fallbackSum = b.total ?? b.credited ?? b.saldo_26;
+                if (fallbackSum !== undefined)
+                    row.sum = fallbackSum;
+            }
+            if (!row.comment)
+                row.comment = b.descript || b.base || b.reason || b.theme || b.subject || b.content || '';
+        }
+        if (!row.name) {
+            const clsTitle = (o?.cid && this.classes?.[o.cid]?.label) || this.schema?.title || '';
+            const numPart = b.num ? ` № ${b.num}` : '';
+            const datePart = row.time ? ` от ${row.time}` : '';
+            row.name = (clsTitle || b.num) ? `${clsTitle}${numPart}${datePart}`.trim() : (o?.id || '');
+        }
         return row;
     },
     async reload() {
@@ -722,6 +921,8 @@ export default {
             this.rows = (Array.isArray(res?.items) ? res.items : []).map(o => this.rowOf(o));
             this.total = Number(res?.total) || this.rows.length;
             // строки пересозданы: выделение возвращаем на открытый объект по id
+            this.selectedRows = [];
+            this.$?.('#objectsTable')?.clearSelection?.();
             this.focusedRow = this.tableRows.find(r => r.id === (this.editing?.id || this.focusedRow?.id)) ?? null;
             this.focusedItem = this.focusedRow?.id ? this.focusedRow : null;
             this._notifyForm();
@@ -905,14 +1106,177 @@ export default {
             this.editorOpen = false;
         }
     },
-    /** Новый объект — то же окно с пустыми значениями (у операции — сегодняшняя дата; в группе — первый лист). */
+    /**
+     * Построить дерево подклассов промежуточного класса для диалога выбора конечной точки хранения.
+     * В промежуточных классах объекты храниться не могут — они отображаются как серые узлы группировки,
+     * а выбрать можно только конечный класс-лист (`leaf: true`).
+     */
+    buildClassTree() {
+        const rawMap = new Map();
+        const rootCid = this.schema?.cid || '';
+        const rootPath = this.schema?.path || this.$item?.path || this.$item?.short || '';
+        const defaultIcon = this.isOperation ? 'carbon:task-complete' : 'carbon:catalog';
+
+        const rowCounts = new Map();
+        for (const r of this.rows || []) {
+            if (r?.cid)
+                rowCounts.set(r.cid, (rowCounts.get(r.cid) || 0) + 1);
+        }
+
+        for (const c of Object.values(this.classes || {})) {
+            if (!c?.cid)
+                continue;
+            rawMap.set(c.cid, {
+                cid: c.cid,
+                path: c.path || c.cid,
+                parent: c.parent || '',
+                label: c.label || c.cid.split('/').pop(),
+                type: c.type || '',
+                icon: c.icon || defaultIcon,
+                leaf: !!c.leaf,
+                count: Number(c.count) || rowCounts.get(c.cid) || 0,
+                children: [],
+                expanded: true,
+            });
+        }
+        for (const l of this.leaves || []) {
+            if (!l?.cid || rawMap.has(l.cid))
+                continue;
+            rawMap.set(l.cid, {
+                cid: l.cid,
+                path: l.path || l.cid,
+                parent: l.parent || '',
+                label: l.label || l.cid.split('/').pop(),
+                type: this.schema?.type || '$catalog',
+                icon: l.icon || defaultIcon,
+                leaf: true,
+                count: Number(l.count) || 0,
+                children: [],
+                expanded: true,
+            });
+        }
+
+        // Определим корневой узел открытого промежуточного класса
+        let rootNode = (rootCid && rawMap.get(rootCid))
+            || (rootPath && [...rawMap.values()].find(n => n.path === rootPath))
+            || [...rawMap.values()].find(n => !n.leaf && (!n.parent || !rawMap.has(n.parent)))
+            || null;
+        const effectiveRootCid = rootNode?.cid || rootCid;
+        const effectiveRootPath = rootNode?.path || rootPath;
+
+        const byPath = new Map();
+        for (const n of rawMap.values()) {
+            if (n.path)
+                byPath.set(n.path, n);
+        }
+
+        // Привяжем каждого потомка к ближайшему родителю (или синтезируем промежуточные папки по пути)
+        const roots = [];
+        for (const node of [...rawMap.values()]) {
+            if (node.cid === effectiveRootCid || (effectiveRootPath && node.path === effectiveRootPath))
+                continue;
+            if (node.type === '$virtual')
+                continue;
+            let parentNode = node.parent && node.parent !== effectiveRootCid ? rawMap.get(node.parent) : null;
+            if (!parentNode && effectiveRootPath && node.path && node.path.startsWith(effectiveRootPath + '/')) {
+                const rel = node.path.slice(effectiveRootPath.length + 1).split('/').filter(Boolean);
+                let curPath = effectiveRootPath;
+                let curParent = null;
+                for (let i = 0; i < rel.length - 1; i++) {
+                    curPath += '/' + rel[i];
+                    let mid = byPath.get(curPath);
+                    if (!mid) {
+                        mid = {
+                            cid: curPath,
+                            path: curPath,
+                            parent: curParent?.cid || effectiveRootCid,
+                            label: rel[i],
+                            type: this.schema?.type || '$catalog',
+                            icon: defaultIcon,
+                            leaf: false,
+                            count: 0,
+                            children: [],
+                            expanded: true,
+                        };
+                        rawMap.set(mid.cid, mid);
+                        byPath.set(curPath, mid);
+                        if (curParent)
+                            curParent.children.push(mid);
+                        else
+                            roots.push(mid);
+                    }
+                    curParent = mid;
+                }
+                parentNode = curParent;
+            }
+            if (parentNode && parentNode !== node) {
+                if (!parentNode.children.includes(node))
+                    parentNode.children.push(node);
+            }
+            else if (!roots.includes(node)) {
+                roots.push(node);
+            }
+        }
+
+        // Оставляем только ветки, ведущие хотя бы к одному конечному листу хранения, и сортируем
+        const pruneAndSort = (list) => {
+            const kept = [];
+            for (const n of list) {
+                n.children = pruneAndSort(n.children || []);
+                if (n.leaf || n.children.length > 0)
+                    kept.push(n);
+            }
+            kept.sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), 'ru', { numeric: true }));
+            return kept;
+        };
+        return pruneAndSort(roots);
+    },
+    /** Открыть модальное окно выбора конечного класса хранения перед созданием объекта из промежуточного класса. */
+    async pickTargetLeafClass() {
+        const tree = this.buildClassTree();
+        if (!tree.length)
+            return '';
+        const classTitle = this.schema?.title || this.$item?.DATA?.label || this.$item?.label || this.$item?.id || '';
+        const dialogTitle = `Выберите класс для создания объекта '${classTitle}'`;
+        const picker = ODA.createComponent('item-class-picker', {
+            treeNodes: tree,
+            selectedCid: '',
+        });
+        try {
+            await WORK.showModal(picker, {
+                TITLE: { label: dialogTitle },
+                allowClose: true,
+                width: Math.min(580, (window.innerWidth || 640) - 32),
+            });
+            return picker.confirmedCid || '';
+        }
+        catch {
+            return '';
+        }
+    },
+    /** Новый объект — если вызван на промежуточном классе, сначала предлагаем выбрать конечный класс-лист хранения. */
     async create() {
         if (this.editorOpen)
             return;
-        this.editorOpen = true;
-        if (!this.schema?.leaf && this.leaves?.length)
-            await this.loadLeafSchema(this.leaves[0].cid);
+        if (!this.schema)
+            await this.loadSchema().catch(() => {});
+        if (!this.schema?.leaf) {
+            if (!this.leaves?.length)
+                return;
+            let chosenCid = '';
+            if (typeof WORK?.showModal === 'function' && typeof document !== 'undefined') {
+                chosenCid = await this.pickTargetLeafClass();
+                if (!chosenCid)
+                    return;
+            }
+            else {
+                chosenCid = this.leafCid || this.leaves[0].cid;
+            }
+            this.editorOpen = true;
+            await this.loadLeafSchema(chosenCid);
+        }
         else {
+            this.editorOpen = true;
             this.leafCid = '';
             this.leafSchema = null;
         }
@@ -961,17 +1325,23 @@ export default {
             this.editorOpen = false;
         }
     },
-    /** Удаление выбранного объекта из тулбара. */
-    async deleteRow(row = this.focusedRow) {
-        if (!row?.id || this.busy || !this.canDeleteRow(row))
+    /** Удаление выбранного объекта или списка объектов (при множественном выборе с allowList) из тулбара. */
+    async deleteRow(target = this.activeSelection) {
+        const list = (Array.isArray(target) ? target : (target?.id ? [target] : this.activeSelection))
+            .filter(r => this.canDeleteRow(r));
+        if (!list.length || this.busy)
             return;
         this.busy = true;
         this.clearError();
         try {
-            const target = await this.targetItem(row.cid || '');
-            await target.fetch('db_delete', { id: row.id });
+            for (const row of list) {
+                const item = await this.targetItem(row.cid || '');
+                await item.fetch('db_delete', { id: row.id });
+            }
+            this.selectedRows = [];
             this.focusedRow = null;
             this.focusedItem = null;
+            this.$?.('#objectsTable')?.clearSelection?.();
             await this.reload();
         }
         catch (e) {
@@ -1408,12 +1778,6 @@ ODA({
             padding: var(--space-m) var(--space-m) 0;
         }
     </style>
-    <label class="context" ~if="owner.showLeafSelect && !owner.editing?.id">Вид
-        <select @change="owner.selectLeaf($this.value)">
-            <option ~for="owner.leaves" :value="$for.item.cid"
-                :selected="$for.item.cid === owner.leafCid">{{$for.item.label}}</option>
-        </select>
-    </label>
     <label class="context" ~if="owner.showContext && !owner.editing?.id">От места
         <select @change="owner.contextKey = $this.value">
             <option ~for="owner.contexts" :value="owner.contextKeyOf($for.item)"
@@ -1497,5 +1861,206 @@ ODA({
     },
     close() {
         this.parentElement?.close?.();
+    },
+});
+
+/**
+ * item-class-picker — диалог выбора конечного класса хранения при вызове «Новый» на промежуточном классе.
+ * Промежуточные классы в дереве отображаются приглушёнными (в них объекты храниться не могут),
+ * а выбрать и подтвердить кнопкой «OK» (или двойным кликом) можно только конечный класс-лист.
+ */
+ODA({
+    is: 'item-class-picker',
+    imports: '/oda/components/button/button.js, /oda/components/icon/icon.js',
+    template: /*html*/`
+    <style>
+        :host {
+            @apply --vertical;
+            padding: 12px 14px;
+            gap: 12px;
+            box-sizing: border-box;
+            background: light-dark(#ffffff, #1e1f24);
+            color: light-dark(#1f2937, #e5e7eb);
+        }
+        .tree-box {
+            @apply --vertical;
+            min-height: 320px;
+            max-height: 62vh;
+            overflow: auto;
+            border: 1px solid light-dark(#cbd5e1, #3a3b42);
+            background: light-dark(#ffffff, #18191d);
+            padding: 8px 10px;
+            box-sizing: border-box;
+        }
+        .tree-row {
+            @apply --horizontal;
+            align-items: center;
+            min-height: 28px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            user-select: none;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        .tree-row.leaf {
+            cursor: pointer;
+        }
+        .tree-row.leaf:hover:not([selected]) {
+            background: light-dark(#f1f5f9, #272930);
+        }
+        .tree-row[selected] {
+            background: var(--selected-background, #3b82f6);
+            color: var(--selected-color, #ffffff);
+        }
+        .indent-guide {
+            display: inline-block;
+            width: 18px;
+            height: 26px;
+            border-left: 1px dotted light-dark(#94a3b8, #4b5563);
+            flex-shrink: 0;
+        }
+        .expander {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 13px;
+            height: 13px;
+            border: 1px solid light-dark(#94a3b8, #64748b);
+            background: light-dark(#f8fafc, #272930);
+            color: light-dark(#334155, #cbd5e1);
+            font-size: 11px;
+            line-height: 1;
+            cursor: pointer;
+            flex-shrink: 0;
+            margin-right: 2px;
+        }
+        .expander-spacer {
+            display: inline-block;
+            width: 15px;
+            flex-shrink: 0;
+        }
+        .node-icon {
+            flex-shrink: 0;
+            color: light-dark(#d97706, #fbbf24);
+        }
+        .tree-row[selected] .node-icon {
+            color: inherit;
+        }
+        .node-label {
+            font-size: 13px;
+        }
+        .tree-row.group .node-label {
+            color: light-dark(#8a8a8a, #787c88);
+        }
+        .node-count {
+            font-size: 12.5px;
+            color: light-dark(#8a8a8a, #94a3b8);
+            margin-left: 4px;
+        }
+        .tree-row[selected] .node-count {
+            color: inherit;
+            opacity: 0.9;
+        }
+        .footer-bar {
+            @apply --horizontal;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+        }
+        button.dlg-btn {
+            min-width: 78px;
+            min-height: 28px;
+            padding: 4px 14px;
+            font-size: 13px;
+            border: 1px solid light-dark(#b8b8b0, #4a4b52);
+            border-radius: 3px;
+            background: light-dark(linear-gradient(180deg, #fafaf8 0%, #e8e7de 100%), linear-gradient(180deg, #32343a 0%, #26282d 100%));
+            color: light-dark(#222, #e2e8f0);
+            cursor: pointer;
+        }
+        button.dlg-btn:hover:not(:disabled) {
+            border-color: light-dark(#7c8ea6, #60a5fa);
+            background: light-dark(linear-gradient(180deg, #ffffff 0%, #dfe8f6 100%), linear-gradient(180deg, #3b4252 0%, #2e3440 100%));
+        }
+        button.dlg-btn:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+    </style>
+    <div class="tree-box">
+        <div ~for="flatRows"
+            :class="'tree-row ' + ($for.item.node.leaf ? 'leaf' : 'group')"
+            :selected="$for.item.node.leaf && selectedCid === $for.item.node.cid"
+            @tap="onRowTap($for.item.node, $event)"
+            @dblclick="onRowDblClick($for.item.node, $event)">
+            <span class="indent-guide" ~for="$for.item.guides"></span>
+            <span class="expander" ~if="$for.item.node.children?.length" @tap.stop="toggleNode($for.item.node)">{{$for.item.node.expanded ? '−' : '+'}}</span>
+            <span class="expander-spacer" ~if="!$for.item.node.children?.length"></span>
+            <oda-icon class="node-icon" :icon="$for.item.node.icon || 'carbon:catalog'" icon-size="20"></oda-icon>
+            <span class="node-label">{{$for.item.node.label}}</span>
+            <span class="node-count" ~if="$for.item.node.leaf && $for.item.node.count > 0">({{$for.item.node.count}})</span>
+        </div>
+    </div>
+    <div class="footer-bar">
+        <button type="button" class="dlg-btn" :disabled="!selectedCid" @tap="confirmPick">OK</button>
+        <button type="button" class="dlg-btn" @tap="cancelPick">Отмена</button>
+    </div>
+    `,
+    treeNodes: [],
+    selectedCid: '',
+    confirmedCid: '',
+    treeVersion: 0,
+    get flatRows() {
+        void this.treeVersion;
+        const out = [];
+        const walk = (list, level) => {
+            for (const node of list || []) {
+                const guides = Array.from({ length: level }, (_, i) => i);
+                out.push({ node, level, guides });
+                if (node.expanded && node.children?.length)
+                    walk(node.children, level + 1);
+            }
+        };
+        walk(this.treeNodes, 0);
+        return out;
+    },
+    toggleNode(node) {
+        if (!node)
+            return;
+        node.expanded = !node.expanded;
+        this.treeVersion++;
+        this.render?.(true);
+    },
+    onRowTap(node) {
+        if (!node)
+            return;
+        if (node.leaf) {
+            this.selectedCid = node.cid;
+        }
+        else {
+            this.selectedCid = '';
+        }
+        this.render?.(true);
+    },
+    onRowDblClick(node) {
+        if (!node)
+            return;
+        if (node.leaf) {
+            this.selectedCid = node.cid;
+            this.confirmPick();
+        }
+        else if (node.children?.length) {
+            this.toggleNode(node);
+        }
+    },
+    confirmPick() {
+        if (!this.selectedCid)
+            return;
+        this.confirmedCid = this.selectedCid;
+        this.parentElement?.close?.('ok');
+    },
+    cancelPick() {
+        this.confirmedCid = '';
+        this.parentElement?.close?.('');
     },
 });

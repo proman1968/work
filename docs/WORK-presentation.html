@@ -603,7 +603,8 @@
       <div class="cover-badges">
         <span class="cover-badge">Реестр российского ПО № 304855</span>
         <span class="cover-badge">30+ лет развития платформы ODANT</span>
-        <span class="cover-badge">On-Premise · Облако · White-Label</span>
+        <span class="cover-badge">Изолированные базы $base + Архивация ZIP</span>
+        <span class="cover-badge">Локальный ИИ: HuggingFace + LoRA / GRPO</span>
         <span class="cover-badge">Лидер независимого Scorecard: 74 / 75</span>
       </div>
     </div>
@@ -619,19 +620,19 @@
         </div>
         <div class="cover-stat">
           <div class="val">13 + 27</div>
-          <div class="lbl">13 специализированных ролевых субагентов и 27 готовых навыков автоматизации</div>
+          <div class="lbl">13 ролевых субагентов, 27 навыков и встроенный ИИ-консультант форм (?)</div>
         </div>
         <div class="cover-stat">
-          <div class="val">100%</div>
-          <div class="lbl">Обратимость: каждая операция = файл + снимок истории + факт в журнале</div>
+          <div class="val">100% ОСВ</div>
+          <div class="lbl">Явная двойная запись, сторно и проверенная миграция реальных предприятий</div>
         </div>
         <div class="cover-stat">
-          <div class="val">Private AI</div>
-          <div class="lbl">Работа с любыми облачными и локальными LLM внутри контура компании</div>
+          <div class="val">Local AI</div>
+          <div class="lbl">Мультимодальный хаб /MODELS/Local, свой PyTorch-движок и дообучение LoRA/GRPO</div>
         </div>
       </div>
       <div style="background:rgba(56,189,248,0.12);border-left:3px solid #38bdf8;padding:2.5mm 3mm;border-radius:1.5mm;font-size:8.5pt;color:#e0f2fe;line-height:1.35;">
-        <strong>Для пользователей:</strong> готовое рабочее место «под ключ» с ИИ-помощником в каждой роли.<br>
+        <strong>Для пользователей:</strong> готовое рабочее место «под ключ» с учётом, документами и ИИ-консультантом в каждой роли.<br>
         <strong>Для инвесторов и партнёров:</strong> зрелая технология (вложено ~250 млн ₽), старт облачных и партнёрских продаж.
       </div>
     </div>
@@ -639,7 +640,7 @@
 
   <div class="slide-footer">
     <span>ООО «БИС» · Группа компаний с ООО «Инфостандарт» · odant.org · current.odant.org</span>
-    <span>Презентация для потенциальных пользователей и инвесторов · Стр. 1 / 12</span>
+    <span>Презентация для потенциальных пользователей, партнёров и инвесторов · Стр. 1 / 14</span>
   </div>
 </section>
 
@@ -724,17 +725,17 @@
 
   <div class="slide-footer">
     <span>WORK / ODANT — платформа управления деятельностью организаций</span>
-    <span>Стр. 2 / 12</span>
+    <span>Стр. 2 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 3: ФУНДАМЕНТ WORK ==================== -->
+<!-- ==================== СЛАЙД 3: ФУНДАМЕНТ WORK И ОРГАНИЗАЦИОННАЯ МОДЕЛЬ ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
-      <div class="kicker">2. Архитектурное ядро</div>
-      <div class="slide-title">Файлово-событийная модель: понятно человеку, прозрачно для ИИ</div>
-      <div class="slide-subtitle">Три простых принципа заменяют сложные связки «СУБД + бэкенд + фронтенд + шина интеграции»</div>
+      <div class="kicker">2. Архитектурное ядро и организационная модель</div>
+      <div class="slide-title">Файлово-событийная модель, изолированные базы <code>$base</code> и трёхосевое наследование</div>
+      <div class="slide-subtitle">Единое дерево объединяет эталонные модули <code>/MODULES</code>, изолированные организации <code>/ORGANIZATIONS</code>, подразделения и рабочие места</div>
     </div>
     <span class="badge-pill">Фундамент платформы</span>
   </div>
@@ -743,44 +744,40 @@
     <div class="grid-3">
       <div class="card accent-left white">
         <div class="card-head">
-          <span class="card-title">1. Всё есть файл и класс (<code>$class</code>)</span>
-          <span class="tag">Унификация</span>
+          <span class="card-title">1. Изолированные <code>$base</code> и 3 оси наследования</span>
+          <span class="tag">Мультибазовость</span>
         </div>
         <p>
-          Организация моделируется деревом классов: подразделения, проекты, справочники, счета.
-          Любое содержание — документ, таблица, сообщение, письмо, карточка клиента, задача ИИ — это файл по понятному пути:
-          <code>/ОТДЕЛ/ПРОЕКТ/договор.docx</code>.
+          Эталонные конфигурации живут в <code>/MODULES</code> (<code>Register</code>, <code>Geo</code>), а каждое предприятие в <code>/ORGANIZATIONS/&lt;Имя&gt;</code> (<code>$base</code>) имеет <strong>собственную изолированную БД</strong> <code>$base/#system/work.db</code>.
         </p>
         <p style="color:var(--text-muted);font-size:8.3pt;">
-          <strong>Наследование «~»:</strong> правила, формы, скрипты <code>class.js</code> и навыки ИИ автоматически «стекают» от базового типа к подразделению без дублирования кода.
+          <strong>Трёхосевое наследование:</strong> <code>Types (миксины)</code> → <code>Ancestor (в /MODULES)</code> → <code>Parent (в дереве)</code> → <code>Сам класс</code>. Перенос всей организации с базой между серверами выполняется в 1 клик (<strong>«Архивация» / «Загрузить из архива»</strong>).
         </p>
       </div>
 
       <div class="card green-left white">
         <div class="card-head">
-          <span class="card-title">2. Файл = артефакт, Лог = факт</span>
-          <span class="tag green">Обратимость</span>
+          <span class="card-title">2. Подразделения, рабочие места и <code>History</code></span>
+          <span class="tag green">Роли и обратимость</span>
         </div>
         <p>
-          Любое действие человека, сенсора или ИИ проходит единый конвейер ядра:
-          текущий файл обновляется, а предыдущая версия <strong>автоматически уходит в неизменяемый архив</strong> <code>history/YYYY-MM-DD/время.uid.ext</code>.
+          Подразделение (<code>$structure</code>) — точка коллаборации (<code>BOSS</code>, <code>ADMIN</code>, чат, задачи, файлы), а вложенные рабочие места (<code>ROLES</code>) выдают сотрудникам точечный доступ к классам учёта (<code>LINKS: read/write</code>).
         </p>
         <p style="color:var(--text-muted);font-size:8.3pt;">
-          <strong>Тройная журнализация:</strong> факт операции мгновенно фиксируется в личном логе автора, в логе подразделения и у получателей. Потерять или тайно подменить историю невозможно.
+          <strong>Неизменяемый след:</strong> каждая правка сохраняет снимок в <code>history/YYYY-MM-DD/</code> и пишет факт в <code>logs</code>, а панель <code>form/staff</code> и глобальный поиск <code>form/search</code> дают мгновенный обзор штата и данных.
         </p>
       </div>
 
       <div class="card amber-left white">
         <div class="card-head">
-          <span class="card-title">3. Чат — универсальный пульт</span>
-          <span class="tag amber">Интерфейс</span>
+          <span class="card-title">3. Чат и ИИ-консультант в каждой форме</span>
+          <span class="tag amber">Умный интерфейс</span>
         </div>
         <p>
-          В WORK чат — это не отдельная «болталка», а <strong>живое представление над журналом событий подразделения</strong>.
-          Здесь сходятся сообщения людей, поручения со сроками, вложения, звонки и работа ИИ-агентов.
+          Чат — живое представление над журналом событий подразделения, где сходятся сообщения, поручения, звонки и работа ИИ-агентов (ИИ — нулевой получатель).
         </p>
         <p style="color:var(--text-muted);font-size:8.3pt;">
-          <strong>ИИ — нулевой получатель:</strong> любое обращение без явного адресата-человека принимает ИИ-агент точки, который знает весь контекст этого места.
+          <strong>Кнопка «?» (<code>item-consultant</code>) в шапке любой формы:</strong> одним нажатием открывает панель ИИ, автоматически передаёт контекст открытого отчёта/объекта и сохраняет консультацию в личный кабинет <code>/USERS/&lt;uid&gt;</code>.
         </p>
       </div>
     </div>
@@ -798,8 +795,8 @@
         <div class="flow-arrow">→</div>
         <div class="flow-step">
           <div class="step-num">Шаг 2 · Артефакт</div>
-          <div class="step-title">Запись в зону роли</div>
-          <p>Сохранение актуального файла или типизированного объекта <code>.data</code> по схеме полей</p>
+          <div class="step-title">Запись в класс / БД</div>
+          <p>Сохранение файла или объекта в изолированной <code>work.db</code> конечного класса хранения</p>
         </div>
         <div class="flow-arrow">→</div>
         <div class="flow-step">
@@ -809,9 +806,9 @@
         </div>
         <div class="flow-arrow">→</div>
         <div class="flow-step">
-          <div class="step-num">Шаг 4 · Журнал</div>
-          <div class="step-title">Факт и проводка</div>
-          <p>Запись в <code>logs</code> (автор, время, связи) + разноска Дт/Кт в регистре учёта ресурсов</p>
+          <div class="step-num">Шаг 4 · Двойная запись</div>
+          <div class="step-title">Лог и проводка Дт/Кт</div>
+          <p>Запись в <code>logs</code> + явная разноска в классы счетов Дебета и Кредита (<code>account_entries</code>)</p>
         </div>
         <div class="flow-arrow">→</div>
         <div class="flow-step">
@@ -824,8 +821,8 @@
   </div>
 
   <div class="slide-footer">
-    <span>WORK / ODANT — архитектура «Текущее → History → Log → RAG»</span>
-    <span>Стр. 3 / 12</span>
+    <span>WORK / ODANT — архитектура «Модули → Изолированная $base → History → Двойная запись → RAG»</span>
+    <span>Стр. 3 / 14</span>
   </div>
 </section>
 
@@ -904,7 +901,7 @@
 
   <div class="slide-footer">
     <span>WORK / ODANT — исполнительное ядро ИИ-агента</span>
-    <span>Стр. 4 / 12</span>
+    <span>Стр. 4 / 14</span>
   </div>
 </section>
 
@@ -1007,15 +1004,80 @@
 
   <div class="slide-footer">
     <span>WORK / ODANT — ролевые субагенты, параллельная оркестрация и навыки</span>
-    <span>Стр. 5 / 12</span>
+    <span>Стр. 5 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 6: КОМПЬЮТЕР, БРАУЗЕР, КОД, ДОКУМЕНТЫ ==================== -->
+<!-- ==================== СЛАЙД 6: ЛОКАЛЬНЫЙ МУЛЬТИМОДАЛЬНЫЙ КОНТУР ИИ И ДООБУЧЕНИЕ ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
       <div class="kicker">5. Агентская ИИ-система · Часть 3</div>
+      <div class="slide-title">Локальная мультимодальная студия ИИ (<code>/MODELS/Local</code>) и дообучение (<code>form/trainer</code>)</div>
+      <div class="slide-subtitle">Собственный нейросетевой контур без внешних облаков: автоподбор под железо, витрина Hugging Face, инференс и дообучение LoRA / GRPO</div>
+    </div>
+    <span class="badge-pill">Новое · Local AI &amp; Trainer</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-2">
+      <div class="card white accent-left">
+        <div class="card-head">
+          <span class="card-title">1. Автопрофилирование железа и витрина Hugging Face</span>
+          <span class="tag">7 категорий · 13 умений</span>
+        </div>
+        <ul>
+          <li><strong>Умное профилирование хоста (<code>detectHardware</code>):</strong> система автоматически определяет CPU, RAM и GPU VRAM сервера и подбирает оптимальные модели и гиперпараметры (<code>evaluateModelFit</code>).</li>
+          <li><strong>Прямая потоковая загрузка с Hugging Face Hub:</strong> мультимодальная витрина по 7 категориям (<code>Текст и Код LLM</code>, <code>Зрение / OCR VLM</code>, <code>Картинки Image</code>, <code>Звук и Речь ASR/TTS/Music</code>, <code>Видео Video</code>, <code>Поиск RAG/Rerank</code>) с авто-регистрацией классов <code>$ai</code> в <code>/MODELS/Local</code>.</li>
+        </ul>
+      </div>
+
+      <div class="card white green-left">
+        <div class="card-head">
+          <span class="card-title">2. Постоянный локальный нейросетевой движок инференса</span>
+          <span class="tag green">Zero-Copy PyTorch</span>
+        </div>
+        <ul>
+          <li><strong>Собственный локальный воркер (<code>local_infer_worker.py</code> + <code>local-engine.js</code>):</strong> держит веса моделей в памяти с zero-copy <code>mmap</code> (<code>.safetensors</code>) и <code>KV-Cache</code> для мгновенного отклика без внешних серверов.</li>
+          <li><strong>Полная автономность:</strong> скачанные модели (например, семейство <code>Qwen3</code>, <code>Llama</code>, <code>DeepSeek</code>) сразу готовы к диалогу в чате, работе субагентов и ответам ИИ-консультанта <code>item-consultant</code> внутри закрытого контура.</li>
+        </ul>
+      </div>
+
+      <div class="card white amber-left">
+        <div class="card-head">
+          <span class="card-title">3. Автосборщик корпоративных датасетов WORK</span>
+          <span class="tag amber">Память → Датасет</span>
+        </div>
+        <ul>
+          <li><strong>Генерация обучающих выборок в 1 клик (<code>buildWorkDataset</code>):</strong> автоматически собирает эталонные примеры в формате <code>ChatML .jsonl</code> прямо из реальной жизни организации.</li>
+          <li><strong>Три источника знаний предприятия:</strong> успешные задачи и диалоги ИИ (<code>.task</code>), реальные объекты и проводки базы <code>work.db</code>, а также метаданные и контракты классов <code>/MODULES</code>.</li>
+        </ul>
+      </div>
+
+      <div class="card dark-box">
+        <div class="card-head">
+          <span class="card-title">4. Дообучение <code>LoRA / SFT / GRPO</code> с верификатором ядра</span>
+          <span class="tag dark">Self-Evolving AI</span>
+        </div>
+        <ul>
+          <li><strong>Адаптация под специфику компании:</strong> прямо в вкладке <code>form/trainer</code> запускается дообучение локальной модели (<code>SFT / LoRA</code>) с живым графиком <code>Loss</code> и сохранением адаптеров.</li>
+          <li><strong>Обучение с подкреплением (<code>GRPO</code>) от учётного ядра:</strong> детерминированный верификатор (<code>verifyCompletion</code>) проверяет ответы модели на соблюдение схем классов и сходимость двойной записи Дт = Кт.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>WORK / ODANT — локальный мультимодальный ИИ-хаб /MODELS/Local и студия дообучения</span>
+    <span>Стр. 6 / 14</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 7: КОМПЬЮТЕР, БРАУЗЕР, КОД, ДОКУМЕНТЫ ==================== -->
+<section class="slide">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">6. Агентская ИИ-система · Часть 4</div>
       <div class="slide-title">Инструменты реального действия: два контура ПК, код, документы и голос</div>
       <div class="slide-subtitle">Агент не просто советует в чате — он работает в браузере, управляет программами, верстает отчёты и пишет код</div>
     </div>
@@ -1075,15 +1137,15 @@
 
   <div class="slide-footer">
     <span>WORK / ODANT — компьютер, документы, разработка, голос и мобильность</span>
-    <span>Стр. 6 / 12</span>
+    <span>Стр. 7 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 7: БЕЗОПАСНОСТЬ, ПРИВАТНОСТЬ И БЮДЖЕТЫ ==================== -->
+<!-- ==================== СЛАЙД 8: БЕЗОПАСНОСТЬ, ПРИВАТНОСТЬ И БЮДЖЕТЫ ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
-      <div class="kicker">6. Корпоративная защита и управляемость ИИ</div>
+      <div class="kicker">7. Корпоративная защита и управляемость ИИ</div>
       <div class="slide-title">Безопасность зашита в код ядра, а не держится на «обещаниях» промпта</div>
       <div class="slide-subtitle">Многоуровневая защита от утечек и prompt-инъекций, полный суверенитет данных и прозрачный контроль расходов</div>
     </div>
@@ -1143,86 +1205,150 @@
 
   <div class="slide-footer">
     <span>WORK / ODANT — структурная безопасность, приватный контур и управление расходами</span>
-    <span>Стр. 7 / 12</span>
+    <span>Стр. 8 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 8: ОТКРЫТАЯ ЭКОСИСТЕМА И УЧЁТ РЕСУРСОВ ==================== -->
+<!-- ==================== СЛАЙД 9: УЧЁТНАЯ СИСТЕМА ДВОЙНОЙ ЗАПИСИ И СТАНДАРТ ФОРМ ODANT ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
-      <div class="kicker">7. Интеграции и учётная система (ERP / CRM / Баланс)</div>
-      <div class="slide-title">Открытый хаб интеграций (MCP, A2A, 1С) и единый журнал двойной записи</div>
-      <div class="slide-subtitle">WORK объединяет внешние сервисы и сводит любые операционные модели бизнеса к единому математическому балансу</div>
+      <div class="kicker">8. Учётная система двойной записи и эргономика форм (Эталон ODANT)</div>
+      <div class="slide-title">Явная двойная запись, иерархия классов хранения и единый стандарт форм <code>work-form</code></div>
+      <div class="slide-subtitle">Никакого комбинаторного взрыва алгоритмов: единое ядро счетов, аналитик, виртуальных справочников и табличных представлений</div>
     </div>
-    <span class="badge-pill">Экосистема + ERP</span>
+    <span class="badge-pill">ERP / Учётное ядро</span>
   </div>
 
   <div class="slide-body">
     <div class="grid-2">
       <div class="card white accent-left">
         <div class="card-head">
-          <span class="card-title">Двусторонний MCP, протокол A2A и 12+ коннекторов</span>
-          <span class="tag">Связь с миром</span>
+          <span class="card-title">1. Явная двойная запись, сторно и двухэтапные аналитики</span>
+          <span class="tag">Математика баланса</span>
         </div>
         <ul>
-          <li><strong>WORK как MCP-сервер (<code>/mcp</code>) и MCP-клиент:</strong> внешние ИИ-инструменты (OpenCode, Claude Code, VS Code Copilot) подключаются к WORK по персональному токену и работают с деревом по тем же правилам прав, хуков и подтверждений (<code>elicitation</code>).</li>
-          <li><strong>Межагентный протокол A2A и JS SDK:</strong> карточка <code>/.well-known/agent.json</code>, JSON-RPC <code>/a2a</code> для общения агентов разных систем и готовый виджет чата <code>/sdk/work-agent.js</code> для встраивания в любые корпоративные порталы.</li>
-          <li><strong>Каталог подключений (OAuth2/PKCE) и LAN:</strong> Яндекс 360, Google, Microsoft 365, Битрикс24, amoCRM, Telegram, GitHub/GitLab, Notion + автообнаружение принтеров, сканеров и баз <strong>1С (OData)</strong> в локальной сети.</li>
+          <li><strong>Честная двойная запись:</strong> проведение операции (<code>$operation</code>) создаёт связанные записи в классе счёта Дебета и классе счёта Кредита (<code>$account</code>, <code>account_entries</code>). Исправление проведённых документов — строго через <strong>сторно</strong>.</li>
+          <li><strong>Двухэтапные субаналитики и <code>$virtual</code>:</strong> поля справочника-аналитики выступают субаналитиками отчётов, а виртуальные справочники (<code>Клиенты</code>, <code>Поставщики</code>, <code>Сотрудники/В отпуске</code>) строятся прямо от оборотов или остатков счёта + поля <code>OVERLAY</code>.</li>
         </ul>
       </div>
 
       <div class="card white green-left">
         <div class="card-head">
-          <span class="card-title">Единый журнал двойной записи: от чата к точному балансу</span>
-          <span class="tag green">Математика учёта</span>
+          <span class="card-title">2. Иерархия классов хранения и <code>allowList</code> в <code>form/objects</code></span>
+          <span class="tag green">Справочники и документы</span>
+        </div>
+        <ul>
+          <li><strong>Промежуточные и конечные классы:</strong> при открытии вышестоящего класса (например, <code>Номенклатура</code>) автоматически появляется колонка <strong>«Группа»</strong> с относительным путём места хранения (<code>Прайс/Услуги/1. Предпроектное...</code>).</li>
+          <li><strong>Точка хранения и пакетные операции:</strong> при нажатии <strong>«Новый»</strong> на группе система сначала предлагает выбрать конечный класс-лист в дереве, а при множественном выборе строк (<code>Ctrl/Shift+Click</code>) активирует только групповые операции с <code>allowList</code> (<strong>«Удалить»</strong>).</li>
+        </ul>
+      </div>
+
+      <div class="card white amber-left">
+        <div class="card-head">
+          <span class="card-title">3. Унифицированная форма <code>work-form</code> (<code>$item</code> / <code>$focusedItem</code>)</span>
+          <span class="tag amber">Ролевой UI</span>
+        </div>
+        <ul>
+          <li><strong>3-зонный тулбар и сервисный подвал:</strong> верхняя панель объединяет действия открытого класса (<code>$item</code>) и сфокусированной строки (<code>$focusedItem</code>), а нижний подвал — сервисные переходы (<code>Обороты</code>, <code>Анализ</code>, <code>Проводки</code>, <code>Провести</code>, <code>Печать</code>).</li>
+          <li><strong>Представления строго по роли:</strong> <code>ADMIN</code> видит конструктор и безопасность (<code>builder</code>, <code>editor</code>, <code>staff</code>), <code>BOSS</code> — отчёты и поиск, <code>USER</code> — рабочие инструменты.</li>
+        </ul>
+      </div>
+
+      <div class="card dark-box">
+        <div class="card-head">
+          <span class="card-title">4. Единый табличный стандарт отчётов с <code>oda-packets</code></span>
+          <span class="tag dark">Drilldown в 1 клик</span>
+        </div>
+        <ul>
+          <li><strong>5 связанных отчётов:</strong> <strong>«Обороты»</strong> (<code>sheet</code>, ОСВ), <strong>«Анализ счёта»</strong> (<code>analysis</code>), <strong>«Обороты счёта»</strong> (<code>turnovers</code>), <strong>«Проводки счёта»</strong> (<code>postings</code>) и <strong>«Журнал проводок»</strong> (<code>journal</code>).</li>
+          <li><strong>Умный drilldown:</strong> двойной клик по счёту в ведомости «Обороты» автоматически открывает «Анализ счёта» (или «Обороты счёта», если у счёта нет аналитик) с сохранением выбранного периода <code>oda-packets</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>WORK / ODANT — учётное ядро двойной записи и стандарт форм ODANT</span>
+    <span>Стр. 9 / 14</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 10: ОТКРЫТАЯ ЭКОСИСТЕМА, ФЕДЕРАЦИЯ /NODES И МИГРАЦИЯ ПРЕДПРИЯТИЙ ==================== -->
+<section class="slide">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">9. Интеграции, федерация серверов и реальные внедрения</div>
+      <div class="slide-title">Открытый хаб (MCP, A2A, 1С), федерация узлов <code>/NODES</code> и миграция реальных предприятий</div>
+      <div class="slide-subtitle">Бесшовная связь с внешним миром, объединение удалённых серверов WORK и проверенный перенос многолетних баз бизнеса</div>
+    </div>
+    <span class="badge-pill">Экосистема + Федерация</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-2">
+      <div class="card white accent-left">
+        <div class="card-head">
+          <span class="card-title">Двусторонний MCP, протокол A2A, OAuth2 и федерация <code>/NODES</code></span>
+          <span class="tag">Сеть и интеграции</span>
+        </div>
+        <ul>
+          <li><strong>Федерация узлов WORK (<code>/NODES/&lt;Узел&gt;</code>):</strong> монтирование доступных точек удалённых серверов федерации в дерево проводника с возможностью открывать удалённые подразделения и классы прямо у себя во вкладках.</li>
+          <li><strong>Двусторонний MCP (<code>/mcp</code>) и A2A (<code>/a2a</code>):</strong> подключение внешних IDE и агентов по токену с соблюдением прав, плюс встраиваемый виджет <code>/sdk/work-agent.js</code>.</li>
+          <li><strong>12+ коннекторов и LAN:</strong> Яндекс 360, Google, Microsoft 365, Битрикс24, amoCRM, Telegram, GitHub/GitLab + автообнаружение принтеров, сканеров и баз <strong>1С (OData)</strong>.</li>
+        </ul>
+      </div>
+
+      <div class="card white green-left">
+        <div class="card-head">
+          <span class="card-title">Проверено полной миграцией действующих предприятий</span>
+          <span class="tag green">100% баланс ОСВ</span>
         </div>
         <p>
-          Традиционные ERP страдают от комбинаторного взрыва алгоритмов при росте числа операций. В WORK реализована универсальная учётная архитектура (<code>DATA/REGISTER</code>, <code>OPERATIONS</code>, <code>CATALOGS</code>):
+          Реализован прямой декодер бинарных пакетов ODANT (<code>OBX\x01</code> <code>.oml</code> / <code>.ocl</code>) и автоматический перенос действующих предприятий в изолированные базы <code>/ORGANIZATIONS/&lt;База&gt;</code>:
         </p>
         <ul>
-          <li>Любое движение ресурсов (деньги, сырьё, продукция, рабочее время, стоимость ИИ-операций) расщепляется на <strong>двойную запись (Дебет / Кредит)</strong> по иерархии счетов <code>$account</code>.</li>
-          <li><strong>Пирамида индексов (день → месяц → год):</strong> мгновенный расчёт сальдо, карточки счёта и оборотно-сальдовой ведомости (<code>sheet</code>) на любом уровне компании.</li>
-          <li><strong>Виртуальные справочники (<code>$virtual</code>):</strong> отображение объектов в состоянии счёта на любую выбранную дату.</li>
+          <li><strong>ООО «Бизнес Интер Софт» (2006–2026 гг.):</strong> 720 объектов справочников, <strong>18 665 документов операций</strong>, <strong>45 526 двойных проводок</strong> (91 052 записи по 47 счетам), оборот ОСВ <strong>1,28 млрд ₽</strong> — сходимость Дт/Кт до копейки.</li>
+          <li><strong>ООО МА «Деловая сфера»:</strong> 3 827 объектов справочников, <strong>11 896 документов операций</strong>, 7 201 двойная проводка по 20 счетам, оборот ОСВ <strong>152,76 млн ₽</strong> — 100% совпадение с эталоном.</li>
         </ul>
       </div>
     </div>
 
     <div class="kpi-row">
       <div class="kpi-box">
-        <div class="kpi-num">(n−1)! → 1</div>
-        <div class="kpi-label">Схлопывание сложности</div>
-        <div class="kpi-sub">Единый алгоритм анализа для любого числа бизнес-процессов</div>
+        <div class="kpi-num">40–80 мс</div>
+        <div class="kpi-label">Отклик меню и форм</div>
+        <div class="kpi-sub">Ускорение отдачи серверных хендлеров более чем в 100 раз</div>
       </div>
       <div class="kpi-box">
-        <div class="kpi-num">12 готовых</div>
-        <div class="kpi-label">OAuth2 / API коннекторов</div>
-        <div class="kpi-sub">Почта, календари, диски, CRM, мессенджеры, репозитории</div>
+        <div class="kpi-num">30 500+</div>
+        <div class="kpi-label">Реальных документов</div>
+        <div class="kpi-sub">Импортировано и сверено в изолированных базах предприятий</div>
       </div>
       <div class="kpi-box">
         <div class="kpi-num">MCP + A2A</div>
         <div class="kpi-label">Мировые стандарты ИИ</div>
-        <div class="kpi-sub">Бесшовная стыковка с внешними агентами и IDE</div>
+        <div class="kpi-sub">Плюс федерация серверов WORK через /NODES</div>
       </div>
       <div class="kpi-box">
-        <div class="kpi-num">Пакеты Plugin</div>
-        <div class="kpi-label">Готовность к маркетплейсу</div>
-        <div class="kpi-sub">Установка навыков, субагентов, хуков и MCP одним пакетом</div>
+        <div class="kpi-num">ZIP $base</div>
+        <div class="kpi-label">Мгновенный трансфер баз</div>
+        <div class="kpi-sub">Упаковка и развёртывание целой организации в один клик</div>
       </div>
     </div>
   </div>
 
   <div class="slide-footer">
-    <span>WORK / ODANT — открытая экосистема интеграций и учётное ядро</span>
-    <span>Стр. 8 / 12</span>
+    <span>WORK / ODANT — открытая экосистема, федерация узлов и промышленная миграция предприятий</span>
+    <span>Стр. 10 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 9: СРАВНЕНИЕ С МИРОВЫМИ ЛИДЕРАМИ (SCORECARD) ==================== -->
+<!-- ==================== СЛАЙД 11: СРАВНЕНИЕ С МИРОВЫМИ ЛИДЕРАМИ (SCORECARD) ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
-      <div class="kicker">8. Конкурентное преимущество (Независимый Scorecard · Октябрь 2026)</div>
+      <div class="kicker">10. Конкурентное преимущество (Независимый Scorecard · Октябрь 2026)</div>
       <div class="slide-title">1-е место (74 из 75 баллов) против ведущих мировых ИИ-платформ</div>
       <div class="slide-subtitle">WORK объединяет мощь лучших кодинг-агентов, универсальных компьютерных помощников и корпоративных систем управления</div>
     </div>
@@ -1298,15 +1424,15 @@
 
   <div class="slide-footer">
     <span>Полный отчёт и методика сверки: docs/work-scorecard.pdf</span>
-    <span>Стр. 9 / 12</span>
+    <span>Стр. 11 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 10: ПРИКЛАДНЫЕ СЦЕНАРИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==================== -->
+<!-- ==================== СЛАЙД 12: ПРИКЛАДНЫЕ СЦЕНАРИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
-      <div class="kicker">9. Ценность для потенциальных пользователей</div>
+      <div class="kicker">11. Ценность для потенциальных пользователей</div>
       <div class="slide-title">Как WORK работает на практике: от рядового специалиста до генерального директора</div>
       <div class="slide-subtitle">Понятные сценарии ежедневной работы, которые запускаются сразу после развёртывания системы</div>
     </div>
@@ -1367,15 +1493,15 @@
 
   <div class="slide-footer">
     <span>WORK / ODANT — практическая польза для каждого подразделения</span>
-    <span>Стр. 10 / 12</span>
+    <span>Стр. 12 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 11: РЫНОК, НАСЛЕДИЕ И БИЗНЕС-МОДЕЛЬ ==================== -->
+<!-- ==================== СЛАЙД 13: РЫНОК, НАСЛЕДИЕ И БИЗНЕС-МОДЕЛЬ ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
-      <div class="kicker">10. Рыночный потенциал, наследие внедрений и монетизация</div>
+      <div class="kicker">12. Рыночный потенциал, наследие внедрений и монетизация</div>
       <div class="slide-title">Промышленный фундамент ODANT + масштабируемая бизнес-модель WORK</div>
       <div class="slide-subtitle">Отечественное ПО в реестре Минцифры с опытом крупнейших госвнедрений и четырьмя потоками выручки</div>
     </div>
@@ -1450,15 +1576,15 @@
 
   <div class="slide-footer">
     <span>WORK / ODANT — рынок, регуляторный статус и модель монетизации</span>
-    <span>Стр. 11 / 12</span>
+    <span>Стр. 13 / 14</span>
   </div>
 </section>
 
-<!-- ==================== СЛАЙД 12: ИНВЕСТИЦИОННОЕ ПРЕДЛОЖЕНИЕ И КОНТАКТЫ ==================== -->
+<!-- ==================== СЛАЙД 14: ИНВЕСТИЦИОННОЕ ПРЕДЛОЖЕНИЕ И КОНТАКТЫ ==================== -->
 <section class="slide">
   <div class="slide-header">
     <div class="header-left">
-      <div class="kicker">11. Дорожная карта и предложение для инвесторов и партнёров</div>
+      <div class="kicker">13. Дорожная карта и предложение для инвесторов и партнёров</div>
       <div class="slide-title">Инвестиционный тезис и формат стратегического партнёрства</div>
       <div class="slide-subtitle">Вход в готовый продукт промышленного уровня на этапе масштабирования продаж</div>
     </div>
@@ -1473,9 +1599,8 @@
           <span class="tag dark">Технологический ров</span>
         </div>
         <ul>
-          <li><strong>Продукт готов:</strong> ядро ODANT, реактивный UI ODA, учётная система двойной записи и агентская ИИ-система (74/75 в Scorecard) полностью реализованы и покрыты тестами.</li>
-          <li><strong>Высокий входной барьер для конкурентов:</strong> фрактальную файлово-событийную архитектуру с наследованием <code>class.js</code>, откатом <code>undo</code> и структурной защитой <code>&lt;untrusted&gt;</code> невозможно быстро скопировать поверх обычного стека «БД + REST».</li>
-          <li><strong>Саморазвитие:</strong> разработка самой платформы уже переносится внутрь WORK с участием ИИ-агентов.</li>
+          <li><strong>Продукт полностью готов:</strong> ядро ODANT, реактивный UI ODA, учётная система двойной записи, локальный мультимодальный контур ИИ (<code>/MODELS/Local</code> + <code>LoRA/GRPO</code>) и агентская система (74/75 в Scorecard) протестированы на реальных базах предприятий.</li>
+          <li><strong>Высокий входной барьер:</strong> фрактальную файлово-событийную архитектуру с трёхосевым наследованием, откатом <code>undo</code> и защитой <code>&lt;untrusted&gt;</code> невозможно скопировать поверх обычного стека «БД + REST».</li>
         </ul>
       </div>
 
@@ -1497,32 +1622,36 @@
           <span class="tag green">Дорожная карта</span>
         </div>
         <ul>
-          <li><strong>Для потенциальных заказчиков:</strong> запуск пилотного проекта в подразделении за 1–3 дня (в облаке или на вашем сервере с локальной LLM), миграция справочников из Excel/1С и настройка ролевых ИИ-агентов.</li>
-          <li><strong>Для интеграторов:</strong> партнёрская программа White-Label и создание отраслевых пакетов навыков (<code>plugin</code>).</li>
-          <li><strong>Вектор развития 2026–2027:</strong> федерация узлов WORK (межкорпоративные точки взаимодействия) и запуск встроенного маркетплейса навыков.</li>
+          <li><strong>Для потенциальных заказчиков:</strong> запуск пилотного проекта в подразделении за 1–3 дня (в облаке или на вашем сервере с локальной LLM), миграция базы из ODANT/1С/Excel и настройка ролевых ИИ-агентов.</li>
+          <li><strong>Для интеграторов:</strong> партнёрская программа White-Label, тиражирование отраслевых конфигураций через <code>/MODULES</code> и архивы <code>$base</code>.</li>
+          <li><strong>Вектор развития 2026–2027:</strong> масштабирование федерации узлов WORK (<code>/NODES</code>) и маркетплейса отраслевых модулей и навыков.</li>
         </ul>
       </div>
     </div>
 
-    <div class="banner dark-banner" style="display:flex;justify-content:space-between;align-items:center;padding:3.2mm 5mm;background:linear-gradient(90deg,#0a2952 0%,#15488a 100%);color:#fff;border:none;">
+    <div class="banner dark-banner" style="display:grid;grid-template-columns:1.15fr 1fr;gap:5mm;align-items:center;padding:3mm 4.5mm;background:linear-gradient(90deg,#0a2952 0%,#15488a 100%);color:#fff;border:none;">
       <div>
-        <div style="font-size:11pt;font-weight:800;color:#fff;margin-bottom:0.8mm;">
-          Контакты для демонстрации платформы, запуска пилота и переговоров об инвестициях
+        <div style="font-size:10.5pt;font-weight:800;color:#fff;margin-bottom:1mm;">
+          Контакты для демонстрации платформы, запуска пилота и переговоров
         </div>
-        <div style="font-size:9pt;color:#bae6fd;">
-          <strong>Перепелкин Роман</strong> — основатель платформы ODANT, директор ООО «БИС» · г. Рязань, ул. Ленина, д. 47
+        <div style="font-size:8.8pt;color:#bae6fd;line-height:1.38;">
+          <strong>Перепелкин Роман</strong> — основатель платформы ODANT, директор ООО «БИС»<br>
+          Тел.: <strong>+7 (910) 642-39-14</strong> · E-mail: <strong>proman@artbis.ru</strong> · <strong>odant.org</strong> · <strong>current.odant.org</strong>
         </div>
       </div>
-      <div style="text-align:right;font-size:9.5pt;line-height:1.4;color:#fff;">
-        <div>Тел.: <strong>+7 (910) 642-39-14</strong> · E-mail: <strong>proman@artbis.ru</strong></div>
-        <div style="color:#7dd3fc;"><strong>odant.org</strong> · Демо-стенд: <strong>current.odant.org</strong></div>
+      <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(125,211,252,0.35);border-radius:2.2mm;padding:2.2mm 3.5mm;font-size:8.8pt;line-height:1.42;color:#fff;">
+        <div style="font-size:8pt;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#7dd3fc;margin-bottom:0.8mm;">
+          Партнёры по развитию
+        </div>
+        <div><strong>Наумов Олег Ярославович</strong> — тел.: <strong>+7 910 500-07-70</strong></div>
+        <div><strong>Черепнин Виктор Валерьевич</strong> — тел.: <strong>+7 977 812-05-14</strong></div>
       </div>
     </div>
   </div>
 
   <div class="slide-footer">
     <span>ООО «БИС» (ИНН 6234049193) · Платформа ODANT в реестре ПО Минцифры РФ № 304855</span>
-    <span>Стр. 12 / 12</span>
+    <span>Стр. 14 / 14</span>
   </div>
 </section>
 

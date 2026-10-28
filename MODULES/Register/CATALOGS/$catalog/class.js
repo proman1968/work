@@ -10,7 +10,7 @@ export default {    async TestFunc(s, d = {
     METADATA: {
         FIELDS: [{
             id: "name",
-            label: "Название",
+            label: "Наименование",
             required: true
         }]
     },

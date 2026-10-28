@@ -23,28 +23,39 @@ import { raw } from '/oda/components/table/lib/model.js';
 const FRAME = /*html*/`
     <style>
         :host {
-            @apply --content;
             @apply --horizontal;
             align-items: center;
             box-sizing: border-box;
             min-width: 0;
+            min-height: 24px;
             overflow: hidden;
-            padding: var(--space-s) var(--space-m);
+            padding: 2px 8px;
+            font-size: 12.5px;
+            line-height: 1.3;
+            border-right: 1px solid var(--subtle-border);
+            border-bottom: 1px solid var(--subtle-border);
             /* Поверхность строки (зебра/выделение): строка задаёт наследуемые переменные,
                ячейка непрозрачна и красит фон сама — фон на :host строки перекрыт ячейками. */
             background-color: var(--row-surface, var(--content-background));
             color: var(--row-color, var(--content-color));
-        }
-        :host([col-lines]) {
-            border-right: 1px solid var(--header-background);
         }
         /* Последняя ячейка — без правой линии, как последняя ячейка шапки: иначе ширины
            колонок расходятся на доли пикселя и сетка «дрейфует». */
         :host([last]) {
             border-right: none;
         }
-        :host([row-lines]) {
-            border-bottom: 1px solid var(--header-background);
+        :host([sticky-left]) {
+            position: sticky;
+            left: 0;
+            z-index: 1;
+            box-shadow: 1px 0 0 var(--border-color);
+        }
+        :host([sticky-right]) {
+            position: sticky;
+            right: 0;
+            z-index: 1;
+            border-left: 1px solid var(--subtle-border);
+            box-shadow: -1px 0 0 var(--border-color);
         }
         :host(:focus) {
             @apply --focus-ring;
@@ -72,6 +83,13 @@ const FRAME = /*html*/`
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        .text[group-col] {
+            color: var(--row-color, light-dark(#6b21a8, #c084fc));
+        }
+        .text[num-col] {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
     </style>`;
 
 ODA({
@@ -80,9 +98,9 @@ ODA({
         <!-- ввод слушаем на обёртке: слушатель на теге с ~if/~is теряется при перештамповке (pitfalls §43);
              value-changed контролла composed и всплывает сюда сам -->
         <div class="control" @focusin="onFocusIn()" @focusout="onFocusOut()" @value-changed="onControlInput($event)">
-            <span class="text" ~if="!mediatorTag && !controlTag">{{text}}</span>
+            <span class="text" ~if="!mediatorTag && !controlTag" :group-col="Boolean(column?.field?.isGroupCol)" :num-col="isNumericCol">{{text}}</span>
             <div ~is="mediatorTag" ~if="mediatorTag" :row :column :table></div>
-            <div ~is="controlTag" ~if="controlTag" class="view" :field="column.field" :value="valueFor($this)" :readonly="readonly"></div>
+            <div ~is="controlTag" ~if="controlTag" class="view" borderless dense :field="column.field" :value="valueFor($this)" :readonly="readonly"></div>
         </div>
     `,
     $public: {
@@ -95,6 +113,14 @@ ODA({
         /** последняя ячейка строки: правая линия не рисуется (у шапки то же — по `start + colSpan === N`;
             при хвосте `@filler` последняя ячейка краем сетки не считается) */
         last: {
+            $def: false,
+            $attr: true
+        },
+        stickyLeft: {
+            $def: false,
+            $attr: true
+        },
+        stickyRight: {
             $def: false,
             $attr: true
         },
@@ -167,10 +193,18 @@ ODA({
      * в ячейке не выводится). Редактор по имени (`editorTag`) приоритетнее.
      */
     get fieldTag() {
+        if (this.readonly)
+            return undefined;
         const field = this.column?.field;
         if (!field || (!field.type && !field.control) || field.type === 'Table')
             return undefined;
+        if (String(field.type).toLowerCase() === 'text' && !field.control)
+            return 'oda-text-input';
         return controlOf(CONTROLS, field);
+    },
+    get isNumericCol() {
+        const t = String(this.column?.field?.type || '').toLowerCase();
+        return t === 'number' || t === 'money' || t === 'integer';
     },
     /**
      * Запись значения ячейки — одна точка (ввод контролла и редактора идёт сюда):
@@ -231,12 +265,18 @@ ODA({
     get value() {
         return this.column?.valueOf?.(this.row?.data);
     },
-    /** текст значения: пустое — пустая строка; объект — метка/имя */
+    /** текст значения: пустое — пустая строка; объект — метка/имя; числа/суммы — форматированно */
     get text() {
         const value = this.value;
-        return value === undefined || value === null ? ''
-            : typeof value === 'object' ? (value.label ?? value.name ?? '')
-            : String(value);
+        if (value === undefined || value === null || value === '')
+            return '';
+        if (typeof value === 'object')
+            return value.label ?? value.name ?? '';
+        const f = this.column?.field;
+        if (f?.formatMoney && Number.isFinite(Number(value))) {
+            return Number(value).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+        return String(value);
     }
 });
 

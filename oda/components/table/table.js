@@ -70,18 +70,18 @@ ODA({
             :host {
                 @apply --vertical;
                 @apply --flex;
-                @apply --light;
-                /* Скругление как у кнопок — системным радиусом. */
-                border-radius: var(--radius-s);
+                @apply --content;
+                border-radius: 0;
+                font-size: 13px;
                 overflow: hidden;
-                /* Минимум гибкой колонки по умолчанию (Р6): ≈ иконка. Модель чисел не знает —
-                   берёт этот токен в треки и в минимум сетки. */
-                --table-min-col: var(--space-xl);
+                --table-min-col: 110px;
             }
             /* Прокручивается этот контейнер (и вниз, и вбок): шапка и строки — его дети с одной
                сеткой и одним минимумом ширины, поэтому при переполнении едут вместе. */
             .scroller {
                 overflow: auto;
+                background-color: var(--content-background);
+                color: var(--content-color);
             }
         </style>
         <!-- Сетка колонок — CSS-переменные на элементе шаблона (на кастомный хост ~style не ставится, §31);
@@ -125,12 +125,31 @@ ODA({
             $attr: true
         },
         /** ключ хранилища состояния колонок (`_savePath/oda-table[$saveKey]`): задаёт потребитель до первого чтения */
-        $saveKey: undefined,
+        $saveKey: '',
+        saveKey: {
+            $def: '',
+            $type: String,
+            set(n) {
+                if (n)
+                    this._loadPersistedColumnState(n);
+            }
+        },
         /** разрешить фокус строки: клик делает строку текущей (как у oda-table, по умолчанию выключено) */
         allowFocus: {
             $def: false,
             $type: Boolean,
             $attr: true
+        },
+        /** разрешить выделение строк (одиночное и множественное Ctrl/Shift+Click) */
+        allowSelection: {
+            $def: false,
+            $type: Boolean,
+            $attr: true
+        },
+        /** выбранные строки (массив сырых объектов данных) при allowSelection */
+        selectedRows: {
+            $def: [],
+            $type: Array
         },
         /** зебра: соседние строки чередуются по фону */
         evenOdd: {
@@ -201,8 +220,59 @@ ODA({
     columnWrappers: null,
     /** раскрытие групп: ключ группы → bool */
     groupStates: null,
+    _loadedStorageKey: '',
     attached() {
         this.groupStates ??= new Map();
+        this._ensurePersistedLoaded();
+    },
+    _storageKeyFor(explicitKey) {
+        const host = this.getRootNode?.()?.host;
+        const k = String(
+            explicitKey
+            || this.saveKey
+            || this.$saveKey
+            || host?.$item?.short
+            || host?.$item?.path
+            || (host?.field?.id ? `${host?.domHost?.owner?.$item?.short || ''}:${host.field.id}` : '')
+            || ''
+        ).trim();
+        return k ? `work.table.state:${k}` : '';
+    },
+    _ensurePersistedLoaded() {
+        const sk = this._storageKeyFor();
+        if (!sk || sk === this._loadedStorageKey)
+            return;
+        this._loadedStorageKey = sk;
+        this._loadPersistedColumnState();
+    },
+    _loadPersistedColumnState(explicitKey) {
+        const sk = this._storageKeyFor(explicitKey);
+        if (!sk || typeof localStorage === 'undefined')
+            return;
+        this._loadedStorageKey = sk;
+        try {
+            const rawStr = localStorage.getItem(sk);
+            if (!rawStr)
+                return;
+            const parsed = JSON.parse(rawStr);
+            if (parsed?.sizing && typeof parsed.sizing === 'object' && Object.keys(parsed.sizing).length)
+                this.columnSizing = parsed.sizing;
+            if (parsed?.view && typeof parsed.view === 'object' && Object.keys(parsed.view).length)
+                this.columnView = parsed.view;
+        }
+        catch {}
+    },
+    _savePersistedColumnState() {
+        const sk = this._storageKeyFor();
+        if (!sk || typeof localStorage === 'undefined')
+            return;
+        try {
+            localStorage.setItem(sk, JSON.stringify({
+                sizing: this.columnSizing || {},
+                view: this.columnView || {},
+            }));
+        }
+        catch {}
     },
     /**
      * Развернуть/свернуть ветку. Состояние живёт на самой обёртке (`row.expanded`), поэтому запись
@@ -238,6 +308,28 @@ ODA({
             return;
         this.focusedRow = data;
     },
+    _selectionAnchor: null,
+    /** синхронизировать массив selectedRows по отмеченным (checked === 'checked') строкам */
+    _syncSelectedRows() {
+        const list = [];
+        for (const node of this.items ?? []) {
+            if (!node.isGroup && node.checked === 'checked') {
+                const d = raw(node.data);
+                if (d)
+                    list.push(d);
+            }
+        }
+        this.selectedRows = list;
+    },
+    /** сбросить выделение всех строк */
+    clearSelection() {
+        for (const node of this.items ?? []) {
+            if (node.checked === 'checked')
+                node.checked = 'unchecked';
+        }
+        this._selectionAnchor = null;
+        this.selectedRows = [];
+    },
 
     // --- состояние колонок: только через API, только заменой ---
     /**
@@ -259,6 +351,8 @@ ODA({
         const view = patchPart(patch, VIEW_FIELDS, this.columnView?.[key]);
         if (view)
             this.columnView = nextColumnState(this.columnView, key, view);
+        if (sizing || view)
+            this._savePersistedColumnState();
         if ('filter' in patch) {
             // та же ссылка — изменений нет: свойство не заменяем (ни пересчёта строк, ни записи)
             const filters = nextColumnFilter(this.columnFilter, key, patch.filter);
@@ -271,6 +365,7 @@ ODA({
         this.columnSizing = {};
         this.columnView = {};
         this.columnFilter = {};
+        this._savePersistedColumnState();
     },
     /**
      * Клик по колонке для сортировки (Р1): цикл `+N → −N → без сортировки`. Простой клик (`add`
@@ -336,6 +431,7 @@ ODA({
      * не читает: `stateOf` вызывается лениво, внутри геттеров обёрток.
      */
     get wrappers() {
+        this._ensurePersistedLoaded();
         const host = this;
         return wrapColumns(normalizeFields(this.metadata), {
             childrenKey: 'children',
