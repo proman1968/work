@@ -100,6 +100,7 @@ export async function scanClasses(rootDir, roots = DEFAULT_ROOTS) {
         }
         const dirs = entries.filter(e => e.isDirectory()).map(e => e.name).sort();
         const metas = dirs.filter(n => n.startsWith('$'));
+        let selfItem = null;
         if (metas.length) {
             const ranked = [...metas].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
             const type = ranked[0];
@@ -114,17 +115,23 @@ export async function scanClasses(rootDir, roots = DEFAULT_ROOTS) {
                 problems.push(`${clsPath}: class.js не загружен — ${e.message}`);
             }
             const label = typeof own.label === 'string' && own.label ? own.label : path.basename(rel);
-            classes.push({ cid: clsPath, path: clsPath, type, label, own });
+            selfItem = { cid: clsPath, path: clsPath, type, label, own };
         }
-        for (const name of dirs) {
-            if (name.startsWith('$') || name.startsWith('.') || name.startsWith('#') || SKIP.has(name))
-                continue;
-            await visit(path.join(rel, name));
+        const childDirs = dirs.filter(name => !name.startsWith('$') && !name.startsWith('.') && !name.startsWith('#') && !SKIP.has(name));
+        const subLists = await Promise.all(childDirs.map(name => visit(path.join(rel, name))));
+        const out = selfItem ? [selfItem] : [];
+        for (const sub of subLists) {
+            if (sub?.length)
+                out.push(...sub);
         }
+        return out;
     }
 
-    for (const root of roots)
-        await visit(root);
+    const rootLists = await Promise.all(roots.map(root => visit(root)));
+    for (const list of rootLists) {
+        if (list?.length)
+            classes.push(...list);
+    }
 
     return { classes, problems };
 }
@@ -208,6 +215,7 @@ export function rebuildTree(db) {
                 ins.run(a, cid, d);
             }
         }
+        generations.set(db, classesGeneration(db) + 1);
     });
 }
 
@@ -220,14 +228,94 @@ export async function refreshClasses(db, rootDir, roots = DEFAULT_ROOTS) {
     return { ...syncClasses(db, classes), problems };
 }
 
-function row(r) {
-    return r ? { ...r, own: JSON.parse(r.own) } : null;
+const classIndexCache = new WeakMap();
+
+/**
+ * Построить или вернуть из памяти индекс всех классов и замыкания иерархии БД.
+ * Сбрасывается автоматически при изменении `classesGeneration(db)`.
+ */
+function getClassIndex(db) {
+    const gen = classesGeneration(db);
+    let idx = classIndexCache.get(db);
+    if (idx && idx.gen === gen)
+        return idx;
+
+    const byCid = new Map();
+    const byPath = new Map();
+    const childrenByParent = new Map();
+    const nonVirtualChildParents = new Set();
+    const allSortedByPath = [];
+
+    const rows = db.prepare('SELECT cid, path, parent, type, label, own FROM classes ORDER BY path').all();
+    for (const r of rows) {
+        const item = {
+            cid: r.cid,
+            path: r.path,
+            parent: r.parent,
+            type: r.type,
+            label: r.label,
+            own: r.own ? JSON.parse(r.own) : {},
+        };
+        byCid.set(item.cid, item);
+        byPath.set(item.path, item);
+        allSortedByPath.push(item);
+        if (item.parent) {
+            let list = childrenByParent.get(item.parent);
+            if (!list)
+                childrenByParent.set(item.parent, list = []);
+            list.push(item);
+            if (item.type !== '$virtual')
+                nonVirtualChildParents.add(item.parent);
+        }
+    }
+    for (const list of childrenByParent.values())
+        list.sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+
+    const descByAncestor = new Map();
+    const treeRows = db.prepare('SELECT ancestor, descendant, depth FROM class_tree ORDER BY ancestor, depth, descendant').all();
+    for (const tr of treeRows) {
+        let dList = descByAncestor.get(tr.ancestor);
+        if (!dList)
+            descByAncestor.set(tr.ancestor, dList = []);
+        dList.push(tr.descendant);
+    }
+
+    const ancByDescendant = new Map();
+    for (const item of allSortedByPath) {
+        const chain = [];
+        const seen = new Set();
+        for (let cur = item; cur && !seen.has(cur.cid); cur = cur.parent ? byCid.get(cur.parent) : null) {
+            seen.add(cur.cid);
+            chain.unshift(cur);
+        }
+        ancByDescendant.set(item.cid, chain);
+    }
+
+    idx = {
+        gen,
+        byCid,
+        byPath,
+        childrenByParent,
+        nonVirtualChildParents,
+        descByAncestor,
+        ancByDescendant,
+        allSortedByPath,
+    };
+    classIndexCache.set(db, idx);
+    return idx;
+}
+
+function cloneClassRow(r) {
+    return r ? { ...r } : null;
 }
 
 /** Класс по пути (null — нет). */
 export function getClass(db, ref) {
     const key = String(ref ?? '');
-    return row(db.prepare('SELECT cid, path, parent, type, label, own FROM classes WHERE cid = ? OR path = ? LIMIT 1').get(key, key));
+    if (!key)
+        return null;
+    const idx = getClassIndex(db);
+    return cloneClassRow(idx.byCid.get(key) || idx.byPath.get(key));
 }
 
 /**
@@ -236,8 +324,10 @@ export function getClass(db, ref) {
  * @returns {string[]}
  */
 export function descendants(db, cid, { self = true } = {}) {
-    return db.prepare(`SELECT descendant FROM class_tree WHERE ancestor = ? AND depth >= ? ORDER BY depth, descendant`)
-        .all(cid, self ? 0 : 1).map(r => r.descendant);
+    const list = getClassIndex(db).descByAncestor.get(String(cid ?? ''));
+    if (!list?.length)
+        return [];
+    return self ? list.slice() : list.slice(1);
 }
 
 /**
@@ -246,28 +336,32 @@ export function descendants(db, cid, { self = true } = {}) {
  * @returns {Array<{cid, path, parent, type, label, own}>}
  */
 export function ancestors(db, cid, { self = true } = {}) {
-    return db.prepare(`
-        SELECT c.cid, c.path, c.parent, c.type, c.label, c.own FROM class_tree t JOIN classes c ON c.cid = t.ancestor
-        WHERE t.descendant = ? AND t.depth >= ? ORDER BY t.depth DESC`)
-        .all(cid, self ? 0 : 1).map(row);
+    const chain = getClassIndex(db).ancByDescendant.get(String(cid ?? ''));
+    if (!chain?.length)
+        return [];
+    const slice = self ? chain : chain.slice(0, -1);
+    return slice.map(cloneClassRow);
 }
 
 /** Прямые дочерние классы. */
 export function children(db, cid) {
-    return db.prepare('SELECT cid, path, parent, type, label, own FROM classes WHERE parent = ? ORDER BY label').all(cid).map(row);
+    const list = getClassIndex(db).childrenByParent.get(String(cid ?? ''));
+    return list ? list.map(cloneClassRow) : [];
 }
 
 /** Лист — класс без дочерних классов своего реального типа (виртуальные справочники $virtual всегда листья для своих расширений и не превращают родительский $catalog в не-лист). */
 export function isLeaf(db, cid) {
-    const cls = getClass(db, cid);
+    const key = String(cid ?? '');
+    const idx = getClassIndex(db);
+    const cls = idx.byCid.get(key) || idx.byPath.get(key);
     if (cls?.type === '$virtual')
         return true;
-    return !db.prepare(`SELECT 1 FROM classes WHERE parent = ? AND type <> '$virtual' LIMIT 1`).get(cid);
+    const targetCid = cls?.cid || key;
+    return !idx.nonVirtualChildParents.has(targetCid);
 }
 
 /** Все классы типа (или типов). */
 export function classesOfType(db, types) {
-    const list = [].concat(types);
-    return db.prepare(`SELECT cid, path, parent, type, label, own FROM classes WHERE type IN (${list.map(() => '?').join(',')}) ORDER BY path`)
-        .all(...list).map(row);
+    const set = new Set([].concat(types).map(String));
+    return getClassIndex(db).allSortedByPath.filter(c => set.has(c.type)).map(cloneClassRow);
 }

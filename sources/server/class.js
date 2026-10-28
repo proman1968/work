@@ -292,17 +292,20 @@ export class $class extends $folder {
         const mod = this._enclosingModule();
         if (!mod)
             return true;
+        const now = Date.now();
+        if (mod._ownEnabledCache && now - mod._ownEnabledCache.ts < 1500)
+            return mod._ownEnabledCache.val;
+        let val = mod.DATA?.localEnabled !== false && mod.DATA?.blocked !== true;
         try {
             const ownFile = path.join(mod.real_dir, '$module', 'class.js');
             if (fs.existsSync(ownFile)) {
                 const txt = fs.readFileSync(ownFile, 'utf-8');
-                if (/\benabled\s*:\s*false\b/.test(txt) || /\bblocked\s*:\s*true\b/.test(txt))
-                    return false;
-                return true;
+                val = !(/\benabled\s*:\s*false\b/.test(txt) || /\bblocked\s*:\s*true\b/.test(txt));
             }
         }
         catch { /* ignore */ }
-        return mod.DATA?.localEnabled !== false && mod.DATA?.blocked !== true;
+        mod._ownEnabledCache = { val, ts: now };
+        return val;
     }
 
     /** Заблокирован ли одноимённый эталонный модуль на уровне всей системы WORK (/MODULES/<id>). */
@@ -312,12 +315,17 @@ export class $class extends $folder {
             return false;
         if (String(mod.path || '').startsWith('/MODULES/'))
             return false;
+        const now = Date.now();
+        if (mod._sysBlockedCache && now - mod._sysBlockedCache.ts < 1500)
+            return mod._sysBlockedCache.val;
         const rootDir = globalThis.WORK?.real_dir || '.';
         const sysFile = path.join(rootDir, 'MODULES', mod.id, '$module', 'class.js');
         if (fs.existsSync(sysFile)) {
             try {
                 const txt = fs.readFileSync(sysFile, 'utf-8');
-                return /\benabled\s*:\s*false\b/.test(txt) || /\bblocked\s*:\s*true\b/.test(txt);
+                const val = /\benabled\s*:\s*false\b/.test(txt) || /\bblocked\s*:\s*true\b/.test(txt);
+                mod._sysBlockedCache = { val, ts: now };
+                return val;
             }
             catch { /* ignore */ }
         }
@@ -325,11 +333,14 @@ export class $class extends $folder {
             const sysMod = await globalThis.WORK?.get_item('/MODULES/' + mod.id);
             if (sysMod) {
                 await sysMod.init;
-                if (!sysMod._ownModuleEnabledSync())
+                if (!sysMod._ownModuleEnabledSync()) {
+                    mod._sysBlockedCache = { val: true, ts: now };
                     return true;
+                }
             }
         }
         catch { /* ignore */ }
+        mod._sysBlockedCache = { val: false, ts: now };
         return false;
     }
 
@@ -374,6 +385,8 @@ export class $class extends $folder {
             post,
             ignore_save_logs: true,
         });
+        this._ownEnabledCache = null;
+        this._sysBlockedCache = null;
         this.reset();
         await this.init;
         LINKS.reset();
@@ -386,6 +399,8 @@ export class $class extends $folder {
                         continue;
                     const peer = await globalThis.WORK?.get_item(`${org.path}/MODULES/${this.id}`).catch(() => null);
                     if (peer) {
+                        peer._ownEnabledCache = null;
+                        peer._sysBlockedCache = null;
                         peer.reset();
                         await peer.init;
                     }

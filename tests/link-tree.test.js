@@ -141,4 +141,25 @@ describe('link_tree', () => {
         await assert.rejects(invoke(fin, 'db_query', as(NOBODY)), /Доступ запрещён/);
         assert.equal((await invoke(fin, 'db_query', as(ADMIN))).items.length, 2, 'ADMIN видит всё');
     });
+
+    it('ссылка на вышестоящий класс раскрывает всё его дочернее поддерево с тем же доступом', async () => {
+        const sales = await WORK.get_item('/BASE/direction/sales');
+        const trie = await sales._linkTrie(new Map([
+            ['/DATA/OPERATIONS/Финансы/Платежи', { access: 'write', via: ['chief'] }],
+        ]));
+        const ops = trie[0].children[0];
+        assert.deepEqual(chain(ops), {
+            path: '/DATA/OPERATIONS', label: 'OPERATIONS', access: 'read',
+            children: [{
+                path: '/DATA/OPERATIONS/Финансы', label: 'Финансы', access: 'read',
+                children: [{
+                    path: '/DATA/OPERATIONS/Финансы/Платежи', label: 'Платежи', access: 'write',
+                    children: [
+                        { path: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', label: 'Покупатель', access: 'write', children: [] },
+                        { path: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', label: 'Поставщик', access: 'write', children: [] },
+                    ],
+                }],
+            }],
+        });
+    });
 });

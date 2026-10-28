@@ -268,8 +268,23 @@ export default {
             searchInput.type = 'search';
             searchInput.placeholder = 'Поиск…';
             searchInput.style.cssText = 'width: 210px; min-height: 24px; padding: 2px 8px; font-size: 12.5px; border: 1px solid var(--border-color); border-radius: 3px; background: var(--content-background); color: var(--content-color); outline: none;';
-            searchInput.addEventListener('change', () => this.onSearch(searchInput.value));
-            searchInput.addEventListener('search', () => this.onSearch(searchInput.value));
+            let searchTimer = null;
+            const runNow = () => {
+                if (searchTimer) {
+                    clearTimeout(searchTimer);
+                    searchTimer = null;
+                }
+                const owner = searchInput._ownerView || this;
+                if (String(searchInput.value ?? '').trim() !== String(owner.searchQuery ?? '').trim())
+                    owner.onSearch(searchInput.value);
+            };
+            searchInput.addEventListener('input', () => {
+                if (searchTimer)
+                    clearTimeout(searchTimer);
+                searchTimer = setTimeout(runNow, 180);
+            });
+            searchInput.addEventListener('change', runNow);
+            searchInput.addEventListener('search', runNow);
             container.appendChild(searchInput);
         }
         searchInput._ownerView = this;
@@ -724,7 +739,8 @@ export default {
         this.columns = built.columns;
         this.leaves = Array.isArray(res?.leaves) ? res.leaves : [];
         this.classes = res?.classes && typeof res.classes === 'object' ? res.classes : {};
-        this.packetsDays = Array.isArray(res?.days) ? res.days : [];
+        this._hasServerDays = Array.isArray(res?.days);
+        this.packetsDays = this._hasServerDays ? res.days : [];
         this.schema = {
             cid: built.cid,
             path: built.path,
@@ -789,13 +805,12 @@ export default {
     async attached() {
         this.mountToolbarSlots();
         try {
-            await this.loadSchema();
+            await Promise.all([this.loadSchema(), this.loadScope()]);
         }
         catch (e) {
             this.error = String(e?.message || e);
             return;
         }
-        await this.loadScope();
         // у операций строки грузит пакет (событие выбора периода), справочник — весь список сразу
         if (this.isOperation)
             await this.loadRange();
@@ -843,6 +858,12 @@ export default {
             this.packetsEnd = lastDay;
             return;
         }
+        if (this._hasServerDays) {
+            const today = _today();
+            this.packetsStart = today;
+            this.packetsEnd = today;
+            return;
+        }
         const edge = order => this.$item.fetch('db_query', { order, limit: 1 })
             .then(r => r?.items?.[0]?.time).catch(() => undefined);
         const [first, last] = await Promise.all([edge('time'), edge('-time')]);
@@ -887,7 +908,9 @@ export default {
         }
         return row;
     },
+    _reloadSeq: 0,
     async reload() {
+        const seq = ++this._reloadSeq;
         this.rows = [];
         this.names = {};
         this.error = '';
@@ -917,6 +940,8 @@ export default {
             if (Object.keys(where).length)
                 params.where = JSON.stringify(where);
             const res = await this.$item.fetch('db_query', params);
+            if (seq !== this._reloadSeq)
+                return;
             this.names = res?.names || {};
             this.rows = (Array.isArray(res?.items) ? res.items : []).map(o => this.rowOf(o));
             this.total = Number(res?.total) || this.rows.length;
@@ -928,6 +953,8 @@ export default {
             this._notifyForm();
         }
         catch (e) {
+            if (seq !== this._reloadSeq)
+                return;
             this.error = String(e?.message || e);
             this._notifyForm();
         }

@@ -22,8 +22,8 @@
  */
 import fs from 'node:fs';
 import { DEV_MODE } from '../host/config.js';
-import { dataDb, baseDbFile } from './db.js';
-import { refreshClasses, getClass, descendants, isLeaf, classesOfType, DEFAULT_ROOTS, STRUCTURE_TYPES } from './classes.js';
+import { dataDb, baseDbFile, dataGeneration } from './db.js';
+import { refreshClasses, getClass, descendants, isLeaf, classesOfType, classesGeneration, DEFAULT_ROOTS, STRUCTURE_TYPES } from './classes.js';
 import { classSchema, checkSchema, analyticSlots, FAMILY } from './schema.js';
 import {
     createObject, readObject, objectVersions, updateObject, deleteObject, restoreObject, queryObjects, linkCids,
@@ -106,6 +106,83 @@ export async function classHasObjects(ref) {
 }
 
 const COUNTABLE_DATA_TYPES = new Set(['$catalog', '$virtual', '$operation', '$account', '$register']);
+const dbSummaryCache = new WeakMap();
+const baseDbExistsCache = new Map();
+
+/**
+ * Кэш сводных счётчиков объектов/записей счетов и дат операций по БД.
+ * Автоматически сбрасывается при любом изменении классов (`classesGeneration`) или данных (`dataGeneration`).
+ */
+function getDbSummary(db) {
+    const clsGen = classesGeneration(db);
+    const dataGen = dataGeneration(db);
+    let summary = dbSummaryCache.get(db);
+    if (summary && summary.clsGen === clsGen && summary.dataGen === dataGen)
+        return summary;
+
+    const ownObjCounts = new Map();
+    for (const r of db.prepare("SELECT cid, count(*) n FROM objects WHERE status <> 'deleted' AND ext_of IS NULL GROUP BY cid").all())
+        ownObjCounts.set(r.cid, Number(r.n) || 0);
+
+    const ownAccCounts = new Map();
+    for (const r of db.prepare('SELECT account_cid cid, count(*) n FROM account_entries WHERE NOT storno GROUP BY account_cid').all())
+        ownAccCounts.set(r.cid, Number(r.n) || 0);
+
+    const subtreeCounts = new Map();
+    const opDaysByCid = new Map();
+
+    summary = {
+        clsGen,
+        dataGen,
+        ownObjCounts,
+        ownAccCounts,
+        subtreeCounts,
+        opDaysByCid,
+        countFor(clsPath, clsType = '') {
+            const cls = getClass(db, clsPath);
+            const type = cls?.type || clsType;
+            if (!type || type === '$base' || type === '$structure' || type === '$domain')
+                return 0;
+            const key = `${type}:${cls?.cid || clsPath}`;
+            if (subtreeCounts.has(key))
+                return subtreeCounts.get(key);
+            let total = 0;
+            if (type === '$virtual') {
+                total = virtualMembers(db, { cid: cls?.cid || clsPath }).items.length;
+            }
+            else if (type === '$account' || type === '$register') {
+                const accs = cls ? descendants(db, cls.cid) : [clsPath];
+                for (const cid of accs)
+                    total += ownAccCounts.get(cid) || 0;
+            }
+            else if (type === '$catalog' || type === '$operation') {
+                const cids = cls ? descendants(db, cls.cid) : [clsPath];
+                for (const cid of cids) {
+                    if (getClass(db, cid)?.type !== '$virtual')
+                        total += ownObjCounts.get(cid) || 0;
+                }
+            }
+            subtreeCounts.set(key, total);
+            return total;
+        },
+        opDaysFor(cid, desc) {
+            if (opDaysByCid.has(cid))
+                return opDaysByCid.get(cid);
+            const daySet = new Set();
+            if (desc.length) {
+                for (const r of db.prepare(`SELECT DISTINCT time FROM objects WHERE cid IN (${desc.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL AND time IS NOT NULL ORDER BY time`).all(...desc)) {
+                    if (Number.isFinite(r.time))
+                        daySet.add(localDay(r.time));
+                }
+            }
+            const days = [...daySet].sort();
+            opDaysByCid.set(cid, days);
+            return days;
+        },
+    };
+    dbSummaryCache.set(db, summary);
+    return summary;
+}
 
 /**
  * Количество объектов (или записей счёта/участников виртуального справочника) у класса и его поддерева.
@@ -118,29 +195,18 @@ export async function classObjectCount(clsPath, clsType = '') {
     if (!p || p === '/' || p.startsWith('/MODULES/'))
         return 0;
     const basePath = resolveBasePath(p);
-    if (!fs.existsSync(baseDbFile(process.cwd(), basePath)))
+    const dbFile = baseDbFile(process.cwd(), basePath);
+    const now = Date.now();
+    let entry = baseDbExistsCache.get(dbFile);
+    if (!entry || now - entry.ts > 1000) {
+        entry = { ok: fs.existsSync(dbFile), ts: now };
+        baseDbExistsCache.set(dbFile, entry);
+    }
+    if (!entry.ok)
         return 0;
     try {
         const db = await dataStore(basePath);
-        const cls = getClass(db, p);
-        const type = cls?.type || clsType;
-        if (!type || type === '$base' || type === '$structure' || type === '$domain')
-            return 0;
-        if (type === '$virtual')
-            return virtualMembers(db, { cid: cls?.cid || p }).items.length;
-        if (type === '$account' || type === '$register') {
-            const accs = cls ? descendants(db, cls.cid) : [p];
-            if (!accs.length)
-                return 0;
-            return db.prepare(`SELECT count(*) n FROM account_entries WHERE account_cid IN (${accs.map(() => '?').join(',')}) AND NOT storno`).get(...accs)?.n || 0;
-        }
-        if (type === '$catalog' || type === '$operation') {
-            const cids = (cls ? descendants(db, cls.cid) : [p]).filter(cid => getClass(db, cid)?.type !== '$virtual');
-            if (!cids.length)
-                return 0;
-            return db.prepare(`SELECT count(*) n FROM objects WHERE cid IN (${cids.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL`).get(...cids)?.n || 0;
-        }
-        return 0;
+        return getDbSummary(db).countFor(p, clsType);
     }
     catch {
         return 0;
@@ -418,18 +484,13 @@ function schemaSubtree(db, cls) {
     const seenSlots = new Set();
     const fam = familyOf(cls);
     const desc = descendants(db, cls.cid);
-    const counts = {};
-    if (desc.length && (fam === 'catalog' || fam === 'operation')) {
-        for (const r of db.prepare(`SELECT cid, count(*) n FROM objects WHERE cid IN (${desc.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL GROUP BY cid`).all(...desc)) {
-            counts[r.cid] = Number(r.n) || 0;
-        }
-    }
+    const summary = (desc.length && (fam === 'catalog' || fam === 'operation')) ? getDbSummary(db) : null;
     for (const cid of desc) {
         const c = getClass(db, cid);
         if (!c)
             continue;
         const leaf = isLeaf(db, cid);
-        const count = counts[cid] || 0;
+        const count = summary ? (summary.ownObjCounts.get(cid) || 0) : 0;
         classes[cid] = {
             cid,
             path: c.path,
@@ -472,15 +533,9 @@ function schemaSubtree(db, cls) {
         c.group = parts.join('/');
     }
     leaves.sort((a, b) => a.label.localeCompare(b.label, 'ru'));
-    let opDays = undefined;
-    if (desc.length && fam === 'operation') {
-        const daySet = new Set();
-        for (const r of db.prepare(`SELECT DISTINCT time FROM objects WHERE cid IN (${desc.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL AND time IS NOT NULL ORDER BY time`).all(...desc)) {
-            if (Number.isFinite(r.time))
-                daySet.add(localDay(r.time));
-        }
-        opDays = [...daySet].sort();
-    }
+    const opDays = (desc.length && fam === 'operation' && summary)
+        ? summary.opDaysFor(cls.cid, desc)
+        : undefined;
     return { classes, leaves, ...(fam === 'account' ? { slots } : {}), ...(opDays ? { days: opDays } : {}) };
 }
 
@@ -503,6 +558,17 @@ async function writePlace(db, cls, p, scope) {
 
 /* ---------- методы ---------- */
 
+function buildScopeInfo(db, cls, scope) {
+    return {
+        all: scope.grants === null,
+        units: (visibleUnits(scope.grants) ?? classesOfType(db, STRUCTURE_TYPES).map(c => c.cid)).map(cid => {
+            const c = getClass(db, cid);
+            return { cid, path: c?.path ?? cid, label: c?.label ?? cid };
+        }),
+        contexts: writeContexts(db, cls, scope.links),
+    };
+}
+
 /**
  * Методы ядра: имя → { level — уровень шлюза (access/gateway.js), fn(item, params) }.
  * Устанавливаются в прототип `$class` (sources/server/class.js).
@@ -512,10 +578,11 @@ export const DATA_METHODS = Object.freeze({
      * Схема класса по наследованию и ошибки конфигурации: { schema, errors }.
      * Схема вложена: ответ с `type`/`path` на верхнем уровне клиент (WORK.__bind) превратил бы в элемент дерева.
      */
-    db_schema: { level: 'read', fn: method('read', ({ db, cls }) => ({
+    db_schema: { level: 'read', fn: method('read', ({ db, cls, p, scope }) => ({
         schema: withTargetPaths(db, classSchema(db, cls.cid)),
         errors: checkSchema(db, cls.cid),
         ...schemaSubtree(db, cls),
+        ...(flag(p?.withScope) ? { scope: buildScopeInfo(db, cls, scope) } : {}),
     })) },
 
     /**
@@ -524,14 +591,7 @@ export const DATA_METHODS = Object.freeze({
      * ({ cid, path, label }; при all — все подразделения); contexts — подразделения и места,
      * от которых можно создать объект ({ unit, unit_label, place, place_label, any? }).
      */
-    db_scope: { level: 'read', fn: method('read', ({ db, cls, scope }) => ({
-        all: scope.grants === null,
-        units: (visibleUnits(scope.grants) ?? classesOfType(db, STRUCTURE_TYPES).map(c => c.cid)).map(cid => {
-            const c = getClass(db, cid);
-            return { cid, path: c?.path ?? cid, label: c?.label ?? cid };
-        }),
-        contexts: writeContexts(db, cls, scope.links),
-    })) },
+    db_scope: { level: 'read', fn: method('read', ({ db, cls, scope }) => buildScopeInfo(db, cls, scope)) },
 
     /**
      * Рабочее пространство пользователя в подразделении вызова и вложенных: подразделения и места

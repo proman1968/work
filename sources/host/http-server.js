@@ -70,7 +70,7 @@ async function readBody(request, limit) {
     return Buffer.concat(chunks);
 }
 
-const COMPRESS_MAX = 256 * 1024;
+const COMPRESS_MAX = 8 * 1024 * 1024;
 const STATIC_CACHE = 'must-revalidate, public, max-age=3600';
 /** В dev — всегда ревалидация (304 по ETag дешёв), правки видны сразу. */
 const DEV_CACHE = 'no-cache';

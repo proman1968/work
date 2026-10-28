@@ -606,7 +606,22 @@ ODA({is: 'oda-tree-node',
         const t = trail ? trail + '/' + p.id : p.id;
         const kids = [];
         try {
-            kids.push(...await bindLinkTree(p.tree || [], (path) => WORK.get_item(path)));
+            kids.push(...await bindLinkTree(p.tree || [], (path, node) => {
+                const cached = CORE?.$item?.ITEMS?.[path];
+                if (cached)
+                    return cached;
+                if (node?.type && node?.path && typeof WORK?.__bind === 'function') {
+                    return WORK.__bind({
+                        id: node.path.split('/').pop(),
+                        path: node.path,
+                        label: node.label,
+                        icon: node.icon,
+                        type: node.type,
+                        objectCount: node.objectCount,
+                    }, node.path);
+                }
+                return WORK.get_item(path);
+            }));
         }
         catch { /* без ссылок места */ }
         for (const c of p.roles || [])

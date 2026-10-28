@@ -1248,4 +1248,19 @@ describe('архитектура представлений формы (VIEW п�
             globalThis.WORK = prevWork;
         }
     });
+
+    it('ускорение form/objects: пустой days[] из db_schema не делает 2 лишних db_query в loadRange, а _reloadSeq отсекает устаревший ответ', async () => {
+        const calls = [];
+        const h = host(objects, calls, {
+            fetch: (m) => {
+                if (m === 'db_schema')
+                    return { ...SCHEMA('operation'), days: [] };
+                return null;
+            },
+        });
+        await h.attached();
+        assert.equal(calls.filter(c => c.method === 'db_query').length, 0, 'при пришедшем days:[] в db_schema лишние запросы границ не шлются');
+        assert.match(h.packetsStart, /^\d{4}-\d{2}-\d{2}$/);
+        assert.equal(h.packetsStart, h.packetsEnd);
+    });
 });

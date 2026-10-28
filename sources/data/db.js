@@ -181,7 +181,7 @@ export async function openDataDb(file = path.resolve(DATA_DIR, DATA_FILE)) {
     if (file !== ':memory:')
         fs.mkdirSync(path.dirname(file), { recursive: true });
     const db = new DatabaseSync(file);
-    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA busy_timeout = 5000;');
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000; PRAGMA temp_store = MEMORY; PRAGMA cache_size = -32000; PRAGMA mmap_size = 268435456;');
     migrate(db);
     return db;
 }
@@ -289,6 +289,19 @@ export function setSetting(db, key, value) {
 }
 
 const depth = new WeakMap();
+const dataGenerations = new WeakMap();
+
+/** Поколение прикладных данных БД: растёт при каждом успешном COMMIT транзакции. */
+export function dataGeneration(db) {
+    return dataGenerations.get(db) || 0;
+}
+
+/** Принудительно увеличить поколение прикладных данных БД. */
+export function bumpDataGeneration(db) {
+    const next = (dataGenerations.get(db) || 0) + 1;
+    dataGenerations.set(db, next);
+    return next;
+}
 
 /**
  * Выполнить fn в транзакции. Вложенный вызов — точка сохранения (SAVEPOINT),
@@ -308,6 +321,8 @@ export function tx(db, fn) {
         if (typeof res?.then === 'function')
             throw new Error('tx: функция транзакции должна быть синхронной');
         db.exec(level ? `RELEASE ${sp}` : 'COMMIT');
+        if (!level)
+            bumpDataGeneration(db);
         return res;
     }
     catch (e) {

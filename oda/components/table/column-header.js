@@ -207,11 +207,24 @@ ODA({
         const startW = Math.round(hcell?.getBoundingClientRect()?.width || node.width || 120);
         const startX = e.clientX;
         resizer?.classList?.add('active');
+        let rafId = 0;
+        let pendingW = startW;
+        const applyWidth = () => {
+            rafId = 0;
+            this.host?.setColumnState?.(node.key, { width: pendingW }, { skipPersist: true });
+        };
         const onMove = (ev) => {
-            const nextW = Math.max(52, Math.round(startW + (ev.clientX - startX)));
-            this.host?.setColumnState?.(node.key, { width: nextW });
+            pendingW = Math.max(52, Math.round(startW + (ev.clientX - startX)));
+            if (!rafId)
+                rafId = requestAnimationFrame(applyWidth);
         };
         const onUp = () => {
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+                rafId = 0;
+                this.host?.setColumnState?.(node.key, { width: pendingW }, { skipPersist: true });
+            }
+            this.host?._savePersistedColumnState?.();
             resizer?.classList?.remove('active');
             window.removeEventListener('pointermove', onMove);
             window.removeEventListener('pointerup', onUp);

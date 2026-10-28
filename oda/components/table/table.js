@@ -83,12 +83,19 @@ ODA({
                 background-color: var(--content-background);
                 color: var(--content-color);
             }
+            .v-spacer {
+                flex-shrink: 0;
+                width: 1px;
+                pointer-events: none;
+            }
         </style>
         <!-- Сетка колонок — CSS-переменные на элементе шаблона (на кастомный хост ~style не ставится, §31);
              шапка и строки читают их статическим CSS -->
-        <div class="scroller" vertical flex ~style="gridVars">
+        <div class="scroller" vertical flex ~style="gridVars" @scroll="onScroll($event)">
             <oda-table-header :layout="layout" :col-lines :row-lines></oda-table-header>
+            <div class="v-spacer" ~if="topSpacerHeight" ~style="{height: topSpacerHeight + 'px'}"></div>
             <oda-table-row ~for="rows" :row="$for.item" :index="$for.index"></oda-table-row>
+            <div class="v-spacer" ~if="bottomSpacerHeight" ~style="{height: bottomSpacerHeight + 'px'}"></div>
         </div>
     `,
     $public: {
@@ -342,7 +349,7 @@ ODA({
      * @param {string} key — ключ-путь колонки (`wrapper.key`)
      * @param {object} patch
      */
-    setColumnState(key, patch) {
+    setColumnState(key, patch, options) {
         if (!key || !patch || typeof patch !== 'object')
             return;
         const sizing = patchPart(patch, SIZING_FIELDS, this.columnSizing?.[key]);
@@ -351,7 +358,7 @@ ODA({
         const view = patchPart(patch, VIEW_FIELDS, this.columnView?.[key]);
         if (view)
             this.columnView = nextColumnState(this.columnView, key, view);
-        if (sizing || view)
+        if ((sizing || view) && !options?.skipPersist)
             this._savePersistedColumnState();
         if ('filter' in patch) {
             // та же ссылка — изменений нет: свойство не заменяем (ни пересчёта строк, ни записи)
@@ -543,8 +550,53 @@ ODA({
     get rowCount() {
         return this.sortedItems.length;
     },
-    /** окно отрисовки: пока без скролла — весь список (этап 14 добавит count и запас) */
+    _virtualRowHeight: 25,
+    _virtualThreshold: 70,
+    _virtualWindowCount: 45,
+    _virtualOverscan: 15,
+    _scrollRaf: 0,
+    onScroll(e) {
+        if (this.rowCount <= this._virtualThreshold)
+            return;
+        const scroller = e?.currentTarget;
+        if (!scroller)
+            return;
+        const scrollTop = scroller.scrollTop || 0;
+        if (this._scrollRaf)
+            return;
+        this._scrollRaf = requestAnimationFrame(() => {
+            this._scrollRaf = 0;
+            const rawIdx = Math.max(0, Math.floor(scrollTop / this._virtualRowHeight) - 10);
+            const maxTop = Math.max(0, this.rowCount - (this._virtualWindowCount + this._virtualOverscan));
+            const nextTop = Math.min(rawIdx, maxTop);
+            if (Math.abs(nextTop - (this.screenTopRowIndex || 0)) >= 4 || nextTop === 0 || nextTop === maxTop)
+                this.screenTopRowIndex = nextTop;
+        });
+    },
+    /** окно отрисовки: для списков > 70 строк работает оконная виртуализация */
     get rows() {
-        return sliceWindow(this.sortedItems, { top: this.screenTopRowIndex });
+        const list = this.sortedItems;
+        if (list.length <= this._virtualThreshold)
+            return sliceWindow(list, { top: 0 });
+        const maxTop = Math.max(0, list.length - (this._virtualWindowCount + this._virtualOverscan));
+        const top = Math.min(Math.max(Math.trunc(this.screenTopRowIndex) || 0, 0), maxTop);
+        return sliceWindow(list, { top, count: this._virtualWindowCount, overscan: this._virtualOverscan });
+    },
+    get topSpacerHeight() {
+        const total = this.rowCount;
+        if (total <= this._virtualThreshold)
+            return 0;
+        const maxTop = Math.max(0, total - (this._virtualWindowCount + this._virtualOverscan));
+        const top = Math.min(Math.max(Math.trunc(this.screenTopRowIndex) || 0, 0), maxTop);
+        return top * this._virtualRowHeight;
+    },
+    get bottomSpacerHeight() {
+        const total = this.rowCount;
+        if (total <= this._virtualThreshold)
+            return 0;
+        const maxTop = Math.max(0, total - (this._virtualWindowCount + this._virtualOverscan));
+        const top = Math.min(Math.max(Math.trunc(this.screenTopRowIndex) || 0, 0), maxTop);
+        const rendered = this.rows.length;
+        return Math.max(0, total - top - rendered) * this._virtualRowHeight;
     }
 });

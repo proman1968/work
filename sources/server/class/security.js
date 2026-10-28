@@ -183,11 +183,13 @@ export const classSecurityMethods = {
         return this._linkTrie(eff);
     },
 
-    /** Собрать цепочки ссылок от корней типов. */
+    /** Собрать цепочки ссылок от корней типов (включая всё дочернее поддерево прилинкованного класса). */
     async _linkTrie(eff) {
         const rank = { read: 1, write: 2, admin: 3 };
         const byPath = new Map();
+        const resolvedItems = new Map();
         const roots = [];
+        const targetPaths = [];
         for (const [id, e] of eff) {
             const modMatch = /^(\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+|\/MODULES\/[^/]+)\/(.+)$/.exec(id);
             if (modMatch) {
@@ -213,16 +215,73 @@ export const classSecurityMethods = {
                     else
                         roots.push(n);
                 }
-                if (i === segs.length - 1 && (rank[e.access] || 0) > (rank[n.access] || 0)) {
+                if (i === segs.length - 1 && (rank[e.access] || 0) >= (rank[n.access] || 0)) {
                     n.access = e.access;
-                    n.via = e.via;
+                    n.via = [...new Set([...(n.via || []), ...(e.via || [])])];
                 }
                 parent = n;
             });
+            targetPaths.push([id, e]);
         }
+
+        const expandSubtree = async (parentNode, parentItem, inherited) => {
+            if (!parentNode || !parentItem)
+                return;
+            let kids = [];
+            try {
+                kids = ((await parentItem.items) || []).filter(c => c instanceof FS.$class && !LINKS.NO_LINK_TYPES.has(c.type));
+            }
+            catch { kids = []; }
+            for (const child of kids) {
+                const childPath = child.path;
+                if (!childPath)
+                    continue;
+                resolvedItems.set(childPath, child);
+                let cn = byPath.get(childPath);
+                if (!cn) {
+                    cn = {
+                        path: childPath,
+                        label: child.id,
+                        icon: '',
+                        type: '',
+                        access: inherited.access,
+                        via: [...(inherited.via || [])],
+                        objectCount: 0,
+                        children: [],
+                    };
+                    byPath.set(childPath, cn);
+                    parentNode.children.push(cn);
+                }
+                else {
+                    if ((rank[inherited.access] || 0) > (rank[cn.access] || 0))
+                        cn.access = inherited.access;
+                    cn.via = [...new Set([...(cn.via || []), ...(inherited.via || [])])];
+                    if (!parentNode.children.includes(cn))
+                        parentNode.children.push(cn);
+                }
+                await expandSubtree(cn, child, { access: cn.access, via: cn.via });
+            }
+        };
+
+        for (const [id, e] of targetPaths) {
+            const targetNode = byPath.get(id);
+            if (!targetNode)
+                continue;
+            try {
+                let targetItem = resolvedItems.get(id) || await globalThis.WORK.get_item(id);
+                if (Array.isArray(targetItem))
+                    targetItem = targetItem.at(-1);
+                if (targetItem) {
+                    resolvedItems.set(id, targetItem);
+                    await expandSubtree(targetNode, targetItem, { access: targetNode.access || e.access, via: targetNode.via?.length ? targetNode.via : e.via });
+                }
+            }
+            catch { /* ignore */ }
+        }
+
         for (const n of byPath.values()) {
             try {
-                let t = await globalThis.WORK.get_item(n.path);
+                let t = resolvedItems.get(n.path) || await globalThis.WORK.get_item(n.path);
                 if (Array.isArray(t))
                     t = t.at(-1);
                 if (!t)

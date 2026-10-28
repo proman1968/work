@@ -46,7 +46,7 @@ async function bindLinkNode(n, getItem) {
         kids.push(await bindLinkNode(c, getItem));
     let real = null;
     try {
-        real = await getItem(n.path);
+        real = await getItem(n.path, n);
     }
     catch { real = null; }
     if (Array.isArray(real))
