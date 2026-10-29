@@ -55,3 +55,4 @@ docs/
 Thumbs.db
 *.log
 *.tgz
+current_session.json
