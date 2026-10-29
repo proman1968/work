@@ -100,6 +100,7 @@ ODA({is: 'chat-item',
                 <oda-button ~if="!compact" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
             <div class="preview" ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
+            <div class="preview" ~if="!expanded && !$file && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
             <div header ~if="!expanded && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
@@ -455,6 +456,17 @@ ODA({is: 'chat-item',
             this.log = null;
             this._unwatchLog();
             this._applySenderFromRef(n);
+            if (n?.logRow && typeof n.logRow === 'object') {
+                const data = { ...n.logRow };
+                this.log = data;
+                if (data.sender && !this.senderIsReady)
+                    this.senderId = data.sender;
+                else if (!this.senderIsReady)
+                    this._markSenderReady();
+                this.previewIsReady = true;
+                this.render();
+                return;
+            }
             if (n?.listen && n?.id?.endsWith?.('.logs')) {
                 const applyLog = raw => {
                     const data = typeof raw === 'string' ? JSON.parse(raw) : raw;

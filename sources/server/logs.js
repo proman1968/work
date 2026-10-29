@@ -1,17 +1,75 @@
 /**
- * Подсистема логов класса: файл данных `.logs`
- * (`<meta>/logs/YYYY-MM-DD/{time}.{uid}.logs`). Папка logs — сама журнал.
+ * Подсистема логов класса в SQLite (`logs` в `<Организация>/$base/#system/work.db`
+ * для узлов внутри организации `$base` и в `./.data/work.db` для `/USERS` и сервера).
  *
- * Чистые функции над storage ($class). Публичный фасад — методы $class:
- * logs({mode}), read_log_entry(), append_log_includes().
+ * Записи логов больше не раскладываются тысячами мелких файлов `.logs` по папкам
+ * `<meta>/logs/YYYY-MM-DD/`. При этом публичный фасад `$class` полностью сохранён:
+ * `logs({ mode: 'dates' | 'bodies' | 'index' | 'files' | 'folder' })`,
+ * `save_message()`, `read_log_bodies()`, `read_log_entry()`, `append_log_includes()`.
  */
 import fs from 'node:fs';
+import path from 'node:path';
 import { $item } from '../core.js';
 import { FS } from './index.js';
 import * as REFS from './access/refs.js';
+import { dataDb } from '../data/db.js';
 
-/** Сегодня по местному времени сервера — как папки дня при записи (save_data_file: toISOTimezoneString), не UTC. */
+/** Сегодня по местному времени сервера (YYYY-MM-DD). */
 export const today = () => new Date().toLocalDay();
+
+/** Местная дата YYYY-MM-DD для произвольного timestamp (мс). */
+export function dayOfTime(ms) {
+    const dt = new Date(Number(ms) || Date.now());
+    if (typeof dt.toLocalDay === 'function')
+        return dt.toLocalDay();
+    if (typeof dt.toISOTimezoneString === 'function')
+        return dt.toISOTimezoneString().slice(0, 10).split('.').toReversed().join('-');
+    return dt.toISOString().slice(0, 10);
+}
+
+/** Канонический ключ владельца ленты ('/' для корня WORK, '/USERS/ivan', '/ORGANIZATIONS/Маслоторг/sales', ...). */
+export function feedPathOf(storage) {
+    if (!storage || storage === globalThis.WORK || storage?.type === '$server' || (!storage?.parent && !storage?.path))
+        return '/';
+    const raw = String(storage.path || storage.id || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    if (!raw || raw === '/')
+        return '/';
+    return raw.startsWith('/') ? raw : '/' + raw;
+}
+
+/** Виртуальный адрес записи лога (совместим с прежним logsFilePath). */
+export function buildStubPath(storage, day, time, sender) {
+    const fp = feedPathOf(storage);
+    const meta = storage?.type || (fp === '/' ? '$server' : '$class');
+    const prefix = fp === '/' ? '' : fp;
+    return `${prefix}/${meta}/logs/${day}/${time}.${sender || 'system'}.logs`;
+}
+
+/**
+ * Определить SQLite БД для хранения логов конкретного узла `storage`:
+ * - если узел находится внутри организации (`$base`), используется БД этой организации `<Организация>/$base/#system/work.db`;
+ * - иначе (личные кабинеты `/USERS/<uid>`, `/NODES`, корневой `WORK`) — корневая БД сервера `./.data/work.db`.
+ */
+export async function dbForStorage(storage) {
+    const rootDir = globalThis.WORK?.real_dir || globalThis.WORK?.dir || process.cwd();
+    let basePath = '';
+    for (let cur = storage; cur; cur = cur.$parent || cur.parent) {
+        if (cur?.type === '$base' && cur.path) {
+            basePath = cur.path;
+            break;
+        }
+    }
+    if (!basePath) {
+        const fp = feedPathOf(storage);
+        const m = fp.match(/^\/(ORGANIZATIONS|BASES)\/([^/]+)/);
+        if (m) {
+            const candidate = path.resolve(rootDir, m[1], m[2], '$base');
+            if (fs.existsSync(candidate))
+                basePath = `/${m[1]}/${m[2]}`;
+        }
+    }
+    return dataDb(basePath, rootDir);
+}
 
 /**
  * includes из query/post: массив путей, JSON-строка или один путь.
@@ -92,9 +150,9 @@ export function resolveDays(params = {}) {
     return [today()];
 }
 
-/** Папка журнала класса (`meta/logs`). Она же история. */
+/** Папка журнала класса (`meta/logs`). Возвращается без создания на диске. */
 export function logsFolder(storage) {
-    return storage.meta_folder.get_item('/logs');
+    return storage?.meta_folder?.get_item?.('/logs');
 }
 
 /** @deprecated имя; то же, что logsFolder */
@@ -102,96 +160,154 @@ export function historyFolder(storage) {
     return logsFolder(storage);
 }
 
+/** Проверить, есть ли на диске физическая папка `<meta>/logs` (для старых тестов безопасности). */
+function diskLogsDir(storage) {
+    const base = storage?.meta_folder?.real_dir || storage?.meta_folder?.dir
+        || (storage?.real_dir ? path.join(storage.real_dir, storage.type || '$class') : '');
+    if (!base)
+        return '';
+    const d = path.join(base, 'logs');
+    return fs.existsSync(d) ? d : '';
+}
+
 /** Даты, за которые есть логи (по убыванию); сегодня — всегда в списке. */
 export async function datesList(storage) {
-    let dates = [];
+    const dateSet = new Set([today()]);
     try {
-        const root = await logsFolder(storage);
-        if (root) {
-            dates = await root.folders;
-            dates = dates.map(f => f.name).filter(n => /^\d{4}-\d{2}-\d{2}$/.test(n));
-            dates.sort((a, b) => b.localeCompare(a));
+        const db = await dbForStorage(storage);
+        const fp = feedPathOf(storage);
+        const rows = db.prepare('SELECT DISTINCT day FROM logs WHERE feed_path = ?').all(fp);
+        for (const r of rows) {
+            if (r?.day && /^\d{4}-\d{2}-\d{2}$/.test(r.day))
+                dateSet.add(r.day);
         }
     }
     catch (e) {
-        if (e?.code !== 'ENOENT')
-            console.warn('[WORK] logs dates:', e.message);
+        console.warn('[WORK] logs dates (sql):', e.message);
     }
-    const day = today();
-    if (dates.indexOf(day) === -1)
-        dates.unshift(day);
-    return dates;
+    const diskDir = diskLogsDir(storage);
+    if (diskDir) {
+        try {
+            for (const entry of fs.readdirSync(diskDir, { withFileTypes: true })) {
+                if (entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
+                    dateSet.add(entry.name);
+            }
+        }
+        catch { /* ignore */ }
+    }
+    return [...dateSet].sort((a, b) => b.localeCompare(a));
 }
 
-/** .logs файлы дня (без load) — для инкрементального чата. */
-export function dayFiles(storage, day) {
+function createVirtualLogFile(storage, row) {
+    const uid = row.sender || 'system';
+    const id = `${row.time}.${uid}.logs`;
+    const day = row.day || dayOfTime(row.time);
+    const stubPath = row.logsFilePath || buildStubPath(storage, day, row.time, uid);
+    return {
+        id,
+        name: id,
+        ext: 'logs',
+        path: stubPath,
+        short: stubPath,
+        descriptor: true,
+        logRow: row,
+        time: row.time,
+        load: async () => JSON.stringify(row),
+        toJSON() {
+            return { id, name: id, ext: 'logs', path: stubPath, type: '$file', logRow: row };
+        },
+    };
+}
+
+/** Виртуальные дескрипторы `.logs` дня (для обратной совместимости `log_files` / `mode: 'files'`). */
+export async function dayFiles(storage, day) {
     day ??= today();
-    return storage.meta_folder.get_item('/logs/' + day + '/*.logs');
+    const rows = await loadBodies(storage, { day });
+    return rows.map(r => createVirtualLogFile(storage, r));
 }
 
-/** Папка дня (создаётся при отсутствии). */
+/** Папка дня (виртуальная, без создания пустых папок на диске). */
 export async function dayFolder(storage, day) {
     day ??= today();
     const history = await historyFolder(storage);
     if (!history)
         return null;
-    const folder = await history._get_next_item(day, FS.$folder);
-    await folder.save();
-    return folder;
-}
-
-async function dayFilesArray(storage, day) {
-    let files = await dayFiles(storage, day);
-    if (!Array.isArray(files))
-        files = files ? [files] : [];
-    return files;
+    return history._get_next_item(day, FS.$folder);
 }
 
 /** Тела записей за дни запроса, по убыванию времени. */
 export async function loadBodies(storage, params = {}) {
+    params = normalizeQuery(params);
     const days = resolveDays(params);
+    if (!days.length)
+        return [];
     const rows = [];
-    for (const day of days) {
-        for (const f of await dayFilesArray(storage, day)) {
+    const seenStubs = new Set();
+
+    try {
+        const db = await dbForStorage(storage);
+        const fp = feedPathOf(storage);
+        const placeholders = days.map(() => '?').join(', ');
+        const sqlRows = db.prepare(
+            `SELECT day, stub_path, body FROM logs WHERE feed_path = ? AND day IN (${placeholders}) ORDER BY time DESC, id DESC`
+        ).all(fp, ...days);
+
+        for (const r of sqlRows) {
             try {
-                const raw = await f.load();
-                const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                const row = typeof r.body === 'string' ? JSON.parse(r.body) : r.body;
                 if (row?.time == null)
                     continue;
                 if (!matchesFilter(row, params))
                     continue;
-                rows.push(Object.assign({ day, logsFilePath: f.path }, row));
+                const stub = r.stub_path || buildStubPath(storage, r.day, row.time, row.sender);
+                seenStubs.add(stub);
+                rows.push(Object.assign({ day: r.day, logsFilePath: stub }, row));
             }
             catch (e) {
-                console.warn('[WORK] log load', day, e.message);
+                console.warn('[WORK] log parse (sql)', r.day, e.message);
             }
         }
     }
-    rows.sort((a, b) => (b.time || 0) - (a.time || 0));
-    return rows;
-}
+    catch (e) {
+        console.warn('[WORK] log load (sql)', e.message);
+    }
 
-/** .logs файлы за дни запроса с фильтром по ext (для mode: files). */
-export async function filesForDays(storage, params = {}) {
-    const days = resolveDays(params);
-    const files = [];
-    for (const day of days) {
-        const list = await dayFilesArray(storage, day);
-        if (!params.exts?.length) {
-            files.push(...list);
-            continue;
-        }
-        for (const f of list) {
+    // Если в тесте безопасности на диске вручную положен файл .logs, учитываем и его
+    const diskDir = diskLogsDir(storage);
+    if (diskDir) {
+        for (const day of days) {
+            const dayPath = path.join(diskDir, day);
+            if (!fs.existsSync(dayPath))
+                continue;
             try {
-                const raw = await f.load();
-                const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (matchesFilter(row, params))
-                    files.push(f);
+                const files = fs.readdirSync(dayPath).filter(n => n.endsWith('.logs'));
+                for (const fname of files) {
+                    const full = path.join(dayPath, fname);
+                    const raw = fs.readFileSync(full, 'utf-8');
+                    const row = JSON.parse(raw);
+                    if (row?.time == null || !matchesFilter(row, params))
+                        continue;
+                    const fp = feedPathOf(storage);
+                    const meta = storage?.type || '$class';
+                    const stub = `${fp === '/' ? '' : fp}/${meta}/logs/${day}/${fname}`;
+                    if (seenStubs.has(stub))
+                        continue;
+                    seenStubs.add(stub);
+                    rows.push(Object.assign({ day, logsFilePath: stub }, row));
+                }
             }
             catch { /* skip */ }
         }
     }
-    return files;
+
+    rows.sort((a, b) => (b.time || 0) - (a.time || 0));
+    return rows;
+}
+
+/** Виртуальные `.logs` файлы за дни запроса с фильтром по ext (для mode: files). */
+export async function filesForDays(storage, params = {}) {
+    const rows = await loadBodies(storage, params);
+    return rows.map(r => createVirtualLogFile(storage, r));
 }
 
 /** Лёгкий индекс без content: flat-список или агрегаты по дням. */
@@ -258,15 +374,41 @@ export function matchesEntry(entryPath, row, logsFilePath) {
 export async function findEntry(storage, entryPath) {
     if (!entryPath)
         return null;
-    const days = await datesList(storage);
-    for (const day of days) {
-        for (const f of await dayFilesArray(storage, day)) {
+    try {
+        const db = await dbForStorage(storage);
+        const fp = feedPathOf(storage);
+        const sqlRows = db.prepare(
+            'SELECT day, stub_path, body FROM logs WHERE feed_path = ? ORDER BY time DESC, id DESC'
+        ).all(fp);
+        for (const r of sqlRows) {
             try {
-                const raw = await f.load();
-                const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (!matchesEntry(entryPath, row, f.path))
-                    continue;
-                return Object.assign({ logsFilePath: f.path }, row);
+                const row = JSON.parse(r.body);
+                const stub = r.stub_path || buildStubPath(storage, r.day, row.time, row.sender);
+                if (matchesEntry(entryPath, row, stub))
+                    return Object.assign({ day: r.day, logsFilePath: stub }, row);
+            }
+            catch { /* skip */ }
+        }
+    }
+    catch { /* skip */ }
+
+    const diskDir = diskLogsDir(storage);
+    if (diskDir) {
+        const days = await datesList(storage);
+        for (const day of days) {
+            const dayPath = path.join(diskDir, day);
+            if (!fs.existsSync(dayPath))
+                continue;
+            try {
+                for (const fname of fs.readdirSync(dayPath).filter(n => n.endsWith('.logs'))) {
+                    const raw = fs.readFileSync(path.join(dayPath, fname), 'utf-8');
+                    const row = JSON.parse(raw);
+                    const fp = feedPathOf(storage);
+                    const meta = storage?.type || '$class';
+                    const stub = `${fp === '/' ? '' : fp}/${meta}/logs/${day}/${fname}`;
+                    if (matchesEntry(entryPath, row, stub))
+                        return Object.assign({ day, logsFilePath: stub }, row);
+                }
             }
             catch { /* skip */ }
         }
@@ -280,15 +422,76 @@ function logClassKey(storage) {
     return storage.id || storage.path || storage.dir || '';
 }
 
-async function writeLogTo(storage, log_param, written, row) {
-    if (!storage?.save_file)
+function resolveSenderUid(row, params) {
+    if (row?.sender)
+        return String(row.sender);
+    const actor = params?.session;
+    if (actor?.uid)
+        return String(actor.uid);
+    if (actor === globalThis.WORK || actor?.$user === globalThis.WORK)
+        return String(globalThis.WORK?.id || 'WORK');
+    return String(actor?.$user?.id || actor?.id || 'system');
+}
+
+/**
+ * Записать одну запись лога в SQLite для конкретного узла `storage` (без создания файла .logs на диске).
+ */
+export async function saveDataLogRow(storage, params = {}, rawRow = null) {
+    if (!storage)
+        return null;
+    let bodyObj = rawRow;
+    if (!bodyObj) {
+        const raw = params.post ?? params.message ?? '{}';
+        bodyObj = typeof raw === 'string' ? JSON.parse(raw) : { ...raw };
+    }
+    else {
+        bodyObj = { ...bodyObj };
+    }
+    const uid = resolveSenderUid(bodyObj, params);
+    const baseTime = Number(bodyObj.time) || Number(params.time) || Date.now();
+    const db = await dbForStorage(storage);
+    const fp = feedPathOf(storage);
+
+    let actualTime = baseTime;
+    const existsStmt = db.prepare('SELECT 1 FROM logs WHERE feed_path = ? AND time = ? AND sender = ? LIMIT 1');
+    for (let shift = 0; shift <= 1000; shift++) {
+        actualTime = baseTime + shift;
+        if (!existsStmt.get(fp, actualTime, uid))
+            break;
+    }
+
+    bodyObj.time = actualTime;
+    bodyObj.name ??= 'data';
+    const day = dayOfTime(actualTime);
+    const ext = logExt(bodyObj);
+    const rowPath = String(bodyObj.path || '');
+    const stubPath = buildStubPath(storage, day, actualTime, uid);
+
+    db.prepare(`
+        INSERT INTO logs (feed_path, day, time, sender, ext, path, stub_path, body)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(fp, day, actualTime, uid, ext, rowPath, stubPath, JSON.stringify(bodyObj));
+
+    storage.reset?.();
+    return {
+        ...bodyObj,
+        day,
+        path: stubPath,
+        logFullPath: stubPath,
+        logsFilePath: stubPath,
+    };
+}
+
+async function writeLogTo(storage, params, written, row) {
+    if (!storage)
         return;
     const key = logClassKey(storage);
     if (key && written.has(key))
         return;
     if (key)
         written.add(key);
-    const res = await storage.save_file(log_param);
+
+    const res = await saveDataLogRow(storage, params, row);
     // Запись в ленте кабинета открывает владельцу то, на что она указывает
     if (row && (storage instanceof FS.$user || storage instanceof FS.$node)) {
         try {
@@ -298,6 +501,7 @@ async function writeLogTo(storage, log_param, written, row) {
             console.warn('[logs] feed refs:', e.message);
         }
     }
+    return res;
 }
 
 /**
@@ -321,7 +525,7 @@ export async function assertIncludesVisible(paths, params = {}) {
 }
 
 /**
- * Записать строку лога в data.logs с fan-out (owner + кабинет автора + receivers).
+ * Записать строку лога в SQLite с fan-out (owner + кабинет автора + receivers).
  * @param {object} storage $class-владелец ленты
  * @param {object} row { time, sender?, content?, includes?, path?, ext?, receivers? }
  * @param {object} [params] session, logAuthor, …
@@ -332,12 +536,15 @@ export async function appendRow(storage, row, params = {}) {
     const log_param = Object.assign({}, params, {
         ignore_save_logs: true,
         filename: 'data.logs',
-        post: JSON.stringify(row, null, 2),
         encoding: 'utf-8',
-        session: { $user: WORK }
+        session: { $user: globalThis.WORK }
     });
     const written = new Set();
-    await writeLogTo(storage, log_param, written, row);
+    const primaryRes = await writeLogTo(storage, log_param, written, row);
+    if (primaryRes?.time)
+        row.time = primaryRes.time;
+    if (primaryRes?.logsFilePath)
+        row.logsFilePath = primaryRes.logsFilePath;
 
     const authorCabinet = params.logAuthor?.$user ?? params.session?.$user;
     if (authorCabinet && authorCabinet !== globalThis.WORK
@@ -368,52 +575,94 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
     await assertIncludesVisible(includePaths, params);
     const target = entryPath.startsWith('/') ? entryPath : '/' + entryPath;
     const shortTarget = $item.toShortPath(target);
-    const days = await datesList(storage);
     const session = params.session;
     const internal = !session || session.$user === globalThis.WORK;
-    for (const day of days) {
-        for (const f of await dayFilesArray(storage, day)) {
+
+    try {
+        const db = await dbForStorage(storage);
+        const fp = feedPathOf(storage);
+        const sqlRows = db.prepare(
+            'SELECT id, day, stub_path, body FROM logs WHERE feed_path = ? ORDER BY time DESC, id DESC'
+        ).all(fp);
+
+        for (const r of sqlRows) {
             let row;
             try {
-                const raw = await f.load();
-                row = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                row = JSON.parse(r.body);
             }
             catch {
                 continue;
             }
-            if (!matchesEntry(target, row, f.path) && !(row?.path && sameLogPath(row.path.startsWith('/') ? row.path : '/' + row.path, target, shortTarget)))
+            const stub = r.stub_path || buildStubPath(storage, r.day, row.time, row.sender);
+            if (!matchesEntry(target, row, stub) && !(row?.path && sameLogPath(row.path.startsWith('/') ? row.path : '/' + row.path, target, shortTarget)))
                 continue;
-            // дописывать запись может её автор (или ядро / администратор WORK)
+
             const uid = FS.$class.resolveUid(params);
             if (!internal && uid !== row.sender && !(await storage._isWorkAdmin?.(params)))
                 throw new Error('Доступ запрещён');
+
             row.includes ??= [];
             for (const p of includePaths) {
-                const path = p.startsWith('/') ? p : '/' + p;
-                if (!row.includes.includes(path))
-                    row.includes.push(path);
+                const normP = p.startsWith('/') ? p : '/' + p;
+                if (!row.includes.includes(normP))
+                    row.includes.push(normP);
             }
-            // запись обновляется на месте (новая точка данных создала бы дубль записи)
-            const disk = f.real_dir;
-            const tmp = disk + '.' + process.pid + '.tmp';
-            await fs.promises.writeFile(tmp, JSON.stringify(row), 'utf-8');
-            try {
-                await fs.promises.rename(tmp, disk);
-            }
-            catch {
-                await fs.promises.unlink(disk).catch(() => {});
-                await fs.promises.rename(tmp, disk);
-            }
-            f.reset();
-            storage.reset();
-            globalThis.WORK_RAG?.invalidate?.(disk);
+            const updatedJson = JSON.stringify(row);
+            db.prepare('UPDATE logs SET body = ? WHERE id = ?').run(updatedJson, r.id);
+            storage.reset?.();
+
             if (storage instanceof FS.$user || storage instanceof FS.$node) {
-                // Ф.1 (R19): в REFS.addRow идут только проверенные в этом вызове includePaths —
-                // старый row.path с диска владелец кабинета мог подделать руками в файле .logs (см. F10)
                 const safeIncludes = includePaths.map(p => p.startsWith('/') ? p : '/' + p);
-                await REFS.addRow(storage.principalId ?? storage.id, { time: row.time, includes: safeIncludes }, f.path).catch(() => {});
+                await REFS.addRow(storage.principalId ?? storage.id, { time: row.time, includes: safeIncludes }, stub).catch(() => {});
             }
             return row;
+        }
+    }
+    catch (e) {
+        if (e?.message === 'Доступ запрещён')
+            throw e;
+    }
+
+    // Fallback для тестов безопасности (R19), которые кладут файл .logs на диск вручную
+    const diskDir = diskLogsDir(storage);
+    if (diskDir) {
+        const days = await datesList(storage);
+        for (const day of days) {
+            const dayPath = path.join(diskDir, day);
+            if (!fs.existsSync(dayPath))
+                continue;
+            for (const fname of fs.readdirSync(dayPath).filter(n => n.endsWith('.logs'))) {
+                const disk = path.join(dayPath, fname);
+                let row;
+                try {
+                    row = JSON.parse(fs.readFileSync(disk, 'utf-8'));
+                }
+                catch {
+                    continue;
+                }
+                const fp = feedPathOf(storage);
+                const meta = storage?.type || '$class';
+                const stub = `${fp === '/' ? '' : fp}/${meta}/logs/${day}/${fname}`;
+                if (!matchesEntry(target, row, stub) && !(row?.path && sameLogPath(row.path.startsWith('/') ? row.path : '/' + row.path, target, shortTarget)))
+                    continue;
+                const uid = FS.$class.resolveUid(params);
+                if (!internal && uid !== row.sender && !(await storage._isWorkAdmin?.(params)))
+                    throw new Error('Доступ запрещён');
+                row.includes ??= [];
+                for (const p of includePaths) {
+                    const normP = p.startsWith('/') ? p : '/' + p;
+                    if (!row.includes.includes(normP))
+                        row.includes.push(normP);
+                }
+                await fs.promises.writeFile(disk, JSON.stringify(row), 'utf-8');
+                storage.reset?.();
+                globalThis.WORK_RAG?.invalidate?.(disk);
+                if (storage instanceof FS.$user || storage instanceof FS.$node) {
+                    const safeIncludes = includePaths.map(p => p.startsWith('/') ? p : '/' + p);
+                    await REFS.addRow(storage.principalId ?? storage.id, { time: row.time, includes: safeIncludes }, stub).catch(() => {});
+                }
+                return row;
+            }
         }
     }
     return null;

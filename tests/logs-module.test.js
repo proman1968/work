@@ -61,4 +61,65 @@ describe('logs.js: чистые функции', () => {
         assert.equal(LOGS.matchesEntry('/other.logs', row, stub), false);
         assert.equal(LOGS.matchesEntry('', row, stub), false);
     });
+
+    it('SQL-хранение логов: логи организации живут в её $base/#system/work.db, логи кабинетов — в .data/work.db, файлы .logs на диске не создаются', async () => {
+        const fs = await import('node:fs');
+        const fsp = await import('node:fs/promises');
+        const os = await import('node:os');
+        const path = await import('node:path');
+        const { closeDataDb, dataDb } = await import('../sources/data/db.js');
+        const prevWork = globalThis.WORK;
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-sql-logs-'));
+        try {
+            fs.mkdirSync(path.join(tmp, 'ORGANIZATIONS', 'OrgA', '$base', '#system'), { recursive: true });
+            globalThis.WORK = { id: 'WORK', type: '$server', real_dir: tmp, dir: tmp, path: '' };
+
+            const orgBase = { id: 'OrgA', type: '$base', path: '/ORGANIZATIONS/OrgA', real_dir: path.join(tmp, 'ORGANIZATIONS', 'OrgA'), parent: globalThis.WORK };
+            const salesDept = { id: 'sales', type: '$structure', path: '/ORGANIZATIONS/OrgA/sales', real_dir: path.join(tmp, 'ORGANIZATIONS', 'OrgA', 'sales'), parent: orgBase, $parent: orgBase };
+            const userCab = { id: 'ivan', type: '$user', path: '/USERS/ivan', real_dir: path.join(tmp, 'USERS', 'ivan'), parent: globalThis.WORK };
+
+            const row = {
+                time: 1761800000000,
+                sender: 'ivan',
+                content: 'Счёт оплачен',
+                path: '/ORGANIZATIONS/OrgA/sales/work/act.docx',
+                ext: 'docx',
+            };
+            await LOGS.appendRow(salesDept, row, { logAuthor: { $user: userCab } });
+
+            // 1. На диске нет папок logs и файлов .logs
+            assert.equal(fs.existsSync(path.join(tmp, 'ORGANIZATIONS', 'OrgA', 'sales', '$structure', 'logs')), false, 'папка logs подразделения на диске не создаётся');
+            assert.equal(fs.existsSync(path.join(tmp, 'USERS', 'ivan', '$user', 'logs')), false, 'папка logs кабинета на диске не создаётся');
+
+            // 2. Запись подразделения лежит в БД организации OrgA ($base/#system/work.db)
+            const orgDb = await dataDb('/ORGANIZATIONS/OrgA', tmp);
+            const orgLogCount = orgDb.prepare('SELECT COUNT(*) AS c FROM logs WHERE feed_path = ?').get('/ORGANIZATIONS/OrgA/sales').c;
+            assert.equal(orgLogCount, 1, 'запись подразделения сохранена в work.db организации');
+
+            // 3. Зеркальная запись автора лежит в серверной БД (.data/work.db)
+            const srvDb = await dataDb('', tmp);
+            const cabLogCount = srvDb.prepare('SELECT COUNT(*) AS c FROM logs WHERE feed_path = ?').get('/USERS/ivan').c;
+            assert.equal(cabLogCount, 1, 'запись кабинета автора сохранена в корневой .data/work.db');
+
+            // 4. Чтение через datesList, loadBodies, findEntry и appendIncludes
+            const day = LOGS.dayOfTime(row.time);
+            const dates = await LOGS.datesList(salesDept);
+            assert.ok(dates.includes(day), 'день записи виден в datesList');
+
+            const bodies = await LOGS.loadBodies(salesDept, { day });
+            assert.equal(bodies.length, 1);
+            assert.equal(bodies[0].content, 'Счёт оплачен');
+
+            const found = await LOGS.findEntry(salesDept, row.path);
+            assert.ok(found, 'findEntry находит запись в SQLite по path');
+
+            const updated = await LOGS.appendIncludes(salesDept, found.logsFilePath, ['/ORGANIZATIONS/OrgA/sales/work/att.xlsx']);
+            assert.deepEqual(updated.includes, ['/ORGANIZATIONS/OrgA/sales/work/att.xlsx'], 'appendIncludes обновляет запись в SQLite');
+        }
+        finally {
+            await closeDataDb();
+            globalThis.WORK = prevWork;
+            await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
+        }
+    });
 });

@@ -932,40 +932,41 @@ ODA({is: 'chat-day',
         if (this.$pdp.ribbon?.scrollDown)
             this.async(() => { this.$pdp.ribbon.scrollTop = 0; }, 0);
     },
+    _wrapLogRow(row) {
+        if (!row || typeof row.load === 'function')
+            return row;
+        const uid = row.sender || 'system';
+        const id = `${row.time || 0}.${uid}.logs`;
+        return {
+            id,
+            name: id,
+            ext: 'logs',
+            path: row.logsFilePath || `/${id}`,
+            logRow: row,
+            load: async () => row,
+        };
+    },
     async _bindLogsFolder(){
         const source = await Promise.resolve(this.logsSource);
-        if (!source)
-            return false;
-        // mkdir на сервере + fetch; затем get_item — неявная подписка WS на путь папки дня
-        await source.logs(this.day);
-        let folder = await source.get_item('/~/logs/' + this.day);
-        folder = await Promise.resolve(folder);
-        if (!folder)
-            return false;
-        if (this._logsFolder?.path !== folder.path) {
-            this._logsFolder = folder;
-            this._dayFolderHooked = false;
-        }
-        if (!this._dayFolderHooked) {
-            this._dayFolderHooked = true;
-            this._dayHandler = e => this._onLogsChanged(e);
-            folder.listen?.('changed', this._dayHandler);
-        }
-        return true;
+        return !!source;
     },
     async _fetchLogFiles(){
-        const logs = this._logsFolder;
-        if (!logs)
+        const source = await Promise.resolve(this.logsSource);
+        if (!source)
             return [];
-        let files = await logs.get_item('/*.logs'); // todo: сервер в случае если один файл в папке, возвращает строковое содержимое этого файла, а ожидается массив экземпляров файлов
-        if (!Array.isArray(files)) {
-            if(typeof files === 'string') {
-                const allFiles = await logs.files;
-                if(allFiles?.length === 1) files = allFiles[0];
-            }
-            files = files ? [files] : [];
+        let rows = [];
+        try {
+            if (typeof source.fetch === 'function')
+                rows = await source.fetch('logs', { mode: 'bodies', day: this.day });
+            else if (typeof source.logs === 'function')
+                rows = await source.logs({ mode: 'bodies', day: this.day });
         }
-        files = await Promise.all(files.map(f => Promise.resolve(f)));
+        catch {
+            rows = [];
+        }
+        if (!Array.isArray(rows))
+            rows = [];
+        const files = rows.map(r => this._wrapLogRow(r));
         return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.task'))));
     },
     /**
@@ -1019,42 +1020,21 @@ ODA({is: 'chat-day',
             await new Promise(r => setTimeout(r, 50));
         }
     },
-    async _onLogsChangedRun(e){
-        await this._bindLogsFolder();
-        const folder = this._logsFolder;
-        if (!folder)
-            return;
+    async _onLogsChangedRun(){
         if (!this._logsInit)
             return;
-        const initiator = e?.detail?.initiator ?? e?.detail?.value?.initiator;
-        if (initiator && initiator !== '.RAG' && (String(initiator).endsWith('.logs') || String(initiator).endsWith('.task'))) {
-            try {
-                let file = await folder.get_item('/' + initiator, 'info');
-                if (file?.id?.endsWith?.('.logs') || file?.id?.endsWith?.('.task')) {
-                    try {
-                        const raw = await file.load?.();
-                        const row = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                        if (row?.mainContext)
-                            return;
-                        if (row?.ext === 'task' && this._adopted?.has(taskKeyOf(row.path)))
-                            return;
-                    }
-                    catch { /* не разобрали — показываем как раньше */ }
-                    if (!this.logItems.some(i => i.id === file.id)) {
-                        this.logItems.push(file);
-                        this._scrollRibbonDown();
-                    }
-                    await this._expandCreatedTask(file);
-                    return;
-                }
-            }
-            catch (err) {
-                console.warn('[chat-day] log changed', err);
-            }
+        try {
+            const items = await this._fetchLogFiles();
+            const prevLen = (this.logItems || []).length;
+            this.logItems = items;
+            this.render();
+            if (items.length > prevLen)
+                this._scrollRibbonDown();
+            await this._expandCreatedTask();
         }
-        else 
-            this._logsInit = false;
-        // this.logs = undefined;
+        catch (err) {
+            console.warn('[chat-day] log changed', err);
+        }
     },
     _onLogsChanged(e){
         this._lastChangedEvent = e;
@@ -1071,15 +1051,11 @@ ODA({is: 'chat-day',
             if (!this._logsListenersHooked) {
                 this._logsListenersHooked = true;
                 const onChanged = this._onChangedFn = e => this._onLogsChanged(e);
-                this._listened = [source, this.$pdp.$item];
+                this._listened = [source, this.$pdp.$item].filter(Boolean);
                 source?.listen?.('changed', onChanged);
-                this.$pdp.$item?.listen?.('changed', onChanged);
-                const history = await source.get_item('/~/logs');
-                if (history)
-                    this._listened.push(history);
-                history?.listen?.('changed', onChanged);
+                if (this.$pdp.$item && this.$pdp.$item !== source)
+                    this.$pdp.$item?.listen?.('changed', onChanged);
             }
-            await this._bindLogsFolder();
             this.logItems = await this._fetchLogFiles();
             this.render();
             this._scrollRibbonDown();

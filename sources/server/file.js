@@ -659,6 +659,18 @@ export class $file extends $folder{
             return true;
         return $item.allowAccess(params);
     }
+    /** Прочитать офисный документ (.xlsx/.xls/.csv, .docx/.rtf, .pptx) как структурированную модель для локального редактора. */
+    async office_load(params = {}) {
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.READ);
+        const { officeLoadFile } = await import('../modules/office/index.js');
+        return officeLoadFile(this);
+    }
+    /** Сохранить офисный документ (.xlsx/.xls/.csv, .docx/.rtf, .pptx) из локального редактора в рабочую зону + history + SQL-лог. */
+    async office_save(params = {}) {
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.WRITE);
+        const { officeSaveFile } = await import('../modules/office/index.js');
+        return officeSaveFile(this, params);
+    }
 }
 $file.type_chain = Object.create(null);
 $file.__type_data__ = Object.create(null);

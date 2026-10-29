@@ -519,55 +519,29 @@ describe('инструменты WORK на песочнице', () => {
     });
 
     it('записи задачи помечаются mainContext и не шумят в общей ленте', async () => {
-        const readLogRows = () => {
-            const out = [];
-            const walk = dir => {
-                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-                    const p = path.join(dir, e.name);
-                    if (e.isDirectory())
-                        walk(p);
-                    else if (e.name.endsWith('.logs')) {
-                        try {
-                            out.push(JSON.parse(fs.readFileSync(p, 'utf-8')));
-                        }
-                        catch { /* не строка лога */ }
-                    }
-                }
-            };
-            walk(tmp);
-            return out;
+        const { dataDb } = await import('../sources/data/db.js');
+        const readLogRows = async () => {
+            const db = await dataDb('', tmp);
+            return db.prepare('SELECT body FROM logs').all().map(r => JSON.parse(r.body));
         };
         const taskCtx = () => ({ entry: {}, place: null, task: { path: '/BOX/task/42.task' } });
         const c = taskCtx();
         await tool('write').run({ path: '/BOX/doc/pub.md', content: 'v1' }, c);
         await tool('append').run({ path: c.entry.path, content: 'v2' }, taskCtx());
-        const marked = readLogRows().filter(r => String(r.path || '').includes('.pub.md/history'));
+        const marked = (await readLogRows()).filter(r => String(r.path || '').includes('.pub.md/history'));
         assert.ok(marked.length >= 2);
         assert.ok(marked.every(r => r.mainContext === '/BOX/task/42.task'));
         await tool('write').run({ path: '/BOX/doc/plain.md', content: 'x' }, ctx());
-        const plain = readLogRows().filter(r => String(r.path || '').includes('.plain.md/history'));
+        const plain = (await readLogRows()).filter(r => String(r.path || '').includes('.plain.md/history'));
         assert.ok(plain.length >= 1);
         assert.ok(plain.every(r => !r.mainContext));
     });
 
     it('call на методы записи из задачи принудительно ставит mainContext', async () => {
-        const readLogRows = () => {
-            const out = [];
-            const walk = dir => {
-                for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-                    const p = path.join(dir, e.name);
-                    if (e.isDirectory())
-                        walk(p);
-                    else if (e.name.endsWith('.logs')) {
-                        try {
-                            out.push(JSON.parse(fs.readFileSync(p, 'utf-8')));
-                        }
-                        catch { /* не строка лога */ }
-                    }
-                }
-            };
-            walk(tmp);
-            return out;
+        const { dataDb } = await import('../sources/data/db.js');
+        const readLogRows = async () => {
+            const db = await dataDb('', tmp);
+            return db.prepare('SELECT body FROM logs').all().map(r => JSON.parse(r.body));
         };
         const user = await (await WORK.$users).get_item('//' + CHILD_UID);
         const actor = { uid: CHILD_UID, $user: user, principal: { kind: 'user', id: CHILD_UID }, send() {} };
@@ -577,7 +551,7 @@ describe('инструменты WORK на песочнице', () => {
         await call.run({ path: '/BOX', method: 'save_message', args: { message: 'черновик агента' } }, taskCtx());
         await call.run({ path: '/BOX', method: 'save_message', args: { message: 'подмена', mainContext: '/ELSEWHERE/x.task' } }, taskCtx());
         await call.run({ path: '/BOX', method: 'save_message', args: { message: 'без задачи' } }, plainCtx());
-        const rows = readLogRows().filter(r => ['черновик агента', 'подмена', 'без задачи'].includes(r.content));
+        const rows = (await readLogRows()).filter(r => ['черновик агента', 'подмена', 'без задачи'].includes(r.content));
         // appendRow зеркалит запись в кабинет автора — проверяем по группам, а не штучно
         const byContent = c => rows.filter(r => r.content === c);
         assert.ok(byContent('черновик агента').length >= 1);

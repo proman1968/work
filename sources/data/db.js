@@ -157,6 +157,24 @@ export const MIGRATIONS = [
     CREATE INDEX account_entries_entry    ON account_entries(entry_id);
     CREATE INDEX account_entries_op       ON account_entries(op_id);
     `,
+    // 3 — журнал событий и лент ($class, $user, $structure, $base) в SQLite вместо файлов .logs
+    `
+    CREATE TABLE IF NOT EXISTS logs (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        feed_path TEXT NOT NULL,
+        day       TEXT NOT NULL,
+        time      INTEGER NOT NULL,
+        sender    TEXT NOT NULL DEFAULT '',
+        ext       TEXT NOT NULL DEFAULT '',
+        path      TEXT NOT NULL DEFAULT '',
+        stub_path TEXT NOT NULL DEFAULT '',
+        body      TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS logs_feed_day_time ON logs(feed_path, day, time DESC);
+    CREATE INDEX IF NOT EXISTS logs_feed_path     ON logs(feed_path, path);
+    CREATE INDEX IF NOT EXISTS logs_stub_path     ON logs(stub_path);
+    CREATE INDEX IF NOT EXISTS logs_path          ON logs(path);
+    `,
 ];
 
 /** Применить недостающие миграции. @returns {number} версия схемы после миграции */
@@ -187,6 +205,7 @@ export async function openDataDb(file = path.resolve(DATA_DIR, DATA_FILE)) {
 }
 
 let opened = null;
+let openedFile = '';
 const openedByBase = new Map();
 
 /**
@@ -205,17 +224,24 @@ export function baseDbFile(rootDir = process.cwd(), basePath = '') {
 /**
  * БД данных организации ($base) или сервера по умолчанию.
  * @param {string} [basePath] Путь организации (например, '/ORGANIZATIONS/Маслоторг'); пусто — дефолтная БД
+ * @param {string} [rootDir] Корневая директория сервера (по умолчанию process.cwd())
  */
-export async function dataDb(basePath = '') {
+export async function dataDb(basePath = '', rootDir = process.cwd()) {
     const key = String(basePath ?? '').trim().replace(/\/+$/, '');
+    const file = baseDbFile(rootDir, key);
     if (!key) {
-        opened ??= openDataDb();
+        if (!opened || openedFile !== file) {
+            openedFile = file;
+            opened = openDataDb(file);
+            openedByBase.set(file, opened);
+        }
         return opened;
     }
-    let p = openedByBase.get(key);
+    let p = openedByBase.get(file) || openedByBase.get(key);
     if (!p) {
-        p = openDataDb(baseDbFile(process.cwd(), key));
+        p = openDataDb(file);
         openedByBase.set(key, p);
+        openedByBase.set(file, p);
     }
     return p;
 }
@@ -229,7 +255,7 @@ export async function checkpointBaseDb(basePath = '') {
     const file = baseDbFile(process.cwd(), key);
     if (!fs.existsSync(file))
         return;
-    const p = openedByBase.get(key);
+    const p = openedByBase.get(file) || openedByBase.get(key);
     if (p) {
         const db = await p;
         try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* ignore */ }
@@ -248,10 +274,12 @@ export async function checkpointBaseDb(basePath = '') {
  */
 export async function closeBaseDb(basePath = '') {
     const key = String(basePath ?? '').trim().replace(/\/+$/, '');
-    const p = openedByBase.get(key);
+    const file = baseDbFile(process.cwd(), key);
+    const p = openedByBase.get(file) || openedByBase.get(key);
     if (!p)
         return;
     openedByBase.delete(key);
+    openedByBase.delete(file);
     try {
         const db = await p;
         try { db.exec('PRAGMA wal_checkpoint(TRUNCATE);'); } catch { /* ignore */ }
@@ -264,10 +292,11 @@ export async function closeBaseDb(basePath = '') {
 export async function closeDataDb() {
     const p = opened;
     opened = null;
-    const list = [...openedByBase.values()];
-    openedByBase.clear();
+    openedFile = '';
+    const list = new Set(openedByBase.values());
     if (p)
-        (await p).close();
+        list.add(p);
+    openedByBase.clear();
     for (const dbPromise of list) {
         try { (await dbPromise).close(); } catch { /* ignore */ }
     }

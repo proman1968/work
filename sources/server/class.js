@@ -39,6 +39,7 @@ import { classFeedMethods } from './class/feed.js';
 import { classSecurityMethods } from './class/security.js';
 import { classSearchMethods } from './class/search.js';
 import { classArchiveMethods } from './class/archive.js';
+import * as LOGS from './logs.js';
 
 export { looksLikeFileId, ALLOWED_CHILD_TYPES };
 
@@ -265,8 +266,7 @@ export class $class extends $folder {
         if (params.filename === 'data.logs') {
             if (params.session && params.session.$user !== globalThis.WORK)
                 throw new Error(ACCESS_DENIED);
-            const folder = await this.meta_folder._get_next_item('logs', FS.$folder);
-            return folder.save_data_file(params);
+            return LOGS.saveDataLogRow(this, params);
         }
         const storage = await this.work_zone(params);
         const folder = await storage.getFolderToSaveFile(params);

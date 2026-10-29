@@ -58,6 +58,8 @@ after(async () => {
     // Дать асинхронным on_save-цепочкам от последних save_file завершиться,
     // прежде чем сносить песочницу (иначе триггер и rm воюют за каталоги).
     await new Promise(r => setTimeout(r, 1000));
+    const { closeDataDb } = await import('../sources/data/db.js');
+    await closeDataDb();
     process.chdir(prevCwd);
     try {
         await fsp.rm(tmp, { recursive: true, force: true });
@@ -146,13 +148,10 @@ describe('Reactor#async на сервере', () => {
     });
 });
 
-/** Записи ленты корня за сегодня (по времени): каждая — отдельный файл дня. */
-function dayRows() {
-    const dir = path.join(tmp, '$server', 'logs', new Date().toLocalDay());
-    if (!fs.existsSync(dir))
-        return [];
-    return fs.readdirSync(dir).filter(f => f.endsWith('.logs')).sort()
-        .map(f => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')));
+/** Записи ленты корня за сегодня (по возрастанию времени) из SQLite. */
+async function dayRows() {
+    const rows = await WORK.logs({ mode: 'bodies', day: new Date().toLocalDay() });
+    return (Array.isArray(rows) ? rows.slice() : []).sort((a, b) => (a.time || 0) - (b.time || 0));
 }
 
 describe('save_file → history → log → on_save', () => {
@@ -185,8 +184,8 @@ describe('save_file → history → log → on_save', () => {
         assert.ok(log.path?.includes('/history/' + day + '/'), 'log.path указывает в history');
         assert.equal(log.ext, 'smoke');
 
-        // 4. Лог — запись дня у ближайшего класса (WORK → $server/logs/ДЕНЬ/{время}.{автор}.logs)
-        const rows = dayRows();
+        // 4. Лог — запись дня у ближайшего класса в SQLite
+        const rows = await dayRows();
         const row = rows.find(r => r.path === log.path);
         assert.ok(row, 'запись дня в мете класса указывает на снимок');
         assert.ok(!fs.existsSync(path.join(tmp, '$server', 'logs', 'data.logs')), 'общего data.logs нет');
@@ -212,7 +211,7 @@ describe('save_file → history → log → on_save', () => {
             message: 'видимое сообщение',
             encoding: 'utf-8',
         });
-        const row = dayRows().reverse().find(r => r.path?.includes('anything.smoke'));
+        const row = (await dayRows()).reverse().find(r => r.path?.includes('anything.smoke'));
         assert.ok(row, 'запись лога для anything.smoke найдена');
         assert.equal(row.content, 'видимое сообщение', 'content = params.message, а не тело файла');
     });
@@ -279,14 +278,14 @@ describe('лог-фасад: logs / read_log_entry / append_log_includes', () =>
             assert.equal(byStub.logsFilePath, target.logsFilePath);
         }
 
-        const before = dayRows().length;
+        const before = (await dayRows()).length;
         const updated = await WORK.append_log_includes({
             entryPath: target.path,
             includePaths: ['/PLAIN/extra.smoke'],
         });
         assert.ok(updated, 'append вернул обновлённую запись');
         assert.ok(updated.includes.includes('/PLAIN/extra.smoke'));
-        assert.equal(dayRows().length, before, 'запись обновлена на месте, а не продублирована');
+        assert.equal((await dayRows()).length, before, 'запись обновлена на месте, а не продублирована');
         // чужую запись дописать нельзя
         await assert.rejects(WORK.append_log_includes({
             entryPath: target.path, includePaths: ['/PLAIN/x.smoke'], session: { uid: 'stranger' },

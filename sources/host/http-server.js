@@ -264,9 +264,16 @@ export function createRequestHandler() {
             response.end('WORK_DEV: доступ только с localhost');
             return;
         }
-        // CORS не разрешён: предзапросы с чужих сайтов получают пустой ответ без разрешений
+        // CORS не разрешён: предзапросы с чужих сайтов получают пустой ответ без разрешений;
+        // для десктопного Office (WebDAV без Origin) возвращаем заголовки DAV
         if (request.method === 'OPTIONS') {
-            response.writeHead(204, { 'X-Content-Type-Options': 'nosniff' });
+            const headers = { 'X-Content-Type-Options': 'nosniff' };
+            if (!request.headers?.origin) {
+                headers['DAV'] = '1, 2';
+                headers['MS-Author-Via'] = 'DAV';
+                headers['Allow'] = 'OPTIONS, GET, HEAD, PUT, PROPFIND, LOCK, UNLOCK';
+            }
+            response.writeHead(204, headers);
             response.end();
             return;
         }
@@ -359,6 +366,11 @@ export function createRequestHandler() {
                 session.sockets?.[request.headers['x-work-wsid']]?.events?.add(path);
         };
         params.session = session;
+        if (item?.constructor === CORE.$file && ['LOCK', 'UNLOCK', 'PROPFIND', 'PUT'].includes(String(request.method || '').toUpperCase())) {
+            const { handleOfficeWebDav } = await import('../modules/office/index.js');
+            if (await handleOfficeWebDav(request, response, session, item, readBody, MAX_UPLOAD_BYTES))
+                return;
+        }
         if (item === undefined){
             if(!path.includes('/@')){
                 if(path === '/index.html'){

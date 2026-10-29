@@ -31,7 +31,7 @@ export const MEMBERS = Object.freeze({
     user_login_start: L.PUBLIC, user_login_finish: L.PUBLIC, user_exit: L.PUBLIC,
     get_public_vapid: L.PUBLIC,
     // чтение
-    info: L.READ, load: L.READ, download: L.READ, read_text: L.READ, get_imports: L.READ,
+    info: L.READ, load: L.READ, download: L.READ, read_text: L.READ, get_imports: L.READ, office_load: L.READ,
     get_schema: L.READ, services_schema: L.READ, handlers: L.READ, manifest: L.READ,
     find_text: L.READ, find_item: L.READ, readme_merged: L.READ,
     semantic_search: L.READ, search: L.READ, query_objects: L.READ, rag_status: L.READ,
@@ -56,7 +56,7 @@ export const MEMBERS = Object.freeze({
     // сеть WORK
     network_graph: L.READ, remote: L.WRITE, node_add: L.ADMIN, node_refresh: L.ADMIN,
     // запись (точное право — внутри метода)
-    save_file: L.WRITE, save_files: L.WRITE, save_includes: L.WRITE, save_message: L.WRITE,
+    save_file: L.WRITE, save_files: L.WRITE, save_includes: L.WRITE, save_message: L.WRITE, office_save: L.WRITE,
     append_log_includes: L.WRITE, save: L.WRITE, edit: L.WRITE, edit_file: L.WRITE,
     ensure_folder: L.WRITE, create: L.WRITE, write_to_stream: L.WRITE, close_write_stream: L.WRITE,
     restore_from_history: L.WRITE, store_push_subscription: L.WRITE,

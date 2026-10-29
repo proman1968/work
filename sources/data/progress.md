@@ -1,6 +1,19 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [16:50, 29.10] Перенос логов (`.logs`) из файлов в SQLite и локальный офисный пакет (`oda-office-editor` для `.xlsx`, `.docx`, `.pptx` + WebDAV):
+  - **Перенос `.logs` в SQLite (`sources/data/db.js`, `sources/server/logs.js`, `sources/server/class.js`, `chat.js`, `chat-item.js`):**
+    1. В `sources/data/db.js` добавлена миграция №3 с таблицей `logs(id, feed_path, day, time, sender, ext, path, stub_path, body)` и индексами по `(feed_path, day, time DESC)`, `(feed_path, path)` и `stub_path`.
+    2. Логи подразделений и классов внутри организации (`$base`) пишутся в изолированную БД этой организации `<Организация>/$base/#system/work.db` (и автоматически входят в архив организации при `db_backup`), а логи личных кабинетов (`/USERS/<uid>`) и сервера — в корневую `./.data/work.db`.
+    3. Полностью сохранён серверный контракт `$class`: `logs({ mode: 'dates' | 'bodies' | 'index' | 'files' | 'folder' })`, `save_message()`, `read_log_bodies()`, `read_log_entry()`, `append_log_includes()`, `appendRow()`, при этом на диске больше не создаются тысячи мелких файлов `<meta>/logs/YYYY-MM-DD/*.logs` (сами рабочие файлы и точки `.task`, `.ics`, `.eml` остаются файлами).
+    4. В `chat-day` (`chat.js`) и `chat-item.js` загрузка ленты дня переведена на одиночный запрос `logs({ mode: 'bodies', day })` без создания папок `/~/logs/YYYY-MM-DD` и без десятков `/*.logs` запросов.
+  - **Локальные редакторы офисных файлов `.xlsx`, `.docx`, `.pptx` без Docker и внешних серверов (`sources/modules/office/index.js`, `$server/$folder/$file/$office/handlers/pages/form/file/$handler/file.js`, `sources/server/file.js`, `sources/host/http-server.js`):**
+    1. Реализован серверный OOXML-движок `sources/modules/office/index.js` и методы `$file.office_load` / `$file.office_save`, читающие и собирающие валидные `.xlsx/.xls/.csv` (SheetJS `xlsx`), `.docx/.rtf` (`word/document.xml` + `adm-zip` + `xmldom`) и `.pptx` (`ppt/presentation.xml` + `ppt/slides/slideN.xml`).
+    2. В `$server/$folder/$file/$office` неработающий внешний `oda-only-office` заменён на встроенный локальный пакет `oda-office-editor` (`allowSave: true`, интеграция с верхней кнопкой `💾` в шапке `work-form` и `Ctrl+S`):
+       - **Таблицы (`.xlsx`, `.xls`, `.csv`):** вкладки листов, строка формул с живым вычислителем (`=SUM`, `=AVERAGE`, `=MIN`, `=MAX`, `=COUNT`, `=ROUND` и арифметики), форматирование ячеек, объединение ячеек (`merges`), добавление/удаление строк и колонок и строка статуса (`Сумма / Среднее / Кол-во`).
+       - **Документы Word (`.docx`, `.rtf`):** страничный редактор формата А4 с тулбаром стилей (`H1–H3`, шрифты, `Ж/К/Ч/S`, цвет, выравнивание, списки, вставка таблиц и разрывов страниц).
+       - **Презентации PowerPoint (`.pptx`):** боковая лента слайдов (добавление/дублирование/удаление), холст 16:9 с перетаскиваемыми текстовыми блоками, настройкой шрифтов/цветов и полноэкранным режимом показа слайдов (`▶ Показ слайдов`).
+    3. Добавлена поддержка протоколов `ms-word:ofe|u|...`, `ms-excel:ofe|u|...`, `ms-powerpoint:ofe|u|...` и WebDAV-методов (`OPTIONS`, `LOCK`, `UNLOCK`, `PROPFIND`, `PUT`) в `sources/host/http-server.js` для прямого открытия и сохранения файлов в установленном на ПК MS Office / LibreOffice / Р7 / МойОфис.
 - [16:10, 29.10] Системная доработка `work-form`, `form/object`, `form/objects`, фильтров/группировок/ссылок `oda-table`, контекстного меню объекта, единой стилевой модели ODA и дерева проводника:
   - **Кнопка `save` в шапке `work-form`, контроль `allowSave` активного представления и незастревающие кнопки в подвале (`form.js`, `object.js`, `objects.js`, `sources/server/handler.js`, `sources/client/handler.js`):**
     1. В `sources/server/handler.js` (`info`) и `sources/client/handler.js` добавлены синхронные свойства `allowSave`, `allowTools`, `hiddenInViewList`, `hasSettings`, чтобы чтение `view.allowSave` не уходило в `_onEmpty('/@allowSave')`.
