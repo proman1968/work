@@ -55,4 +55,6 @@ docs/
 Thumbs.db
 *.log
 *.tgz
+!vendor/*.tgz
+current_session.json
 current_session.json

@@ -1,11 +1,12 @@
 {
-  "name": "work",
+  "name": "odant-work",
   "version": "1.0.0",
   "description": "WORK — платформа цифровой организации (учётная система уровня 1С, документооборот, чаты и локальный мультимодальный ИИ)",
   "type": "module",
   "main": "sources/work.js",
   "bin": {
-    "work": "run.mjs"
+    "work": "run.mjs",
+    "odant-work": "run.mjs"
   },
   "scripts": {
     "start": "node run.mjs",
@@ -13,7 +14,7 @@
     "test": "node --test \"tests/**/*.test.js\"",
     "test:ci": "npm test",
     "setup-mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-svn-mirror.ps1",
-    "publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-publish.ps1",
+    "svn:publish": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-publish.ps1",
     "sync": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/svn-sync.ps1",
     "mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/mirror-to-git.ps1",
     "test:ui": "node tests/ui/run.mjs",
