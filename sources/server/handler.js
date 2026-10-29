@@ -101,6 +101,13 @@ export class $handler extends $class {
         }
         if (this.DATA?.allowList)
             data.allowList = true;
+        if (this.DATA?.allowSave != null)
+            data.allowSave = Boolean(this.DATA.allowSave);
+        if (this.DATA?.allowTools != null)
+            data.allowTools = Boolean(this.DATA.allowTools);
+        if (this.DATA?.hiddenInViewList)
+            data.hiddenInViewList = true;
+        data.hasSettings = Boolean(this.DATA?.hasSettings || typeof this.DATA?.showSettings === 'function');
         if (this.DATA?.order != null)
             data.order = this.DATA.order;
         return data;

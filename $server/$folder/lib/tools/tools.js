@@ -154,11 +154,17 @@ export default {
             };
         });
     },
+    _syncSeq: 0,
     async _syncToolsNow() {
+        const seq = ++this._syncSeq;
         const host = this._findFormHost();
         const vc = host?.view_control;
         const filter = this.filter;
         const focusedOnly = this.focusedOnly;
+        if (filter === 'button' && (host?.view?.allowTools === false || host?.view?.DATA?.allowTools === false)) {
+            this._setTools([]);
+            return;
+        }
         const rawTarget = this.targetItem;
         const isMulti = Array.isArray(rawTarget) && rawTarget.length > 1;
         const singleTarget = Array.isArray(rawTarget) ? (rawTarget[0] || null) : rawTarget;
@@ -216,6 +222,8 @@ export default {
 
         const role = host?.activeRole || handlerSource.role || '';
         const list = await this.loadFilteredHandlers(handlerSource, role, filter);
+        if (seq !== this._syncSeq)
+            return;
         const contextForRun = singleTarget || handlerSource;
         this._setTools(this._wrapWithState(list, hasFocus, isMulti, vc, rawTarget, contextForRun));
     },
@@ -276,7 +284,7 @@ export default {
             tool.$handler.execute(e);
             return;
         }
-        if (tool.type === '$handler' && target && window.execute) {
+        if (tool.type === '$handler' && target && (typeof host?.openInForm === 'function' || window.execute)) {
             const nav = typeof vc?.buildDrilldownNav === 'function'
                 ? vc.buildDrilldownNav(tool.id, target)
                 : {
@@ -287,7 +295,10 @@ export default {
                     packetsKey: vc?.packetsKey || '',
                     unit: vc?.unit || '',
                 };
-            window.execute(target, nav);
+            if (typeof host?.openInForm === 'function')
+                host.openInForm(target, nav);
+            else
+                window.execute(target, nav);
             return;
         }
         if (typeof tool.execute === 'function')

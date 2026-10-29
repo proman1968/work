@@ -68,6 +68,12 @@ export default {
     iconSize: 24,
     nextIcon: 'icons:chevron-right',
     focusedItem: null,
+    $item: {
+        $def: null,
+        set(n) {
+            this.expandedItem = n;
+        }
+    },
     showRole: {
         $def: false,
         $attr: true,

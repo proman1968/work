@@ -11,21 +11,42 @@ export default {
                 min-width: 200px;
                 .tools-list{
                     @apply --vertical;
+                    padding: 4px;
+                    gap: 1px;
 
                     .tool{
                         @apply --horizontal;
-                        @apply --flex;
+                        @apply --no-flex;
                         align-items: center;
-                        font-size: 120%;
-                        padding: 2px;
+                        gap: 8px;
+                        font-size: 13px;
+                        padding: 5px 10px;
+                        border-radius: var(--radius-xs, 3px);
+                        cursor: pointer;
+                        user-select: none;
+                    }
+                    .tool:hover:not([disabled]){
+                        background: var(--accent-soft);
+                        color: var(--accent-color);
+                    }
+                    .tool[disabled]{
+                        opacity: 0.42;
+                        pointer-events: none;
+                    }
+                    .tool-shortcut{
+                        margin-left: auto;
+                        padding-left: 16px;
+                        font-size: 11px;
+                        color: var(--muted-color);
                     }
                 }
             }
         </style>
         <div ~if="showTools" class="tools-list">
-            <div ~for="tools" @pointerdown="executeTool($for.item)" class="tool">
-                <oda-icon :icon="$for.item.icon" :icon-size></oda-icon>
+            <div ~for="tools" :disabled="Boolean($for.item.disabled)" @pointerdown.stop.prevent="executeTool($for.item, $event)" class="tool">
+                <oda-icon :icon="$for.item.icon" icon-size="18"></oda-icon>
                 <div>{{$for.item.label}}</div>
+                <span class="tool-shortcut" ~if="$for.item.shortcut">{{$for.item.shortcut}}</span>
             </div>
         </div>
         <item-tree ~if="showHandlers" hide-files @resize :hide-tops :hide-roots :prefetch-deep="0" expander-order="1" expand-all :$item="handlersRoot" :allow-categories></item-tree>
@@ -37,6 +58,7 @@ export default {
     hideTops: 1,
     allowCategories: true,
     path: '',
+    customTools: null,
     mode: {
         $def: 'handlers',
         $list: ['tools', 'handlers', 'both']
@@ -56,10 +78,14 @@ export default {
             $item.fetch('handlers', { path: this.path }));
     },
     get tools(){
-        return this.$item?.tools;
+        return this.customTools || this.$item?.tools || [];
     },
-    executeTool(tool) {
+    executeTool(tool, e) {
+        if (!tool || tool.disabled)
+            return;
+        e?.stopPropagation?.();
+        this.parentElement?.close?.('ok');
         this.fire('close');
-        tool.execute();
+        tool.execute?.();
     }
 }

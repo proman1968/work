@@ -17,6 +17,14 @@ export function knownHasItems(it, pdp = {}) {
     return typeof v === 'boolean' ? v : undefined;
 }
 
+function nodeStateKey(it) {
+    if (!it)
+        return '';
+    if ('_stateKey' in Object(it) && it._stateKey)
+        return String(it._stateKey);
+    return String(it.short || it.path || '');
+}
+
 function applyTreeFilters(items, host) {
     items = items || [];
     if (host.hideSystem)
@@ -78,8 +86,10 @@ export default {
                     return;
                 }
                 this._deferredItem = null;
+                this._loadSavedTreeState(n);
                 await this.prefetch(n);
-                await this.getItems(n, 1)
+                await this.getItems(n, 1);
+                this._applySavedStateToItems([n]);
                 this.items = [n];
             }
             else {
@@ -93,9 +103,80 @@ export default {
         if (!n)
             return;
         this._deferredItem = null;
+        this._loadSavedTreeState(n);
         await this.prefetch(n);
         await this.getItems(n, 1);
+        this._applySavedStateToItems([n]);
         this.items = [n];
+    },
+    _savedExpandedSet: null,
+    _savedFocusedKey: '',
+    _treeStorageKey(root = this.$item) {
+        const k = root?.short || root?.path || '/';
+        return 'work.tree.state:' + k;
+    },
+    _loadSavedTreeState(root = this.$item) {
+        this._savedExpandedSet = new Set();
+        this._savedFocusedKey = '';
+        if (typeof localStorage === 'undefined')
+            return;
+        try {
+            const raw = localStorage.getItem(this._treeStorageKey(root));
+            if (!raw)
+                return;
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed?.expanded)) {
+                for (const p of parsed.expanded) {
+                    if (p)
+                        this._savedExpandedSet.add(String(p));
+                }
+            }
+            if (parsed?.focused)
+                this._savedFocusedKey = String(parsed.focused);
+        }
+        catch { /* ignore */ }
+    },
+    _persistTreeState() {
+        if (typeof localStorage === 'undefined' || !this.$item)
+            return;
+        try {
+            localStorage.setItem(this._treeStorageKey(this.$item), JSON.stringify({
+                expanded: [...(this._savedExpandedSet || [])],
+                focused: this._savedFocusedKey || '',
+            }));
+        }
+        catch { /* ignore */ }
+    },
+    recordNodeExpanded(it, isExpanded) {
+        const key = nodeStateKey(it);
+        if (!key)
+            return;
+        this._savedExpandedSet ??= new Set();
+        if (isExpanded)
+            this._savedExpandedSet.add(key);
+        else
+            this._savedExpandedSet.delete(key);
+        this._persistTreeState();
+    },
+    recordNodeFocused(it) {
+        const key = nodeStateKey(it);
+        if (!key)
+            return;
+        this._savedFocusedKey = key;
+        this._persistTreeState();
+    },
+    _applySavedStateToItems(list) {
+        if (!Array.isArray(list) || (!this._savedExpandedSet?.size && !this._savedFocusedKey))
+            return;
+        for (const it of list) {
+            const key = nodeStateKey(it);
+            if (!key)
+                continue;
+            if (this._savedExpandedSet?.has(key) && !it.expanded)
+                it.expanded = true;
+            if (this._savedFocusedKey && this._savedFocusedKey === key && this.focusedItem !== it)
+                this.focusedItem = it;
+        }
     },
     /** Глубина первого слоя дерева одним запросом info (вглубь — по классам); 0 — выключить. */
     prefetchDeep: 3,
@@ -376,6 +457,7 @@ ODA({is: 'oda-tree-node',
         e.stopPropagation();
         this.$pdp.focusedItem = this.$item;
         this.$pdp.focusedNode = this;
+        this.$pdp?.tree?.recordNodeFocused?.(this.$item);
     },
     get isFocused() {
         if (!this.$pdp.allowFocus)
@@ -481,6 +563,8 @@ ODA({is: 'oda-tree-node',
                     this.$item.expanded = true;
                 }
                 this.$item.expanded = n;
+                if (this.hideTops < 1 && this.hideRoots < 1)
+                    this.$pdp?.tree?.recordNodeExpanded?.(this.$item, !!n);
                 if (!n)
                     this.isStuck = false;
                 this.$pdp?.tree?._onTreeScroll?.();
@@ -575,6 +659,7 @@ ODA({is: 'oda-tree-node',
                     }
                 })
             }, {once: true})
+            this.$pdp?.tree?._applySavedStateToItems?.(items);
             return items;
         })
     },
@@ -626,6 +711,19 @@ ODA({is: 'oda-tree-node',
         catch { /* без ссылок места */ }
         for (const c of p.roles || [])
             kids.push(await this._placeNode(structItem, c, t));
+        const placeStateKey = `${structItem.short || structItem.path || ''}#place:${t}`;
+        const stampLinks = (list, prefix) => {
+            for (const ln of list || []) {
+                if (!ln || typeof ln !== 'object')
+                    continue;
+                const sk = `${prefix}->${ln.short || ln.path || ln.id || ''}`;
+                Object.defineProperty(ln, '_stateKey', { value: sk, configurable: true });
+                if (Array.isArray(ln.items) && ln.items.length)
+                    stampLinks(ln.items, sk);
+            }
+            this.$pdp?.tree?._applySavedStateToItems?.(list);
+        };
+        stampLinks(kids, placeStateKey);
         const node = {
             id: p.id,
             label: p.label || p.id,
@@ -636,9 +734,12 @@ ODA({is: 'oda-tree-node',
             isPlace: true,
             items: kids,
         };
+        Object.defineProperty(node, '_stateKey', { value: placeStateKey, configurable: true });
         // владелец — вне перечисляемых: иначе JSON.stringify узла закольцуется
         Object.defineProperty(node, 'owner', { value: structItem });
-        return typeof Reactor?.activate === 'function' ? Reactor.activate(node) : node;
+        const activated = typeof Reactor?.activate === 'function' ? Reactor.activate(node) : node;
+        this.$pdp?.tree?._applySavedStateToItems?.([activated]);
+        return activated;
     },
     /**
      * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет

@@ -130,7 +130,7 @@ describe('oda-packets: гранулярность mode, структура по�
         assert.equal(inst.items[inst.items.length - 1].label, 'Весь период');
     });
 
-    it('блок [<, now, >] вынесен в отдельный компонент oda-packets-now-group фиксированного размера, годы в скролле, Весь период фиксирован', () => {
+    it('блок [<, now, >] вынесен в отдельный компонент oda-packets-now-group фиксированного размера, скролл годов убран, отображаются не более 5 кнопок лет и кнопка «Ещё (<N>)»', () => {
         const navGroup = defs.find(d => d.is === 'oda-packets-now-group');
         assert.ok(navGroup, 'компонент oda-packets-now-group объявлен');
         assert.ok(navGroup.template.includes('~for="navItems"'), 'рендерит элементы навигации через ~for="navItems"');
@@ -141,10 +141,105 @@ describe('oda-packets: гранулярность mode, структура по�
 
         const rowDef = defs.find(d => d.is === 'oda-packets-row');
         assert.ok(rowDef.template.includes('<oda-packets-now-group'), 'oda-packets-row использует oda-packets-now-group');
-        assert.ok(rowDef.template.includes('class="years-scroll"'), 'контейнер годов с горизонтальным скроллом');
-        assert.ok(rowDef.template.includes('class="all-fixed"'), 'Весь период зафиксирован вне скролла годов');
+        assert.ok(rowDef.template.includes('class="years-group"'), 'контейнер годов без горизонтального скролла (.years-group)');
+        assert.ok(!rowDef.template.includes('overflow-x: auto'), 'горизонтальный скролл годов убран');
+        assert.ok(rowDef.template.includes('class="all-fixed"'), 'Весь период зафиксирован справа');
         assert.ok(!rowDef.template.includes('oda-packets-period-selector'), 'кнопка Период удалена из разметки oda-packets-row');
         assert.ok(defs.find(d => d.is === 'oda-packets-period-selector'), 'сам компонент oda-packets-period-selector сохранён');
+        assert.ok(defs.find(d => d.is === 'oda-packets-more-years'), 'компонент кнопки «Ещё (<N>)» объявлен');
+        assert.ok(defs.find(d => d.is === 'oda-packets-more-menu'), 'компонент меню «Ещё (<N>)» объявлен');
+    });
+
+    it('при <= 5 годах отображаются все годы без кнопки «Ещё», при > 5 годах — 5 свежих лет и справа кнопка «Ещё (<остальные>)»', () => {
+        const { inst: inst5 } = mount();
+        build(inst5, '2022-01-01', '2026-12-31', 'month');
+        const years5 = inst5.items.filter(i => i.type === 'year' && !i.is).map(i => i.name);
+        assert.deepEqual(years5, ['2026', '2025', '2024', '2023', '2022']);
+        assert.equal(inst5.items.some(i => i.is === 'oda-packets-more-years'), false, 'при 5 годах кнопки «Ещё» нет');
+
+        const { inst: inst12 } = mount();
+        build(inst12, '2015-01-01', '2026-12-31', 'month');
+        const years12 = inst12.items.filter(i => i.type === 'year' && !i.is).map(i => i.name);
+        assert.deepEqual(years12, ['2026', '2025', '2024', '2023', '2022'], 'на полосе ровно 5 самых свежих лет');
+        const moreBtn = inst12.items.find(i => i.is === 'oda-packets-more-years');
+        assert.ok(moreBtn, 'кнопка «Ещё» присутствует');
+        assert.equal(moreBtn.label, 'Ещё (7)');
+        assert.equal(moreBtn.fullLabel, 'Предыдущие года (2015 - 2021)');
+        assert.equal(inst12._nowItem.fullLabel, 'Выбор текущего периода');
+        assert.deepEqual(moreBtn.years.map(y => y.name), ['2021', '2020', '2019', '2018', '2017', '2016', '2015']);
+
+        const idxLastYear = inst12.items.findIndex(i => i.name === '2022' && !i.is);
+        const idxMore = inst12.items.findIndex(i => i.is === 'oda-packets-more-years');
+        const idxAll = inst12.items.findIndex(i => i.name === '*');
+        assert.equal(idxMore, idxLastYear + 1, 'кнопка «Ещё» расположена сразу справа от кнопок Год');
+        assert.equal(idxAll, idxMore + 1, 'после «Ещё» идёт «Весь период»');
+    });
+
+    it('при выборе года из «Ещё (<N>)» он занимает 5-е место вместо 5-го свежего года, а 5-й свежий год уходит в «Ещё (<N>)»', async () => {
+        const { inst } = mount();
+        build(inst, '2015-01-01', '2026-12-31', 'month');
+
+        // Выбираем май 2018 через меню кнопки «Ещё (7)»
+        let createdMore = null;
+        fakeODA.createComponent = (id, props) => (createdMore = { id, ...props });
+        fakeODA.showMenu = async () => '2018-05';
+        try {
+            const moreBtn = inst.items.find(i => i.is === 'oda-packets-more-years');
+            await inst._onOpenMoreYears({ detail: { value: { item: moreBtn } } });
+        } finally {
+            delete fakeODA.createComponent;
+            delete fakeODA.showMenu;
+        }
+
+        assert.equal(createdMore.id, 'oda-packets-more-menu');
+        assert.deepEqual(createdMore.items.map(i => i.value), ['2021', '2020', '2019', '2018', '2017', '2016', '2015']);
+
+        const visibleYears = inst.items.filter(i => i.type === 'year' && !i.is);
+        assert.deepEqual(visibleYears.map(y => y.name), ['2026', '2025', '2024', '2023', '2018'], '4 свежих + выбранный 2018 на 5-м месте');
+        const y2018 = yearNode(inst, '2018');
+        assert.equal(y2018.selected, true);
+        assert.match(y2018.label, /^Май 2018/);
+
+        const moreAfter = inst.items.find(i => i.is === 'oda-packets-more-years');
+        assert.equal(moreAfter.label, 'Ещё (7)', 'количество оставшихся лет не изменилось');
+        assert.equal(moreAfter.fullLabel, 'Предыдущие года (2015 - 2022)');
+        assert.deepEqual(moreAfter.years.map(y => y.name), ['2022', '2021', '2020', '2019', '2017', '2016', '2015'], '2022 временно ушёл в список «Ещё»');
+
+        // Возвращаемся к «Весь период» — на панель возвращаются 5 самых свежих лет (2026..2022)
+        inst._applySelection([inst._allItem]);
+        assert.deepEqual(inst.items.filter(i => i.type === 'year' && !i.is).map(y => y.name), ['2026', '2025', '2024', '2023', '2022']);
+        assert.deepEqual(moreAfter.years.map(y => y.name), ['2021', '2020', '2019', '2018', '2017', '2016', '2015']);
+    });
+
+    it('oda-packets-more-menu: любой клик по строке года открывает его полное меню oda-packets-months', async () => {
+        const { inst } = mount();
+        build(inst, '2015-01-01', '2026-12-31', 'month');
+        const y2018 = inst._years.find(y => y.name === '2018');
+        const yearMenuItems = inst._buildYearMenuItems(y2018);
+
+        const moreMenuDef = defs.find(d => d.is === 'oda-packets-more-menu');
+        const moreEl = Object.create(moreMenuDef);
+        moreEl.value = '2018-05';
+        moreEl.day = '2018-05-17';
+        moreEl.parentElement = { close: val => (moreEl.closed = val) };
+
+        let subCreated = null;
+        let subAnchor = null;
+        fakeODA.createComponent = (id, props) => (subCreated = { id, ...props });
+        fakeODA.showMenu = async (p, anchor) => { subAnchor = anchor; return '2018-q3'; };
+        const rowTarget = { getBoundingClientRect: () => ({ right: 120, top: 55 }) };
+        try {
+            await moreEl.openYearMenu({ label: '2018', value: '2018', items: yearMenuItems }, { currentTarget: rowTarget });
+        } finally {
+            delete fakeODA.createComponent;
+            delete fakeODA.showMenu;
+        }
+        assert.equal(subCreated.id, 'oda-packets-months');
+        assert.equal(subCreated.items.length, 17, '«весь год», 4 квартала и 12 месяцев');
+        assert.equal(subCreated.value, '2018-05');
+        assert.equal(subCreated.day, '2018-05-17');
+        assert.deepEqual({ x: subAnchor.x, y: subAnchor.y, target: subAnchor.target }, { x: 120, y: 55, target: rowTarget });
+        assert.equal(moreEl.closed, '2018-q3', 'выбор в подменю года закрывает родительское меню со значением периода');
     });
 });
 
@@ -456,7 +551,7 @@ describe('oda-packets: подписи без сдвига по таймзоне'
         assert.match(leaf(inst, '2024-12-25').fullLabel, /25 декабря 2024/);
     });
 
-    it('подписи квартала и служебных кнопок соответствуют формату и иконкам', () => {
+    it('подписи квартала и служебных кнопок соответствуют формату и иконкам, а у < и > выводится период после нажатия', () => {
         const { inst } = mount();
         build(inst, '2024-01-01', '2024-12-31', 'quarter');
         assert.equal(inst._leaves[0].label, '1 квартал');
@@ -464,9 +559,13 @@ describe('oda-packets: подписи без сдвига по таймзоне'
         assert.equal(inst.items.find(i => i.name === '*').label, 'Весь период');
         const leftBtn = inst.items.find(i => i.name === '<');
         assert.equal(leftBtn.icon, 'icons:chevron-right:180');
-        assert.equal(leftBtn.fullLabel, 'Назад');
+        assert.equal(leftBtn.fullLabel, 'Назад (4 кв. 2024 г.)');
         const rightBtn = inst.items.find(i => i.name === '>');
         assert.equal(rightBtn.icon, 'icons:chevron-right');
+        assert.equal(rightBtn.fullLabel, 'Вперёд (1 кв. 2024 г.)');
+
+        inst._applySelection([leaf(inst, '2024-q4')]);
+        assert.equal(leftBtn.fullLabel, 'Назад (3 кв. 2024 г.)');
         assert.equal(rightBtn.fullLabel, 'Вперёд');
     });
 });
@@ -544,11 +643,14 @@ describe('oda-packets: меню выбора года (всегда в режи�
             const apr = created.items.find(i => i.value === '2024-04');
             const may = created.items.find(i => i.value === '2024-05');
             assert.equal(apr.disabled, true, 'недоступный месяц виден, но disabled');
-            assert.equal(apr.days.length, 30, 'у апреля все 30 дней');
+            assert.equal(apr.days.length, 0, 'у недоступного апреля дни без данных скрыты');
+            assert.equal(apr.submenu, false, 'у недоступного месяца нет подменю дней');
             assert.equal(may.disabled, false, 'май активен');
-            assert.equal(may.days.length, 31, 'у мая все 31 день');
-            assert.equal(may.submenu, true, 'у месяца всегда есть подменю дней');
-            assert.equal(may.days.find(d => d.value === '2024-05-01').disabled, true, 'недоступный день disabled');
+            assert.equal(may.days.length, 11, 'в подменю мая показаны только 11 дней, в которых есть данные (10..20 мая)');
+            assert.equal(may.submenu, true, 'у месяца с данными есть подменю дней');
+            assert.equal(may.hint, undefined, 'у месяца нет дублирующего описания под текстом');
+            assert.equal(may.days[0].hint, undefined, 'у дня нет дублирующего описания под текстом');
+            assert.equal(may.days.find(d => d.value === '2024-05-01'), undefined, 'день без данных скрыт из подменю');
             assert.equal(may.days.find(d => d.value === '2024-05-17').disabled, false, 'доступный день активен');
             assert.equal(inst.mode, 'day', 'выбор дня переключил mode на day');
             assert.equal(inst.selected.name, '2024-05-17');

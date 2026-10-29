@@ -152,7 +152,7 @@ export default {
         return this.$handler?.icon;
     },
     hideRoots: 1,
-    hideTops: 1,
+    hideTops: 0,
     itemsSelector: 'items',
     load_page(){
         let url = decodeURI(window.location.hash);
@@ -172,11 +172,18 @@ export default {
     },
     focusedPage: '',
     attached() {
-        this.async(()=>{
+        this.async(async ()=>{
             if(!WORK.uid && !WORK.DEV_MODE){
                 this.visibleMode = 'user';
                 if(this.left_drawer)
                     this.left_drawer.closed = true;
+            }
+            if (this.$item?.type === '$server' && !WORK.DEV_MODE) {
+                try {
+                    const isAdm = await this.$item.isAdmin;
+                    this.hideTops = isAdm ? 0 : 1;
+                }
+                catch { /* ignore */ }
             }
         })
         window.explorer = this;

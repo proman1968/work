@@ -258,6 +258,26 @@ ODA.menuTag = 'item-menu';
 for (const name of ['showPopover', 'showModal', 'showDialog', 'showMenu', 'showConfirm', 'showDropdown', 'showPrompt',
     'CancelError', 'popovers', 'popoverResolvers', 'closePopup', 'dismissTo', 'dismissToModal', 'dismissAbove', 'findPopover'])
     WORK[name] = ODA[name];
+
+// Подавление нативного контекстного меню браузера везде, кроме полей ввода и выделенного текста
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('contextmenu', (e) => {
+        if (e.defaultPrevented)
+            return;
+        const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+        const isEditable = path.some(el => {
+            if (!el || typeof el !== 'object')
+                return false;
+            const tag = String(el.tagName || el.localName || '').toLowerCase();
+            return tag === 'input' || tag === 'textarea' || Boolean(el.isContentEditable);
+        });
+        if (!isEditable) {
+            const sel = typeof window.getSelection === 'function' ? String(window.getSelection() || '').trim() : '';
+            if (!sel)
+                e.preventDefault();
+        }
+    });
+}
 WORK.clearSessionCache = function () {
     for (const item of Object.values(CORE.$item.ITEMS)) {
         Reactor.cleanupDeps(item);

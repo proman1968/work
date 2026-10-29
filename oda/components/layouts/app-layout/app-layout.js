@@ -215,9 +215,58 @@ ODA({is: 'app-layout-drawer',
     buttons: [],
     focusedIndex: {
         $def: 0,
+        $save: true,
         set(n) {
+            this._persistActiveTab(n);
             this.updateControls();
         }
+    },
+    _tabStorageKey() {
+        return 'work.drawer.tab:' + (this._savePath || this.align || 'left');
+    },
+    _ctrlIdentity(ctrl, idx) {
+        if (!ctrl)
+            return String(idx ?? 0);
+        return String(ctrl.$item?.path || ctrl.$item?.short || ctrl.id || ctrl.getAttribute?.('label') || ctrl.label || idx || 0);
+    },
+    _persistActiveTab(idx = this.focusedIndex) {
+        if (!this._restoredTab || typeof localStorage === 'undefined')
+            return;
+        const ctrl = this.controls?.[idx];
+        if (!ctrl)
+            return;
+        try {
+            localStorage.setItem(this._tabStorageKey(), JSON.stringify({
+                index: idx,
+                key: this._ctrlIdentity(ctrl, idx),
+            }));
+        }
+        catch { /* ignore */ }
+    },
+    _restoreActiveTab() {
+        const list = this.controls || [];
+        if (!list.length)
+            return 0;
+        if (typeof localStorage !== 'undefined') {
+            try {
+                const raw = localStorage.getItem(this._tabStorageKey());
+                if (raw) {
+                    const saved = JSON.parse(raw);
+                    if (saved?.key) {
+                        const byKey = list.findIndex((c, i) => this._ctrlIdentity(c, i) === saved.key);
+                        if (byKey >= 0)
+                            return byKey;
+                    }
+                    if (typeof saved?.index === 'number' && saved.index >= 0 && saved.index < list.length)
+                        return saved.index;
+                }
+            }
+            catch { /* ignore */ }
+        }
+        const tabsIdx = this.$('app-tabs')?.focusedIndex;
+        if (typeof tabsIdx === 'number' && tabsIdx >= 0 && tabsIdx < list.length)
+            return tabsIdx;
+        return 0;
     },
 
     get reverse() {
@@ -261,12 +310,23 @@ ODA({is: 'app-layout-drawer',
         else
             this.controls = e.target.assignedNodes();
         if (this.controls.length) {
-            this.focusedIndex = this.$('app-tabs').focusedIndex || 0;
+            const idx = this._restoreActiveTab();
+            this._restoredTab = true;
+            const tabs = this.$('app-tabs');
+            if (tabs)
+                tabs.focusedIndex = idx;
+            this.focusedIndex = idx;
+            this.updateControls();
         }
     },
     updateControls() {
         queueMicrotask(() => {
-            this.controls?.forEach((ctrl, i) =>  ctrl.hidden = this.focusedIndex !== i);
+            this.controls?.forEach((ctrl, i) => {
+                const isActive = this.focusedIndex === i;
+                ctrl.hidden = !isActive;
+                if (isActive && typeof ctrl.onShow === 'function')
+                    ctrl.onShow();
+            });
         });
     }
 });
@@ -305,6 +365,7 @@ ODA({is: 'app-tabs',
             this.$pdp.closed = false;
             this.focusedIndex = idx;
             this.$pdp.focusedIndex = idx;
+            this.$pdp._persistActiveTab?.(idx);
         }
     }
 });

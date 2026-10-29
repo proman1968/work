@@ -710,13 +710,13 @@ await test('postings: 4-шаговый интерфейс ODANT (Анализ с
 
     // Экран 2: Анализ счёта
     await el.setMode('analysis');
-    assert(await until(() => el.$('.analysis-layout') && deepText(el).includes('АНАЛИТИКИ СЧЁТА')),
+    assert(await until(() => el.$('.analysis-layout') && !el.$('.analysis-side') && deepText(el).includes('Контрагент')),
         'Экран 2: Анализ счёта отрисован: ' + (el.__shadowRoot__?.innerHTML || '').slice(0, 600));
     assert(deepText(el).includes('Альфа') && deepText(el).includes(rub(500)), 'строка аналитики в Анализе счёта: ' + deepText(el));
 
     // Экран 3: Двухпанельные Обороты счёта
     await el.setMode('turnovers');
-    assert(await until(() => el.$('.turnovers-layout') && deepText(el).includes('ГРУППИРОВАТЬ')), 'Экран 3: Обороты счёта отрисованы');
+    assert(await until(() => el.$('.turnovers-layout') && deepText(el).includes('Группировать:') && el.$('.entry-icon-btn')), 'Экран 3: Обороты счёта отрисованы');
     assert(deepText(el).includes('1 кв. 2026 г.') && deepText(el).includes('со сч. 90 Продажи'), 'левая таблица периодов и правая таблица документов: ' + deepText(el));
 
     // Экран 4: Сборная карточка проводки

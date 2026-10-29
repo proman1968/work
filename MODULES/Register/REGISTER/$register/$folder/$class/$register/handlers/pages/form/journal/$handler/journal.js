@@ -51,6 +51,74 @@ function _derivePacketsKey(from, to, fallback = '*') {
     return fallback || '*';
 }
 
+function _daysInMonth(y, m) {
+    return new Date(y, m, 0).getDate();
+}
+
+function _weekBounds(dt) {
+    const dow = dt.getDay();
+    const diffToMon = dow === 0 ? -6 : 1 - dow;
+    const mon = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + diffToMon);
+    const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
+    return { from: _day(mon), to: _day(sun) };
+}
+
+function _boundsFromPacketsKey(key, defaultMode = 'month') {
+    const k = String(key || '').trim();
+    if (!k || k === '*')
+        return { from: '', to: '' };
+    if (k.startsWith('period:')) {
+        const [, s = '', e = ''] = k.split(':');
+        return { from: s, to: e };
+    }
+    if (k === 'now' || k.startsWith('now:')) {
+        const gran = k.startsWith('now:') ? k.slice(4) : defaultMode;
+        const now = new Date();
+        const y = now.getFullYear(), m = now.getMonth() + 1;
+        if (gran === 'day') {
+            const d = _day(now);
+            return { from: d, to: d };
+        }
+        if (gran === 'week')
+            return _weekBounds(now);
+        if (gran === 'quarter') {
+            const q = Math.floor((m - 1) / 3) + 1;
+            const m1 = String((q - 1) * 3 + 1).padStart(2, '0');
+            const m2 = (q - 1) * 3 + 3;
+            return { from: `${y}-${m1}-01`, to: `${y}-${String(m2).padStart(2, '0')}-${String(_daysInMonth(y, m2)).padStart(2, '0')}` };
+        }
+        if (gran === 'year')
+            return { from: `${y}-01-01`, to: `${y}-12-31` };
+        const ms = String(m).padStart(2, '0');
+        return { from: `${y}-${ms}-01`, to: `${y}-${ms}-${String(_daysInMonth(y, m)).padStart(2, '0')}` };
+    }
+    const clean = k.replace(/\*+$/, '');
+    if (/^\d{4}$/.test(clean))
+        return { from: `${clean}-01-01`, to: `${clean}-12-31` };
+    const qm = /^(\d{4})-q([1-4])$/i.exec(clean);
+    if (qm) {
+        const y = +qm[1], q = +qm[2];
+        const m1 = String((q - 1) * 3 + 1).padStart(2, '0');
+        const m2 = (q - 1) * 3 + 3;
+        return { from: `${y}-${m1}-01`, to: `${y}-${String(m2).padStart(2, '0')}-${String(_daysInMonth(y, m2)).padStart(2, '0')}` };
+    }
+    const mm = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(clean);
+    if (mm) {
+        const y = +mm[1], m = +mm[2];
+        return { from: `${clean}-01`, to: `${clean}-${String(_daysInMonth(y, m)).padStart(2, '0')}` };
+    }
+    if (clean.startsWith('week:')) {
+        const monIso = clean.slice(5);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(monIso)) {
+            const [y, m, d] = monIso.split('-').map(Number);
+            return _weekBounds(new Date(y, m - 1, d));
+        }
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean))
+        return { from: clean, to: clean };
+    return { from: '', to: '' };
+}
+
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 
 export default {
@@ -336,11 +404,13 @@ export default {
     </div>
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
-    packetsStart: _yearStart(),
-    packetsEnd: _yearEnd(),
+    packetsStart: '',
+    packetsEnd: '',
     packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
+    _attachedDone: false,
+    _initialNav: null,
     from: '',
     to: '',
     account: '',
@@ -449,14 +519,26 @@ export default {
         if (!hasNavPeriod && (this.from || this.to))
             return;
         const saved = _readSavedPeriod();
-        const src = hasNavPeriod ? nav : saved;
+        const localSavedKey = typeof this.loadFromLocalStorage === 'function' ? this.loadFromLocalStorage('packetsKey') : undefined;
+        if (typeof localSavedKey === 'string' && localSavedKey && (typeof this.packetsKey !== 'string' || this.packetsKey === '*'))
+            this.packetsKey = localSavedKey;
+        const pk = typeof this.packetsKey === 'string' ? this.packetsKey : '';
+        const src = hasNavPeriod ? nav : (saved || (pk && pk !== '*' ? { packetsKey: pk } : null));
         if (!src)
             return;
         this._initializingPackets = true;
         try {
-            const from = String(src.from || '');
-            const to = String(src.to || '');
-            const key = _derivePacketsKey(from, to, typeof src.packetsKey === 'string' ? src.packetsKey : '*');
+            const rawKey = typeof src.packetsKey === 'string' && src.packetsKey ? src.packetsKey : (pk || '*');
+            let from = String(src.from || '');
+            let to = String(src.to || '');
+            if (!from && !to && rawKey !== '*') {
+                const derived = _boundsFromPacketsKey(rawKey, 'month');
+                if (derived.from && derived.to) {
+                    from = derived.from;
+                    to = derived.to;
+                }
+            }
+            const key = _derivePacketsKey(from, to, rawKey);
             this.from = from;
             this.to = to;
             this._packetFiltered = !!(from || to);
@@ -483,9 +565,12 @@ export default {
         this.entryCard = null;
     },
     async attached() {
-        this._restorePeriodState();
+        const initNav = this._initialNav;
+        this._initialNav = null;
+        this._restorePeriodState(initNav);
         await this.loadScope();
         await this.reload();
+        this._attachedDone = true;
     },
     /** Видимые подразделения для фильтра; без ответа — без фильтра. */
     async loadScope() {
@@ -514,8 +599,15 @@ export default {
         return p;
     },
     _syncPacketRange(res) {
-        if (!res || !('range' in res))
+        if (!res)
             return false;
+        if (!('range' in res)) {
+            if (!this.packetsStart) {
+                this.packetsStart = _yearStart();
+                this.packetsEnd = _yearEnd();
+            }
+            return false;
+        }
         const r = res.range;
         if (!r || !r.start || !r.end) {
             this.packetsStart = '';
@@ -526,7 +618,9 @@ export default {
         this.packetsStart = r.start;
         this.packetsEnd = r.end;
         this.packetDays = Array.isArray(r.days) && r.days.length ? r.days : null;
-        if (this._packetFiltered && ((this.to && this.to < r.start) || (this.from && this.from > r.end))) {
+        const keyStr = typeof this.packetsKey === 'string' ? this.packetsKey : '';
+        const isNowKey = keyStr === 'now' || keyStr.startsWith('now:');
+        if (this._packetFiltered && !isNowKey && this.to && this.to < r.start) {
             this._initializingPackets = true;
             try {
                 this._packetFiltered = false;

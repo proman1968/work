@@ -1183,6 +1183,109 @@ describe('архитектура представлений формы (VIEW п�
         assert.equal(h.packetsKey, '*', 'несуществующий 2021 год автоматически сброшен на Все (*)');
         assert.equal(h.from, '');
         assert.equal(h.to, '');
+
+        // Если выбран текущий период (например, 4 кв. 2026 г. или now), который идёт после первой проводки (to >= r.start),
+        // период НЕ сбрасывается и передаётся в db_sheet для отображения входящего сальдо На начало!
+        calls.length = 0;
+        h.from = '2026-10-01';
+        h.to = '2026-12-31';
+        h.packetsKey = '2026-q4*';
+        h._packetFiltered = true;
+        await h.reload();
+        assert.equal(h.from, '2026-10-01', 'период 4 кв. 2026 г. не сброшен');
+        assert.equal(h.to, '2026-12-31');
+        assert.equal(h.packetsKey, '2026-q4*');
+        assert.equal(calls.length, 1, 'повторного сброса на Весь период нет');
+        assert.deepEqual(calls[0].params, { from: '2026-10-01', to: '2026-12-31' });
+    });
+
+    it('Обороты, Анализ, стандартная вьюха объекта (form/object с allowTools: false) и вкладки в футере work-form', async () => {
+        const objectMeta = (await import('../$server/$folder/$class/handlers/pages/form/object/$handler/class.js')).default;
+        const objectView = (await import('../$server/$folder/$class/handlers/pages/form/object/$handler/object.js')).default;
+        const formSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/handlers/pages/form/$handler/form.js'), 'utf-8');
+
+        // 1. Хендлер редактора объекта имеет allowTools: false и является стандартной вьюхой
+        assert.equal(objectMeta.allowTools, false, 'у хендлера редактора объектов allowTools: false');
+        assert.equal(objectView.isObjectView, true);
+        assert.ok(objectView.template.includes('oda-editor-form'), 'стандартная вьюха объекта содержит oda-editor-form');
+        assert.ok(formSrc.includes('allowTools === false'), 'work-form скрывает верхний тулбар при allowTools: false');
+
+        // 2. В футере work-form сервисные кнопки берутся только от $focusedItem (#focusedTools), а не от $item (#mainTools), и справа есть вкладки formTabs
+        assert.ok(!formSrc.includes('id="mainTools"'), 'сервисные кнопки от $item формы (#mainTools) убраны из футера');
+        assert.ok(formSrc.includes('id="focusedTools"'), 'сервисные кнопки от $focusedItem (#focusedTools) в футере');
+        assert.ok(formSrc.includes('class="form-tabs-bar"'), 'полоса вкладок formTabs справа на футере');
+        assert.ok(formSrc.includes('openInForm('), 'переходы внутри формы открываются на вкладках внутри текущей work-form');
+
+        // 3. На view "Обороты" выбор группировок сделан дропдауном в filter-strip, а последним полем добавлена кнопка-иконка проводки без текста
+        assert.ok(!postings.template.includes('class="group-panel"'), 'боковая панель радиокнопок группировки убрана');
+        assert.ok(postings.template.includes('title="Группировать"'), 'выбор группировок вынесен дропдауном');
+        assert.ok(postings.template.includes('class="entry-icon-btn"'), 'кнопка проводки последним полем (только иконка без текста)');
+
+        // 4. На view "Анализ" нет левой панели (.analysis-side), а в начале таблицы идут колонки по числу привязанных аналитических справочников (analysisSlots)
+        assert.ok(!postings.template.includes('class="analysis-side"'), 'левая панель в Анализе убрана');
+        assert.ok(!postings.template.includes('class="slot-card"'), 'устаревшие карточки слотов убраны');
+        assert.ok(!postings.template.includes('class="analysis-toolbar"'), 'лишняя верхняя панель над таблицей Анализа убрана');
+        assert.ok(postings.template.includes('~for="analysisSlots"'), 'колонки по числу привязанных аналитических справочников');
+
+        const calls = [];
+        const h = host(postings, calls, {
+            fetch: (m) => {
+                if (m === 'db_schema') {
+                    return {
+                        schema: {
+                            family: 'account',
+                            fields: [{ id: 'item', label: 'Материал', type: 'link', target: '/DATA/CATALOGS/ITEMS', analytic: true }],
+                        },
+                        slots: [{
+                            id: 'item',
+                            label: 'Материал',
+                            target: '/DATA/CATALOGS/ITEMS',
+                            fields: [
+                                { id: 'item', spec: 'item', slotId: 'item', fieldId: 'name', label: 'Наименование', slotLabel: 'Материал', isObject: true, type: 'link', options: [{ value: 'i1', label: 'Сервер' }] },
+                                { id: 'item.unit', spec: 'item.unit', slotId: 'item', fieldId: 'unit', label: 'Ед. изм.', slotLabel: 'Материал', isObject: false, type: 'string', options: [{ value: 'шт', label: 'шт' }] },
+                            ],
+                        }],
+                    };
+                }
+                if (m === 'db_sheet')
+                    return { rows: [], total: {}, names: {} };
+                return null;
+            },
+        });
+        await h.loadSlots();
+        h.mode = 'analysis';
+        assert.equal(h.analyticFeatures.length, 2);
+        assert.deepEqual(h.analyticFeatures.map(f => f.label), ['Наименование', 'Ед. изм.']);
+        await h.setFeatureValue(h.analyticFeatures[1], 'шт');
+        let lastCall = calls.filter(c => c.method === 'db_sheet').at(-1);
+        assert.equal(lastCall.params.subanalytics, JSON.stringify({ item: { unit: 'шт' } }));
+        assert.equal(lastCall.params.by, JSON.stringify(['item']));
+        await h.toggleSlot('item.unit', true);
+        lastCall = calls.filter(c => c.method === 'db_sheet').at(-1);
+        assert.equal(lastCall.params.by, JSON.stringify(['item', 'item.unit']));
+
+        // 5. Отсутствие двойной загрузки при открытии представления с пакетировщиком и _initialNav
+        const openCalls = [];
+        const hOpen = host(postings, openCalls, {
+            self: { _initialNav: { mode: 'turnovers', from: '2026-01-01', to: '2026-12-31', packetsKey: '2026*' } },
+            fetch: (m) => {
+                if (m === 'db_schema')
+                    return { schema: { family: 'account', fields: [] }, slots: [] };
+                if (m === 'db_scope')
+                    return { all: true, units: [] };
+                if (m === 'db_turnovers')
+                    return {
+                        account: '/DATA/REGISTER/70', label: '70', groupBy: 'quarter',
+                        opening: { debit: 0, credit: 0 }, groups: [], closing: { debit: 0, credit: 0 }, total: 0, items: [],
+                        range: { start: '2014-01-01', end: '2026-04-15', days: ['2014-01-09', '2026-04-15'] },
+                        names: {},
+                    };
+                return null;
+            },
+        });
+        await hOpen.attached();
+        await hOpen.onPackets({ detail: { value: { selected: { name: '2026' }, period: { start: '2026-01-01', end: '2026-12-31' } } } });
+        assert.equal(openCalls.filter(c => c.method === 'db_turnovers').length, 1, 'представление с пакетировщиком при открытии загружается ровно 1 раз');
     });
 
     it('$handler Счетов (turnovers, analysis, postings) объявлены как сервисные представления с порядком 1..3', async () => {
@@ -1262,5 +1365,70 @@ describe('архитектура представлений формы (VIEW п�
         assert.equal(calls.filter(c => c.method === 'db_query').length, 0, 'при пришедшем days:[] в db_schema лишние запросы границ не шлются');
         assert.match(h.packetsStart, /^\d{4}-\d{2}-\d{2}$/);
         assert.equal(h.packetsStart, h.packetsEnd);
+    });
+
+    it('системность UI: allowSave по активному виду, верхняя кнопка Save, незастревающие кнопки внизу, кликабельные ссылки, контекстное меню объекта и вкладки проводника', async () => {
+        const objectsMeta = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/class.js')).default;
+        const objectMeta = (await import('../$server/$folder/$class/handlers/pages/form/object/$handler/class.js')).default;
+        const structExplorer = (await import('../$server/$folder/$class/$structure/handlers/pages/explorer/$handler/explorer.js')).default;
+        const baseExplorer = (await import('../$server/$folder/lib/explorer/explorer.js')).default;
+        const formSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/handlers/pages/form/$handler/form.js'), 'utf-8');
+
+        assert.equal(objectsMeta.allowSave, false, 'у табличного представления Объекты (form/objects) allowSave: false');
+        assert.equal(objectMeta.allowSave, true, 'у представления Объект (form/object) allowSave: true');
+        assert.ok(!formSrc.includes('onObjectSave()'), 'дублирующая кнопка Save внизу формы объекта убрана (живёт сверху в шапке)');
+        assert.ok(formSrc.includes('~if="allowSave"'), 'кнопка Save в шапке контролирует allowSave активного представления');
+        assert.ok(formSrc.includes('vc !== this.view_control'), 'syncFromView игнорирует фоновые вызовы от неактивных вкладок');
+        assert.deepEqual(objects.getFocusedServices(), [], 'в табличном представлении form/objects кнопки объекта внизу не застревают');
+
+        // Проводник: корень сервера виден администратору (hideTops: 0), вкладки Организации и Модули убраны из левой панели
+        assert.equal(baseExplorer.hideTops, 0, 'корневой элемент сервера WORK виден администратору в дереве');
+        assert.deepEqual(structExplorer.list, ['/USERS', '/NODES'], 'вкладки /ORGANIZATIONS и /MODULES убраны из панели переключателей слева');
+
+        // Кликабельные ссылки и контекстное меню строки объекта
+        const openedTabs = [];
+        let shownMenu = null;
+        globalThis.WORK.get_item = async p => ({ path: p, short: p });
+        globalThis.WORK.showMenu = async (params) => { shownMenu = params; };
+        try {
+            const calls = [];
+            const h = host(objects, calls, {
+                self: {
+                    $form: {
+                        openInForm: async (t, nav) => openedTabs.push({ path: t.path, nav }),
+                    },
+                },
+                fetch: (m) => {
+                    if (m === 'db_schema')
+                        return SCHEMA('operation');
+                    if (m === 'db_query')
+                        return { items: [{ id: 'op1', time: '2026-10-25', status: 'draft', body: { name: 'Акт № 54', client: 'c1' } }], names: { c1: 'ИП Трушин' } };
+                    return null;
+                },
+            });
+            await h.loadSchema();
+            await h.reload();
+
+            const clientCol = h.tableMetadata.find(c => c.id === 'client');
+            assert.equal(clientCol?.isLinkCol, true, 'колонка Link помечена isLinkCol для рендера синей гиперссылкой');
+            const timeCol = h.tableMetadata.find(c => c.id === 'time');
+            assert.equal(timeCol?.isDateCol, true, 'колонка Дата помечена isDateCol для календарного фильтра');
+
+            await h.onCellLinkClick({ detail: { row: h.tableRows[0], column: { field: clientCol } } });
+            assert.equal(openedTabs.length, 1, 'клик по синей ссылке открывает связанный объект во вкладке');
+            assert.equal(openedTabs[0].path, '/DATA/CATALOGS/C');
+            assert.equal(openedTabs[0].nav.view, 'object');
+            assert.equal(openedTabs[0].nav.id, 'c1');
+
+            await h.onRowContextMenu({ detail: { row: h.tableRows[0], originalEvent: {} } });
+            assert.ok(shownMenu, 'правый клик на строке объекта открывает контекстное меню объекта');
+            assert.equal(shownMenu.TITLE.label, 'объект: Акт № 54');
+            assert.equal(shownMenu.mode, 'tools');
+            assert.deepEqual(shownMenu.customTools.map(t => t.id), ['create', 'copy', 'open', 'delete']);
+        }
+        finally {
+            delete globalThis.WORK.get_item;
+            delete globalThis.WORK.showMenu;
+        }
     });
 });

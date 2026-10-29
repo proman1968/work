@@ -2,7 +2,7 @@
 export default {
     icon: 'odant:grid',
     label: 'Объекты',
-    allowSave: true,
+    allowSave: false,
     roles: ['BOSS', 'USER'],
     /**
      * Только классы с полями объектов (у групп и служебных классов формы нет).

@@ -49,6 +49,158 @@ export default {
                 flex-shrink: 1;
                 min-width: 0;
             }
+            .form-tabs-bar {
+                display: flex;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                align-items: flex-end !important;
+                justify-content: flex-start !important;
+                gap: 3px;
+                width: 100%;
+                overflow-x: auto;
+                overflow-y: hidden;
+                scrollbar-width: thin;
+                padding: 4px 8px 0 8px;
+                background: var(--light-background);
+                color: var(--content-color);
+                border-bottom: 1px solid var(--border-color);
+                box-sizing: border-box;
+            }
+            .form-tabs-bar[hidden],
+            #formToolbar[hidden],
+            #formFooter[hidden] {
+                display: none !important;
+            }
+            .tabs-close-all {
+                display: inline-flex !important;
+                align-items: center;
+                justify-content: center;
+                width: 22px;
+                height: 22px;
+                margin: 0 0 3px 6px;
+                padding: 0;
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-xs, 3px);
+                background: var(--content-background);
+                color: var(--content-color);
+                font-size: 13px;
+                font-weight: 700;
+                line-height: 1;
+                cursor: pointer;
+                flex-shrink: 0;
+                user-select: none;
+            }
+            .tabs-close-all:hover {
+                background: var(--error-color);
+                border-color: var(--error-color);
+                color: var(--error-background);
+            }
+            .form-tab {
+                display: inline-flex !important;
+                flex-direction: row !important;
+                flex-wrap: nowrap !important;
+                align-items: center !important;
+                flex-shrink: 0;
+                gap: 6px;
+                max-width: 260px;
+                height: 27px;
+                padding: 0 9px 0 10px;
+                margin-bottom: -1px;
+                font-size: 12.5px;
+                font-weight: 500;
+                line-height: 1;
+                white-space: nowrap !important;
+                border: 1px solid var(--border-color);
+                border-radius: 6px 10px 0 0;
+                background: var(--subtle-background);
+                color: var(--content-color);
+                cursor: pointer;
+                user-select: none;
+                box-sizing: border-box;
+                transition: background 0.12s ease, color 0.12s ease;
+            }
+            .form-tab:hover:not(.active) {
+                background: var(--accent-soft);
+                color: var(--accent-color);
+            }
+            .form-tab.active {
+                height: 28px;
+                background: var(--content-background);
+                color: var(--content-color);
+                border-color: var(--border-color);
+                border-bottom-color: var(--content-background);
+                font-weight: 700;
+                box-shadow: inset 0 2px 0 var(--accent-color);
+                z-index: 2;
+            }
+            .form-tab .tab-label {
+                display: inline-block;
+                max-width: 205px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap !important;
+            }
+            .form-tab .tab-close {
+                display: inline-flex !important;
+                align-items: center;
+                justify-content: center;
+                width: 15px;
+                height: 15px;
+                margin-left: 3px;
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-xs, 3px);
+                background: var(--content-background);
+                color: var(--content-color);
+                font-size: 10.5px;
+                font-weight: 700;
+                line-height: 1;
+                flex-shrink: 0;
+            }
+            .form-tab .tab-close:hover {
+                background: var(--error-color);
+                border-color: var(--error-color);
+                color: var(--error-background);
+            }
+            .obj-footer-actions {
+                display: inline-flex !important;
+                flex-direction: row !important;
+                align-items: center !important;
+                gap: 6px;
+                flex-shrink: 0;
+            }
+            button.obj-footer-btn {
+                display: inline-flex !important;
+                flex-direction: row !important;
+                align-items: center;
+                justify-content: center;
+                gap: 5px;
+                min-height: 24px;
+                padding: 3px 12px;
+                font-size: 12.5px;
+                font-weight: 600;
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-xs, 3px);
+                background: var(--content-background);
+                color: var(--content-color);
+                cursor: pointer;
+                user-select: none;
+            }
+            button.obj-footer-btn.primary {
+                font-weight: 700;
+                min-width: 62px;
+            }
+            button.obj-footer-btn.icon-only {
+                padding: 3px 7px;
+            }
+            button.obj-footer-btn:hover:not(:disabled) {
+                border-color: var(--accent-color);
+                background: var(--accent-soft);
+                color: var(--accent-color);
+            }
+            button.obj-footer-btn:disabled {
+                opacity: 0.45;
+                cursor: default;
+            }
         </style>
         <work-form :$item flex :view_name></work-form>
     `,
@@ -70,10 +222,10 @@ ODA({is: 'work-form',
                 to { opacity: 1; }
             }
         </style>
-        <div ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
+        <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px; margin: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
-                <item-node-explorer no-flex :$item show-role></item-node-explorer>
+                <item-node-explorer no-flex :$item="currentItem" show-role></item-node-explorer>
                 <div flex></div>
                 <oda-button id="consultantBtn" shadow icon="icons:help" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
@@ -82,11 +234,11 @@ ODA({is: 'work-form',
                     <div class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
 
                         <div
-                            ~if="view?.allowSave"
+                            ~if="allowSave"
                             :disabled="saving"
                             :rainbow="saving"
-                            :error-invert="$item?.isChanged && !!saveError"
-                            :success-invert="$item?.isChanged && !saveError"
+                            :error-invert="isViewChanged && !!saveError"
+                            :success-invert="isViewChanged && !saveError"
                             style="position: relative; align-items: center;"
                             horizontal
                         >
@@ -101,7 +253,7 @@ ODA({is: 'work-form',
                             <oda-button
                                 :icon="saving ? 'spinners:8-dots-rotate' : 'icons:save'"
                                 :icon-size
-                                :disabled="!$item?.isChanged"
+                                :disabled="!isViewChanged"
                                 @tap="save"
                                 style="border-radius: 4px;"
                                 center
@@ -110,7 +262,7 @@ ODA({is: 'work-form',
                         </div>
                         <div id="tools" raised no-flex horizontal style="min-height: 32px; align-items: center; gap: 8px; border-bottom: 1px solid;">
                             <item-node
-                                ~for="formViews"
+                                ~for="visibleFormViews"
                                 :$item="$for.item"
                                 :hide-label="view?.id !== $for.item.id"
                                 :icon-size
@@ -120,18 +272,27 @@ ODA({is: 'work-form',
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             >
-                                <oda-button ~if="view?.id === $for.item.id && view?.hasSettings" icon="icons:settings" @pointerdown.stop.prevent="view?.showSettings?.()" style="padding: 0;"></oda-button>
+                                <oda-button ~if="view?.id === $for.item.id && (view?.hasSettings || view?.DATA?.hasSettings || view_control?.hasSettings)" icon="icons:settings" @pointerdown.stop.prevent="(view_control?.showSettings ? view_control.showSettings() : view?.showSettings?.())" style="padding: 0;"></oda-button>
                             </item-node>
                         </div>
                     </div>
                 </div>
             </div>
-            <oda-button @tap="toggleFullscreen" ~if="$item?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
+            <oda-button @tap="toggleFullscreen" ~if="currentItem?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div id="formToolbar" slot="top" ~show="hasToolbar" header horizontal no-flex style="align-items: center; padding: 3px 8px; min-height: 32px; gap: 8px; box-sizing: border-box; border-bottom: 1px solid var(--border-color);">
+        <div id="formTabsBar" slot="top" class="form-tabs-bar" horizontal no-flex :hidden="!(formTabs?.length > 1)" ~show="formTabs?.length > 1">
+            <div class="form-tab" horizontal no-flex ~for="formTabs" ~class="{active: activeTabKey === $for.item.key}" :title="$for.item.label" @tap="activateTab($for.item)" style="display: inline-flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px; white-space: nowrap;">
+                <oda-icon no-flex ~if="$for.item.icon" :icon="$for.item.icon" icon-size="16" style="flex-shrink: 0;"></oda-icon>
+                <span class="tab-label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{$for.item.label}}</span>
+                <span class="tab-close" ~if="$for.item.closable" title="Закрыть вкладку" @tap.stop="closeTab($for.item, $event)">✕</span>
+            </div>
+            <div style="flex: 1;"></div>
+            <button type="button" class="tabs-close-all" title="Закрыть все дополнительные вкладки" @tap.stop="closeAllTabs($event)">✕</button>
+        </div>
+        <div id="formToolbar" slot="top" :hidden="!hasToolbar" ~show="hasToolbar" light horizontal no-flex style="align-items: center; padding: 3px 8px; min-height: 32px; gap: 8px; box-sizing: border-box; color: var(--content-color); border-bottom: 1px solid var(--border-color);">
             <div class="toolbar-zone left" horizontal no-flex style="align-items: center; gap: 6px;">
-                <item-tools id="topMainTools" :$item :state-version="focusedStateVersion" filter="button" ::tool-items="topMainToolItems" @tools-changed="onToolsListChanged('topMainToolItems', $event)" show-labels></item-tools>
+                <item-tools id="topMainTools" :$item="currentItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topMainToolItems" @tools-changed="onToolsListChanged('topMainToolItems', $event)" show-labels></item-tools>
                 <item-tools id="topFocusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topFocusedToolItems" @tools-changed="onToolsListChanged('topFocusedToolItems', $event)" show-labels></item-tools>
                 <slot name="tool-left" @slotchange="_checkToolbarSlots()"></slot>
             </div>
@@ -142,11 +303,14 @@ ODA({is: 'work-form',
                 <slot name="tool-right" @slotchange="_checkToolbarSlots()"></slot>
             </div>
         </div>
-        <div id="formFooter" slot="footer" ~show="hasFooter" header horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; gap: 6px; box-sizing: border-box; border-top: 1px solid var(--border-color);">
-            <item-tools id="mainTools" :$item :state-version="focusedStateVersion" filter="service" ::tool-items="mainToolItems" @tools-changed="onToolsListChanged('mainToolItems', $event)" show-labels></item-tools>
+        <div id="formFooter" slot="footer" :hidden="!hasFooter" ~show="hasFooter" light horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; gap: 6px; box-sizing: border-box; color: var(--content-color); border-top: 1px solid var(--border-color);">
             <item-tools id="focusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="service" ::tool-items="focusedToolItems" @tools-changed="onToolsListChanged('focusedToolItems', $event)" show-labels></item-tools>
             <slot name="footer-left"></slot>
             <div flex></div>
+            <div class="obj-footer-actions" horizontal no-flex ~if="isObjectViewActive" style="display: inline-flex; flex-direction: row; align-items: center; gap: 6px;">
+                <button type="button" class="obj-footer-btn primary" ~if="view_control?.canSave" :disabled="view_control?.busy" @tap="onObjectOk()">OK</button>
+                <button type="button" class="obj-footer-btn" :disabled="view_control?.busy" @tap="onObjectClose()">Закрыть</button>
+            </div>
             <div no-flex horizontal ~show="dialog" style="gap: 6px;">
                 <oda-button info-invert icon="icons:check" :icon-size @tap="ok" label="OK"></oda-button>
                 <oda-button icon="icons:close" :icon-size @tap="cancel" label="Отмена"></oda-button>
@@ -203,7 +367,7 @@ ODA({is: 'work-form',
      * Собрать описание того, что сейчас открыто в форме, для автоматического вопроса ИИ-консультанту.
      */
     buildConsultantContext() {
-        const it = this.$item;
+        const it = this.currentItem;
         const path = it?.short || it?.path || '/';
         const label = it?.DATA?.label || it?.label || it?.id || path;
         const type = it?.type || '';
@@ -293,7 +457,10 @@ ODA({is: 'work-form',
         }
     },
     async ready() {
-        window.execute ??= ($item, nav) => {
+        window.execute = ($item, nav) => {
+            if ($item && $item.type !== '$handler') {
+                return this.openInForm($item, nav);
+            }
             const short = $item?.short || $item?.path || '';
             if (nav && short)
                 this._saveNav(short, nav);
@@ -302,11 +469,11 @@ ODA({is: 'work-form',
                 return;
             }
             let url = short + '/';
-            if ($item.type !== '$handler')
-                url += '~/handlers/pages/' + ($item.page || 'form') + '/'
+            if ($item?.type !== '$handler')
+                url += '~/handlers/pages/' + ($item?.page || 'form') + '/'
             url = encodeURI(url);
             window.open(url, url)
-        }
+        };
         // для закрытия вкладки браузера (form без explorer)
         if (window.parent !== window)
             window.close = () => {
@@ -372,12 +539,22 @@ ODA({is: 'work-form',
      * activeRole) читаются синхронно, поэтому пересчёт и перерисовка идут
      * автоматически через Reactor, без ручных вызовов и render().
      */
+    activeItem: null,
+    get currentItem() {
+        return this.activeItem || this.$item;
+    },
     get formViews() {
-        const $item = this.$item;
+        const $item = this.currentItem;
         const role = this.activeRole;
         if (!$item || !role)
             return [];
         return this.loadFormViews($item, role);
+    },
+    get visibleFormViews() {
+        const views = this.formViews;
+        if (!Array.isArray(views))
+            return [];
+        return views.filter(v => !(v?.DATA?.hiddenInViewList || v?.hiddenInViewList) || v?.id === this.view?.id);
     },
     async loadFormViews($item, role) {
         try {
@@ -404,20 +581,12 @@ ODA({is: 'work-form',
             return [];
         }
     },
-    /**
-     * Представление по имени с проверкой доступа на сервере: недоступное
-     * (roles в class.js, отозванные права, allowUse) — get_item вернёт null,
-     * тогда fallback на вид из $item.form или первый доступный.
-     * contextPath — контекст для серверного предиката allowUse.
-     * Проверять вхождение в formViews нельзя: виды с allowUse === false
-     * (например chat) открыты легально, но в списке их нет.
-     */
-    async resolveView(name) {
-        const $item = this.$item;
-        const role = this.activeRole;
-        const views = await this.formViews;
+    async resolveView(name, targetItem = this.currentItem) {
+        const $item = targetItem || this.currentItem;
+        const role = $item?.role || this.activeRole;
+        const views = $item === this.currentItem ? await this.formViews : await this.loadFormViews($item, role);
         if (name) {
-            const inList = views.find(v => v.id === name);
+            const inList = (views || []).find(v => v.id === name);
             if (inList)
                 return inList;
             if ($item) {
@@ -426,24 +595,37 @@ ODA({is: 'work-form',
                     return view;
             }
         }
-        return views.find(v => v.id === $item?.form) || views[0];
+        return (views || []).find(v => v.id === $item?.form) || views?.[0];
     },
     $item: {
         $def: null,
         async set(n) {
             if (n) {
-                const $class = await this.$item?.$class;
-                this._savePath = ($class?.short || this.$item?.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
+                // Если уже открыта дочерняя вкладка и родительский биндинг повторно передаёт корневой $item — не сбрасываем активную вкладку
+                if (this._rootItem && this._rootItem === n && this.formTabs?.length > 0)
+                    return;
+                this._rootItem = n;
+                this.activeItem = n;
+                const $class = await n.$class;
+                this._savePath = ($class?.short || n.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
 
                 await n.ensureRole?.();
                 const nav = this._takeNav(n.short || n.path);
-                if (nav)
+                if (nav) {
+                    if (nav.view === 'objects' && nav.id)
+                        nav.view = 'object';
                     this._pendingNav = nav;
+                }
                 const view_name = nav?.view || this.host.default_view || n?.form || this.host.view_name;
-                this.view ||= await this.resolveView(view_name);
+                this.view = await this.resolveView(view_name, n);
             }
         }
     },
+    _rootItem: null,
+    _mountSeq: 0,
+    formTabs: [],
+    activeTabKey: '',
+    _newObjSeq: 0,
     topMainToolItems: [],
     topFocusedToolItems: [],
     mainToolItems: [],
@@ -451,11 +633,39 @@ ODA({is: 'work-form',
     hasSlottedToolbar: false,
     focusedStateVersion: 0,
     fallbackFocusedItem: null,
+    get isObjectViewActive() {
+        return Boolean(this.view?.id === 'object' || this.view_control?.isObjectView);
+    },
+    get allowSave() {
+        void this.focusedStateVersion;
+        const v = this.view;
+        if (!v)
+            return false;
+        if (typeof v.DATA?.allowSave === 'boolean')
+            return v.DATA.allowSave;
+        if (typeof v.allowSave === 'boolean')
+            return v.allowSave;
+        return Boolean(this.view_control?.allowSave);
+    },
+    get isViewChanged() {
+        void this.focusedStateVersion;
+        const vc = this.view_control;
+        if (vc && typeof vc.isChanged === 'boolean')
+            return vc.isChanged;
+        if (vc && typeof vc.isDirty === 'function')
+            return Boolean(vc.canSave !== false && vc.isDirty());
+        return Boolean(this.currentItem?.isChanged);
+    },
     get hasToolbar() {
+        if (this.view?.allowTools === false || this.view?.DATA?.allowTools === false)
+            return false;
         return Boolean(this.topMainToolItems?.length || this.topFocusedToolItems?.length || this.hasSlottedToolbar);
     },
+    get hasTopArea() {
+        return Boolean((this.formTabs?.length > 1) || this.hasToolbar);
+    },
     get hasFooter() {
-        return Boolean(this.dialog || this.mainToolItems?.length || this.focusedToolItems?.length);
+        return Boolean(this.dialog || this.isObjectViewActive || this.focusedToolItems?.length);
     },
     _checkToolbarSlots() {
         const names = ['tool-left', 'tool-center', 'tool-right'];
@@ -471,7 +681,7 @@ ODA({is: 'work-form',
         this.async(() => this._wakeBars(), 5);
     },
     _wakeBars() {
-        for (const sel of ['#formToolbar', '#topMainTools', '#topFocusedTools', '#formFooter', '#mainTools', '#focusedTools']) {
+        for (const sel of ['#formHeader', '#formTabsBar', '#formToolbar', '#topMainTools', '#topFocusedTools', '#formFooter', '#focusedTools']) {
             const node = this.$?.(sel);
             if (node) {
                 if (node[R]?.states)
@@ -481,15 +691,15 @@ ODA({is: 'work-form',
         }
     },
     syncFromView(vc = this.view_control) {
-        if (!vc)
+        if (!vc || (this.view_control && vc !== this.view_control))
             return;
         this.fallbackFocusedItem = vc.fallbackFocusedItem || null;
         this.focusedItem = vc.$focusedItem !== undefined ? vc.$focusedItem : (vc.focusedItem || null);
         this.focusedStateVersion++;
-        for (const [sel, isFocused] of [['#topMainTools', false], ['#topFocusedTools', true], ['#mainTools', false], ['#focusedTools', true]]) {
+        for (const [sel, isFocused] of [['#topMainTools', false], ['#topFocusedTools', true], ['#focusedTools', true]]) {
             const t = this.$?.(sel);
             if (t) {
-                t.$item = this.$item;
+                t.$item = this.currentItem;
                 if (isFocused) {
                     t.fallbackItem = this.fallbackFocusedItem;
                     t.targetItem = this.focusedItem;
@@ -521,11 +731,11 @@ ODA({is: 'work-form',
     },
     /** Роль формы — эффективная роль элемента (общая предпочитаемая + доступность). */
     get activeRole() {
-        return this.$item?.role || '';
+        return this.currentItem?.role || '';
     },
-    /** Роль для $observers: читает $item.role, меняется вместе с ней. */
+    /** Роль для $observers: читает currentItem.role, меняется вместе с ней. */
     get itemRole() {
-        return this.$item?.role;
+        return this.currentItem?.role;
     },
     $observers: {
         // смена роли (из формы, меню или другого окна): цвет страницы,
@@ -622,6 +832,281 @@ ODA({is: 'work-form',
         this.host.view_name = handler.id;
         this.view = handler;
     },
+    _viewIconOf(viewHandler, $item) {
+        const map = {
+            sheet: 'odant:grid',
+            analysis: 'odant:grid',
+            turnovers: 'odant:calendar',
+            journal: 'odant:calendar',
+            postings: 'icons:list',
+            objects: 'odant:grid',
+            object: 'icons:description',
+            virtual: 'odant:grid',
+            folder: 'fontawesome:r-folder-open',
+            builder: 'icons:build',
+            editor: 'icons:code',
+            staff: 'icons:supervisor-account',
+            search: 'icons:search',
+            chat: 'communication:forum',
+            calendar: 'icons:event',
+            email: 'communication:email',
+        };
+        const id = viewHandler?.id || '';
+        const dataIcon = viewHandler?.DATA?.icon;
+        if (typeof dataIcon === 'string' && dataIcon)
+            return dataIcon;
+        if (map[id])
+            return map[id];
+        const rawIcon = viewHandler?.icon;
+        if (typeof rawIcon === 'string' && rawIcon && !rawIcon.includes('folder'))
+            return rawIcon;
+        return $item?.DATA?.icon || 'icons:dashboard';
+    },
+    _computeTabKey($item, viewId, nav = null) {
+        const short = $item?.short || $item?.path || '';
+        if (viewId === 'object') {
+            const objKey = nav?.id ? `id:${nav.id}` : nav?.copyFrom ? `copy:${nav.copyFrom}` : `new:${nav?._seq || (++this._newObjSeq)}`;
+            if (nav && !nav.id && !nav.copyFrom && !nav._seq)
+                nav._seq = Number(objKey.slice(4));
+            return `${short}::object::${objKey}`;
+        }
+        return `${short}`;
+    },
+    _computeTabLabel($item, viewHandler, nav = null) {
+        if (nav?.label)
+            return String(nav.label);
+        const rawLabel = $item?.DATA?.label || $item?.label || $item?.id || ($item?.short || '').split('/').pop() || 'Форма';
+        const code = ($item?.short || $item?.path || '').split('/').pop() || '';
+        const isAcc = $item?.type === '$account' || /^\d+(?:\.\d+)?$/.test(code);
+        const itemTitle = (isAcc && code && !String(rawLabel).startsWith(code + ' ') && String(rawLabel) !== code)
+            ? `${code} ${rawLabel}`
+            : String(rawLabel);
+        return itemTitle;
+    },
+    _ensureCurrentTab(viewHandler = this.view, nav = null) {
+        const curItem = this.currentItem;
+        if (!curItem || !viewHandler)
+            return null;
+        const viewId = viewHandler.id || '';
+        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
+        if (list.length === 0) {
+            const key = this._computeTabKey(curItem, viewId, nav);
+            const rootTab = {
+                key,
+                $item: curItem,
+                viewId,
+                view: viewHandler,
+                nav: nav || null,
+                label: this._computeTabLabel(curItem, viewHandler, nav),
+                icon: this._viewIconOf(viewHandler, curItem),
+                closable: false,
+            };
+            this.formTabs = [rootTab];
+            this.activeTabKey = key;
+            return rootTab;
+        }
+        let cur = list.find(t => t.key === this.activeTabKey);
+        if (cur && cur.$item === curItem && cur.viewId !== 'object' && viewId !== 'object') {
+            cur.viewId = viewId;
+            cur.view = viewHandler;
+            cur.icon = this._viewIconOf(viewHandler, curItem);
+            this.formTabs = [...list];
+        }
+        return cur || list[0];
+    },
+    updateActiveTabLabel(newLabel) {
+        if (!newLabel || !Array.isArray(this.formTabs))
+            return;
+        const list = [...this.formTabs];
+        const cur = list.find(t => t.key === this.activeTabKey);
+        if (cur && cur.label !== newLabel) {
+            cur.label = String(newLabel);
+            this.formTabs = list;
+        }
+    },
+    async openInForm(targetItem, rawNav = null) {
+        if (!targetItem)
+            return;
+        await targetItem.ensureRole?.();
+        const nav = rawNav && typeof rawNav === 'object' ? { ...rawNav } : {};
+        if (nav.view === 'objects' && nav.id) {
+            nav.view = 'object';
+        }
+        // Зафиксируем текущую (начальную) вкладку перед открытием дочерней
+        this._ensureCurrentTab(this.view);
+
+        const targetViewName = nav.view || targetItem.form || '';
+        const viewHandler = await this.resolveView(targetViewName, targetItem);
+        if (!viewHandler)
+            return;
+        const viewId = viewHandler.id;
+        const key = this._computeTabKey(targetItem, viewId, nav);
+        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
+        let tab = list.find(t => t.key === key);
+        if (!tab) {
+            tab = {
+                key,
+                $item: targetItem,
+                viewId,
+                view: viewHandler,
+                nav,
+                label: this._computeTabLabel(targetItem, viewHandler, nav),
+                icon: this._viewIconOf(viewHandler, targetItem),
+                closable: list.length > 0,
+            };
+            list.push(tab);
+            this.formTabs = list;
+        }
+        else {
+            tab.nav = nav;
+            tab.viewId = viewId;
+            tab.view = viewHandler;
+            tab.icon = this._viewIconOf(viewHandler, targetItem);
+            if (nav.label)
+                tab.label = String(nav.label);
+            this.formTabs = list;
+        }
+        await this.activateTab(tab, nav);
+    },
+    async activateTab(tab, explicitNav = null) {
+        if (!tab || !tab.$item)
+            return;
+        this.activeTabKey = tab.key;
+        this.activeItem = tab.$item;
+        const viewHandler = tab.view || await this.resolveView(tab.viewId, tab.$item);
+        if (!viewHandler)
+            return;
+        tab.view = viewHandler;
+        tab.viewId = viewHandler.id;
+        tab.icon = this._viewIconOf(viewHandler, tab.$item);
+        if (explicitNav)
+            this._pendingNav = explicitNav;
+        if (this.view === viewHandler) {
+            await this._mountActiveView(viewHandler);
+        }
+        else {
+            this.view = viewHandler;
+        }
+    },
+    async closeTab(tab, e) {
+        e?.stopPropagation?.();
+        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
+        const idx = list.findIndex(t => t.key === tab?.key);
+        if (idx <= 0)
+            return;
+        const targetTab = list[idx];
+        const ctrl = targetTab.control || this.controls[`${targetTab.key}::${targetTab.viewId}`];
+        if (ctrl && typeof ctrl.isDirty === 'function' && ctrl.isDirty()) {
+            if (typeof ctrl.confirmClose === 'function') {
+                const canClose = await ctrl.confirmClose();
+                if (!canClose)
+                    return;
+            }
+        }
+        if (ctrl && this.contains(ctrl))
+            this.removeChild(ctrl);
+        for (const k of Object.keys(this.controls)) {
+            if (k === targetTab.key || k.startsWith(targetTab.key + '::')) {
+                const c = this.controls[k];
+                if (c && this.contains(c))
+                    this.removeChild(c);
+                delete this.controls[k];
+            }
+        }
+        list.splice(idx, 1);
+        this.formTabs = list;
+        if (this.activeTabKey === targetTab.key && list.length) {
+            const nextTab = list[Math.max(0, idx - 1)];
+            await this.activateTab(nextTab);
+        }
+    },
+    async closeAllTabs(e) {
+        e?.stopPropagation?.();
+        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
+        if (list.length <= 1)
+            return;
+        for (let i = list.length - 1; i >= 1; i--) {
+            const t = list[i];
+            const ctrl = t.control || this.controls[`${t.key}::${t.viewId}`];
+            if (ctrl && typeof ctrl.isDirty === 'function' && ctrl.isDirty()) {
+                if (typeof ctrl.confirmClose === 'function') {
+                    const canClose = await ctrl.confirmClose();
+                    if (!canClose)
+                        return;
+                }
+            }
+        }
+        for (let i = list.length - 1; i >= 1; i--) {
+            const t = list[i];
+            for (const k of Object.keys(this.controls)) {
+                if (k === t.key || k.startsWith(t.key + '::')) {
+                    const c = this.controls[k];
+                    if (c && this.contains(c))
+                        this.removeChild(c);
+                    delete this.controls[k];
+                }
+            }
+        }
+        const rootTab = list[0];
+        this.formTabs = [rootTab];
+        await this.activateTab(rootTab);
+    },
+    async closeActiveTab(reloadPrevious = false) {
+        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
+        const idx = list.findIndex(t => t.key === this.activeTabKey);
+        if (idx <= 0)
+            return;
+        const targetTab = list[idx];
+        for (const k of Object.keys(this.controls)) {
+            if (k === targetTab.key || k.startsWith(targetTab.key + '::')) {
+                const c = this.controls[k];
+                if (c && this.contains(c))
+                    this.removeChild(c);
+                delete this.controls[k];
+            }
+        }
+        list.splice(idx, 1);
+        this.formTabs = list;
+        const nextTab = list[Math.max(0, idx - 1)];
+        if (nextTab) {
+            await this.activateTab(nextTab);
+            if (reloadPrevious && nextTab.control && typeof nextTab.control.reload === 'function') {
+                await nextTab.control.reload();
+            }
+        }
+    },
+    async reloadSiblingLists() {
+        const list = Array.isArray(this.formTabs) ? this.formTabs : [];
+        for (const t of list) {
+            if (t.key !== this.activeTabKey && t.control && typeof t.control.reload === 'function') {
+                await t.control.reload();
+            }
+        }
+    },
+    async onObjectOk() {
+        const vc = this.view_control;
+        if (!vc)
+            return;
+        if (typeof vc.saveAndClose === 'function') {
+            await vc.saveAndClose();
+            return;
+        }
+        if (typeof vc.save === 'function') {
+            const ok = await vc.save();
+            if (!ok)
+                return;
+        }
+        await this.closeActiveTab(true);
+    },
+    async onObjectClose() {
+        const list = Array.isArray(this.formTabs) ? this.formTabs : [];
+        const cur = list.find(t => t.key === this.activeTabKey);
+        if (cur && cur.closable) {
+            await this.closeTab(cur);
+            return;
+        }
+        await this.close();
+    },
     ok(e) {
         alert('ok')
     },
@@ -629,72 +1114,96 @@ ODA({is: 'work-form',
         alert('cancel')
     },
     controls: {},
+    async _mountActiveView(n) {
+        if (!n) return;
+        const seq = ++this._mountSeq;
+        const curItem = this.currentItem;
+        const nav = this._pendingNav || this._takeNav(curItem?.short || curItem?.path);
+        const curTab = this._ensureCurrentTab(n, nav);
+        const tabItem = curTab?.$item || curItem;
+        const cacheKey = `${curTab?.key || (tabItem?.short || '')}::${n.id}`;
+        let el = this.controls[cacheKey];
+
+        const removeOtherMainChildren = (keepEl) => {
+            for (const ch of [...this.children]) {
+                if (ch !== keepEl && ch.getAttribute?.('slot') === 'main')
+                    this.removeChild(ch);
+            }
+        };
+
+        removeOtherMainChildren(el);
+        if (!el) {
+            const ext = String(tabItem?.ext || '').toLowerCase();
+            const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
+            await n.importView(is);
+            if (seq !== this._mountSeq || this.view !== n)
+                return;
+            if (!customElements.get(is)) {
+                console.error(`[work-form] вид '${n.id}' не зарегистрирован как <${is}>`);
+                return;
+            }
+            el = this.controls[cacheKey];
+            if (!el) {
+                el = ODA.createComponent(is, { $item: tabItem, $context: tabItem, slot: 'main', $handler: n });
+                el.setAttribute('slot', 'main');
+                el.$form = this;
+                if (nav) {
+                    el._initialNav = nav;
+                    this._pendingNav = null;
+                }
+                this.controls[cacheKey] = el;
+            }
+            removeOtherMainChildren(el);
+            if (!el.isConnected)
+                this.appendChild(el);
+        }
+        else {
+            removeOtherMainChildren(el);
+            if (!el.isConnected)
+                this.appendChild(el);
+        }
+        el.$form = this;
+        if (curTab) {
+            curTab.control = el;
+            curTab.viewId = n.id;
+            curTab.view = n;
+            curTab.icon = this._viewIconOf(n, tabItem);
+        }
+        for (const oldSlotEl of [
+            ...this.querySelectorAll('[slot="tool-left"], [slot="tool-center"], [slot="tool-right"], [slot="footer-left"]'),
+            ...(this.$?.('#formToolbar')?.querySelectorAll?.('[data-toolbar-widget]') || []),
+        ]) {
+            if (oldSlotEl._ownerView && oldSlotEl._ownerView !== el)
+                oldSlotEl.remove();
+        }
+        this.saveError = null;
+        this.focusedToolItems = [];
+        this.topMainToolItems = [];
+        this.topFocusedToolItems = [];
+        this.view_control = el;
+        if (n.allowTools !== false && n.DATA?.allowTools !== false)
+            el.mountToolbarSlots?.(this);
+        this._checkToolbarSlots();
+        this.syncFromView(el);
+        this._wakeBars();
+        this.host.view_name = n.id;
+        if (nav && this._pendingNav === nav && el._attachedDone && typeof el?.applyNav === 'function') {
+            this._pendingNav = null;
+            Promise.resolve(el.applyNav(nav)).catch(err => console.error(err));
+        }
+        try {
+            const exp = window.top?.explorer || window.parent?.explorer;
+            const cons = exp?.$?.('#consultant') || exp?.$?.('item-consultant');
+            if (cons) {
+                const ctx = this.buildConsultantContext();
+                cons.activeFormContext = ctx;
+                cons.activeFormSummary = ctx;
+            }
+        } catch { /* ignore */ }
+    },
     view: {
         async set(n) {
-            if (!n) return;
-            let el = this.controls[n.id];
-            for (let id in this.controls) {
-                let old = this.controls[id];
-                if (old !== el && this.contains(old))
-                    this.removeChild(old);
-            }
-            if (!el) {
-                const ext = String(this.$item?.ext || '').toLowerCase();
-                const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
-                await n.importView(is);
-                if (this.view !== n)
-                    return;
-                if (!customElements.get(is)) {
-                    // Вид не зарегистрирован под нужным тегом — создавать элемент
-                    // бессмысленно: он останется пустым (как на скриншоте).
-                    console.error(`[work-form] вид '${n.id}' не зарегистрирован как <${is}>`);
-                    return;
-                }
-                // Сеттер асинхронный: пока грузился модуль, параллельный вызов (роль, повторный $item)
-                // мог уже создать это представление — второй экземпляр не нужен.
-                el = this.controls[n.id];
-                if (!el) {
-                    el = ODA.createComponent(is, { $item: this.$item, $context: this.$item, slot: 'main', $handler: n });
-                    el.$form = this;
-                    this.controls[n.id] = el;
-                }
-                for (let id in this.controls) {
-                    let old = this.controls[id];
-                    if (old !== el && this.contains(old))
-                        this.removeChild(old);
-                }
-                if (!el.isConnected)
-                    this.appendChild(el);
-            }
-            else if (!el.isConnected)
-                this.appendChild(el);
-            el.$form = this;
-            for (const oldSlotEl of [
-                ...this.querySelectorAll('[slot="tool-left"], [slot="tool-center"], [slot="tool-right"], [slot="footer-left"]'),
-                ...(this.$?.('#formToolbar')?.querySelectorAll?.('[data-toolbar-widget]') || []),
-            ]) {
-                if (oldSlotEl._ownerView && oldSlotEl._ownerView !== el)
-                    oldSlotEl.remove();
-            }
-            this.view_control = el;
-            el.mountToolbarSlots?.(this);
-            this._checkToolbarSlots();
-            this.syncFromView(el);
-            this.host.view_name = n.id;
-            const nav = this._pendingNav || this._takeNav(this.$item?.short || this.$item?.path);
-            if (nav && typeof el?.applyNav === 'function') {
-                this._pendingNav = null;
-                Promise.resolve(el.applyNav(nav)).catch(err => console.error(err));
-            }
-            try {
-                const exp = window.top?.explorer || window.parent?.explorer;
-                const cons = exp?.$?.('#consultant') || exp?.$?.('item-consultant');
-                if (cons) {
-                    const ctx = this.buildConsultantContext();
-                    cons.activeFormContext = ctx;
-                    cons.activeFormSummary = ctx;
-                }
-            } catch { /* ignore */ }
+            await this._mountActiveView(n);
         }
     },
     $listeners: {

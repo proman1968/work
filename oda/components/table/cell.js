@@ -85,6 +85,15 @@ const FRAME = /*html*/`
         }
         .text[group-col] {
             color: var(--row-color, light-dark(#6b21a8, #c084fc));
+            cursor: pointer;
+        }
+        .text[group-col]:hover {
+            text-decoration: underline;
+        }
+        .text[link-col] {
+            color: var(--row-color, var(--accent-color));
+            text-decoration: underline;
+            cursor: pointer;
         }
         .text[num-col] {
             text-align: right;
@@ -98,7 +107,7 @@ ODA({
         <!-- ввод слушаем на обёртке: слушатель на теге с ~if/~is теряется при перештамповке (pitfalls §43);
              value-changed контролла composed и всплывает сюда сам -->
         <div class="control" @focusin="onFocusIn()" @focusout="onFocusOut()" @value-changed="onControlInput($event)">
-            <span class="text" ~if="!mediatorTag && !controlTag" :group-col="Boolean(column?.field?.isGroupCol)" :num-col="isNumericCol">{{text}}</span>
+            <span class="text" ~if="!mediatorTag && !controlTag" :group-col="Boolean(column?.field?.isGroupCol && text)" :link-col="Boolean(column?.field?.isLinkCol && text)" :num-col="isNumericCol" @click="onTextClick($event)">{{text}}</span>
             <div ~is="mediatorTag" ~if="mediatorTag" :row :column :table></div>
             <div ~is="controlTag" ~if="controlTag" class="view" borderless dense :field="column.field" :value="valueFor($this)" :readonly="readonly"></div>
         </div>
@@ -205,6 +214,22 @@ ODA({
     get isNumericCol() {
         const t = String(this.column?.field?.type || '').toLowerCase();
         return t === 'number' || t === 'money' || t === 'integer';
+    },
+    onTextClick(e) {
+        const field = this.column?.field;
+        if (!field || !this.text)
+            return;
+        if (field.isLinkCol || field.isGroupCol) {
+            e?.stopPropagation?.();
+            const rowData = raw(this.row)?.data ?? this.row?.data;
+            const link = rowData?._links?.[field.id] || null;
+            this.fire('cell-link-click', {
+                row: rowData,
+                column: this.column,
+                fieldId: field.id,
+                link,
+            });
+        }
     },
     /**
      * Запись значения ячейки — одна точка (ввод контролла и редактора идёт сюда):

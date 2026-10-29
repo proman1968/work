@@ -474,6 +474,179 @@ function withTargetPaths(db, schema) {
 }
 
 /**
+ * Собрать аналитические признаки по полям прилинкованного справочника слота счёта
+ * (Наименование + поля схемы $catalog, вложенных структур $struct и расширений OVERLAY у $virtual)
+ * со списком реально существующих значений для панели «Анализ счёта».
+ */
+function buildCatalogAnalyticFields(db, slotField) {
+    const slotId = slotField.id;
+    const slotLabel = slotField.label || slotId;
+    const targetPath = slotField.targetPath || slotField.target;
+    const targetSchema = slotField.target ? withTargetPaths(db, classSchema(db, slotField.target)) : null;
+    if (!targetSchema) {
+        return [{
+            id: slotId,
+            spec: slotId,
+            slotId,
+            fieldId: 'name',
+            label: 'Наименование',
+            slotLabel,
+            isObject: true,
+            type: 'link',
+            catalog: targetPath,
+            options: [],
+        }];
+    }
+    const isVirt = targetSchema.type === '$virtual';
+    const regCid = isVirt ? (targetSchema.source?.registry || targetSchema.cid) : targetSchema.cid;
+    const descCids = descendants(db, regCid);
+
+    let objRows = [];
+    if (descCids.length) {
+        objRows = db.prepare(
+            `SELECT id, cid, body FROM objects WHERE cid IN (${descCids.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NULL ORDER BY updated DESC LIMIT 300`
+        ).all(...descCids);
+    }
+    const extByObj = new Map();
+    if (isVirt) {
+        const virtCids = descendants(db, targetSchema.cid);
+        if (virtCids.length) {
+            for (const r of db.prepare(
+                `SELECT ext_of, body FROM objects WHERE cid IN (${virtCids.map(() => '?').join(',')}) AND status <> 'deleted' AND ext_of IS NOT NULL LIMIT 300`
+            ).all(...virtCids)) {
+                try {
+                    extByObj.set(r.ext_of, JSON.parse(r.body || '{}'));
+                }
+                catch { /* ignore */ }
+            }
+        }
+    }
+
+    const parsedObjs = objRows.map(r => {
+        let body = {};
+        try { body = JSON.parse(r.body || '{}'); } catch { /* ignore */ }
+        const title = String(body.name || body.label || body.title || r.id).trim();
+        return { id: r.id, title, body, ext: extByObj.get(r.id) || null };
+    });
+
+    const objectOptions = parsedObjs
+        .map(o => ({ value: o.id, label: o.title || o.id }))
+        .sort((a, b) => a.label.localeCompare(b.label, 'ru', { numeric: true }));
+
+    const fieldDefs = [];
+    const seenFieldIds = new Set(['name', 'time']);
+    const collectFields = (list, isOverlay = false, prefix = '', prefixLabel = '') => {
+        for (const f of list || []) {
+            if (!f?.id || f.type === 'table')
+                continue;
+            const fullId = prefix ? `${prefix}.${f.id}` : f.id;
+            const fullLabel = prefixLabel ? `${prefixLabel}: ${f.label || f.id}` : (f.label || f.id);
+            if (f.type === 'struct' && Array.isArray(f.fields) && f.fields.length) {
+                collectFields(f.fields, isOverlay, fullId, fullLabel);
+                continue;
+            }
+            if (seenFieldIds.has(fullId))
+                continue;
+            seenFieldIds.add(fullId);
+            fieldDefs.push({
+                fieldId: fullId,
+                label: fullLabel,
+                type: f.type || 'string',
+                target: f.target,
+                values: f.values || f.options,
+                isOverlay,
+            });
+        }
+    };
+
+    collectFields(targetSchema.fields, false);
+    if (isVirt)
+        collectFields(targetSchema.overlay, true);
+    for (const cid of descCids) {
+        if (cid === targetSchema.cid)
+            continue;
+        const cs = classSchema(db, cid);
+        if (cs)
+            collectFields(cs.fields, false);
+    }
+
+    const refIdsToResolve = new Set();
+    const rawValuesByField = new Map();
+    for (const fd of fieldDefs) {
+        const vals = new Set();
+        for (const o of parsedObjs) {
+            let v;
+            if (fd.isOverlay && o.ext) {
+                v = o.ext[fd.fieldId];
+            }
+            else {
+                let cur = o.body;
+                for (const part of fd.fieldId.split('.')) {
+                    if (!cur || typeof cur !== 'object') { cur = undefined; break; }
+                    cur = cur[part];
+                }
+                v = cur;
+            }
+            if (v === undefined || v === null || v === '' || typeof v === 'object')
+                continue;
+            const strVal = String(v).trim();
+            if (!strVal)
+                continue;
+            vals.add(strVal);
+            if (fd.type === 'link')
+                refIdsToResolve.add(strVal);
+        }
+        rawValuesByField.set(fd.fieldId, [...vals]);
+    }
+
+    const refNames = refIdsToResolve.size ? namesOf(db, [...refIdsToResolve]).objects : {};
+
+    const out = [{
+        id: slotId,
+        spec: slotId,
+        slotId,
+        fieldId: 'name',
+        label: 'Наименование',
+        slotLabel,
+        isObject: true,
+        type: 'link',
+        catalog: targetPath,
+        options: objectOptions,
+    }];
+
+    for (const fd of fieldDefs) {
+        const rawVals = rawValuesByField.get(fd.fieldId) || [];
+        let options = [];
+        if (fd.type === 'boolean') {
+            options = [{ value: '1', label: 'Да' }, { value: '0', label: 'Нет' }];
+        }
+        else if (fd.type === 'enum' && Array.isArray(fd.values) && fd.values.length) {
+            options = fd.values.map(v => (v && typeof v === 'object'
+                ? { value: String(v.id ?? v.value), label: String(v.label ?? v.id ?? v.value) }
+                : { value: String(v), label: String(v) }));
+        }
+        else {
+            options = rawVals.map(v => ({
+                value: v,
+                label: fd.type === 'link' ? (refNames[v] || v) : v,
+            })).sort((a, b) => a.label.localeCompare(b.label, 'ru', { numeric: true }));
+        }
+        out.push({
+            id: `${slotId}.${fd.fieldId}`,
+            spec: `${slotId}.${fd.fieldId}`,
+            slotId,
+            fieldId: fd.fieldId,
+            label: fd.label,
+            slotLabel,
+            isObject: false,
+            type: fd.type,
+            options,
+        });
+    }
+    return out;
+}
+
+/**
  * Поддерево класса для форм: `classes` (cid → описание потомков), `leaves` (листья для создания
  * объектов в группе) и `slots` (слоты аналитик счёта или журнала по всему поддереву счетов).
  */
@@ -508,7 +681,13 @@ function schemaSubtree(db, cls) {
             for (const f of analyticSlots(s || { fields: [] })) {
                 if (!seenSlots.has(f.id)) {
                     seenSlots.add(f.id);
-                    slots.push({ id: f.id, label: f.label || f.id, target: f.target, targetPath: f.targetPath || f.target });
+                    slots.push({
+                        id: f.id,
+                        label: f.label || f.id,
+                        target: f.target,
+                        targetPath: f.targetPath || f.target,
+                        fields: buildCatalogAnalyticFields(db, f),
+                    });
                 }
             }
         }

@@ -56,6 +56,74 @@ function _derivePacketsKey(from, to, fallback = '*') {
     return fallback || '*';
 }
 
+function _daysInMonth(y, m) {
+    return new Date(y, m, 0).getDate();
+}
+
+function _weekBounds(dt) {
+    const dow = dt.getDay();
+    const diffToMon = dow === 0 ? -6 : 1 - dow;
+    const mon = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + diffToMon);
+    const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
+    return { from: _day(mon), to: _day(sun) };
+}
+
+function _boundsFromPacketsKey(key, defaultMode = 'month') {
+    const k = String(key || '').trim();
+    if (!k || k === '*')
+        return { from: '', to: '' };
+    if (k.startsWith('period:')) {
+        const [, s = '', e = ''] = k.split(':');
+        return { from: s, to: e };
+    }
+    if (k === 'now' || k.startsWith('now:')) {
+        const gran = k.startsWith('now:') ? k.slice(4) : defaultMode;
+        const now = new Date();
+        const y = now.getFullYear(), m = now.getMonth() + 1;
+        if (gran === 'day') {
+            const d = _day(now);
+            return { from: d, to: d };
+        }
+        if (gran === 'week')
+            return _weekBounds(now);
+        if (gran === 'quarter') {
+            const q = Math.floor((m - 1) / 3) + 1;
+            const m1 = String((q - 1) * 3 + 1).padStart(2, '0');
+            const m2 = (q - 1) * 3 + 3;
+            return { from: `${y}-${m1}-01`, to: `${y}-${String(m2).padStart(2, '0')}-${String(_daysInMonth(y, m2)).padStart(2, '0')}` };
+        }
+        if (gran === 'year')
+            return { from: `${y}-01-01`, to: `${y}-12-31` };
+        const ms = String(m).padStart(2, '0');
+        return { from: `${y}-${ms}-01`, to: `${y}-${ms}-${String(_daysInMonth(y, m)).padStart(2, '0')}` };
+    }
+    const clean = k.replace(/\*+$/, '');
+    if (/^\d{4}$/.test(clean))
+        return { from: `${clean}-01-01`, to: `${clean}-12-31` };
+    const qm = /^(\d{4})-q([1-4])$/i.exec(clean);
+    if (qm) {
+        const y = +qm[1], q = +qm[2];
+        const m1 = String((q - 1) * 3 + 1).padStart(2, '0');
+        const m2 = (q - 1) * 3 + 3;
+        return { from: `${y}-${m1}-01`, to: `${y}-${String(m2).padStart(2, '0')}-${String(_daysInMonth(y, m2)).padStart(2, '0')}` };
+    }
+    const mm = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(clean);
+    if (mm) {
+        const y = +mm[1], m = +mm[2];
+        return { from: `${clean}-01`, to: `${clean}-${String(_daysInMonth(y, m)).padStart(2, '0')}` };
+    }
+    if (clean.startsWith('week:')) {
+        const monIso = clean.slice(5);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(monIso)) {
+            const [y, m, d] = monIso.split('-').map(Number);
+            return _weekBounds(new Date(y, m - 1, d));
+        }
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean))
+        return { from: clean, to: clean };
+    return { from: '', to: '' };
+}
+
 const money = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
 const qtyFmt = v => (Number(v) ? Number(v).toLocaleString('ru-RU', { maximumFractionDigits: 4 }) : '');
 /** Сальдо со знаком (Дт − Кт) текстом: «1 200,00 Дт», «300,00 Кт». */
@@ -113,19 +181,20 @@ export default {
         /* Компактная полоса отбора аналитик над Оборотами и Проводками */
         .filter-strip {
             @apply --horizontal;
+            @apply --light;
+            color: var(--content-color);
             flex-shrink: 0;
             gap: 8px;
             align-items: center;
             flex-wrap: wrap;
             padding: 3px 8px;
             min-height: 28px;
-            background: light-dark(#efeee4, #24252b);
-            border-bottom: 1px solid light-dark(#b5b4ac, #3e4049);
+            border-bottom: 1px solid var(--border-color);
             font-size: 12px;
         }
         .filter-strip-label {
             font-weight: 600;
-            color: light-dark(#555, #a0aec0);
+            color: var(--muted-color);
         }
         .filter-slot-item {
             @apply --horizontal;
@@ -136,25 +205,25 @@ export default {
         .filter-strip select {
             padding: 2px 6px;
             font-size: 12px;
-            border: 1px solid light-dark(#b8b7ae, #3e4049);
-            border-radius: 3px;
-            background: light-dark(#fff, #1b1c20);
-            color: inherit;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-xs, 3px);
+            background: var(--content-background);
+            color: var(--content-color);
         }
 
-        /* Общие табличные стили в духе ODANT (единые с Ведомостью sheet.js) */
+        /* Общие табличные стили (единые с Ведомостью sheet.js и oda-table) */
         .head-wrap {
             @apply --vertical;
             flex-shrink: 0;
-            background: light-dark(#e3e1d3, #2a2b32);
-            color: light-dark(#1f1f1f, #e2e8f0);
-            border-bottom: 1px solid light-dark(#9a9990, #4a4c56);
+            background: var(--header-background);
+            color: var(--header-color);
+            border-bottom: 1px solid var(--border-color);
             user-select: none;
             scrollbar-gutter: stable;
             overflow-y: hidden;
         }
         .head-top {
-            border-bottom: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-bottom: 1px solid var(--border-color);
             font-weight: 600;
             font-size: 12px;
         }
@@ -169,23 +238,23 @@ export default {
             overflow-y: auto;
             overflow-x: hidden;
             scrollbar-gutter: stable;
-            background: light-dark(#ffffff, #1b1c20);
+            background: var(--content-background);
         }
         div.row {
             flex-shrink: 0;
             min-height: 25px;
-            border-bottom: 1px solid light-dark(#ecece8, #2c2d34);
+            border-bottom: 1px solid var(--subtle-border);
         }
         div.row:hover:not(.selected):not(.total):not(.opening-row) {
-            background: light-dark(#f2f5fb, rgba(255, 255, 255, 0.05));
+            background: var(--accent-soft);
         }
         div.row.selected {
-            background: #6882d6 !important;
-            color: #ffffff !important;
+            background: var(--selected-background) !important;
+            color: var(--selected-color) !important;
         }
         div.row.selected .cell {
             background: transparent !important;
-            color: #ffffff !important;
+            color: var(--selected-color) !important;
             border-right-color: rgba(255, 255, 255, 0.3) !important;
         }
         .cell {
@@ -197,13 +266,13 @@ export default {
             box-sizing: border-box;
             display: flex;
             align-items: center;
-            border-right: 1px solid light-dark(#e2e2dc, #2f3038);
+            border-right: 1px solid var(--subtle-border);
         }
         .cell:last-child {
             border-right: none;
         }
         .head-wrap .cell {
-            border-right: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-right: 1px solid var(--border-color);
             padding: 3px 7px;
         }
         .head-wrap .cell:last-child {
@@ -213,16 +282,16 @@ export default {
             grid-column: span 2;
             justify-content: center;
             text-align: center;
-            border-right: 1px solid light-dark(#9a9990, #4a4c56);
+            border-right: 1px solid var(--border-color);
         }
         .cell.span2:last-child {
             border-right: none;
         }
         .cell.acc {
-            border-right: 2px solid light-dark(#8c8b82, #52545f) !important;
+            border-right: 2px solid var(--border-color) !important;
         }
         .cell.group-sep {
-            border-right: 1px solid light-dark(#9a9990, #4a4c56);
+            border-right: 1px solid var(--border-color);
         }
         .cell.num {
             justify-content: flex-end;
@@ -244,15 +313,15 @@ export default {
             background: light-dark(rgba(253, 230, 238, 0.32), rgba(244, 114, 182, 0.03));
         }
         .storno {
-            color: var(--error-color, #c53030);
+            color: var(--error-color);
         }
         div.row.opening-row, div.bar.opening {
             flex-shrink: 0;
             font-weight: 600;
             min-height: 24px;
-            background: light-dark(#efeee4, #24252c);
-            color: light-dark(#222, #e2e8f0);
-            border-bottom: 1px solid light-dark(#b8b7ae, #3e4049);
+            background: var(--light-background);
+            color: var(--content-color);
+            border-bottom: 1px solid var(--border-color);
             scrollbar-gutter: stable;
             overflow-y: hidden;
         }
@@ -260,16 +329,16 @@ export default {
             flex-shrink: 0;
             font-weight: 700;
             min-height: 27px;
-            background: light-dark(#e3e1d3, #2a2b32);
-            color: light-dark(#111, #f1f5f9);
-            border-top: 2px solid light-dark(#8c8b82, #52545f);
+            background: var(--header-background);
+            color: var(--header-color);
+            border-top: 2px solid var(--border-color);
             border-bottom: none;
             scrollbar-gutter: stable;
             overflow-y: hidden;
             cursor: default;
         }
         .row.total .cell {
-            border-right: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-right: 1px solid var(--border-color);
         }
         .row.total .cell:last-child {
             border-right: none;
@@ -304,32 +373,27 @@ export default {
         }
         .analysis-side {
             @apply --vertical;
-            width: 240px;
+            width: 245px;
             flex-shrink: 0;
-            gap: 6px;
-            padding: 8px;
+            gap: 0;
+            padding: 0;
             background: light-dark(#f3f2ea, #22232a);
             border-right: 1px solid light-dark(#9a9990, #4a4c56);
-            overflow-y: auto;
+            overflow: hidden;
             font-size: 12px;
         }
-        .slot-card {
-            @apply --vertical;
-            gap: 4px;
-            padding: 6px;
-            background: light-dark(#fafaf7, #292a32);
-            border: 1px solid light-dark(#c8c7be, #3e4049);
-            border-radius: 3px;
-        }
-        .slot-head {
+        .analysis-side-top {
             @apply --horizontal;
             align-items: center;
             gap: 4px;
-            font-weight: 600;
+            padding: 4px 6px;
+            border-bottom: 1px solid light-dark(#b8b7ae, #3e4049);
+            background: light-dark(#e8e7dc, #26272f);
+            flex-shrink: 0;
         }
         .slot-move-btn {
-            padding: 1px 5px;
-            font-size: 11px;
+            padding: 2px 7px;
+            font-size: 12px;
             line-height: 1.2;
             border: 1px solid light-dark(#b8b7ae, #4a4c56);
             border-radius: 2px;
@@ -337,15 +401,83 @@ export default {
             color: inherit;
             cursor: pointer;
         }
-        .slot-sub {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 3px 6px;
-            border: 1px solid light-dark(#b8b7ae, #3e4049);
-            border-radius: 3px;
-            background: light-dark(#fff, #1b1c20);
-            color: inherit;
+        .slot-move-btn:hover {
+            background: light-dark(#eef2fa, #3d404c);
+        }
+        .features-grid {
+            @apply --vertical;
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            background: light-dark(#ffffff, #1b1c20);
+            border-bottom: 1px solid light-dark(#b8b7ae, #3e4049);
+        }
+        .feat-head, .feat-row {
+            display: grid !important;
+            grid-template-columns: minmax(105px, 1.05fr) minmax(95px, 1fr);
+            align-items: stretch;
+        }
+        .feat-head {
+            background: light-dark(#e3e1d3, #2a2b32);
+            color: light-dark(#1f1f1f, #e2e8f0);
+            border-bottom: 1px solid light-dark(#9a9990, #4a4c56);
+            font-weight: 600;
             font-size: 11.5px;
+            flex-shrink: 0;
+        }
+        .feat-row {
+            min-height: 24px;
+            border-bottom: 1px solid light-dark(#ecece8, #2c2d34);
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .feat-row.selected {
+            background: light-dark(#dbe4f8, rgba(104, 130, 214, 0.28));
+        }
+        .feat-cell {
+            min-width: 0;
+            padding: 2px 5px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            border-right: 1px solid light-dark(#e2e2dc, #2f3038);
+            box-sizing: border-box;
+        }
+        .feat-cell:last-child {
+            border-right: none;
+        }
+        .feat-select {
+            width: 100%;
+            min-width: 0;
+            padding: 1px 3px;
+            font-size: 11.5px;
+            border: 1px solid transparent;
+            border-radius: 2px;
+            background: transparent;
+            color: light-dark(#1d4ed8, #93c5fd);
+            cursor: pointer;
+            outline: none;
+        }
+        .feat-select:focus, .feat-select:hover {
+            border-color: light-dark(#b8b7ae, #4a4c56);
+            background: light-dark(#fff, #24252c);
+        }
+        .analysis-side-bottom {
+            @apply --vertical;
+            gap: 3px;
+            padding: 6px 8px;
+            flex-shrink: 0;
+            background: light-dark(#f3f2ea, #22232a);
+        }
+        .analysis-side-bottom label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+            user-select: none;
         }
         .analysis-main {
             @apply --vertical;
@@ -354,34 +486,42 @@ export default {
             min-height: 0;
             overflow: hidden;
         }
-        .analysis-toolbar {
-            @apply --horizontal;
-            flex-shrink: 0;
-            gap: 8px;
-            align-items: center;
-            padding: 4px 8px;
-            background: light-dark(#efeee4, #24252b);
-            border-bottom: 1px solid light-dark(#b5b4ac, #3e4049);
-        }
-        .analysis-search {
-            width: 240px;
-            padding: 3px 8px;
-            font-size: 12.5px;
-            border: 1px solid light-dark(#b8b7ae, #3e4049);
-            border-radius: 3px;
-            background: light-dark(#fff, #1b1c20);
-            color: inherit;
-        }
         .analysis-table {
             @apply --vertical;
             flex: 1;
             min-height: 0;
             overflow: hidden;
         }
-        .analysis-table div.head-top, .analysis-table div.head, .analysis-table div.row {
+        .analysis-table div.head-top, .analysis-table div.head, .analysis-table div.filter-row, .analysis-table div.row {
             display: grid !important;
             grid-template-columns: minmax(210px, 2.5fr) repeat(6, minmax(90px, 1fr));
             align-items: stretch;
+        }
+        .filter-row {
+            background: light-dark(#ffffff, #1f2026);
+            border-top: 1px solid light-dark(#b8b7ae, #3e4049);
+            min-height: 23px;
+        }
+        .filter-row .cell {
+            padding: 1px 5px;
+            gap: 4px;
+        }
+        .filter-mark {
+            font-size: 10.5px;
+            font-weight: 700;
+            color: light-dark(#555, #94a3b8);
+            flex-shrink: 0;
+            user-select: none;
+        }
+        .inline-filter-input {
+            flex: 1;
+            min-width: 0;
+            border: none;
+            outline: none;
+            background: transparent;
+            color: inherit;
+            font-size: 12px;
+            padding: 1px 2px;
         }
         .analysis-table .grid-body div.row .cell.acc {
             background: light-dark(#f6f6f4, #222328);
@@ -394,31 +534,12 @@ export default {
         }
 
         /* Экран 3: Обороты счёта (mode === 'turnovers') */
-        .group-panel {
-            @apply --vertical;
-            width: 124px;
-            flex-shrink: 0;
-            gap: 4px;
-            padding: 8px;
-            background: light-dark(#f3f2ea, #22232a);
-            border-right: 1px solid light-dark(#9a9990, #4a4c56);
-            overflow-y: auto;
-            font-size: 12.5px;
-        }
-        .group-panel label {
-            display: flex;
-            align-items: center;
-            gap: 5px;
-            padding: 1px 0;
-            cursor: pointer;
-            user-select: none;
-        }
         .group-title {
             font-weight: 700;
             font-size: 11.5px;
             letter-spacing: 0.02em;
-            color: light-dark(#333, #cbd5e1);
-            margin-bottom: 4px;
+            color: light-dark(#555, #cbd5e1);
+            margin-bottom: 2px;
         }
         .periods-panel {
             @apply --vertical;
@@ -445,8 +566,30 @@ export default {
         }
         .docs-panel div.head, .docs-panel div.row {
             display: grid !important;
-            grid-template-columns: 82px minmax(115px, 1.45fr) minmax(115px, 1.35fr) minmax(86px, 1fr) minmax(86px, 1fr);
+            grid-template-columns: 82px minmax(115px, 1.45fr) minmax(115px, 1.35fr) minmax(86px, 1fr) minmax(86px, 1fr) 30px;
             align-items: stretch;
+        }
+        .cell.entry-col {
+            justify-content: center;
+            padding: 0 2px;
+        }
+        .entry-icon-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 20px;
+            padding: 0;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            color: light-dark(#444, #cbd5e1);
+            cursor: pointer;
+        }
+        .entry-icon-btn:hover {
+            border-color: light-dark(#b8b7ae, #4a4c56);
+            background: light-dark(#eef2fa, #2d3039);
+            color: light-dark(#1d4ed8, #93c5fd);
         }
 
         /* Экран 4: Сборная карточка проводки */
@@ -503,8 +646,12 @@ export default {
 
     <div class="error" ~if="error">{{error}}</div>
 
-    <!-- Компактная полоса отбора по аналитикам и подразделению в Оборотах и Проводках -->
-    <div class="filter-strip" ~if="(slots?.length || units.length > 1) && mode !== 'analysis'">
+    <!-- Компактная полоса группировки, отбора по аналитикам и подразделению в Оборотах и Проводках -->
+    <div class="filter-strip" ~if="mode !== 'analysis' && (mode === 'turnovers' || slots?.length || units.length > 1)">
+        <span class="filter-strip-label" ~if="mode === 'turnovers'">Группировать:</span>
+        <select ~if="mode === 'turnovers'" title="Группировать" @change="setGroupBy($this.value)">
+            <option ~for="turnoverGroupOptions" :value="$for.item.id" :selected="$for.item.id === groupBy">{{$for.item.label}}</option>
+        </select>
         <span class="filter-strip-label" ~if="slots?.length">Аналитики:</span>
         <div class="filter-slot-item" ~for="slots">
             <oda-link-input dense :meta="$for.item" ::value="filters[$for.item.id]" @value-changed="onFilterChanged()"></oda-link-input>
@@ -563,42 +710,25 @@ export default {
         </div>
     </div>
 
-    <!-- Экран 2 ODANT: Анализ счёта в разрезе аналитик -->
+    <!-- Экран 2 ODANT: Анализ счёта в разрезе аналитик (колонки по числу привязанных аналитических справочников, без левой панели) -->
     <div class="analysis-layout" ~if="mode === 'analysis'">
-        <div class="analysis-side">
-            <div class="group-title">АНАЛИТИКИ СЧЁТА</div>
-            <div class="slot-card" ~for="slots">
-                <div class="slot-head">
-                    <input type="checkbox" :checked="isSlotActive($for.item.id)" @change="toggleSlot($for.item.id, $this.checked)">
-                    <span style="flex:1; overflow:hidden; text-overflow:ellipsis;">{{$for.item.label}}</span>
-                    <button type="button" class="slot-move-btn" title="Выше" @tap="moveSlot($for.index, -1)">↑</button>
-                    <button type="button" class="slot-move-btn" title="Ниже" @tap="moveSlot($for.index, 1)">↓</button>
-                </div>
-                <oda-link-input dense :meta="$for.item" ::value="filters[$for.item.id]" @value-changed="onFilterChanged()"></oda-link-input>
-                <input class="slot-sub" :value="subFilters[$for.item.id] || ''"
-                    placeholder="Субаналитика (поле:знач)"
-                    @change="setSubFilter($for.item.id, $this.value)">
-            </div>
-            <div class="group-title" style="margin-top:6px;">ЗНАЧЕНИЯ</div>
-            <label><input type="radio" name="valMode" value="amount" :checked="valueMode === 'amount'" @change="setValueMode('amount')"> Сумма</label>
-            <label><input type="radio" name="valMode" value="qty" :checked="valueMode === 'qty'" @change="setValueMode('qty')"> Количество</label>
-        </div>
         <div class="analysis-main">
-            <div class="analysis-toolbar">
-                <input class="analysis-search" :value="analysisQuery" placeholder="Быстрый фильтр по аналитике…" @input="analysisQuery = $this.value">
-                <div style="flex:1;"></div>
-                <button type="button" class="btn-action" @tap="openTurnoversFromAnalysis(selectedAnalysisRow)">Обороты по аналитике</button>
-            </div>
             <div class="analysis-table">
                 <div class="head-wrap">
-                    <div class="head-top">
-                        <div class="cell acc">Аналитика</div>
+                    <div class="head-top" ~style="{gridTemplateColumns: analysisGridCols}">
+                        <div class="cell acc" ~style="{gridColumn: 'span ' + analysisSlots.length, justifyContent: 'space-between'}">
+                            <span>Аналитика</span>
+                            <span style="display:inline-flex; align-items:center; gap:10px; font-weight:500; font-size:11.5px;">
+                                <label style="display:inline-flex; align-items:center; gap:3px; cursor:pointer;"><input type="radio" name="valMode" value="amount" :checked="valueMode === 'amount'" @change="setValueMode('amount')"> Сумма</label>
+                                <label style="display:inline-flex; align-items:center; gap:3px; cursor:pointer;"><input type="radio" name="valMode" value="qty" :checked="valueMode === 'qty'" @change="setValueMode('qty')"> Кол-во</label>
+                            </span>
+                        </div>
                         <div class="cell span2">На начало</div>
                         <div class="cell span2">За период</div>
                         <div class="cell span2">На конец</div>
                     </div>
-                    <div class="head">
-                        <div class="cell acc">Объект / Субсчёт</div>
+                    <div class="head" ~style="{gridTemplateColumns: analysisGridCols}">
+                        <div class="cell" ~for="analysisSlots" ~class="{acc: $for.index === analysisSlots.length - 1}">{{$for.item.label}}</div>
                         <div class="cell num">Дебет</div>
                         <div class="cell num group-sep">Кредит</div>
                         <div class="cell num">Дебет</div>
@@ -606,13 +736,26 @@ export default {
                         <div class="cell num">Дебет</div>
                         <div class="cell num">Кредит</div>
                     </div>
+                    <div class="filter-row" ~style="{gridTemplateColumns: analysisGridCols}">
+                        <div class="cell" ~for="analysisSlots" ~class="{acc: $for.index === analysisSlots.length - 1}">
+                            <span class="filter-mark">a%c</span>
+                            <input class="inline-filter-input" :value="slotQueryOf($for.item.id)" :placeholder="$for.item.label + '…'" @input="setSlotQuery($for.item.id, $this.value)">
+                        </div>
+                        <div class="cell"><span class="filter-mark">=</span></div>
+                        <div class="cell group-sep"><span class="filter-mark">=</span></div>
+                        <div class="cell"><span class="filter-mark">=</span></div>
+                        <div class="cell group-sep"><span class="filter-mark">=</span></div>
+                        <div class="cell"><span class="filter-mark">=</span></div>
+                        <div class="cell"><span class="filter-mark">=</span></div>
+                    </div>
                 </div>
                 <div class="grid-body">
                     <div class="row" ~for="analysisRows"
+                        ~style="{gridTemplateColumns: analysisGridCols}"
                         ~class="{group: !$for.item.detail, selected: selectedAnalysisRow?.label === $for.item.label}"
                         @tap="selectedAnalysisRow = $for.item"
                         @dblclick="openTurnoversFromAnalysis($for.item)">
-                        <div class="cell acc link" ~style="{paddingLeft: (8 + $for.item.indent) + 'px'}">{{$for.item.label}}</div>
+                        <div class="cell link" ~for="$for.item.slotCells" ~class="{acc: $for.$for.index === $for.item.slotCells.length - 1}">{{$for.$for.item}}</div>
                         <div class="cell num debit-col">{{$for.item.open_debit}}</div>
                         <div class="cell num credit-col group-sep">{{$for.item.open_credit}}</div>
                         <div class="cell num debit-col">{{$for.item.debit}}</div>
@@ -621,8 +764,8 @@ export default {
                         <div class="cell num credit-col">{{$for.item.close_credit}}</div>
                     </div>
                 </div>
-                <div class="row total">
-                    <div class="cell acc"><span>Итого</span><span class="row-count">{{analysisRows.length}}</span></div>
+                <div class="row total" ~style="{gridTemplateColumns: analysisGridCols}">
+                    <div class="cell acc" ~style="{gridColumn: 'span ' + analysisSlots.length}"><span>Итого</span><span class="row-count">{{analysisRows.length}}</span></div>
                     <div class="cell num">{{analysisTotals.open_debit}}</div>
                     <div class="cell num group-sep">{{analysisTotals.open_credit}}</div>
                     <div class="cell num">{{analysisTotals.debit}}</div>
@@ -636,13 +779,6 @@ export default {
 
     <!-- Экран 3 ODANT: Двухпанельные Обороты счёта -->
     <div class="turnovers-layout" ~if="mode === 'turnovers'">
-        <div class="group-panel">
-            <div class="group-title">ГРУППИРОВАТЬ</div>
-            <label ~for="turnoverGroupOptions">
-                <input type="radio" name="turnoverGroup" :value="$for.item.id" :checked="groupBy === $for.item.id" @change="setGroupBy($for.item.id)">
-                <span>{{$for.item.label}}</span>
-            </label>
-        </div>
         <div class="periods-panel">
             <div class="head-wrap">
                 <div class="head">
@@ -687,6 +823,7 @@ export default {
                     <div class="cell">Корр. счёт</div>
                     <div class="cell num">Дебет</div>
                     <div class="cell num">Кредит</div>
+                    <div class="cell entry-col" title="Проводка"></div>
                 </div>
             </div>
             <div class="grid-body">
@@ -696,6 +833,11 @@ export default {
                     <div class="cell link" title="Открыть корреспондирующий счёт" @tap="openCorr($for.item)">{{$for.item.corrDir}}</div>
                     <div class="cell num debit-col">{{$for.item.debit}}</div>
                     <div class="cell num credit-col">{{$for.item.credit}}</div>
+                    <div class="cell entry-col">
+                        <button type="button" class="entry-icon-btn" title="Открыть проводку" @tap.stop="openEntry($for.item.entry)">
+                            <oda-icon icon="icons:list" icon-size="16"></oda-icon>
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="row total">
@@ -704,6 +846,7 @@ export default {
                 <div class="cell"></div>
                 <div class="cell num">{{turnoverDocsTotals.debit}}</div>
                 <div class="cell num">{{turnoverDocsTotals.credit}}</div>
+                <div class="cell entry-col"></div>
             </div>
         </div>
     </div>
@@ -739,11 +882,13 @@ export default {
     </div>
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
-    packetsStart: _yearStart(),
-    packetsEnd: _yearEnd(),
+    packetsStart: '',
+    packetsEnd: '',
     packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
+    _attachedDone: false,
+    _initialNav: null,
     /** Режим экрана счёта: 'card' (Проводки) | 'analysis' (Экран 2: Анализ) | 'turnovers' (Экран 3: Обороты) */
     mode: 'card',
     /** Режим значений в Анализе счёта: 'amount' (Сумма) | 'qty' (Количество) */
@@ -753,11 +898,17 @@ export default {
     turnoverGroupOptions: TURNOVER_GROUPS,
     selectedGroupKey: '',
     groups: [],
-    /** Выбранные слоты для разворота в Анализе счёта */
+    /** Выбранные слоты/признаки для разворота в Анализе счёта */
     activeSlots: [],
+    /** Аналитические признаки по полям прилинкованных справочников */
+    analyticFeatures: [],
+    selectedFeatureId: '',
+    /** Значения фильтра по полям прилинкованных справочников: { 'slotId.fieldId': val } */
+    featureValues: {},
     /** Текстовые фильтры субаналитик: { слот: 'поле:значение' } */
     subFilters: {},
     analysisQuery: '',
+    slotQueries: {},
     sheetRows: [],
     sheetTotal: null,
     selectedAnalysisRow: null,
@@ -781,6 +932,27 @@ export default {
     names: { objects: {}, classes: {}, paths: {} },
     error: '',
     money,
+    get analysisSlots() {
+        return this.slots?.length ? this.slots : [{ id: '_default', label: 'Объект / Субсчёт' }];
+    },
+    get analysisGridCols() {
+        const n = this.analysisSlots.length;
+        const firstCols = Array(n).fill(n === 1 ? 'minmax(210px, 2.5fr)' : 'minmax(150px, 1.45fr)').join(' ');
+        return `${firstCols} repeat(6, minmax(90px, 1fr))`;
+    },
+    slotQueryOf(slotId) {
+        if (this.slotQueries && slotId in this.slotQueries)
+            return this.slotQueries[slotId] || '';
+        if (this.analysisSlots.length === 1)
+            return this.analysisQuery || '';
+        return '';
+    },
+    setSlotQuery(slotId, val) {
+        const v = String(val || '');
+        this.slotQueries = { ...(this.slotQueries || {}), [slotId]: v };
+        if (this.analysisSlots.length === 1)
+            this.analysisQuery = v;
+    },
     get cardGridCols() {
         const slotCols = (this.slots || []).map(() => 'minmax(105px, 1.15fr)').join(' ');
         return `84px minmax(125px, 1.4fr) minmax(94px, 1fr) minmax(94px, 1fr) minmax(64px, 0.65fr) ${slotCols ? slotCols + ' ' : ''}minmax(125px, 1.3fr) minmax(105px, 1.1fr)`;
@@ -909,26 +1081,103 @@ export default {
             close_debit: money(r?.closing?.debit), close_credit: money(r?.closing?.credit),
         };
     },
-    /** Строки правой таблицы Экрана 2 (Анализ счёта). */
+    /** Строки таблицы Экрана 2 (Анализ счёта) с колонками по каждому аналитическому справочнику. */
     get analysisRows() {
         const q = String(this.analysisQuery || '').trim().toLowerCase();
-        const rows = (this.sheetRows || []).map(r => {
+        const sq = this.slotQueries || {};
+        const aSlots = this.analysisSlots;
+        const rawList = this.sheetRows || [];
+        const hasDetailRows = rawList.some(r => r?.key);
+        const filteredRaw = hasDetailRows ? rawList.filter(r => r?.key) : rawList;
+        const rows = filteredRaw.map(r => {
+            const slotCells = aSlots.map(s => {
+                if (r.key && typeof r.key === 'object') {
+                    const id = s.id in r.key ? r.key[s.id] : Object.values(r.key)[0];
+                    return id === null || id === undefined ? '—' : (this.names?.objects?.[id] || String(id));
+                }
+                return this.accountText(r.account);
+            });
             const label = r.key
-                ? Object.values(r.key).map(id => (id === null ? '—' : this.names?.objects?.[id] || id)).join(' / ')
+                ? slotCells.join(' / ')
                 : this.accountText(r.account);
             return {
                 account: r.account,
                 key: r.key || null,
                 detail: !!r.key,
+                slotCells,
                 label,
                 indent: (Number(r.level) || 0) * 16,
                 ...this.analysisCells(r),
             };
         });
-        return q ? rows.filter(r => r.label.toLowerCase().includes(q)) : rows;
+        return rows.filter(r => {
+            if (q && !r.label.toLowerCase().includes(q))
+                return false;
+            for (let i = 0; i < aSlots.length; i++) {
+                const slotQ = String(sq[aSlots[i].id] || '').trim().toLowerCase();
+                if (slotQ && !String(r.slotCells[i] || '').toLowerCase().includes(slotQ))
+                    return false;
+            }
+            return true;
+        });
     },
     get analysisTotals() {
         return this.analysisCells(this.sheetTotal);
+    },
+    featureLabel(feat) {
+        if (!feat)
+            return '';
+        if ((this.slots || []).length > 1 && feat.slotLabel)
+            return `${feat.slotLabel}: ${feat.label || feat.id}`;
+        return feat.label || feat.id;
+    },
+    featureValueOf(feat) {
+        if (!feat)
+            return '';
+        if (feat.isObject)
+            return String(this.filters?.[feat.slotId] || '');
+        return String(this.featureValues?.[feat.id] || '');
+    },
+    featureValueLabel(feat) {
+        const val = this.featureValueOf(feat);
+        if (!val)
+            return 'Все';
+        const opt = (feat?.options || []).find(o => o.value === val);
+        return opt?.label || val;
+    },
+    async setFeatureValue(feat, value) {
+        if (!feat)
+            return;
+        const val = String(value || '');
+        if (feat.isObject) {
+            this.filters = { ...(this.filters || {}), [feat.slotId]: val };
+            await this.onFilterChanged();
+            return;
+        }
+        this.featureValues = { ...(this.featureValues || {}), [feat.id]: val };
+        if (val && !(this.activeSlots || []).includes(feat.spec) && !(this.activeSlots || []).includes(feat.slotId)) {
+            this.activeSlots = [...(this.activeSlots || []), feat.spec];
+        }
+        await this.reload();
+    },
+    async moveFeature(delta) {
+        const list = [...(this.analyticFeatures || [])];
+        const idx = list.findIndex(f => f.id === this.selectedFeatureId);
+        if (idx < 0)
+            return;
+        const target = idx + delta;
+        if (target < 0 || target >= list.length)
+            return;
+        const [moved] = list.splice(idx, 1);
+        list.splice(target, 0, moved);
+        this.analyticFeatures = list;
+        const order = list.map(f => f.spec);
+        this.activeSlots = (this.activeSlots || []).slice().sort((a, b) => {
+            const ia = order.indexOf(a), ib = order.indexOf(b);
+            return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+        });
+        if (this.mode === 'analysis')
+            await this.reload();
     },
     isSlotActive(slotId) {
         return (this.activeSlots || []).includes(slotId);
@@ -939,7 +1188,13 @@ export default {
             cur.add(slotId);
         else
             cur.delete(slotId);
-        this.activeSlots = [...cur];
+        const order = (this.analyticFeatures || []).map(f => f.spec);
+        this.activeSlots = [...cur].sort((a, b) => {
+            const ia = order.indexOf(a), ib = order.indexOf(b);
+            if (ia < 0 && ib < 0)
+                return 0;
+            return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+        });
         if (this.mode === 'analysis')
             await this.reload();
     },
@@ -953,6 +1208,9 @@ export default {
         this.slots = list;
         const order = list.map(s => s.id);
         this.activeSlots = (this.activeSlots || []).slice().sort((a, b) => order.indexOf(a) - order.indexOf(b));
+        if (this.analyticFeatures?.length) {
+            this.analyticFeatures = [...this.analyticFeatures].sort((a, b) => order.indexOf(a.slotId) - order.indexOf(b.slotId));
+        }
         if (this.mode === 'analysis')
             await this.reload();
     },
@@ -1090,14 +1348,26 @@ export default {
         if (!hasNavPeriod && (this.from || this.to))
             return;
         const saved = _readSavedPeriod();
-        const src = hasNavPeriod ? nav : saved;
+        const localSavedKey = typeof this.loadFromLocalStorage === 'function' ? this.loadFromLocalStorage('packetsKey') : undefined;
+        if (typeof localSavedKey === 'string' && localSavedKey && (typeof this.packetsKey !== 'string' || this.packetsKey === '*'))
+            this.packetsKey = localSavedKey;
+        const pk = typeof this.packetsKey === 'string' ? this.packetsKey : '';
+        const src = hasNavPeriod ? nav : (saved || (pk && pk !== '*' ? { packetsKey: pk } : null));
         if (!src)
             return;
         this._initializingPackets = true;
         try {
-            const from = String(src.from || '');
-            const to = String(src.to || '');
-            const key = _derivePacketsKey(from, to, typeof src.packetsKey === 'string' ? src.packetsKey : '*');
+            const rawKey = typeof src.packetsKey === 'string' && src.packetsKey ? src.packetsKey : (pk || '*');
+            let from = String(src.from || '');
+            let to = String(src.to || '');
+            if (!from && !to && rawKey !== '*') {
+                const derived = _boundsFromPacketsKey(rawKey, 'month');
+                if (derived.from && derived.to) {
+                    from = derived.from;
+                    to = derived.to;
+                }
+            }
+            const key = _derivePacketsKey(from, to, rawKey);
             this.from = from;
             this.to = to;
             this._packetFiltered = !!(from || to);
@@ -1107,13 +1377,7 @@ export default {
             this._initializingPackets = false;
         }
     },
-    async attached() {
-        this._restorePeriodState();
-        await this.loadSlots();
-        await this.loadScope();
-        await this.reload();
-    },
-    async applyNav(nav) {
+    _applyNavFields(nav) {
         if (!nav || typeof nav !== 'object')
             return;
         if (nav.mode && ['card', 'analysis', 'turnovers'].includes(nav.mode))
@@ -1130,6 +1394,24 @@ export default {
         if (nav.filters && typeof nav.filters === 'object')
             this.filters = { ...nav.filters };
         _writeSavedPeriod(this.packetsKey, this.from, this.to);
+    },
+    async attached() {
+        const initNav = this._initialNav;
+        this._initialNav = null;
+        if (initNav)
+            this._applyNavFields(initNav);
+        else
+            this._restorePeriodState();
+        await Promise.all([this.loadSlots(), this.loadScope()]);
+        await this.reload();
+        if (initNav?.entry)
+            await this.openEntry(initNav.entry);
+        this._attachedDone = true;
+    },
+    async applyNav(nav) {
+        if (!nav || typeof nav !== 'object')
+            return;
+        this._applyNavFields(nav);
         await this.reload();
         if (nav.entry)
             await this.openEntry(nav.entry);
@@ -1170,18 +1452,45 @@ export default {
             this.units = [];
         }
     },
-    /** Слоты аналитик счёта из схемы ядра (с учётом наследования). */
+    /** Слоты аналитик счёта из схемы ядра (с учётом наследования) и поля прилинкованных справочников. */
     async loadSlots() {
         try {
-            const s = (await this.$item?.fetch('db_schema'))?.schema;
+            const res = await this.$item?.fetch('db_schema');
+            const s = res?.schema;
             const fields = Array.isArray(s?.fields) ? s.fields : [];
             this.slots = fields.filter(f => f?.analytic && f.type === 'link')
                 .map(f => ({ id: f.id, label: f.label || f.id, type: 'Link', catalog: f.targetPath || f.target, placeholder: f.label || f.id }));
             this.activeSlots = this.slots.map(f => f.id);
+            const serverSlots = Array.isArray(res?.slots) ? res.slots : [];
+            const features = [];
+            for (const slot of this.slots) {
+                const srv = serverSlots.find(x => x.id === slot.id);
+                if (Array.isArray(srv?.fields) && srv.fields.length) {
+                    features.push(...srv.fields);
+                }
+                else {
+                    features.push({
+                        id: slot.id,
+                        spec: slot.id,
+                        slotId: slot.id,
+                        fieldId: 'name',
+                        label: 'Наименование',
+                        slotLabel: slot.label,
+                        isObject: true,
+                        type: 'link',
+                        catalog: slot.catalog,
+                        options: [],
+                    });
+                }
+            }
+            this.analyticFeatures = features;
+            this.selectedFeatureId = features[0]?.id || '';
         }
         catch (e) {
             this.slots = [];
             this.activeSlots = [];
+            this.analyticFeatures = [];
+            this.selectedFeatureId = '';
             this.error = String(e?.message || e);
         }
     },
@@ -1200,7 +1509,17 @@ export default {
         for (const [slotId, raw] of Object.entries(this.subFilters || {})) {
             const parsed = parseSubFilterInput(raw);
             if (parsed)
-                out[slotId] = parsed;
+                out[slotId] = { ...(out[slotId] || {}), ...parsed };
+        }
+        for (const feat of this.analyticFeatures || []) {
+            if (feat.isObject)
+                continue;
+            const val = this.featureValues?.[feat.id];
+            if (val !== undefined && val !== null && val !== '') {
+                if (!out[feat.slotId])
+                    out[feat.slotId] = {};
+                out[feat.slotId][feat.fieldId] = feat.type === 'boolean' ? (val === '1' || val === 'true' ? 1 : 0) : val;
+            }
         }
         return out;
     },
@@ -1220,8 +1539,15 @@ export default {
         return p;
     },
     _syncPacketRange(res) {
-        if (!res || !('range' in res))
+        if (!res)
             return false;
+        if (!('range' in res)) {
+            if (!this.packetsStart) {
+                this.packetsStart = _yearStart();
+                this.packetsEnd = _yearEnd();
+            }
+            return false;
+        }
         const r = res.range;
         if (!r || !r.start || !r.end) {
             this.packetsStart = '';
@@ -1232,7 +1558,9 @@ export default {
         this.packetsStart = r.start;
         this.packetsEnd = r.end;
         this.packetDays = Array.isArray(r.days) && r.days.length ? r.days : null;
-        if (this._packetFiltered && ((this.to && this.to < r.start) || (this.from && this.from > r.end))) {
+        const keyStr = typeof this.packetsKey === 'string' ? this.packetsKey : '';
+        const isNowKey = keyStr === 'now' || keyStr.startsWith('now:');
+        if (this._packetFiltered && !isNowKey && this.to && this.to < r.start) {
             this._initializingPackets = true;
             try {
                 this._packetFiltered = false;

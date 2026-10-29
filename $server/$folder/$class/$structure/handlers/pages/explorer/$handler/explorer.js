@@ -7,7 +7,7 @@ export default{
         
     `,
     list:[
-        '/ORGANIZATIONS', '/MODULES', '/USERS', '/NODES'
+        '/USERS', '/NODES'
     ],
     get available(){
         return Promise.all(this.list.map(path => CORE.$item.ITEMS[path] || WORK.get_item(path)))

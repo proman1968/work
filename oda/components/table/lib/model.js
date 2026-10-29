@@ -152,6 +152,19 @@ export function searchPredicate(search, columns) {
  *   (скрытая колонка, дитя свёрнутого родителя, удалённая колонка) — фильтр по нему не действует
  * @returns {((data: object) => boolean)|undefined}
  */
+function normalizeDateCell(v) {
+    if (v === undefined || v === null || v === '')
+        return '';
+    const s = String(v).trim();
+    const iso = /^(\d{4}-\d{2}-\d{2})/.exec(s);
+    if (iso)
+        return iso[1];
+    const ru = /^(\d{2})\.(\d{2})\.(\d{4})/.exec(s);
+    if (ru)
+        return `${ru[3]}-${ru[2]}-${ru[1]}`;
+    return s;
+}
+
 export function columnFilterPredicate(filters, columns) {
     if (!filters || typeof filters !== 'object')
         return undefined;
@@ -161,10 +174,48 @@ export function columnFilterPredicate(filters, columns) {
             byKey.set(String(col.key), col);
     const tests = [];
     for (const [key, text] of Object.entries(filters)) {
-        const needle = text === undefined || text === null ? '' : String(text).trim().toLowerCase();
+        const rawText = text === undefined || text === null ? '' : String(text).trim();
         const col = byKey.get(key);
-        if (!needle || !col)
+        if (!rawText || !col)
             continue;
+        if (rawText.startsWith('@in:')) {
+            let list = null;
+            try {
+                list = JSON.parse(rawText.slice(4));
+            }
+            catch { list = null; }
+            if (Array.isArray(list)) {
+                const allowed = new Set(list.map(x => x === null || x === undefined ? '' : String(x)));
+                tests.push(data => {
+                    const v = hasValueOf(col) ? col.valueOf(data) : data?.[col?.name ?? col?.id];
+                    const str = (v === undefined || v === null || v === '') ? '' : String(v);
+                    if (allowed.has(str))
+                        return true;
+                    if (col?.field?.formatMoney && str !== '' && Number.isFinite(Number(v))) {
+                        const fmt = Number(v).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                        if (allowed.has(fmt))
+                            return true;
+                    }
+                    return false;
+                });
+                continue;
+            }
+        }
+        if (rawText.startsWith('@date:')) {
+            const spec = rawText.slice(6).trim();
+            if (!spec)
+                continue;
+            const [from, to] = spec.includes('..') ? spec.split('..') : [spec, spec];
+            tests.push(data => {
+                const v = hasValueOf(col) ? col.valueOf(data) : data?.[col?.name ?? col?.id];
+                const d = normalizeDateCell(v);
+                if (!d)
+                    return false;
+                return d >= from && d <= (to || from);
+            });
+            continue;
+        }
+        const needle = rawText.toLowerCase();
         const deep = !col.expanded;
         tests.push(data => columnMatches(col, data, needle, deep));
     }
@@ -303,7 +354,13 @@ export function sortsFrom(columns) {
 export function groupsFrom(columns) {
     return (columns ?? [])
         .filter(c => (c?.name ?? c?.id) && orderOf(c, 'groupOrder') > -1)
-        .map(c => ({ name: c.name ?? c.id, label: c.$element?.label ?? c.label, dir: Math.sign(orderOf(c, 'groupOrder')) || 1 }));
+        .map((c, idx) => {
+            const rawOrd = Number(orderOf(c, 'groupOrder'));
+            const dir = c?.field?.groupDir ?? (rawOrd < 0 ? -1 : 1);
+            return [rawOrd, idx, { name: c.name ?? c.id, key: c.key ?? c.name ?? c.id, label: c.$element?.label ?? c.label, dir }];
+        })
+        .sort((a, b) => (a[0] - b[0]) || (a[1] - b[1]))
+        .map(([, , g]) => ({ name: g.name, label: g.label, dir: g.dir }));
 }
 
 /** сравнение значений групп (значения-пустышки в конец; направление `dir`) */
@@ -365,6 +422,9 @@ export function groupItems(items, { groups = [], expandedOf } = {}) {
                 expanded: !!expandedOf?.(bucket.key),
                 items: [],
             };
+            Object.defineProperty(node, '_count', { value: bucket.blocks.length, enumerable: false });
+            Object.defineProperty(node, '_label', { value: spec.label ?? spec.name, enumerable: false });
+            Object.defineProperty(node, '_rows', { value: bucket.blocks.map(b => b.row?.data).filter(Boolean), enumerable: false });
             if (node.expanded)
                 node.items = emit(bucket.blocks, level + 1, bucket.key);
             out.push(node);

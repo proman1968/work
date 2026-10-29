@@ -80,7 +80,7 @@ const CAT_STATUSES = [
 ];
 
 export default {
-    imports: 'oda//button, oda//packets, oda//table, ~/lib//editor-form',
+    imports: 'oda//button, oda//packets, oda//table, ~/lib//editor-form, ~/lib//menu, ~/lib//popover',
     template: /*html*/`
     <style>
         :host {
@@ -146,7 +146,8 @@ export default {
         }
         .grid-footer {
             @apply --horizontal;
-            @apply --header;
+            @apply --light;
+            color: var(--content-color);
             flex-shrink: 0;
             align-items: center;
             justify-content: space-between;
@@ -182,7 +183,7 @@ export default {
             <div class="error" ~if="error && !editorOpen">{{error}}</div>
             <oda-table id="objectsTable" allow-focus allow-selection col-lines row-lines readonly ::focused-row="focusedRow" ::selected-rows="selectedRows"
                 :metadata="tableMetadata" :data-set="tableRows"
-                :$save-key="$item?.short || $item?.path" @click="onTableClick($event)" @dblclick="onTableDblClick($event)"></oda-table>
+                :$save-key="$item?.short || $item?.path" @click="onTableClick($event)" @dblclick="onTableDblClick($event)" @cell-link-click="onCellLinkClick($event)" @row-contextmenu="onRowContextMenu($event)"></oda-table>
             <div class="grid-footer">
                 <span>{{total || rows.length}}</span>
                 <span ~if="selectedRows?.length > 1">Выбрано: {{selectedRows.length}}</span>
@@ -234,7 +235,7 @@ export default {
     page: 1,
     pageSize: 200,
     _findFormHost() {
-        if (this.$form && ('focusedItem' in this.$form || typeof this.$form.syncFromView === 'function'))
+        if (this.$form && ('focusedItem' in this.$form || typeof this.$form.syncFromView === 'function' || typeof this.$form.openInForm === 'function'))
             return this.$form;
         for (let p = this.parentElement || this.domHost; p; p = p.parentElement || p.domHost) {
             if (p.localName === 'work-form' || typeof p.syncFromView === 'function' || 'focusedItem' in p)
@@ -248,6 +249,8 @@ export default {
     _notifyForm() {
         const host = this._findFormHost();
         if (!host)
+            return;
+        if (host.view_control && host.view_control !== this)
             return;
         if (typeof host.syncFromView === 'function')
             host.syncFromView(this);
@@ -368,37 +371,62 @@ export default {
         return this.getFocusedButtons();
     },
     getFocusedServices() {
-        if (!this.isOperation)
-            return [];
-        const sel = this.getActiveSelection();
-        const isMulti = sel.length > 1;
-        const row = sel[0] || this.focusedRow;
-        const isReg = row?.status === 'registered';
-        return [
-            {
-                id: 'post',
-                label: isReg ? 'Проведен' : 'Провести',
-                icon: 'icons:settings',
-                isService: true,
-                service: true,
-                order: 1,
-                disabled: isMulti || !row?.id || !this.canCreate || row?.status === 'cancelled',
-                execute: () => this.openEditor(row),
-            },
-            {
-                id: 'print',
-                label: 'Печать',
-                icon: 'icons:print',
-                isService: true,
-                service: true,
-                order: 2,
-                disabled: isMulti || !row?.id,
-                execute: () => this.openEditor(row),
-            },
-        ];
+        return [];
     },
     get focusedServices() {
         return this.getFocusedServices();
+    },
+    async onCellLinkClick(e) {
+        const d = e?.detail?.value || e?.detail || {};
+        const row = d.row;
+        const col = d.column;
+        const field = col?.field || col;
+        if (!row || !field)
+            return;
+        if (field.isGroupCol) {
+            const path = row._groupPath || (row.cid && this.classes?.[row.cid]?.path) || row.cid || '';
+            if (!path)
+                return;
+            try {
+                const target = await WORK.get_item(path);
+                if (!target)
+                    return;
+                const formHost = this._findFormHost();
+                if (formHost && typeof formHost.openInForm === 'function')
+                    await formHost.openInForm(target, { view: 'objects' });
+                else if (window.execute)
+                    window.execute(target, { view: 'objects' });
+            }
+            catch (err) {
+                this.setError(err);
+            }
+            return;
+        }
+        const linkInfo = d.link || row._links?.[field.id];
+        const objId = linkInfo?.id;
+        let targetPath = linkInfo?.target || field.linkTarget || field.catalog || '';
+        if (!objId || !targetPath)
+            return;
+        if (!targetPath.startsWith('/')) {
+            const curPath = this.$item?.short || this.$item?.path || '';
+            const m = curPath.match(/^(\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+)/);
+            if (m)
+                targetPath = `${m[1]}/${targetPath.replace(/^\/+/, '')}`;
+        }
+        try {
+            const target = await WORK.get_item(targetPath);
+            if (!target)
+                return;
+            const nav = { view: 'object', id: String(objId), label: String(row[field.id] || objId) };
+            const formHost = this._findFormHost();
+            if (formHost && typeof formHost.openInForm === 'function')
+                await formHost.openInForm(target, nav);
+            else if (window.execute)
+                window.execute(target, nav);
+        }
+        catch (err) {
+            this.setError(err);
+        }
     },
     onTableClick() {
         const tbl = this.$?.('#objectsTable');
@@ -413,6 +441,71 @@ export default {
     onTableDblClick() {
         if (this.focusedRow?.id && !this.editorOpen)
             this.openEditor(this.focusedRow);
+    },
+    async onRowContextMenu(e) {
+        const d = e?.detail?.value || e?.detail || {};
+        const row = d.row || this.focusedRow;
+        const origEvent = d.originalEvent || e;
+        const tbl = this.$?.('#objectsTable');
+        if (tbl) {
+            if (tbl.focusedRow !== undefined)
+                this.focusedRow = tbl.focusedRow;
+            if (Array.isArray(tbl.selectedRows))
+                this.selectedRows = tbl.selectedRows;
+        }
+        else if (row) {
+            this.focusedRow = row;
+        }
+        this._syncFocusedItem();
+        if (!row?.id || typeof WORK?.showMenu !== 'function')
+            return;
+        const sel = this.getActiveSelection();
+        const isMulti = sel.length > 1;
+        const objTitle = row.name || row.id;
+        const tools = [
+            {
+                id: 'create',
+                label: 'Создать объект',
+                shortcut: 'CTRL+INSERT',
+                icon: 'icons:add',
+                disabled: !this.canCreate,
+                execute: () => this.create(),
+            },
+            {
+                id: 'copy',
+                label: 'Создать объект (копия)',
+                shortcut: 'CTRL+SHIFT+C',
+                icon: 'icons:content-copy',
+                disabled: isMulti || !row?.id || !this.canCreate,
+                execute: () => this.copyRow(row),
+            },
+            {
+                id: 'open',
+                label: `Открыть объект '${objTitle}'`,
+                icon: 'icons:launch',
+                disabled: isMulti || !row?.id,
+                execute: () => this.openEditor(row),
+            },
+            {
+                id: 'delete',
+                label: isMulti ? `Удалить объекты (${sel.length})` : 'Удалить объект',
+                shortcut: 'DELETE',
+                icon: 'icons:delete',
+                disabled: !this.canDeleteSelection(sel),
+                execute: () => this.deleteRow(sel),
+            },
+        ];
+        try {
+            await WORK.showMenu({
+                TITLE: { label: isMulti ? `объекты (${sel.length})` : `объект: ${objTitle}` },
+                mode: 'tools',
+                customTools: tools,
+            }, origEvent);
+        }
+        catch (err) {
+            if (!(WORK.CancelError && err instanceof WORK.CancelError))
+                console.warn(err);
+        }
     },
     _syncFocusedItem() {
         const sel = this.getActiveSelection();
@@ -641,7 +734,13 @@ export default {
     },
     /** Колонки таблицы: первым всегда «Наименование» (прилипает слева), у операций — дата и статус, у промежуточного класса — колонка «Группа» справа (прилипает справа). */
     get tableMetadata() {
-        const rawCols = (this.columns || []).map(c => (c.type === 'Link' || c.type === 'Table' || c.type === 'Struct' ? { ...c, type: 'String' } : c));
+        const rawCols = (this.columns || []).map(c => {
+            if (c.type === 'Link')
+                return { ...c, type: 'String', isLinkCol: true, linkTarget: c.catalog || '' };
+            if (c.type === 'Table' || c.type === 'Struct')
+                return { ...c, type: 'String' };
+            return c;
+        });
         const existingName = rawCols.find(c => c.id === 'name');
         const nameCol = {
             ...(existingName || { id: 'name', type: 'String' }),
@@ -656,7 +755,7 @@ export default {
             : restCols;
         const clsCol = this.showClassCol ? [{ id: 'cls', label: 'Группа', type: 'String', isGroupCol: true, stickyRight: true, minWidth: 170 }] : [];
         return this.isOperation
-            ? [nameCol, { id: 'time', label: 'Дата', type: 'String', system: false, minWidth: 96 }, ...orderedCols, { id: 'state', label: 'Статус', type: 'String', minWidth: 96 }, ...clsCol]
+            ? [nameCol, { id: 'time', label: 'Дата', type: 'String', isDateCol: true, system: false, minWidth: 96 }, ...orderedCols, { id: 'state', label: 'Статус', type: 'String', minWidth: 96 }, ...clsCol]
             : [nameCol, ...orderedCols, ...clsCol];
     },
     /** Строки таблицы: названия вместо id ссылок, число строк табличной части, выжимка структуры, статус текстом; id сохраняется. */
@@ -668,16 +767,24 @@ export default {
                 const grp = this.groupLabelOf(r.cid);
                 out.cls = grp;
                 out.group = grp;
+                const grpPath = (r.cid && this.classes?.[r.cid]?.path) || r.cid || '';
+                if (grpPath)
+                    Object.defineProperty(out, '_groupPath', { value: grpPath, enumerable: false, configurable: true });
             }
+            let links = null;
             for (const c of cols) {
                 const v = r[c.id];
-                if (c.type === 'Link' && v)
+                if (c.type === 'Link' && v) {
                     out[c.id] = this.names?.[v] || v;
+                    (links ??= {})[c.id] = { id: v, target: c.catalog || '' };
+                }
                 else if (Array.isArray(v))
                     out[c.id] = v.length ? `${v.length} стр.` : '';
                 else if (c.type === 'Struct' && v && typeof v === 'object')
                     out[c.id] = Object.values(v).filter(x => x !== undefined && x !== null && typeof x !== 'object' && String(x).trim() !== '').join(' ');
             }
+            if (links)
+                Object.defineProperty(out, '_links', { value: links, enumerable: false, configurable: true });
             if (this.isOperation)
                 out.state = STATUS[r.status] || r.status || '';
             return out;
@@ -803,6 +910,13 @@ export default {
             this.schedulePreview();
     },
     async attached() {
+        const initNav = this._initialNav;
+        this._initialNav = null;
+        if (initNav?.id)
+            this._pendingNavId = String(initNav.id);
+        const savedLocalKey = typeof this.loadFromLocalStorage === 'function' ? this.loadFromLocalStorage('packetsKey') : undefined;
+        if (typeof savedLocalKey === 'string' && savedLocalKey)
+            this.packetsKey = savedLocalKey;
         this.mountToolbarSlots();
         try {
             await Promise.all([this.loadSchema(), this.loadScope()]);
@@ -821,6 +935,7 @@ export default {
             this._pendingNavId = '';
             await this.openEditor({ id });
         }
+        this._attachedDone = true;
     },
     /** Переход из отчёта (журнал, карточка счёта, состав, траектория) сразу к объекту по id. */
     async applyNav(nav = {}) {
@@ -1117,10 +1232,21 @@ export default {
         const qty = e.qty ? ` (${e.doc_qty ?? e.qty}${e.doc_unit ? ' ' + e.doc_unit : ''})` : '';
         return `Дт ${side(e.debit, e.debit_analytics)} — Кт ${side(e.credit, e.credit_analytics)}: ${Number(e.amount || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2 })}${qty}`;
     },
-    /** Загрузить объект и открыть окно редактора. */
+    /** Загрузить объект и открыть вьюху редактора (внутри work-form — на вкладке form/object, автономно — модально). */
     async openEditor(row) {
         if (!row?.id || this.editorOpen)
             return;
+        const formHost = this._findFormHost();
+        if (formHost && typeof formHost.openInForm === 'function') {
+            const target = await this.targetItem(row.cid || '');
+            await formHost.openInForm(target || this.$item, {
+                view: 'object',
+                id: row.id,
+                leafCid: row.cid || '',
+                label: row.name || row.title || row.id,
+            });
+            return;
+        }
         this.editorOpen = true;
         this.editing = null;
         try {
@@ -1287,10 +1413,10 @@ export default {
             return;
         if (!this.schema)
             await this.loadSchema().catch(() => {});
+        let chosenCid = '';
         if (!this.schema?.leaf) {
             if (!this.leaves?.length)
                 return;
-            let chosenCid = '';
             if (typeof WORK?.showModal === 'function' && typeof document !== 'undefined') {
                 chosenCid = await this.pickTargetLeafClass();
                 if (!chosenCid)
@@ -1299,6 +1425,21 @@ export default {
             else {
                 chosenCid = this.leafCid || this.leaves[0].cid;
             }
+        }
+        const formHost = this._findFormHost();
+        if (formHost && typeof formHost.openInForm === 'function') {
+            const target = chosenCid ? await this.targetItem(chosenCid) : this.$item;
+            const leafLabel = chosenCid ? (this.classes?.[chosenCid]?.label || this.leaves?.find(l => l.cid === chosenCid)?.label || '') : '';
+            const title = leafLabel || this.schema?.title || 'Объект';
+            await formHost.openInForm(target || this.$item, {
+                view: 'object',
+                create: true,
+                leafCid: chosenCid || '',
+                label: `${title} · новый объект`,
+            });
+            return;
+        }
+        if (chosenCid) {
             this.editorOpen = true;
             await this.loadLeafSchema(chosenCid);
         }
@@ -1326,6 +1467,17 @@ export default {
     async copyRow(row = this.focusedRow) {
         if (!row?.id || this.editorOpen || !this.canCreate)
             return;
+        const formHost = this._findFormHost();
+        if (formHost && typeof formHost.openInForm === 'function') {
+            const target = await this.targetItem(row.cid || '');
+            await formHost.openInForm(target || this.$item, {
+                view: 'object',
+                copyFrom: row.id,
+                leafCid: row.cid || '',
+                label: `${row.name || 'Объект'} (копия)`,
+            });
+            return;
+        }
         this.editorOpen = true;
         this.clearError();
         try {
@@ -1478,7 +1630,7 @@ export default {
             this.accept(res);
             this._snapshot = saved;
             // внутри окна список обновит его закрытие; внешняя кнопка — сразу
-            if (!this.editorOpen)
+            if (!this.editorOpen && !this.isObjectView)
                 await this.reload();
             return true;
         }
@@ -1517,7 +1669,7 @@ export default {
             const target = await this.targetItem();
             await target.fetch('db_delete', this.writeParams());
             this.snapshot();
-            if (!this.editorOpen)
+            if (!this.editorOpen && !this.isObjectView)
                 await this.reload();
             return true;
         }
@@ -1540,8 +1692,10 @@ export default {
             const res = await target.fetch('db_restore', { id: this.editing.id });
             this.accept(res || { id: this.editing.id, status: 'active', version: this.editing.version });
             this.snapshot();
-            if (!this.editorOpen)
+            if (!this.editorOpen && !this.isObjectView)
                 await this.reload();
+            else if (this.isObjectView)
+                await this._findFormHost()?.reloadSiblingLists?.();
             return true;
         }
         catch (e) {
@@ -1565,8 +1719,12 @@ export default {
             const res = await target.fetch('db_register', this.writeParams());
             this.accept(res);
             await this.select({ id: this.editing.id });
+            this.focusedItem = this.editing || this.focusedItem;
             this.snapshot();
-            await this.reload();
+            if (!this.isObjectView)
+                await this.reload();
+            else
+                await this._findFormHost()?.reloadSiblingLists?.();
             return true;
         }
         catch (e) {
@@ -1591,8 +1749,12 @@ export default {
             const res = await target.fetch('db_cancel', this.writeParams());
             this.accept(res);
             await this.select({ id: this.editing.id });
+            this.focusedItem = this.editing || this.focusedItem;
             this.snapshot();
-            await this.reload();
+            if (!this.isObjectView)
+                await this.reload();
+            else
+                await this._findFormHost()?.reloadSiblingLists?.();
             return true;
         }
         catch (e) {

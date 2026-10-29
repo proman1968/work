@@ -53,6 +53,74 @@ function _derivePacketsKey(from, to, fallback = '*') {
     return fallback || '*';
 }
 
+function _daysInMonth(y, m) {
+    return new Date(y, m, 0).getDate();
+}
+
+function _weekBounds(dt) {
+    const dow = dt.getDay();
+    const diffToMon = dow === 0 ? -6 : 1 - dow;
+    const mon = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate() + diffToMon);
+    const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
+    return { from: _day(mon), to: _day(sun) };
+}
+
+function _boundsFromPacketsKey(key, defaultMode = 'month') {
+    const k = String(key || '').trim();
+    if (!k || k === '*')
+        return { from: '', to: '' };
+    if (k.startsWith('period:')) {
+        const [, s = '', e = ''] = k.split(':');
+        return { from: s, to: e };
+    }
+    if (k === 'now' || k.startsWith('now:')) {
+        const gran = k.startsWith('now:') ? k.slice(4) : defaultMode;
+        const now = new Date();
+        const y = now.getFullYear(), m = now.getMonth() + 1;
+        if (gran === 'day') {
+            const d = _day(now);
+            return { from: d, to: d };
+        }
+        if (gran === 'week')
+            return _weekBounds(now);
+        if (gran === 'quarter') {
+            const q = Math.floor((m - 1) / 3) + 1;
+            const m1 = String((q - 1) * 3 + 1).padStart(2, '0');
+            const m2 = (q - 1) * 3 + 3;
+            return { from: `${y}-${m1}-01`, to: `${y}-${String(m2).padStart(2, '0')}-${String(_daysInMonth(y, m2)).padStart(2, '0')}` };
+        }
+        if (gran === 'year')
+            return { from: `${y}-01-01`, to: `${y}-12-31` };
+        const ms = String(m).padStart(2, '0');
+        return { from: `${y}-${ms}-01`, to: `${y}-${ms}-${String(_daysInMonth(y, m)).padStart(2, '0')}` };
+    }
+    const clean = k.replace(/\*+$/, '');
+    if (/^\d{4}$/.test(clean))
+        return { from: `${clean}-01-01`, to: `${clean}-12-31` };
+    const qm = /^(\d{4})-q([1-4])$/i.exec(clean);
+    if (qm) {
+        const y = +qm[1], q = +qm[2];
+        const m1 = String((q - 1) * 3 + 1).padStart(2, '0');
+        const m2 = (q - 1) * 3 + 3;
+        return { from: `${y}-${m1}-01`, to: `${y}-${String(m2).padStart(2, '0')}-${String(_daysInMonth(y, m2)).padStart(2, '0')}` };
+    }
+    const mm = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(clean);
+    if (mm) {
+        const y = +mm[1], m = +mm[2];
+        return { from: `${clean}-01`, to: `${clean}-${String(_daysInMonth(y, m)).padStart(2, '0')}` };
+    }
+    if (clean.startsWith('week:')) {
+        const monIso = clean.slice(5);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(monIso)) {
+            const [y, m, d] = monIso.split('-').map(Number);
+            return _weekBounds(new Date(y, m - 1, d));
+        }
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(clean))
+        return { from: clean, to: clean };
+    return { from: '', to: '' };
+}
+
 export default {
     imports: 'oda//button, oda//packets',
     template: /*html*/`
@@ -89,15 +157,15 @@ export default {
         .head-wrap {
             @apply --vertical;
             flex-shrink: 0;
-            background: light-dark(#e3e1d3, #2a2b32);
-            color: light-dark(#1f1f1f, #e2e8f0);
-            border-bottom: 1px solid light-dark(#9a9990, #4a4c56);
+            background: var(--header-background);
+            color: var(--header-color);
+            border-bottom: 1px solid var(--border-color);
             user-select: none;
             scrollbar-gutter: stable;
             overflow-y: hidden;
         }
         .head-top {
-            border-bottom: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-bottom: 1px solid var(--border-color);
             font-weight: 600;
             font-size: 12px;
         }
@@ -112,24 +180,24 @@ export default {
             overflow-y: auto;
             overflow-x: hidden;
             scrollbar-gutter: stable;
-            background: light-dark(#ffffff, #1b1c20);
+            background: var(--content-background);
         }
         div.row {
             flex-shrink: 0;
             min-height: 25px;
-            border-bottom: 1px solid light-dark(#ecece8, #2c2d34);
+            border-bottom: 1px solid var(--subtle-border);
             cursor: pointer;
         }
         div.row:hover:not(.selected):not(.total) {
-            background: light-dark(#f2f5fb, rgba(255, 255, 255, 0.05));
+            background: var(--accent-soft);
         }
         div.row.selected {
-            background: #6882d6 !important;
-            color: #ffffff !important;
+            background: var(--selected-background) !important;
+            color: var(--selected-color) !important;
         }
         div.row.selected .cell {
             background: transparent !important;
-            color: #ffffff !important;
+            color: var(--selected-color) !important;
             border-right-color: rgba(255, 255, 255, 0.3) !important;
         }
         div.row.selected .cell.acc {
@@ -144,13 +212,13 @@ export default {
             box-sizing: border-box;
             display: flex;
             align-items: center;
-            border-right: 1px solid light-dark(#e2e2dc, #2f3038);
+            border-right: 1px solid var(--subtle-border);
         }
         .cell:last-child {
             border-right: none;
         }
         .head-wrap .cell {
-            border-right: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-right: 1px solid var(--border-color);
             padding: 3px 8px;
         }
         .head-wrap .cell:last-child {
@@ -160,23 +228,23 @@ export default {
             grid-column: span 2;
             justify-content: center;
             text-align: center;
-            border-right: 1px solid light-dark(#9a9990, #4a4c56);
+            border-right: 1px solid var(--border-color);
         }
         .cell.span2:last-child {
             border-right: none;
         }
         .cell.acc {
-            border-right: 2px solid light-dark(#8c8b82, #52545f) !important;
+            border-right: 2px solid var(--border-color) !important;
         }
         .head .cell.acc.sub-head {
             padding-left: 20px;
         }
         .grid-body div.row .cell.acc {
-            background: light-dark(#f6f6f4, #222328);
+            background: var(--subtle-background);
             text-indent: 8px;
         }
         .grid-body div.row:hover:not(.selected) .cell.acc {
-            background: light-dark(#ebeff8, #282a32);
+            background: var(--accent-soft);
         }
         .cell.num {
             justify-content: flex-end;
@@ -188,7 +256,7 @@ export default {
             text-align: center;
         }
         .cell.group-sep {
-            border-right: 1px solid light-dark(#9a9990, #4a4c56);
+            border-right: 1px solid var(--border-color);
         }
         .grid-body div.row .cell.debit-col {
             background: light-dark(rgba(224, 245, 248, 0.32), rgba(56, 189, 248, 0.03));
@@ -207,16 +275,16 @@ export default {
             flex-shrink: 0;
             font-weight: 700;
             min-height: 27px;
-            background: light-dark(#e3e1d3, #2a2b32);
-            color: light-dark(#111, #f1f5f9);
-            border-top: 2px solid light-dark(#8c8b82, #52545f);
+            background: var(--header-background);
+            color: var(--header-color);
+            border-top: 2px solid var(--border-color);
             border-bottom: none;
             scrollbar-gutter: stable;
             overflow-y: hidden;
             cursor: default;
         }
         .row.total .cell {
-            border-right: 1px solid light-dark(#b8b7ae, #3e4049);
+            border-right: 1px solid var(--border-color);
         }
         .row.total .cell:last-child {
             border-right: none;
@@ -254,7 +322,7 @@ export default {
         </div>
         <div class="grid-body" @tap="onGridBodyTap($event)">
             <div class="row" ~class="{group: !$for.item.leaf, 'top-level': $for.item.level === 0, detail: $for.item.detail, selected: selectedRow?.account === $for.item.account && selectedRow?.label === $for.item.label}"
-                ~for="displayRows" @tap.stop="selectRow($for.item)" @dblclick="open($for.item)">
+                ~for="displayRows" @tap.stop="selectRow($for.item)" @dblclick="open($for.item)" @contextmenu.stop.prevent="onRowContextMenu($for.item, $event)">
                 <div class="cell acc" ~style="{paddingLeft: $for.item.indent + 'px'}">{{$for.item.label}}</div>
                 <div class="cell num debit-col">{{$for.item.open_debit}}</div>
                 <div class="cell num credit-col group-sep">{{$for.item.open_credit}}</div>
@@ -276,11 +344,13 @@ export default {
     </div>
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
-    packetsStart: _yearStart(),
-    packetsEnd: _yearEnd(),
+    packetsStart: '',
+    packetsEnd: '',
     packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
+    _attachedDone: false,
+    _initialNav: null,
     from: '',
     to: '',
     account: '',
@@ -489,14 +559,26 @@ export default {
         if (!hasNavPeriod && (this.from || this.to))
             return;
         const saved = _readSavedPeriod();
-        const src = hasNavPeriod ? nav : saved;
+        const localSavedKey = typeof this.loadFromLocalStorage === 'function' ? this.loadFromLocalStorage('packetsKey') : undefined;
+        if (typeof localSavedKey === 'string' && localSavedKey && (typeof this.packetsKey !== 'string' || this.packetsKey === '*'))
+            this.packetsKey = localSavedKey;
+        const pk = typeof this.packetsKey === 'string' ? this.packetsKey : '';
+        const src = hasNavPeriod ? nav : (saved || (pk && pk !== '*' ? { packetsKey: pk } : null));
         if (!src)
             return;
         this._initializingPackets = true;
         try {
-            const from = String(src.from || '');
-            const to = String(src.to || '');
-            const key = _derivePacketsKey(from, to, typeof src.packetsKey === 'string' ? src.packetsKey : '*');
+            const rawKey = typeof src.packetsKey === 'string' && src.packetsKey ? src.packetsKey : (pk || '*');
+            let from = String(src.from || '');
+            let to = String(src.to || '');
+            if (!from && !to && rawKey !== '*') {
+                const derived = _boundsFromPacketsKey(rawKey, 'month');
+                if (derived.from && derived.to) {
+                    from = derived.from;
+                    to = derived.to;
+                }
+            }
+            const key = _derivePacketsKey(from, to, rawKey);
             this.from = from;
             this.to = to;
             this._packetFiltered = !!(from || to);
@@ -506,7 +588,7 @@ export default {
             this._initializingPackets = false;
         }
     },
-    async applyNav(nav) {
+    _applyNavFields(nav) {
         if (!nav || typeof nav !== 'object')
             return;
         this._restorePeriodState(nav);
@@ -517,13 +599,23 @@ export default {
         if (nav.by !== undefined)
             this.by = String(nav.by || '');
         _writeSavedPeriod(this.packetsKey, this.from, this.to);
+    },
+    async applyNav(nav) {
+        if (!nav || typeof nav !== 'object')
+            return;
+        this._applyNavFields(nav);
         await this.reload();
     },
     async attached() {
-        this._restorePeriodState();
-        await this.loadSlots();
-        await this.loadScope();
+        const initNav = this._initialNav;
+        this._initialNav = null;
+        if (initNav)
+            this._applyNavFields(initNav);
+        else
+            this._restorePeriodState();
+        await Promise.all([this.loadSlots(), this.loadScope()]);
         await this.reload();
+        this._attachedDone = true;
     },
     async loadSlots() {
         try {
@@ -561,8 +653,15 @@ export default {
         return p;
     },
     _syncPacketRange(res) {
-        if (!res || !('range' in res))
+        if (!res)
             return false;
+        if (!('range' in res)) {
+            if (!this.packetsStart) {
+                this.packetsStart = _yearStart();
+                this.packetsEnd = _yearEnd();
+            }
+            return false;
+        }
         const r = res.range;
         if (!r || !r.start || !r.end) {
             this.packetsStart = '';
@@ -573,7 +672,9 @@ export default {
         this.packetsStart = r.start;
         this.packetsEnd = r.end;
         this.packetDays = Array.isArray(r.days) && r.days.length ? r.days : null;
-        if (this._packetFiltered && ((this.to && this.to < r.start) || (this.from && this.from > r.end))) {
+        const keyStr = typeof this.packetsKey === 'string' ? this.packetsKey : '';
+        const isNowKey = keyStr === 'now' || keyStr.startsWith('now:');
+        if (this._packetFiltered && !isNowKey && this.to && this.to < r.start) {
             this._initializingPackets = true;
             try {
                 this._packetFiltered = false;
@@ -616,7 +717,20 @@ export default {
             this.selectRow(null);
         }
     },
-    /** Открыть форму счёта: при 2-м клике без mode — в «Обороты» (если Анализ disabled), иначе в «Анализ». */
+    async onRowContextMenu(row, e) {
+        if (!row)
+            return;
+        await this.selectRow(row);
+        const path = this.names?.paths?.[row.account] || row.account;
+        if (!path || typeof WORK?.showMenu !== 'function')
+            return;
+        try {
+            const t = await WORK.get_item(path);
+            if (t)
+                await WORK.showMenu({ $item: t, mode: 'handlers' }, e);
+        }
+        catch { /* ignore */ }
+    },
     async open(row, mode = '') {
         const target = row || this.selectedRow;
         if (!target || !this.rowHasPostings(target))

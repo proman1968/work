@@ -19,6 +19,15 @@ export class $handler extends $class{
     get allowList(){
         return Boolean(this.DATA?.allowList);
     }
+    get allowSave(){
+        return Boolean(this.DATA?.allowSave);
+    }
+    get allowTools(){
+        return this.DATA?.allowTools !== false;
+    }
+    get hiddenInViewList(){
+        return Boolean(this.DATA?.hiddenInViewList);
+    }
     get order(){
         return this.DATA?.order ?? 99;
     }
@@ -80,6 +89,8 @@ export class $handler extends $class{
         }
     }
     get hasSettings() {
+        if (this.DATA?.hasSettings != null)
+            return Boolean(this.DATA.hasSettings);
         return new AsyncPromise(async () => {
             try {
                 const module = await this.getModule();

@@ -4,7 +4,7 @@
  * mode задаёт гранулярность панели: day | week | month | quarter | year.
  *
  * Состав полосы слева направо:
- *   [oda-packets-now-group (<, now, >), ...годы (по убыванию, со скроллом), custom-period?, Весь период]
+ *   [oda-packets-now-group (<, now, >), ...до 5 кнопок лет (4 свежих + выбранный старый либо 5 свежих), Ещё (<N>)?, custom-period?, Весь период]
  *
  * Наружу: selected, selection, mask, period {start, end}, value (ключ выбора) + событие 'selection-changed'.
  * value — обратный вход: потребитель хранит его у себя (например с $save) и отдаёт обратно,
@@ -178,6 +178,7 @@ const NOW_MENU_OPTIONS = [
 ];
 
 const VALID_MODES = ['day', 'week', 'month', 'quarter', 'year'];
+const MAX_VISIBLE_YEARS = 5;
 
 // Вычисление имени единицы для заданной даты и гранулярности
 function _unitNameFromDate(dateObj, granularity) {
@@ -329,7 +330,7 @@ ODA({
             }
         </style>
         <oda-packets-row ~if="items?.length" :items
-            @item-pick="_onItemPick($event)" @open-menu="_onOpenMenu($event)" @open-now-menu="_onOpenNowMenu($event)"
+            @item-pick="_onItemPick($event)" @open-menu="_onOpenMenu($event)" @open-more-years="_onOpenMoreYears($event)" @open-now-menu="_onOpenNowMenu($event)"
             @nav-left="_onNavLeft($event)" @nav-right="_onNavRight($event)" @edit-period="_onEditPeriod($event)"></oda-packets-row>
         <div class="error" ~if="error">{{error}}</div>
     `,
@@ -406,6 +407,7 @@ ODA({
                 this._nowItem.idleLabel = NOW_IDLE_LABELS[mode] || 'Месяц';
                 this._nowItem.label = this._nowItem.idleLabel;
             }
+            this._updateArrowTitles();
         }
     },
     _hasCustomDays: false,
@@ -657,11 +659,11 @@ ODA({
         nowItem.idleLabel = idleText;
         nowItem.activeLabel = activeText;
         nowItem.label = nowItem.selected ? activeText : idleText;
-        nowItem.fullLabel = activeText;
+        nowItem.fullLabel = 'Выбор текущего периода';
         nowItem.disabled = false;
         return nowItem;
     },
-    // Полоса: [<, now, >, ...годы, custom-period?, Весь период]
+    // Полоса: [<, now, >, ...до 5 кнопок лет, Ещё (<N>)?, custom-period?, Весь период]
     // (кнопка Период скрыта из полосы, но this._periodItem сохранён для обратной совместимости)
     _makeBar(years, mode, rangeStart, rangeEnd) {
         const leftArrow = this._makeItem({
@@ -675,6 +677,18 @@ ODA({
             name: 'now', is: 'oda-packets-now-selector'
         });
         this._configureNowItem(nowItem, mode, mode);
+
+        const moreYearsItem = this._makeItem({
+            name: 'more-years',
+            is: 'oda-packets-more-years',
+            label: '',
+            baseLabel: '',
+            fullLabel: 'Предыдущие года',
+            mask: '',
+            hidden: true,
+            years: [],
+            count: 0
+        });
 
         const customPeriodItem = this._makeItem({
             name: 'custom-period', is: 'oda-packets-custom-period',
@@ -694,24 +708,59 @@ ODA({
         this._leftArrow = leftArrow;
         this._rightArrow = rightArrow;
         this._nowItem = nowItem;
+        this._moreYearsItem = moreYearsItem;
         this._customPeriodItem = customPeriodItem;
         this._periodItem = periodBtn;
+        this._allItem = allItem;
 
-        const items = [
-            leftArrow,
-            nowItem,
-            rightArrow,
-            ...years,
-            allItem
-        ];
-        return { items, allItem };
+        this._syncBarItems(false);
+        return { items: this.items, allItem };
+    },
+    // Разбиение списка лет на до 5 отображаемых кнопок и оставшиеся годы для кнопки «Ещё (<N>)».
+    // Если выбран год старше 4 самых свежих лет — он встаёт 5-й кнопкой вместо 5-го свежего года,
+    // а 5-й свежий год временно уходит в список «Ещё (<N>)».
+    _computeYearSplit() {
+        const allYears = [...(this._years || [])];
+        if (allYears.length <= MAX_VISIBLE_YEARS) {
+            return { visibleYears: allYears, overflowYears: [] };
+        }
+        const top4 = allYears.slice(0, MAX_VISIBLE_YEARS - 1);
+        const rest = allYears.slice(MAX_VISIBLE_YEARS - 1);
+        const selectedOld = rest.find(y => y.selected);
+        const fifthYear = selectedOld || rest[0];
+        const visibleYears = [...top4, fifthYear];
+        const overflowYears = allYears.filter(y => !visibleYears.includes(y));
+        return { visibleYears, overflowYears };
     },
     // Пересборка видимого списка элементов полосы:
-    // если выбранный период затрагивает 2 соседних года (например, 2025 и 2026) — размещаем его кнопку ровно между этими годами;
+    // отображаются не более 5 кнопок лет, справа от них при наличии остальных лет — кнопка «Ещё (<N>)».
+    // Если выбранный период затрагивает 2 соседних года (например, 2025 и 2026) — размещаем его кнопку ровно между этими годами;
     // если затрагивает больше 2 лет — размещаем после списка годов перед «Весь период».
     _syncBarItems(showCustomPeriod = false) {
         if (!this._leftArrow || !this._allItem) return;
-        const years = [...(this._years || [])];
+        const { visibleYears, overflowYears } = this._computeYearSplit();
+        const years = [...visibleYears];
+
+        const more = this._moreYearsItem;
+        if (more) {
+            if (overflowYears.length > 0) {
+                const count = overflowYears.length;
+                const lbl = `Ещё (${count})`;
+                const maxYear = overflowYears[0]?.name || '';
+                const minYear = overflowYears[overflowYears.length - 1]?.name || maxYear;
+                more.hidden = false;
+                more.years = overflowYears;
+                more.count = count;
+                more.label = lbl;
+                more.baseLabel = lbl;
+                more.fullLabel = `Предыдущие года (${minYear} - ${maxYear})`;
+            } else {
+                more.hidden = true;
+                more.years = [];
+                more.count = 0;
+            }
+        }
+
         const cp = this._customPeriodItem;
         let insertedBetween = false;
         if (showCustomPeriod && cp) {
@@ -743,10 +792,14 @@ ODA({
             this._rightArrow,
             ...years
         ];
+        if (more && !more.hidden) {
+            next.push(more);
+        }
         if (showCustomPeriod && cp && !insertedBetween) {
             next.push(cp);
         }
         next.push(this._allItem);
+        this._updateArrowTitles();
         this.items = next;
     },
     // Смена mode без перестроения дерева _build (обновляет только _units и подпись невыбранного now)
@@ -759,6 +812,7 @@ ODA({
             this._nowItem.idleLabel = NOW_IDLE_LABELS[newMode] || 'Месяц';
             this._nowItem.label = this._nowItem.idleLabel;
         }
+        this._updateArrowTitles();
     },
     _detail(e) {
         return e?.detail?.value ?? e?.detail ?? {};
@@ -1035,11 +1089,9 @@ ODA({
         this._applySelection([this._nowItem]);
     },
     // --- выпадающие меню годов (всегда работают в режиме day и показывают все элементы, недоступные — disabled) ---
-    async _onOpenMenu(e) {
-        const { item, anchor } = this._detail(e);
-        if (!item?.items?.length) return;
+    _buildYearMenuItems(yearNode) {
         const menuItems = [];
-        for (const child of item.items) {
+        for (const child of yearNode?.items || []) {
             if (child.whole) {
                 const wholeItem = this._toMenuItem(child);
                 wholeItem.whole = true;
@@ -1049,14 +1101,9 @@ ODA({
             menuItems.push({ label: child.label, value: child.name, header: true, disabled: !!child.disabled });
             for (const m of child.items || []) menuItems.push(this._toMenuItem(m));
         }
-        const { value, day } = this._menuFocus();
-        const params = {
-            menu: ODA.createComponent('oda-packets-months', { items: menuItems, value, day })
-        };
-        let pickedName = null;
-        try {
-            pickedName = await ODA.showMenu(params, anchor || this);
-        } catch { return; } // отмена
+        return menuItems;
+    },
+    _pickDateNodeName(pickedName) {
         const node = this._dateNodes?.[pickedName?.value ?? pickedName];
         if (node && !node.disabled) {
             if (['year', 'quarter', 'month', 'day'].includes(node.type)) {
@@ -1065,20 +1112,59 @@ ODA({
             this._applySelection([node]);
         }
     },
-    // Пункт меню для узла дерева; в меню года всегда передаются все дни месяца (недоступные — disabled)
+    async _onOpenMenu(e) {
+        const { item, anchor } = this._detail(e);
+        if (!item?.items?.length) return;
+        const menuItems = this._buildYearMenuItems(item);
+        const { value, day } = this._menuFocus();
+        const params = {
+            menu: ODA.createComponent('oda-packets-months', { items: menuItems, value, day })
+        };
+        let pickedName = null;
+        try {
+            pickedName = await ODA.showMenu(params, anchor || this);
+        } catch { return; } // отмена
+        this._pickDateNodeName(pickedName);
+    },
+    // --- выпадающее меню кнопки «Ещё (<N>)» со списком остальных лет ---
+    async _onOpenMoreYears(e) {
+        const { item, anchor } = this._detail(e);
+        const overflowYears = item?.years || this._moreYearsItem?.years || [];
+        if (!overflowYears.length) return;
+        const yearList = overflowYears.map(y => ({
+            label: y.baseLabel || y.name,
+            value: y.name,
+            disabled: !!y.disabled,
+            yearNode: y,
+            items: this._buildYearMenuItems(y)
+        }));
+        const { value, day } = this._menuFocus();
+        const params = {
+            menu: ODA.createComponent('oda-packets-more-menu', {
+                items: yearList,
+                value,
+                day
+            })
+        };
+        let pickedName = null;
+        try {
+            pickedName = await ODA.showMenu(params, anchor || this);
+        } catch { return; } // отмена
+        this._pickDateNodeName(pickedName);
+    },
+    // Пункт меню для узла дерева; месяцы показываются все (недоступные — disabled),
+    // а в подменю дней передаются только дни, в которых есть данные (!d.disabled).
     _toMenuItem(node) {
         const days = !node.whole
-            ? (node.items || []).map(d => ({
+            ? (node.items || []).filter(d => !d.disabled).map(d => ({
                 label: d.label,
-                hint: d.fullLabel,
                 value: d.name,
-                disabled: !!d.disabled
+                disabled: false
             }))
             : [];
         const label = node.whole ? _getFullLabel(node.name, 'year') : node.label;
         return {
             label,
-            hint: !node.whole && node.fullLabel !== label ? node.fullLabel : '',
             disabled: !!node.disabled,
             whole: !!node.whole,
             value: node.name,
@@ -1109,11 +1195,11 @@ ODA({
         return item;
     },
     // --- стрелки < (Назад, в прошлое, delta = -1) и > (Вперёд, в будущее, delta = +1) ---
-    // Перемещают период в зависимости от текущего mode у packets без зацикливания.
-    _step(delta) {
-        if (!this._lo || !delta) return;
+    // Вычисляет целевой элемент при шаге на delta в зависимости от текущего mode без изменения состояния.
+    _getStepTarget(delta) {
+        if (!this._lo || !delta) return null;
         const stepMode = VALID_MODES.includes(this.mode) ? this.mode : 'month';
-        const cur = this.selection[0];
+        const cur = this.selection?.[0];
 
         // 1. Если выбран «Весь период» ('*') или ничего не выбрано:
         // '<' (Назад) берёт самый свежий период диапазона, '>' (Вперёд) — самый старый период диапазона
@@ -1121,15 +1207,11 @@ ODA({
             if (stepMode === 'week') {
                 const anchorIso = delta < 0 ? this._hi : this._lo;
                 const unitName = _unitNameFromDate(_localDate(anchorIso), 'week');
-                const target = this._resolveUnitNode(unitName, 'week');
-                if (target) this._applySelection([target]);
-                return;
+                return this._resolveUnitNode(unitName, 'week');
             }
             const leaves = this._collectLeaves(this._years || [], stepMode);
-            if (!leaves.length) return;
-            const next = delta < 0 ? leaves[leaves.length - 1] : leaves[0];
-            if (next) this._applySelection([next]);
-            return;
+            if (!leaves.length) return null;
+            return (delta < 0 ? leaves[leaves.length - 1] : leaves[0]) || null;
         }
 
         // 2. Если выделена кнопка now: сдвигаем относительно текущей даты now по stepMode
@@ -1159,8 +1241,7 @@ ODA({
                     }
                 }
             }
-            if (target) this._applySelection([target]);
-            return;
+            return target || null;
         }
 
         // 3. Если выбран конкретный узел (год, квартал, месяц, день) или период (в т.ч. неделя):
@@ -1168,18 +1249,16 @@ ODA({
         if (cur.type === stepMode && !cur._isCustomRange && cur.name !== 'period' && cur.name !== 'custom-period') {
             if (stepMode === 'week') {
                 const nextName = _shiftUnitName(cur.name, 'week', delta);
-                const target = this._resolveUnitNode(nextName, 'week');
-                if (target) this._applySelection([target]);
-                return;
+                return this._resolveUnitNode(nextName, 'week');
             }
             const leaves = this._collectLeaves(this._years || [], stepMode);
             const idx = leaves.findIndex(l => l.name === cur.name);
             if (idx !== -1) {
                 const nextIdx = idx + delta;
                 if (nextIdx >= 0 && nextIdx < leaves.length) {
-                    this._applySelection([leaves[nextIdx]]);
+                    return leaves[nextIdx];
                 }
-                return;
+                return null;
             }
         }
 
@@ -1193,13 +1272,11 @@ ODA({
                 : (delta < 0 ? span[0] : span[1]);
             const curWeek = _unitNameFromDate(_localDate(refIso), 'week');
             const nextWeek = _shiftUnitName(curWeek, 'week', delta);
-            const target = this._resolveUnitNode(nextWeek, 'week');
-            if (target) this._applySelection([target]);
-            return;
+            return this._resolveUnitNode(nextWeek, 'week');
         }
 
         const leaves = this._collectLeaves(this._years || [], stepMode);
-        if (!leaves.length) return;
+        if (!leaves.length) return null;
         let edge = delta < 0 ? span[0] : span[1];
         edge = edge < this._lo ? this._lo : edge > this._hi ? this._hi : edge;
         const idx = leaves.findIndex(l => {
@@ -1209,9 +1286,34 @@ ODA({
         if (idx !== -1) {
             const nextIdx = idx + delta;
             if (nextIdx >= 0 && nextIdx < leaves.length) {
-                this._applySelection([leaves[nextIdx]]);
+                return leaves[nextIdx];
             }
         }
+        return null;
+    },
+    _stepTargetLabel(target) {
+        if (!target) return '';
+        if (target._unitName && String(target._unitName).startsWith('week:')) {
+            return _getFullLabel(target._unitName, 'week');
+        }
+        return target.fullLabel || target.label || _getFullLabel(target.name, target.type) || '';
+    },
+    _updateArrowTitles() {
+        if (this._leftArrow) {
+            const prev = this._getStepTarget(-1);
+            const lbl = this._stepTargetLabel(prev);
+            this._leftArrow.fullLabel = lbl ? `Назад (${lbl})` : 'Назад';
+        }
+        if (this._rightArrow) {
+            const next = this._getStepTarget(1);
+            const lbl = this._stepTargetLabel(next);
+            this._rightArrow.fullLabel = lbl ? `Вперёд (${lbl})` : 'Вперёд';
+        }
+    },
+    // Перемещают период в зависимости от текущего mode у packets без зацикливания.
+    _step(delta) {
+        const target = this._getStepTarget(delta);
+        if (target) this._applySelection([target]);
     },
     // Стрелка '<' (левая) — Назад во времени (-1, в прошлое)
     _onNavLeft() { this._step(-1); },
@@ -1306,33 +1408,23 @@ ODA({
     template: /*html*/`
         <style>
             :host {
-                @apply --content;
+                @apply --light;
                 @apply --horizontal;
                 align-items: center;
-                background: light-dark(#f6f6f2, #222328);
-                border-bottom: 1px solid light-dark(#c8c8c0, #3a3b42);
+                color: var(--content-color);
+                border-bottom: 1px solid var(--border-color);
                 padding: 2px 6px;
                 height: 30px;
                 gap: 4px;
                 overflow: hidden;
                 box-sizing: border-box;
             }
-            .years-scroll {
+            .years-group {
                 @apply --horizontal;
+                @apply --no-flex;
                 align-items: center;
                 gap: 2px;
-                min-width: 0;
                 height: 26px;
-                overflow-x: auto;
-                overflow-y: hidden;
-                scrollbar-width: thin;
-            }
-            .years-scroll::-webkit-scrollbar {
-                height: 3px;
-            }
-            .years-scroll::-webkit-scrollbar-thumb {
-                background: light-dark(rgba(0, 0, 0, 0.25), rgba(255, 255, 255, 0.25));
-                border-radius: 2px;
             }
             .all-fixed {
                 @apply --horizontal;
@@ -1343,7 +1435,7 @@ ODA({
         <oda-packets-now-group ~if="navItems.length" :nav-items="navItems"
             @nav-left="onNavLeft($event)" @nav-right="onNavRight($event)"
             @open-now-dropdown="_onOpenNowDropdown($event)"></oda-packets-now-group>
-        <div class="years-scroll">
+        <div class="years-group">
             <div ~is="$for.item.is || 'oda-packets-selector'" ~for="yearItems"
                 :label="$for.item?.label" :icon="$for.item?.icon || ''" :title="$for.item?.fullLabel"
                 :disabled="$for.item?.disabled" :error="$for.item?.selected"
@@ -1400,6 +1492,10 @@ ODA({
         if (!item || item.disabled) return;
         e?.stopPropagation?.();
         if (item.name === 'period') { this.fire('edit-period', { anchor: e?.target || this }); return; }
+        if (item.is === 'oda-packets-more-years' || item.name === 'more-years') {
+            this.fire('open-more-years', { item, anchor: e?.currentTarget || e?.target || this });
+            return;
+        }
         if (item.items?.length) { this.fire('open-menu', { item, anchor: e?.currentTarget || e?.target || this }); return; }
         this.fire('item-pick', { item, ctrlKey: !!e?.ctrlKey });
     }
@@ -1416,22 +1512,22 @@ ODA({
                 max-width: 280px;
                 font-size: 12.5px;
                 line-height: 1.35;
-                border-radius: 2px;
+                border-radius: var(--radius-xs, 3px);
                 border: 1px solid transparent;
                 background: transparent !important;
-                color: light-dark(#555, #cbd5e1) !important;
+                color: var(--content-color) !important;
                 fill: currentColor !important;
                 box-sizing: border-box;
                 transition: background-color 0.12s ease, border-color 0.12s ease;
             }
             :host(:hover) {
-                background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.08)) !important;
-                color: light-dark(#111, #f8fafc) !important;
+                background: var(--accent-soft) !important;
+                color: var(--accent-color) !important;
             }
             :host([error]) {
-                border: 1px solid light-dark(#2b78a6, #60a5fa) !important;
-                background: light-dark(#eaf4fc, rgba(59, 130, 246, 0.22)) !important;
-                color: light-dark(#0b6623, #86efac) !important;
+                border: 1px solid var(--accent-color) !important;
+                background: var(--accent-soft) !important;
+                color: var(--accent-color) !important;
                 font-weight: 700;
             }
             :host([error]) label {
@@ -1480,9 +1576,81 @@ ODA({
 });
 
 ODA({ is: 'oda-packets-custom-period', extends: 'oda-packets-item' });
+ODA({ is: 'oda-packets-more-years', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-selector', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-left-arrow', extends: 'oda-packets-item' });
 ODA({ is: 'oda-packets-right-arrow', extends: 'oda-packets-item' });
+
+// Выпадающий список остальных лет для кнопки «Ещё (<N>)»:
+// любой клик (или Enter) по строке года открывает стандартное меню этого года (oda-packets-months).
+ODA({
+    is: 'oda-packets-more-menu',
+    imports: '/oda/components/icon/icon.js',
+    template: /*html*/`
+        <style>
+            :host {
+                @apply --vertical;
+                padding: var(--space-s);
+                min-width: 9em;
+                max-width: 18em;
+                overflow: auto;
+            }
+            .year-item {
+                @apply --horizontal;
+                align-items: center;
+                gap: var(--space-m);
+                padding: var(--space-s) var(--space-m);
+                border-radius: var(--radius-s);
+                cursor: pointer;
+                font-weight: 600;
+            }
+            .year-item:hover,
+            .year-item.active {
+                background: var(--accent-soft);
+            }
+            .disabled {
+                opacity: .5;
+                pointer-events: none;
+            }
+            .submenu {
+                margin-left: auto;
+                opacity: .65;
+                flex: none;
+            }
+            .year-item:hover .submenu {
+                opacity: 1;
+            }
+        </style>
+        <div ~for="items" style="display: contents;">
+            <div role="menuitem" tabindex="0"
+                ~class="{'year-item': true, active: activeYear === $for.item.value, disabled: !!$for.item.disabled}"
+                @tap="openYearMenu($for.item, $event)" @keydown="$event.key === 'Enter' && openYearMenu($for.item, $event)">
+                <span flex>{{$for.item.label}}</span>
+                <oda-icon class="submenu" icon="icons:chevron-right" :icon-size="iconSize"></oda-icon>
+            </div>
+        </div>
+    `,
+    items: [],
+    value: {
+        $def: ''
+    },
+    day: '',
+    activeYear: '',
+    iconSize: 20,
+    async openYearMenu(item, e) {
+        if (!item?.items?.length || item.disabled) return;
+        this.activeYear = item.value;
+        const el = e?.currentTarget || this;
+        const { right, top } = el.getBoundingClientRect ? el.getBoundingClientRect() : { right: 0, top: 0 };
+        const menu = ODA.createComponent('oda-packets-months', {
+            items: item.items,
+            value: this.value,
+            day: this.day
+        });
+        const picked = await ODA.showMenu({ menu }, { target: el, x: right, y: top }).catch(() => null);
+        if (picked) this.parentElement?.close?.(picked?.value ?? picked);
+    }
+});
 
 // Меню года (всегда в режиме day): пункт всего года (крупнее и жирнее квартала), заголовки кварталов и месяцы с подменю дней.
 ODA({

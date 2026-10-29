@@ -471,6 +471,20 @@ describe('фильтры колонок (8-c, Р4)', () => {
         assert.equal(read.has('filter'), false, 'раскладка не читает фильтр из состояния колонки');
         assert.deepEqual(PEOPLE_COLUMNS[1].fields.map(f => Object.keys(f)), [['id'], ['id']], 'метаданные не тронуты');
     });
+    it('расширенные префиксы фильтра колонки: @in:[...] (чекбоксы уникальных значений и пустые) и @date:YYYY-MM-DD', () => {
+        const cols = wrapColumns([{ id: 'title' }, { id: 'date', type: 'Date' }, { id: 'sum', type: 'Number', formatMoney: true }]);
+        const leaves = columnLayout(cols).leaves;
+        const rows = [
+            { id: 1, title: 'Альфа', date: '2026-10-01', sum: 23790 },
+            { id: 2, title: '', date: '2026-10-29', sum: 40000 },
+            { id: 3, title: 'Бета', date: '29.10.2026', sum: 43560 },
+        ];
+        const predIn = columnFilterPredicate({ title: '@in:["","Бета"]' }, leaves);
+        assert.deepEqual(rows.filter(predIn).map(r => r.id), [2, 3], 'фильтр @in выбирает пустые и Бета');
+
+        const predDate = columnFilterPredicate({ date: '@date:2026-10-29' }, leaves);
+        assert.deepEqual(rows.filter(predDate).map(r => r.id), [2, 3], 'фильтр @date понимает ISO и DD.MM.YYYY');
+    });
 });
 
 describe('groupOrder из состояния → groupsFrom (8-c, Р7)', () => {

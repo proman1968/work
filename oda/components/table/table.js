@@ -88,7 +88,78 @@ ODA({
                 width: 1px;
                 pointer-events: none;
             }
+            .group-panel {
+                @apply --horizontal;
+                @apply --light;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 6px;
+                min-height: 28px;
+                padding: 4px 10px;
+                border-bottom: 1px solid var(--border-color);
+                color: var(--content-color);
+                font-size: 12px;
+                user-select: none;
+                flex-shrink: 0;
+            }
+            .group-hint {
+                color: var(--muted-color);
+            }
+            .group-chip {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                padding: 2px 8px;
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-xs, 3px);
+                background: var(--content-background);
+                color: var(--content-color);
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .group-chip:hover {
+                border-color: var(--accent-color);
+                background: var(--accent-soft);
+            }
+            .group-chip-remove {
+                font-size: 11px;
+                color: var(--muted-color);
+                margin-left: 2px;
+            }
+            .group-chip-remove:hover {
+                color: var(--error-color);
+            }
+            .search-panel {
+                @apply --horizontal;
+                @apply --light;
+                align-items: center;
+                gap: 8px;
+                padding: 4px 10px;
+                border-bottom: 1px solid var(--border-color);
+                flex-shrink: 0;
+            }
+            .search-panel input {
+                width: 240px;
+                padding: 3px 8px;
+                font-size: 12.5px;
+                border: 1px solid var(--border-color);
+                border-radius: var(--radius-xs, 3px);
+                background: var(--content-background);
+                color: var(--content-color);
+                outline: none;
+            }
         </style>
+        <div class="group-panel" ~if="showGroupPanel || groupChips.length" @dragover.prevent @drop="onGroupPanelDrop($event)">
+            <span class="group-hint" ~if="!groupChips.length">Перетащите сюда колонки для группировки</span>
+            <div class="group-chip" ~for="groupChips" ~style="{marginLeft: ($for.index * 10) + 'px'}" @tap="toggleGroupChipDir($for.item)">
+                <span>{{$for.item.label}}</span>
+                <span>{{$for.item.dir < 0 ? '▼' : '▲'}}</span>
+                <span class="group-chip-remove" title="Разгруппировать" @tap.stop="removeGroupColumn($for.item.key)">✕</span>
+            </div>
+        </div>
+        <div class="search-panel" ~if="showSearchPanel">
+            <input type="search" placeholder="Поиск по таблице…" :value="filter || ''" @input="filter = $event.target.value">
+        </div>
         <!-- Сетка колонок — CSS-переменные на элементе шаблона (на кастомный хост ~style не ставится, §31);
              шапка и строки читают их статическим CSS -->
         <div class="scroller" vertical flex ~style="gridVars" @scroll="onScroll($event)">
@@ -227,6 +298,10 @@ ODA({
     columnWrappers: null,
     /** раскрытие групп: ключ группы → bool */
     groupStates: null,
+    _groupStateTick: 0,
+    showGroupPanel: false,
+    showSearchPanel: false,
+    showAutoFilterRow: false,
     _loadedStorageKey: '',
     attached() {
         this.groupStates ??= new Map();
@@ -493,6 +568,83 @@ ODA({
     get groupsSpec() {
         return groupsFrom(this.wrappers);
     },
+    get groupChips() {
+        return (this.wrappers || [])
+            .filter(w => Number(w.groupOrder ?? -1) > -1)
+            .sort((a, b) => Number(a.groupOrder) - Number(b.groupOrder))
+            .map(w => ({
+                key: w.key,
+                label: w.label || w.key,
+                order: Number(w.groupOrder),
+                dir: Number(w.sortOrder) < 0 ? -1 : 1,
+            }));
+    },
+    addGroupColumn(key) {
+        if (!key)
+            return;
+        const maxOrd = (this.wrappers || []).reduce((m, w) => Math.max(m, Number(w.groupOrder ?? -1)), -1);
+        this.setColumnState(key, { groupOrder: maxOrd + 1 });
+        this.showGroupPanel = true;
+    },
+    removeGroupColumn(key) {
+        if (!key)
+            return;
+        this.setColumnState(key, { groupOrder: -1 });
+    },
+    toggleGroupChipDir(chip) {
+        if (!chip?.key)
+            return;
+        this.setColumnState(chip.key, { sortOrder: chip.dir < 0 ? 1 : -1 });
+    },
+    onGroupPanelDrop(e) {
+        const key = e?.dataTransfer?.getData('text/x-oda-table-col') || e?.dataTransfer?.getData('text/plain') || '';
+        if (key)
+            this.addGroupColumn(key);
+    },
+    toggleGroup(groupKey) {
+        if (!groupKey)
+            return;
+        this.groupStates ??= new Map();
+        const next = !(this.groupStates.get(groupKey) === true);
+        this.groupStates.set(groupKey, next);
+        this._groupStateTick++;
+    },
+    setAllGroupsExpanded(open) {
+        this.groupStates ??= new Map();
+        const walk = (list, level, prefix) => {
+            const specs = this.groupsSpec || [];
+            if (level >= specs.length)
+                return;
+            const spec = specs[level];
+            const buckets = new Map();
+            for (const item of list || []) {
+                const val = item?.data?.[spec.name];
+                const k = `${prefix}/${val}`;
+                this.groupStates.set(k, Boolean(open));
+                if (!buckets.has(k))
+                    buckets.set(k, []);
+                buckets.get(k).push(item);
+            }
+            for (const [k, sub] of buckets.entries())
+                walk(sub, level + 1, k);
+        };
+        walk(this.items || [], 0, '');
+        this._groupStateTick++;
+    },
+    autoFitColumn(key) {
+        const col = flatColumns(this.wrappers).find(w => w.key === key);
+        if (!col)
+            return;
+        let maxChars = String(col.label || key).length + 4;
+        const sample = (this.dataSet || []).slice(0, 200);
+        for (const r of sample) {
+            const v = typeof col.valueOf === 'function' ? col.valueOf(r) : r?.[col.name || key];
+            if (v !== undefined && v !== null)
+                maxChars = Math.max(maxChars, String(v).length);
+        }
+        const px = Math.max(72, Math.min(460, Math.round(maxChars * 7.6 + 26)));
+        this.setColumnState(key, { width: px });
+    },
 
     // --- данные ---
     /** входные данные → дерево обёрток {data, level, expanded, items} */
@@ -534,10 +686,23 @@ ODA({
     },
     /** плоский список с группами (без групп — тот же список) */
     get groupedItems() {
-        return groupItems(this.items, {
+        void this._groupStateTick;
+        const tree = groupItems(this.items, {
             groups: this.groupsSpec,
             expandedOf: key => this.groupStates?.get(key) === true,
         });
+        if (!this.groupsSpec?.length)
+            return tree;
+        const flat = [];
+        const walk = (nodes) => {
+            for (const n of nodes || []) {
+                flat.push(n);
+                if (n?.isGroup && n.expanded && Array.isArray(n.items) && n.items.length)
+                    walk(n.items);
+            }
+        };
+        walk(tree);
+        return flat;
     },
     /** имена как у oda-table: отфильтрованное = сгруппированное = отсортированное */
     get filteredItems() {
