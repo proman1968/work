@@ -520,7 +520,7 @@
                 <div class="r"><span>Округ</span><em>${esc(r.district)}</em></div>
                 <div class="r"><span>Население</span><em>${String(r.populationMillions).replace('.', ',')} млн</em></div>
                 <div class="r"><span>Вакантно</span><em style="color:${vac > 0 ? 'var(--ok)' : 'var(--danger)'}">${vac} из ${q}</em></div>
-                <div class="r"><span>Франшиза</span><em>${rub(feeOf(r))}</em></div>`;
+                <div class="r"><span>Паушальный взнос</span><em>${rub(feeOf(r))}</em></div>`;
             const br = box.getBoundingClientRect();
             let x = e.clientX - br.left + 16, y = e.clientY - br.top + 16;
             const tw = tip.offsetWidth || 200, th = tip.offsetHeight || 110;
@@ -772,7 +772,7 @@
                 <td><b>${esc(r.reservationId)}</b><div class="small muted">Резерв франшизы</div></td>
                 <td><b>${esc(r.regionName)}</b> <span class="muted">(${esc(r.regionCode)})</span></td>
                 <td><b>${esc(r.companyName)}</b><div class="small muted">ИНН ${esc(r.inn || '—')} · ${esc(r.email || '—')}</div></td>
-                <td>Франшиза <b>${rub(r.franchiseFeeRub)}</b><div class="small muted">Залог ${rub(r.depositAmountRub || D.franchise.reservationDepositRub)}</div></td>
+                <td>Паушальный взнос <b>${rub(r.franchiseFeeRub)}</b><div class="small muted">Залог ${rub(r.nonRefundableDepositRub || r.depositAmountRub || D.franchise.reservationDepositRub)} · полная оплата за 1 год</div></td>
                 <td><span class="tag ${r.depositPaid ? 'ok' : ''}">${r.depositPaid ? 'залог оплачен' : 'ждёт оплаты залога'}</span></td>
                 <td><div style="display:flex;gap:6px;flex-wrap:wrap">
                     ${!r.depositPaid && r.orderId ? `<button class="btn btn-ok btn-sm" data-pay-order="${esc(r.orderId)}">Оплатить залог</button>` : ''}

@@ -464,8 +464,9 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.match(p2Err.error, /исчерпана квота партнёров/);
 
         // 8.4 Резервирование региональной франшизы с невозвратным залогом 100 000 ₽ и рост скидки партнёра (10% -> 30% -> 50%)
-        assert.equal(FRANCHISE_PROGRAM.baseFranchiseFeeRub, 5_000_000);
+        assert.equal(FRANCHISE_PROGRAM.baseFranchiseFeeRub, 500_000);
         assert.equal(FRANCHISE_PROGRAM.reservationDepositRub, 100_000);
+        assert.equal(FRANCHISE_PROGRAM.fullPaymentPeriodMonths, 12);
 
         const sveBefore = hubApp.store.getRegionPartnerQuotaStatus('RU-SVE');
         const reserveRes = await fetch(`${hubUrl}/api/partners/reserve`, {

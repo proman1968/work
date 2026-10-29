@@ -420,12 +420,12 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         <section class="stage" id="stage-franchise">
             <div class="sec-head">
                 <div><span class="kicker">Партнёрская программа</span><h2 class="h2">Региональная франшиза ODANT-WORK</h2></div>
-                <p>Число франшиз в субъекте пропорционально населению, стоимость — экономике региона. Резерв закрепляется сразу после невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}.</p>
+                <p>Число франшиз в субъекте пропорционально населению, паушальный взнос — экономике региона. Резерв закрепляется сразу после невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}, полная оплата паушального взноса — в течение 1 года.</p>
             </div>
             <div class="stats">
                 <div class="stat"><b id="statVacant">${totalVacant}</b><span>вакантных франшиз</span></div>
                 <div class="stat"><b>${visibleRegions.length}</b><span>субъектов РФ</span></div>
-                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.baseFranchiseFeeRub)}</b><span>базовая стоимость франшизы</span></div>
+                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.baseFranchiseFeeRub)}</b><span>базовый паушальный взнос</span></div>
                 <div class="stat"><b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b><span>залог за резерв</span></div>
                 <div class="stat"><b>${FRANCHISE_PROGRAM.minDiscountPercent}→${FRANCHISE_PROGRAM.maxDiscountPercent}%</b><span>скидка партнёра от объёма</span></div>
             </div>
@@ -471,10 +471,10 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <div><div class="small muted">Вакантно франшиз</div><div class="display" style="font-size:22px;font-weight:800" id="mapRegVacant">—</div><div class="small muted" id="mapRegOccupied"></div></div>
                     </div>
                     <div class="kv">
-                        <div><span>Стоимость франшизы</span><b id="mapRegFee">—</b></div>
+                        <div><span>Паушальный взнос</span><b id="mapRegFee">—</b></div>
                         <div><span>Залог за резерв</span><b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b></div>
                         <div><span>Индекс экономики</span><b id="mapRegIndex">—</b></div>
-                        <div><span>Остаток после залога</span><b id="mapRegRest">—</b></div>
+                        <div><span>Остаток (в течение года)</span><b id="mapRegRest">—</b></div>
                     </div>
                     <div class="field"><label for="inpPartnerCompany">Компания</label><input type="text" id="inpPartnerCompany" value="ООО «УралТехИнтеграция»"></div>
                     <div class="row2">
@@ -498,7 +498,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                             <th data-sort="district">Округ<span class="arr">↕</span></th>
                             <th data-sort="populationMillions" class="num">Население<span class="arr">↕</span></th>
                             <th data-sort="vacantFranchises">Вакантно<span class="arr">↕</span></th>
-                            <th data-sort="franchiseFeeRub" class="num">Франшиза<span class="arr">↕</span></th>
+                            <th data-sort="franchiseFeeRub" class="num">Паушальный взнос<span class="arr">↕</span></th>
                             <th></th>
                         </tr></thead>
                         <tbody id="regionsTableBody"></tbody>

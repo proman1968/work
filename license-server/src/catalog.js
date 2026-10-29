@@ -277,14 +277,16 @@ export function calculateOrderQuote({
 
 /**
  * Параметры партнёрской программы и региональной франшизы ODANT-WORK:
- * - Предварительная базовая стоимость франшизы = 5 000 000 ₽ (корректируется пропорционально экономическому индексу региона).
- * - Сразу при резервировании франшизы вносится невозвратный залог = 100 000 ₽.
+ * - Базовый паушальный взнос = 500 000 ₽ (корректируется пропорционально экономическому индексу региона).
+ * - Сразу при резервировании франшизы вносится невозвратный залог = 100 000 ₽, полная оплата паушального взноса — в течение 1 года (12 мес.).
  * - Максимальное количество франшиз в регионе пропорционально населению региона (partnersPerMillion * populationMillions, мин. 1).
  * - Партнёрская скидка растёт пропорционально годовому объёму продаж от начальных 10% до максимальных 50%.
  */
 export const FRANCHISE_PROGRAM = Object.freeze({
-    baseFranchiseFeeRub: 5_000_000,         // Предварительная базовая стоимость франшизы (5 млн ₽ при экономическом индексе 1.0)
+    baseFranchiseFeeRub: 500_000,           // Базовый паушальный взнос (500 тыс. ₽ при экономическом индексе 1.0)
     reservationDepositRub: 100_000,         // Невозвратный залог сразу за резервирование региональной франшизы (100 тыс. ₽)
+    fullPaymentPeriodMonths: 12,            // Срок полной оплаты паушального взноса — в течение 1 года (12 месяцев)
+    fullPaymentPeriodYears: 1,              // 1 год на полную оплату паушального взноса после резервирования
     partnersPerMillionPopulation: 1,        // Норматив квоты партнёров: 1 франшиза на 1 млн населения региона
     minDiscountPercent: 10,                 // Начальная партнёрская скидка (10%)
     maxDiscountPercent: 50,                 // Максимальная партнёрская скидка (50%)
@@ -588,6 +590,8 @@ export function calculateFranchiseFee(regionCodeOrIndex = 'RU-SVE', customPopula
         franchiseFeeRub,
         reservationDepositRub,
         remainingAfterDepositRub: Math.max(0, franchiseFeeRub - reservationDepositRub),
+        fullPaymentPeriodMonths: FRANCHISE_PROGRAM.fullPaymentPeriodMonths,
+        fullPaymentPeriodYears: FRANCHISE_PROGRAM.fullPaymentPeriodYears,
     };
 }
 

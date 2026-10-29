@@ -689,7 +689,7 @@ export class LicenseStore {
 
     /**
      * Зарезервировать региональную франшизу с выставлением счёта ЮKassa на невозвратный залог 100 000 ₽.
-     * Полная стоимость франшизы (предварительно 5 000 000 ₽ × индекс региона) фиксируется в договоре резерва.
+     * Полный паушальный взнос (500 000 ₽ × индекс региона) фиксируется в договоре резерва, полная оплата — в течение 1 года.
      */
     reserveFranchiseSlot({
         regionCode = 'RU-SVE',
@@ -730,10 +730,12 @@ export class LicenseStore {
             franchiseFeeRub: quotaStatus.franchiseFeeRub,
             nonRefundableDepositRub: depositRub,
             remainingFranchiseFeeRub: Math.max(0, quotaStatus.franchiseFeeRub - depositRub),
+            fullPaymentPeriodMonths: FRANCHISE_PROGRAM.fullPaymentPeriodMonths,
+            fullPaymentDeadlineAt: now + 365 * 24 * 3600_000,
             status: 'reserved_pending_deposit',
             depositPaid: false,
             createdAt: now,
-            expiresAt: now + 14 * 24 * 3600_000,
+            expiresAt: now + 365 * 24 * 3600_000,
         };
 
         const order = {
@@ -750,7 +752,7 @@ export class LicenseStore {
             franchiseFeeRub: quotaStatus.franchiseFeeRub,
             items: [
                 {
-                    title: `Невозвратный залог за резервирование региональной франшизы ODANT-WORK (${quotaStatus.regionName}, стоимость франшизы ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽)`,
+                    title: `Невозвратный залог за резервирование региональной франшизы ODANT-WORK (${quotaStatus.regionName}, паушальный взнос ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽, полная оплата в течение 1 года)`,
                     quantity: 1,
                     unitPriceRub: depositRub,
                     totalRub: depositRub,

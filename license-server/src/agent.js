@@ -5,7 +5,7 @@
  *  - комплекс ODANT-WORK на AMD Ryzen™ AI Max+ PRO 495 + Radeon™ 8065S;
  *  - ИИ-консультант и мультиагентная система платформы (ролевые агенты, навыки, оркестрация);
  *  - докупка годовых лицензий (Start 10 000 ₽, Business 15 000 ₽, Enterprise 20 000 ₽) со скидкой от количества;
- *  - вакантные франшизы по любому субъекту РФ (залог 100 000 ₽, базовая стоимость 5 000 000 ₽);
+ *  - вакантные франшизы по любому субъекту РФ (залог 100 000 ₽, базовая стоимость 500 000 ₽);
  *  - контакты разработчика платформы.
  */
 import {
@@ -70,15 +70,15 @@ export class LicenseServerAiAgent {
 
         // 1. Франшиза в конкретном субъекте РФ
         const region = findRegionInText(text);
-        if (region && /(франш|регион|вакант|квот|резерв|залог|партн|сколько|област|край|республ)/i.test(lower)) {
+        if (region && /(франш|паушал|взнос|регион|вакант|квот|резерв|залог|партн|сколько|област|край|республ)/i.test(lower)) {
             const q = this.store.getRegionPartnerQuotaStatus(region.code);
             return {
                 reply: [
                     `**${q.regionName}** (${q.district})`,
                     `• Население: **${String(q.populationMillions).replace('.', ',')} млн чел.**`,
                     `• Вакантных франшиз: **${q.vacantFranchises} из ${q.maxPartnersQuota}** — квота пропорциональна населению`,
-                    `• Стоимость франшизы: **${fmt(q.franchiseFeeRub)} ₽** (база ${fmt(FRANCHISE_PROGRAM.baseFranchiseFeeRub)} ₽ × индекс ${q.economicIndex})`,
-                    `• Невозвратный залог за резерв: **${fmt(q.reservationDepositRub)} ₽**`,
+                    `• Паушальный взнос: **${fmt(q.franchiseFeeRub)} ₽** (базовый взнос ${fmt(FRANCHISE_PROGRAM.baseFranchiseFeeRub)} ₽ × индекс ${q.economicIndex})`,
+                    `• Невозвратный залог за резерв: **${fmt(q.reservationDepositRub)} ₽**, полная оплата остатка (**${fmt(q.remainingAfterDepositRub)} ₽**) — **в течение 1 года**`,
                     `• Скидка партнёра: от ${FRANCHISE_PROGRAM.minDiscountPercent}% до ${FRANCHISE_PROGRAM.maxDiscountPercent}% от годового объёма продаж`,
                     q.vacantFranchises > 0
                         ? 'Я выделил субъект на карте — можно сразу нажать «Зарезервировать».'
@@ -164,14 +164,14 @@ export class LicenseServerAiAgent {
         }
 
         // 6. Партнёрская программа в целом
-        if (/(франш|партн|залог|резерв|обучен|сертифик|nas|инференс)/i.test(lower)) {
+        if (/(франш|паушал|взнос|партн|залог|резерв|обучен|сертифик|nas|инференс)/i.test(lower)) {
             const all = this.store.listRegionsWithQuotas().filter(r => !r.hidden);
             const totalVacant = all.reduce((s, r) => s + r.vacantFranchises, 0);
             return {
                 reply: [
                     '**Региональная франшиза ODANT-WORK:**',
-                    `• Базовая стоимость: **${fmt(FRANCHISE_PROGRAM.baseFranchiseFeeRub)} ₽** × экономический индекс субъекта`,
-                    `• Резерв субъекта: невозвратный залог **${fmt(FRANCHISE_PROGRAM.reservationDepositRub)} ₽** через ЮKassa`,
+                    `• Базовый паушальный взнос: **${fmt(FRANCHISE_PROGRAM.baseFranchiseFeeRub)} ₽** × экономический индекс субъекта`,
+                    `• Резерв субъекта: невозвратный залог **${fmt(FRANCHISE_PROGRAM.reservationDepositRub)} ₽** через ЮKassa, полная оплата паушального взноса — **в течение 1 года**`,
                     `• Сейчас свободно **${totalVacant}** франшиз в **${all.length}** субъектах РФ (квота пропорциональна населению)`,
                     `• Скидка партнёра: от ${FRANCHISE_PROGRAM.minDiscountPercent}% до ${FRANCHISE_PROGRAM.maxDiscountPercent}% от годового объёма продаж`,
                     '• 100% дохода партнёра: оборудование и гарантия на него, NAS для резервных копий, серверы инференса, собственный API к моделям, поддержка, дообучение агентов и навыков.',
@@ -186,7 +186,7 @@ export class LicenseServerAiAgent {
                 'Я ИИ-агент лицензионного центра **ODANT-WORK**. Коротко об условиях:',
                 `1. **Комплекс** — ${fmt(PAK_PRODUCT.basePriceRub)} ₽: AMD Ryzen™ AI Max+ PRO 495, Radeon™ 8065S, 192 ГБ, 4 ТБ, ${PAK_PRODUCT.baseSeats} вечных мест и год поддержки.`,
                 '2. **Доп. места на год:** Start 10 000 ₽ · Business 15 000 ₽ · Enterprise 20 000 ₽, скидка за количество до −25%.',
-                `3. **Франшиза:** от ${fmt(FRANCHISE_PROGRAM.baseFranchiseFeeRub)} ₽ × индекс субъекта, залог за резерв ${fmt(FRANCHISE_PROGRAM.reservationDepositRub)} ₽.`,
+                `3. **Франшиза:** паушальный взнос ${fmt(FRANCHISE_PROGRAM.baseFranchiseFeeRub)} ₽ × индекс субъекта, залог за резерв ${fmt(FRANCHISE_PROGRAM.reservationDepositRub)} ₽, полная оплата в течение 1 года.`,
                 'Спросите, например: «Рассчитай 25 мест Business», «Франшиза в Рязанской области» или «Что умеют ИИ-агенты?»',
             ].join('\n'),
             actions: [],
