@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
-const CODE_ROOTS = ['$server', 'sources', 'oda', 'tests', 'scripts', 'rules', 'MODELS', 'NODES', 'SERVICES'];
+const CODE_ROOTS = ['$server', 'sources', 'oda', 'tests', 'scripts', 'rules', 'MODELS', 'NODES', 'SERVICES', 'license-server'];
 const CODE_EXT = /\.(js|mjs|ts)$/;
 const LOCAL_ENV = /(^|\/)(\.venv|node_modules|models)(\/|$)/; // не исходники репозитория
 

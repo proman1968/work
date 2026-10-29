@@ -1,0 +1,57 @@
+# Исключения при публикации пакета work в npm:
+# 1. Исключаем torus и отдельное приложение лицензионного сервера (оно публикуется своим пакетом из license-server/)
+torus/
+torus/**
+license-server/
+license-server/**
+
+# 2. Секреты, системные ключи и локальные настройки узла
+/#system/
+**/#system/
+**/#secret/
+.env
+.env.*
+
+# 3. Тяжёлые веса локальных моделей, датасеты и адаптеры LoRA
+**/#weights/
+**/#datasets/
+**/#adapters/
+**/*.safetensors
+**/*.gguf
+**/*.bin
+**/*.pt
+**/*.pth
+**/*.onnx
+sources/modules/*/.venv/
+
+# 4. Локальные базы данных, индексы, логи и сессии пользователей
+**/*.db
+**/*.db-wal
+**/*.db-shm
+.index/
+**/.RAG/
+**/logs/
+**/history/
+**/ADMIN/task/
+**/ADMIN/image/
+**/ADMIN/text/
+**/ADMIN/xlsx/
+**/ADMIN/docx/
+**/USER/task/
+**/USER/call/
+**/USER/text/
+**/BOSS/task/
+.progress.md/
+USERS/*/
+!USERS/$users/
+test_tts.wav
+
+# 5. Разработка, тесты и служебные каталоги VCS
+.git/
+.svn/
+tests/
+docs/
+.DS_Store
+Thumbs.db
+*.log
+*.tgz

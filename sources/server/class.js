@@ -20,6 +20,7 @@ import * as LINKS from './access/links.js';
 import * as WORKPLACES from './access/workplaces.js';
 import { DATA_METHODS, classHasObjects, classObjectCount, markClassesDirty } from '../data/api.js';
 import { TRAINER_METHODS, localStreamChat } from '../modules/trainer/index.js';
+import { LICENSE_METHODS } from '../modules/license/index.js';
 import { DATA_TYPES } from '../data/classes.js';
 import {
     looksLikeFileId,
@@ -704,6 +705,16 @@ for (const [name, m] of Object.entries(DATA_METHODS)) {
 
 // методы загрузки моделей Hugging Face и дообучения Unsloth (trainer_*)
 for (const [name, m] of Object.entries(TRAINER_METHODS)) {
+    Object.defineProperty($class.prototype, name, {
+        value: function (params = {}) {
+            return m.fn.call(this, params);
+        },
+        writable: true,
+        configurable: true,
+    });
+}
+// методы управления лицензией ПАК WORK (license_*)
+for (const [name, m] of Object.entries(LICENSE_METHODS)) {
     Object.defineProperty($class.prototype, name, {
         value: function (params = {}) {
             return m.fn.call(this, params);

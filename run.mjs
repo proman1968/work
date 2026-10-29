@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import * as childProcess from 'node:child_process';
 import path from 'node:path';
 import * as fs from "node:fs";

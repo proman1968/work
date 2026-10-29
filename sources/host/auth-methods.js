@@ -5,6 +5,7 @@ import { mailer } from './mail.js';
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 import { audit } from '../server/access/audit.js';
+import { assertWorkplaceAvailableForLogin } from '../modules/license/index.js';
 
 const REGISTER_CODE_TTL_MS = 10 * 60 * 1000;
 const REGISTER_MAX_ATTEMPTS = 5;
@@ -285,6 +286,13 @@ export const authMethods = {
                 audit('login_fail', { uid, params });
                 throw new Error("login failed");
             }
+            const rootAdmins = Array.isArray(WORK?.DATA?.['#security']?.ADMIN) ? WORK.DATA['#security'].ADMIN : [];
+            const isAdmin = rootAdmins.includes(uid);
+            assertWorkplaceAvailableForLogin(uid, {
+                sessions: $server.sessions,
+                currentSsid: session.ssid,
+                isAdmin,
+            });
             session.credentials = $user.DATA;
             $server.signIn(session, $user);
             audit('login', { params });

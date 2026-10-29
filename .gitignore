@@ -32,6 +32,9 @@ USERS/*/
 
 # Progress snapshots (mirror of WORK history pattern)
 .progress.md/history/
+# Runtime data of license-server
+license-server/data/
+
 # OS / IDE
 .DS_Store
 Thumbs.db

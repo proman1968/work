@@ -1,11 +1,15 @@
 {
   "name": "work",
   "version": "1.0.0",
-  "description": "",
+  "description": "WORK — платформа цифровой организации (учётная система уровня 1С, документооборот, чаты и локальный мультимодальный ИИ)",
   "type": "module",
-  "main": "work.js",
+  "main": "sources/work.js",
+  "bin": {
+    "work": "run.mjs"
+  },
   "scripts": {
     "start": "node run.mjs",
+    "start:license-server": "node license-server/bin/server.mjs",
     "test": "node --test \"tests/**/*.test.js\"",
     "test:ci": "npm test",
     "setup-mirror": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-svn-mirror.ps1",

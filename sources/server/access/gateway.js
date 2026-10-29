@@ -17,6 +17,7 @@ import { DEV_MODE } from '../../host/config.js';
 import { audit } from './audit.js';
 import { DATA_METHODS } from '../../data/api.js';
 import { TRAINER_METHODS } from '../../modules/trainer/index.js';
+import { LICENSE_METHODS } from '../../modules/license/index.js';
 
 export const LEVEL = Object.freeze({ PUBLIC: 'public', USER: 'user', READ: 'read', CALL: 'call', WRITE: 'write', ADMIN: 'admin' });
 
@@ -63,6 +64,8 @@ export const MEMBERS = Object.freeze({
     ...Object.fromEntries(Object.entries(DATA_METHODS).map(([name, m]) => [name, m.level])),
     // локальные модели Hugging Face и дообучение Unsloth (sources/modules/trainer/index.js)
     ...Object.fromEntries(Object.entries(TRAINER_METHODS).map(([name, m]) => [name, m.level])),
+    // лицензирование ПАК WORK (sources/modules/license/index.js)
+    ...Object.fromEntries(Object.entries(LICENSE_METHODS).map(([name, m]) => [name, m.level])),
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,
