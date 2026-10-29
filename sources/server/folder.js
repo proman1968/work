@@ -1789,11 +1789,15 @@ export class $folder extends $item{
             : params.dateTime.toISOString();
         params.date = stamp.slice(0, 10).split('.').toReversed().join('-');
         const dir = this.dir + '/' + [...parsed.folders, params.date].join('/');
-        // папка точки (logs/, data/…) создаётся впервые — родитель должен увидеть её сразу, а не после debounce
-        const created = !fs.existsSync(this.dir);
+        // папка точки и ролевой зоны создаётся впервые — все новые предки (включая meta_folder) должны увидеть её сразу
+        const missingParents = [];
+        for (let p = this; p && !fs.existsSync(p.dir); p = p.parent) {
+            if (p.parent)
+                missingParents.push(p.parent);
+        }
         fs.mkdirSync(dir, { recursive: true });
-        if (created)
-            this.parent?.reset();
+        for (const p of missingParents)
+            p.reset?.();
         // имя точки — время.автор.ext: одинаковое время (пакетный импорт, запись в ту же мс)
         // не должно перезаписать другой объект — сдвигаем на 1 мс до свободного имени
         let id, json;

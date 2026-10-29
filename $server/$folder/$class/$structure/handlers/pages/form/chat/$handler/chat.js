@@ -1,4 +1,4 @@
-import { taskKeyOf, taskDayOf, isCreatedTask } from './chat-task.js';
+import { taskKeyOf, taskDayOf, isCreatedTask, pathOfLog } from './chat-task.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 /** localStorage.workChatDebug = 1 — журнал времён создания задачи в консоли. */
@@ -457,7 +457,7 @@ ODA({is: 'oda-chat',
             const attachments = [];
             await Promise.all(files.map(async file => {
                 const log = await item.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
-                const path = log?.logFullPath || log?.path;
+                const path = await pathOfLog(log);
                 if (path)
                     attachments.push({ path: path.startsWith('/') ? path : '/' + path, name: file.name });
             }));
@@ -473,7 +473,7 @@ ODA({is: 'oda-chat',
                 params.attachments = JSON.stringify(attachments);
             }
             const log = await item.save_file(new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' }), params);
-            const path = log?.logFullPath || log?.path || '';
+            const path = await pathOfLog(log);
             this.awaitTask = false;
             if (path) {
                 await this._openCreated(path);
@@ -933,17 +933,20 @@ ODA({is: 'chat-day',
             this.async(() => { this.$pdp.ribbon.scrollTop = 0; }, 0);
     },
     _wrapLogRow(row) {
-        if (!row || typeof row.load === 'function')
+        if (!row)
             return row;
-        const uid = row.sender || 'system';
-        const id = `${row.time || 0}.${uid}.logs`;
+        if (typeof row.load === 'function' && !row.logsFilePath && !row.DATA?.logsFilePath)
+            return row;
+        const rawRow = row.DATA?.logsFilePath ? { ...row.DATA } : row;
+        const uid = rawRow.sender || 'system';
+        const id = `${rawRow.time || 0}.${uid}.logs`;
         return {
             id,
             name: id,
             ext: 'logs',
-            path: row.logsFilePath || `/${id}`,
-            logRow: row,
-            load: async () => row,
+            path: rawRow.logsFilePath || `/${id}`,
+            logRow: rawRow,
+            load: async () => ({ ...rawRow }),
         };
     },
     async _bindLogsFolder(){

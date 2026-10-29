@@ -220,10 +220,12 @@ ODA({is: 'work-loader',
 top.loader ??= ODA.createElement('work-loader');
 
 WORK.__bind = function (data, path = '') {
-    if (typeof data === 'object') {
+    if (typeof data === 'object' && data !== null) {
         if (Array.isArray(data))
             return data.map(d => WORK.__bind(d))
-        if (data?.type || data?.path) {
+        // Запись лога (содержит logsFilePath) — не дескриптор узла дерева:
+        // нельзя превращать её в CORE.$file по data.path, иначе затирается кэш самого файла и теряются поля лога
+        if ((data?.type || data?.path) && !data?.logsFilePath) {
             if (!data.type) {
                 const id = data.id || data.path?.split('/').pop() || '';
                 data = {...data, id, type: id.includes('.') ? '$file' : '$folder'};

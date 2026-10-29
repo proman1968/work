@@ -253,8 +253,15 @@ export class $folder extends $item {
         params ??= {};
         if (this.role && !params.role)
             params.role = this.role;
+        const isRawLogPayload = method === 'read_log_bodies'
+            || method === 'read_log_entry'
+            || method === 'log_index'
+            || method === 'save_message'
+            || method === 'save_file'
+            || method === 'save_files'
+            || (method === 'logs' && params.mode && params.mode !== 'folder' && params.mode !== 'files');
         return WORK.fetch?.(this.short || '/', method, params, post_data).then(res => {
-            return WORK.__bind(res);
+            return isRawLogPayload ? res : WORK.__bind(res);
         })
     }
     delete() {

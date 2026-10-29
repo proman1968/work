@@ -327,7 +327,7 @@ ODA({is: 'chat-item',
                 return null;
             return item.load().then(raw => {
                 const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
-                if (!data.path && item.path)
+                if (!data.path && item.path && item.ext !== 'logs')
                     data.path = item.path;
                 // сам .task-файл (карточка принята в ленту напрямую): время — из имени файла <мс>.<uid>.task, как у записи журнала
                 if (!data.time && item.ext === 'task') {
@@ -456,8 +456,9 @@ ODA({is: 'chat-item',
             this.log = null;
             this._unwatchLog();
             this._applySenderFromRef(n);
-            if (n?.logRow && typeof n.logRow === 'object') {
-                const data = { ...n.logRow };
+            const logRow = n?.logRow || n?.DATA?.logRow;
+            if (logRow && typeof logRow === 'object' && typeof logRow.then !== 'function') {
+                const data = { ...logRow };
                 this.log = data;
                 if (data.sender && !this.senderIsReady)
                     this.senderId = data.sender;

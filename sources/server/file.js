@@ -635,6 +635,8 @@ export class $file extends $folder{
         }
         const owner = this.$owner || this.$parent;
         await LOGS.appendRow(owner, log, params);
+        log.logFullPath = this.json_model.path;
+        log.logPath = this.short;
         params.logFullPath = this.json_model.path;
         params.logPath = this.short;
         // триггеры агента (ai/triggers/*.md точки) — фоном, сохранение не ждёт

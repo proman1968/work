@@ -78,6 +78,13 @@ export class $file extends $folder{
             return $file.previews[n.ext];
         return $file.previews[n.ext] = new AsyncPromise(async _=>{
             try{
+                if (typeof n.get_item === 'function') {
+                    const h = await n.get_item('/~/handlers/preview');
+                    if (!h) {
+                        $file.previews[n.ext] = false;
+                        return false;
+                    }
+                }
                 let path = n.short + '/~/handlers/preview/~/preview.js';
                 let module;
                 try {
@@ -91,7 +98,7 @@ export class $file extends $folder{
                 return true;
             }
             catch(e){
-                delete $file.previews[n.ext];
+                $file.previews[n.ext] = false;
                 return false;
             }
 

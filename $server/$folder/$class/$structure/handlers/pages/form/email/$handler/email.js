@@ -406,12 +406,6 @@ ODA({
         if (this._watched || !this.$item)
             return;
         this._watched = [this.$item];
-        try {
-            const history = await this.$item.get_item('/~/logs');
-            if (history)
-                this._watched.push(history);
-        }
-        catch { /* нет логов */ }
         for (const src of this._watched)
             src?.listen?.('changed', this._onChanged);
     },

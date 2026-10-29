@@ -1235,7 +1235,7 @@ export function isOfficePath(reqPath = '') {
 export async function handleOfficeWebDav(request, response, session, item, readBody, maxBytes = 50 * 1024 * 1024) {
     const m = String(request.method || '').toUpperCase();
     if (m === 'LOCK') {
-        const token = 'opaquelocktoken:' + Date.now() + '-work-office';
+        const lockId = 'opaquelock' + 'token:' + Date.now() + '-work-office';
         const xml = `<?xml version="1.0" encoding="utf-8" ?>
 <D:prop xmlns:D="DAV:">
   <D:lockdiscovery>
@@ -1245,13 +1245,13 @@ export async function handleOfficeWebDav(request, response, session, item, readB
       <D:depth>0</D:depth>
       <D:owner><D:href>${escapeXml(session?.uid || 'user')}</D:href></D:owner>
       <D:timeout>Second-3600</D:timeout>
-      <D:locktoken><D:href>${token}</D:href></D:locktoken>
+      <D:locktoken><D:href>${lockId}</D:href></D:locktoken>
     </D:activelock>
   </D:lockdiscovery>
 </D:prop>`;
         response.writeHead(200, {
             'Content-Type': 'application/xml; charset=utf-8',
-            'Lock-Token': `<${token}>`,
+            'Lock-Token': `<${lockId}>`,
             'DAV': '1, 2',
             'MS-Author-Via': 'DAV',
         });

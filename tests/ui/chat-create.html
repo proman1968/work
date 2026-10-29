@@ -208,6 +208,33 @@ await test('геопозиция: нет ответа — не задержив�
     finally { restore(); host.remove(); }
 });
 
+await test('SQL-логи подразделения (logs mode: bodies с logsFilePath и type: "$file") не превращаются WORK.__bind в $file и отображают задачи в chat-day', async () => {
+    const rawLogRow = {
+        day: TODAY,
+        logsFilePath: `/ORGANIZATIONS/Маслоторг/sales/$structure/logs/${TODAY}/1791000000001.U1.logs`,
+        time: 1791000000001,
+        sender: 'U1',
+        content: JSON.stringify({ name: 'Задача в подразделении', items: [] }),
+        path: TASK_PATH,
+        type: '$file',
+        ext: 'task',
+        name: 'data',
+    };
+    const bound = WORK.__bind([rawLogRow]);
+    assert(!(bound[0] instanceof CORE.$file), 'WORK.__bind не должен превращать строку лога с logsFilePath в CORE.$file');
+    eq(bound[0].time, 1791000000001, 'поле time строки лога доступно напрямую');
+    eq(bound[0].logsFilePath, rawLogRow.logsFilePath, 'поле logsFilePath сохранено');
+
+    const { host, chat } = await mountChat();
+    try {
+        const day = await waitFor(() => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY), 'chat-day сегодня');
+        const wrapped = day._wrapLogRow(bound[0]);
+        assert(wrapped.id.endsWith('.logs'), 'строка лога обёрнута в дескриптор .logs');
+        eq(wrapped.logRow.path, TASK_PATH, 'путь задачи сохранён в logRow');
+    }
+    finally { restore(); host.remove(); }
+});
+
 window.__done = true;
 </script>
 </body>

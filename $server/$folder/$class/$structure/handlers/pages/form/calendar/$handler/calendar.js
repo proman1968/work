@@ -65,12 +65,11 @@ export default {
         if (!dayFrom || !dayTo || !source)
             return [];
         return (async () => {
-            const history = await source.get_item('/~/logs');
             this._boundOnLogsChanged ||= () => { this.events = undefined; };
-            if (history !== this._historyFolder) {
+            if (source !== this._historyFolder) {
                 this._historyFolder?.unlisten?.('changed', this._boundOnLogsChanged);
-                history?.listen?.('changed', this._boundOnLogsChanged);
-                this._historyFolder = history;
+                source?.listen?.('changed', this._boundOnLogsChanged);
+                this._historyFolder = source;
             }
             const rows = await source.logs({
                 mode: 'bodies',
@@ -105,7 +104,13 @@ export default {
                 summary: content.summary ?? '',
                 location: content.location ?? '',
                 allDay: !!content.allDay,
-                $item: row.logsFilePath && await WORK.get_item(row.logsFilePath)
+                $item: {
+                    id: `${row.time || 0}.${row.sender || 'system'}.logs`,
+                    ext: 'logs',
+                    path: row.logsFilePath,
+                    logRow: row,
+                    load: async () => ({ ...row }),
+                }
             })));
             events.sort((a, b) => String(a.start).localeCompare(String(b.start)));
             return this.events = events;

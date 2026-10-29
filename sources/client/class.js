@@ -43,7 +43,7 @@ export class $class extends $folder{
     }
     log_files(day){
         day ??= new Date().toLocalDay();
-        return this.get_item(`/~/logs/${day}/*.logs`);
+        return this.logs({ day, mode: 'files' });
     }
     /**
      * Пользователи роли: сервер кладёт uid ролей в данные элемента (`roleIds`), поэтому строка дерева
