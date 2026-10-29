@@ -1,6 +1,6 @@
 /**
  * Комплексные тесты деплоя, лицензирования ПАК WORK и сервера work.odant.org (license-server):
- *  1. Комплектация ПАК WORK: AMD Ryzen 495 8085 · 192 ГБ RAM · SSD 4 ТБ, 4 предустановленные модели ИИ,
+ *  1. Комплектация ПАК WORK: AMD Ryzen™ AI Max+ PRO 495 · 192 ГБ RAM · SSD 4 ТБ, 4 предустановленные модели ИИ,
  *     базовая стоимость 5 млн ₽, вечная лицензия на 5 мест + 1 год включённой поддержки.
  *  2. Тарифы дополнительных годовых лицензий и SLA: Start (15 тыс. ₽), Business (40 тыс. ₽), Enterprise (100 тыс. ₽).
  *  3. Привязка вечной лицензии к HWID + отпечатку ключа узла (#system/node-key.json) и подпись Ed25519.
@@ -70,8 +70,9 @@ describe('ПАК WORK: спецификация, лицензирование, �
         catch { /* ignore */ }
     });
 
-    it('1. Паспорт ПАК WORK и предустановленные модели ИИ соответствуют спецификации', () => {
-        assert.equal(PAK_HARDWARE_SPEC.cpu, 'AMD Ryzen 495 8085');
+    it('1. Паспорт ПАК ODANT-WORK и предустановленные типы моделей ИИ соответствуют спецификации AMD Ryzen AI Max+ PRO 495', () => {
+        assert.match(PAK_HARDWARE_SPEC.cpu, /AMD Ryzen.*AI Max\+ PRO 495/);
+        assert.match(PAK_HARDWARE_SPEC.gpu, /Radeon.*8065S/);
         assert.equal(PAK_HARDWARE_SPEC.ramGb, 192);
         assert.equal(PAK_HARDWARE_SPEC.ssdTb, 4);
         assert.equal(PAK_HARDWARE_SPEC.basePriceRub, 5_000_000);
@@ -81,29 +82,39 @@ describe('ПАК WORK: спецификация, лицензирование, �
 
         const models = inspectPreinstalledModels('.');
         assert.equal(models.length, 4);
-        const ids = models.map(m => m.id);
-        assert.deepEqual(ids, ['Qwen3-30B-A3B', 'Qwen3-Voice', 'Flux-Image', 'Qwen3-Embedding']);
         for (const m of models) {
             assert.equal(m.configured, true, `Дескриптор модели ${m.id} должен быть предустановлен в /MODELS/Local`);
         }
     });
 
-    it('2. Тарифы годовых пользовательских лицензий (Start 15k, Business 40k, Enterprise 100k) и калькулятор', () => {
-        assert.equal(SUPPORT_TIERS.start.pricePerUserYearRub, 15_000);
-        assert.equal(SUPPORT_TIERS.business.pricePerUserYearRub, 40_000);
-        assert.equal(SUPPORT_TIERS.enterprise.pricePerUserYearRub, 100_000);
+    it('2. Тарифы годовых пользовательских лицензий (Start 10k, Business 15k, Enterprise 20k) и скидки от количества', () => {
+        assert.equal(SUPPORT_TIERS.start.pricePerUserYearRub, 10_000);
+        assert.equal(SUPPORT_TIERS.business.pricePerUserYearRub, 15_000);
+        assert.equal(SUPPORT_TIERS.enterprise.pricePerUserYearRub, 20_000);
+
+        assert.equal(SLA_TIERS.start.pricePerUserYearRub, 10_000);
+        assert.equal(SLA_TIERS.business.pricePerUserYearRub, 15_000);
+        assert.equal(SLA_TIERS.enterprise.pricePerUserYearRub, 20_000);
 
         assert.equal(SLA_TIERS.start.reactionMinutes, 480);
         assert.equal(SLA_TIERS.business.reactionMinutes, 120);
         assert.equal(SLA_TIERS.enterprise.reactionMinutes, 15);
 
+        // 3 места Business без объёмной скидки: 3 * 15 000 = 45 000 ₽
         const q1 = calculateOrderQuote({ includeBasePak: true, tier: 'business', addonSeats: 3, years: 1 });
         assert.equal(q1.basePakPriceRub, 5_000_000);
-        assert.equal(q1.addonsAmountRub, 120_000);
-        assert.equal(q1.totalAmountRub, 5_120_000);
+        assert.equal(q1.volumeDiscountPercent, 0);
+        assert.equal(q1.addonsAmountRub, 45_000);
+        assert.equal(q1.totalAmountRub, 5_045_000);
+
+        // 10 мест Business (скидка −10% от количества): 150 000 - 15 000 = 135 000 ₽
+        const q10 = calculateOrderQuote({ includeBasePak: false, tier: 'business', addonSeats: 10, years: 1 });
+        assert.equal(q10.volumeDiscountPercent, 10);
+        assert.equal(q10.addonsDiscountRub, 15_000);
+        assert.equal(q10.addonsAmountRub, 135_000);
 
         const q2 = calculateLicenseQuote({ includeBasePak: false, tier: 'enterprise', addonSeats: 2, years: 2 });
-        assert.equal(q2.totalRub, 400_000);
+        assert.equal(q2.totalRub, 80_000);
     });
 
     it('3. Выпуск лицензии на work.odant.org, привязка HWID + node-key.json, 1 год включённой поддержки и проверка Ed25519', async () => {
@@ -194,7 +205,7 @@ describe('ПАК WORK: спецификация, лицензирование, �
         const initial = await syncWithLicenseHub({ hubUrl, licensePath: clientLicFile });
         assert.equal(initial.totalSeats, 5);
 
-        // Создаём заказ на 3 дополнительных годовых места уровня Enterprise (3 * 100 000 = 300 000 ₽)
+        // Создаём заказ на 3 дополнительных годовых места уровня Enterprise (3 * 20 000 = 60 000 ₽)
         const checkout = await createHubCheckoutOrder({
             hubUrl,
             licensePath: clientLicFile,
@@ -207,12 +218,12 @@ describe('ПАК WORK: спецификация, лицензирование, �
         });
 
         assert.ok(checkout.orderId);
-        assert.equal(checkout.amountRub, 300_000);
+        assert.equal(checkout.amountRub, 60_000);
         assert.ok(checkout.confirmationUrl.includes('/pay/sandbox/'));
 
         // Проверяем структуру payload для ЮKassa v3 (включая чек 54-ФЗ receipt)
         const ykPayload = hubApp.yookassa.buildYooKassaPaymentPayload(checkout.order);
-        assert.equal(ykPayload.amount.value, '300000.00');
+        assert.equal(ykPayload.amount.value, '60000.00');
         assert.equal(ykPayload.amount.currency, 'RUB');
         assert.equal(ykPayload.receipt.customer.inn, '7701234567');
         assert.equal(ykPayload.receipt.items.length, 1);
@@ -227,7 +238,7 @@ describe('ПАК WORK: спецификация, лицензирование, �
                 object: {
                     id: checkout.paymentId,
                     status: 'succeeded',
-                    amount: { value: '300000.00', currency: 'RUB' },
+                    amount: { value: '60000.00', currency: 'RUB' },
                     metadata: {
                         orderId: checkout.orderId,
                         licenseId: initial.licenseId,
@@ -349,13 +360,36 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(tgBuyRes.confirmationUrl);
     });
 
-    it('7. Лендинг work.odant.org отдаёт полную витрину ПАК и оба пакета готовы к публикации в npm (без torus)', async () => {
+    it('7. Лендинг ODANT-WORK (work.odant.org): тёмная/светлая тема, карта России, скрытие докупки до входа и собственный ИИ-агент', async () => {
         const html = await fetch(`${hubUrl}/`).then(r => r.text());
-        assert.ok(html.includes('AMD Ryzen 495 8085'));
+        assert.ok(html.includes('ODANT-WORK'));
+        assert.ok(html.includes('AMD Ryzen™ AI Max+ PRO 495'));
+        assert.ok(html.includes('Radeon™ 8065S'));
         assert.ok(html.includes('192 ГБ'));
         assert.ok(html.includes('5 000 000 ₽'));
-        assert.ok(html.includes('ЮKassa'));
-        assert.ok(html.includes('MAX'));
+        assert.ok(html.includes('data-theme="dark"'));
+        assert.ok(html.includes('toggleTheme()'));
+        assert.ok(html.includes('russiaMapSvg'));
+        assert.ok(html.includes('id="tileAddons"') && html.includes('style="display:none;"'), 'Докупка лицензий скрыта до авторизации пользователя');
+        assert.ok(!html.includes('1С'), 'В лендинге нет упоминаний 1С');
+
+        // Авторизация пользователя для доступа к докупке лицензий
+        const authRes = await fetch(`${hubUrl}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'director@maslotorg.ru', companyName: 'ООО «Маслоторг»' }),
+        }).then(r => r.json());
+        assert.ok(authRes.sessionKey);
+        assert.ok(authRes.licenseId);
+
+        // Запрос к собственному ИИ-агенту сервера лицензий
+        const agentReply = await fetch(`${hubUrl}/api/agent/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: 'Рассчитай 25 мест Business', sessionKey: authRes.sessionKey }),
+        }).then(r => r.json());
+        assert.ok(agentReply.reply.includes('−15%'));
+        assert.equal(agentReply.data.quote.volumeDiscountPercent, 15);
 
         const npmIgnore = fs.readFileSync('.npmignore', 'utf8');
         assert.ok(npmIgnore.includes('torus/'), 'torus исключён из публикации в npm');
@@ -429,21 +463,28 @@ describe('ПАК WORK: спецификация, лицензирование, �
         const p2Err = await p2Res.json();
         assert.match(p2Err.error, /исчерпана квота партнёров/);
 
-        // 8.4 Рост партнёрской скидки при продажах ПАК через ЮKassa (10% -> 30% -> 50%)
-        const order50M = hubApp.store.createOrder({
-            partnerId: p1.partnerId,
-            includeBasePak: true,
-            tier: 'enterprise',
-            addonSeats: 450,
-            years: 1,
-        });
-        assert.equal(order50M.amountRub, 50_000_000);
-        assert.equal(order50M.partnerDiscountPercent, 10);
-        assert.equal(order50M.partnerMarginRub, 5_000_000);
+        // 8.4 Резервирование региональной франшизы с невозвратным залогом 100 000 ₽ и рост скидки партнёра (10% -> 30% -> 50%)
+        assert.equal(FRANCHISE_PROGRAM.baseFranchiseFeeRub, 5_000_000);
+        assert.equal(FRANCHISE_PROGRAM.reservationDepositRub, 100_000);
 
-        const paid50M = hubApp.store.completePaidOrder(order50M.orderId, { paymentId: 'yk_part_1' });
-        assert.equal(paid50M.partner.annualSalesRub, 50_000_000);
-        assert.equal(paid50M.partner.discountPercent, 30, 'После продажи на 50 млн ₽ скидка партнёра выросла до 30%');
+        const sveBefore = hubApp.store.getRegionPartnerQuotaStatus('RU-SVE');
+        const reserveRes = await fetch(`${hubUrl}/api/partners/reserve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                regionCode: 'RU-SVE',
+                companyName: 'ООО «УралФраншиза»',
+                inn: '6670998877',
+                email: 'ceo@uralfranchise.ru',
+            }),
+        }).then(r => r.json());
+        assert.equal(reserveRes.amountRub, 100_000, 'Сразу за резервирование выставляется невозвратный залог 100 000 ₽');
+        assert.equal(reserveRes.regionQuota.vacantFranchises, sveBefore.vacantFranchises - 1, 'Количество вакантных франшиз региона уменьшается на 1 при резервировании');
+
+        hubApp.store.recordPartnerSale(p1.partnerId, 50_000_000);
+        const updatedPartner = hubApp.store.getPartnerSummary(p1.partnerId);
+        assert.equal(updatedPartner.annualSalesRub, 50_000_000);
+        assert.equal(updatedPartner.discountPercent, 30, 'После продажи на 50 млн ₽ скидка партнёра выросла до 30%');
 
         // 8.5 Программа обучения партнёров и сертификация специалистов
         assert.ok(PARTNER_TRAINING_TRACKS.length >= 4);

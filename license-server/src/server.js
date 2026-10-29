@@ -1,7 +1,8 @@
 /**
  * HTTP-сервер приложения work.odant.org:
- *  - GET  /                                — Продающий лендинг ПАК WORK + калькулятор + консоль ботов;
- *  - GET  /api/catalog                     — Спецификация ПАК (AMD Ryzen 495 8085 192GB 4TB) и тарифы Start/Business/Enterprise;
+ *  - GET  /                                — Витрина ODANT-WORK (платформа, ИИ-агенты, тарифы, заказ, франшиза, поддержка);
+ *  - GET  /favicon.ico, /assets/*          — Логотип ODANT, стили и скрипт витрины, контуры субъектов РФ;
+ *  - GET  /api/catalog                     — Спецификация комплекса (AMD Ryzen™ AI Max+ PRO 495, 192 ГБ, 4 ТБ) и тарифы Start/Business/Enterprise;
  *  - POST /api/quote                       — Расчёт стоимости заказа;
  *  - POST /api/license/issue               — Выпуск базовой лицензии ПАК (5 вечных мест + 1 год поддержки);
  *  - POST /api/license/sync                — Онлайн-синхронизация лицензии с ПАК клиента (привязка HWID + node-key.json);
@@ -16,9 +17,13 @@
  *  - GET  /api/admin/overview              — Сводка по лицензиям, заказам и тикетам.
  */
 import http from 'node:http';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
 import {
     PAK_PRODUCT,
     SLA_TIERS,
+    SEAT_VOLUME_DISCOUNTS,
+    calculateSeatVolumeDiscount,
     calculateOrderQuote,
     FRANCHISE_PROGRAM,
     REGIONS_CATALOG,
@@ -31,6 +36,7 @@ import {
 import { LicenseStore } from './store.js';
 import { YooKassaService } from './yookassa.js';
 import { SupportBotsHub } from './bots.js';
+import { LicenseServerAiAgent } from './agent.js';
 import { renderLandingPage, renderSandboxPaymentPage } from './landing.js';
 
 async function readJsonBody(req, maxBytes = 1024 * 1024) {
@@ -55,6 +61,42 @@ function sendJson(res, status, data) {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+    res.end(body);
+}
+
+const ASSETS_DIR = new URL('../assets/', import.meta.url);
+const STATIC_ASSETS = Object.freeze({
+    '/favicon.ico': { file: 'odant-logo.png', type: 'image/png' },
+    '/assets/odant-logo.png': { file: 'odant-logo.png', type: 'image/png' },
+    '/assets/russia-regions.json': { file: 'russia-regions.json', type: 'application/json; charset=utf-8' },
+    '/assets/landing.css': { file: 'landing.css', type: 'text/css; charset=utf-8' },
+    '/assets/landing.js': { file: 'landing.js', type: 'text/javascript; charset=utf-8' },
+});
+const assetCache = new Map();
+let assetVersionCache = '';
+
+/** Версия статики для сброса кэша браузера: короткий хеш стилей и скрипта витрины. */
+function assetVersion() {
+    if (assetVersionCache && !process.env.WORK_DEV)
+        return assetVersionCache;
+    const hash = crypto.createHash('sha1');
+    for (const file of ['landing.css', 'landing.js'])
+        hash.update(fs.readFileSync(new URL(file, ASSETS_DIR)));
+    assetVersionCache = hash.digest('hex').slice(0, 10);
+    return assetVersionCache;
+}
+
+function sendStaticAsset(res, asset) {
+    let body = assetCache.get(asset.file);
+    if (!body) {
+        body = fs.readFileSync(new URL(asset.file, ASSETS_DIR));
+        if (!process.env.WORK_DEV)
+            assetCache.set(asset.file, body);
+    }
+    res.writeHead(200, {
+        'Content-Type': asset.type,
+        'Cache-Control': process.env.WORK_DEV ? 'no-cache' : 'public, max-age=3600',
     });
     res.end(body);
 }
@@ -89,6 +131,11 @@ export function createLicenseServerApp(options = {}) {
         publicOrigin: options.publicOrigin || 'https://work.odant.org',
         fetchImpl: options.fetchImpl,
     });
+    const agent = options.agent || new LicenseServerAiAgent({
+        store,
+        yookassa,
+        fetchImpl: options.fetchImpl,
+    });
 
     async function handler(req, res) {
         try {
@@ -108,9 +155,19 @@ export function createLicenseServerApp(options = {}) {
             const url = new URL(req.url || '/', reqOrigin);
             const pathname = url.pathname;
 
-            // 1. Главная страница лендинга work.odant.org
-            if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
-                return sendHtml(res, 200, renderLandingPage({ publicKey: store.authorityKeys.publicKey }));
+            // 1. Главная страница лендинга work.odant.org и панель администратора (/admin)
+            if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html' || pathname === '/admin')) {
+                return sendHtml(res, 200, renderLandingPage({
+                    publicKey: store.authorityKeys.publicKey,
+                    regions: store.listRegionsWithQuotas(),
+                    assetVersion: assetVersion(),
+                    initialStage: pathname === '/admin' ? 'admin' : '',
+                }));
+            }
+
+            // 1.1 Статика лендинга: логотип ODANT, стили, клиентский скрипт и контуры субъектов РФ
+            if (req.method === 'GET' && STATIC_ASSETS[pathname]) {
+                return sendStaticAsset(res, STATIC_ASSETS[pathname]);
             }
 
             // 2. Каталог ПАК, тарифов SLA и партнёрской франшизы
@@ -118,11 +175,28 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, {
                     product: PAK_PRODUCT,
                     tiers: Object.values(SLA_TIERS),
+                    volumeDiscounts: SEAT_VOLUME_DISCOUNTS,
                     franchiseProgram: FRANCHISE_PROGRAM,
                     regions: store.listRegionsWithQuotas(),
                     trainingTracks: PARTNER_TRAINING_TRACKS,
                     authorityPublicKey: store.authorityKeys.publicKey,
                 });
+            }
+
+            // 2.0 Вход / регистрация пользователя (для доступа к разделу докупки пользовательских лицензий)
+            if (req.method === 'POST' && (pathname === '/api/auth/login' || pathname === '/api/auth/register')) {
+                const body = await readJsonBody(req);
+                const user = store.registerOrLoginUser(body);
+                return sendJson(res, 200, user);
+            }
+
+            if (req.method === 'GET' && pathname === '/api/auth/me') {
+                const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+                const key = url.searchParams.get('sessionKey') || authHeader;
+                const user = store.findUserBySessionKey(key);
+                if (!user)
+                    return sendJson(res, 401, { authenticated: false });
+                return sendJson(res, 200, { authenticated: true, user });
             }
 
             // 2.1 Партнёрская программа: справочник регионов с квотами по населению, шкала скидок 10%-50% и курсы сертификации
@@ -162,6 +236,28 @@ export function createLicenseServerApp(options = {}) {
                 const body = await readJsonBody(req);
                 const result = store.partnerIssueLicense(body);
                 return sendJson(res, 200, result);
+            }
+
+            // 2.6 Резервирование региональной франшизы с оплатой невозвратного залога 100 000 ₽ через ЮKassa
+            if (req.method === 'POST' && pathname === '/api/partners/reserve') {
+                const body = await readJsonBody(req);
+                const reserved = store.reserveFranchiseSlot(body);
+                const payment = await yookassa.createPaymentForOrder(reserved.order, { originOverride: reqOrigin });
+                return sendJson(res, 200, {
+                    ...payment,
+                    reservation: reserved.reservation,
+                    order: reserved.order,
+                    regionQuota: reserved.regionQuota,
+                });
+            }
+
+            // 2.7 Собственный ИИ-агент лицензионного сервера ODANT-WORK
+            if (req.method === 'POST' && pathname === '/api/agent/chat') {
+                const body = await readJsonBody(req);
+                const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+                const user = store.findUserBySessionKey(body.sessionKey || authHeader);
+                const reply = await agent.chat({ message: body.message || body.text || '', history: body.history || [], user });
+                return sendJson(res, 200, reply);
             }
 
             // 3. Калькулятор стоимости
@@ -263,6 +359,7 @@ export function createLicenseServerApp(options = {}) {
                     tickets: store.listTickets(),
                     orders: Object.values(store.state.orders),
                     partners: store.listPartners(),
+                    reservations: Object.values(store.state.reservations || {}),
                     regions: store.listRegionsWithQuotas(),
                 });
             }
@@ -278,6 +375,7 @@ export function createLicenseServerApp(options = {}) {
         store,
         yookassa,
         bots,
+        agent,
         handler,
         listen(port = Number(process.env.PORT || 8020), host = '0.0.0.0') {
             const server = http.createServer(handler);

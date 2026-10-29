@@ -12,6 +12,7 @@ import {
     PAK_PRODUCT,
     SLA_TIERS,
     calculateOrderQuote,
+    FRANCHISE_PROGRAM,
     REGIONS_CATALOG,
     PARTNER_TRAINING_TRACKS,
     calculateFranchiseFee,
@@ -35,7 +36,9 @@ export class LicenseStore {
             tickets: {},
             botBindings: {},
             partners: {},
+            reservations: {},
             certificates: {},
+            users: {},
         };
         this._load();
     }
@@ -51,7 +54,9 @@ export class LicenseStore {
                 this.state.tickets = raw.tickets || {};
                 this.state.botBindings = raw.botBindings || {};
                 this.state.partners = raw.partners || {};
+                this.state.reservations = raw.reservations || {};
                 this.state.certificates = raw.certificates || {};
+                this.state.users = raw.users || {};
             }
         }
         catch { /* начинаем с чистого состояния */ }
@@ -427,6 +432,21 @@ export class LicenseStore {
         if (paymentId)
             ord.paymentId = paymentId;
 
+        if (ord.kind === 'franchise_reservation' && ord.reservationId && this.state.reservations[ord.reservationId]) {
+            const resv = this.state.reservations[ord.reservationId];
+            resv.depositPaid = true;
+            resv.paidAt = ord.paidAt;
+            resv.paymentId = ord.paymentId;
+            resv.status = 'deposit_paid';
+            this._save();
+            return {
+                order: ord,
+                reservation: resv,
+                regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
+                alreadyProcessed: false,
+            };
+        }
+
         const license = this.grantAddonSubscription(ord.licenseId, {
             tier: ord.tier,
             seats: ord.addonSeats,
@@ -569,17 +589,195 @@ export class LicenseStore {
     }
 
     /**
-     * Получить статус квоты партнёров по региону (макс. число партнёров пропорционально населению).
+     * Зарегистрировать или авторизовать пользователя личного кабинета ODANT-WORK.
+     * Докупка дополнительных пользовательских лицензий доступна только зарегистрированным пользователям.
+     */
+    registerOrLoginUser({ email = '', name = '', companyName = '', inn = '', licenseId = '' } = {}) {
+        const cleanEmail = String(email || '').trim().toLowerCase();
+        if (!cleanEmail || !cleanEmail.includes('@'))
+            throw new Error('Укажите корректный email для входа в личный кабинет ODANT-WORK');
+
+        let user = this.state.users[cleanEmail];
+        const now = Date.now();
+        if (!user) {
+            let lic = licenseId ? this.findLicense(licenseId) : null;
+            if (!lic) {
+                const summary = this.issueOrUpdateLicense({
+                    customer: {
+                        name: companyName || name || 'Организация ODANT-WORK',
+                        inn: inn || '',
+                        email: cleanEmail,
+                    },
+                });
+                lic = summary.certificate;
+            }
+            user = {
+                userId: 'USR-' + crypto.createHash('sha256').update(cleanEmail).digest('hex').slice(0, 10).toUpperCase(),
+                email: cleanEmail,
+                name: String(name || companyName || cleanEmail.split('@')[0]).trim(),
+                companyName: String(companyName || lic.customer?.name || 'Организация ODANT-WORK').trim(),
+                inn: String(inn || lic.customer?.inn || '').trim(),
+                licenseId: lic.licenseId,
+                sessionKey: 'wks_' + crypto.randomBytes(16).toString('hex'),
+                createdAt: now,
+                lastLoginAt: now,
+            };
+            this.state.users[cleanEmail] = user;
+        }
+        else {
+            user.lastLoginAt = now;
+            if (name) user.name = String(name).trim();
+            if (companyName) user.companyName = String(companyName).trim();
+            if (inn) user.inn = String(inn).trim();
+            if (licenseId && this.findLicense(licenseId)) {
+                user.licenseId = this.findLicense(licenseId).licenseId;
+            }
+        }
+        this._save();
+        return {
+            userId: user.userId,
+            email: user.email,
+            name: user.name,
+            companyName: user.companyName,
+            inn: user.inn,
+            licenseId: user.licenseId,
+            sessionKey: user.sessionKey,
+            license: this.getLicenseSummary(user.licenseId),
+        };
+    }
+
+    findUserBySessionKey(sessionKey = '') {
+        const key = String(sessionKey || '').trim();
+        if (!key)
+            return null;
+        const user = Object.values(this.state.users).find(u => u.sessionKey === key);
+        if (!user)
+            return null;
+        return {
+            userId: user.userId,
+            email: user.email,
+            name: user.name,
+            companyName: user.companyName,
+            inn: user.inn,
+            licenseId: user.licenseId,
+            license: this.getLicenseSummary(user.licenseId),
+        };
+    }
+
+    /**
+     * Получить статус квоты и вакантных франшиз по региону (макс. число партнёров пропорционально населению).
      */
     getRegionPartnerQuotaStatus(regionCode = 'RU-SVE', customPopulationMillions = null) {
         const info = calculateFranchiseFee(regionCode, customPopulationMillions);
         const existingInRegion = Object.values(this.state.partners).filter(
             p => p.regionCode === info.regionCode && p.status !== 'revoked'
         );
+        const reservedInRegion = Object.values(this.state.reservations || {}).filter(
+            r => r.regionCode === info.regionCode && r.status !== 'canceled' && !r.convertedToPartnerId
+        );
+        const occupied = existingInRegion.length + reservedInRegion.length;
+        const vacantFranchises = Math.max(0, info.maxPartnersQuota - occupied);
         return {
             ...info,
             activePartnersCount: existingInRegion.length,
-            availablePartnerSlots: Math.max(0, info.maxPartnersQuota - existingInRegion.length),
+            reservedFranchisesCount: reservedInRegion.length,
+            occupiedFranchisesCount: occupied,
+            availablePartnerSlots: vacantFranchises,
+            vacantFranchises,
+        };
+    }
+
+    /**
+     * Зарезервировать региональную франшизу с выставлением счёта ЮKassa на невозвратный залог 100 000 ₽.
+     * Полная стоимость франшизы (предварительно 5 000 000 ₽ × индекс региона) фиксируется в договоре резерва.
+     */
+    reserveFranchiseSlot({
+        regionCode = 'RU-SVE',
+        companyName = '',
+        inn = '',
+        email = '',
+        phone = '',
+        contactPerson = '',
+        returnUrl = '',
+    } = {}) {
+        if (!companyName)
+            throw new Error('Укажите наименование компании для резервирования региональной франшизы');
+
+        const quotaStatus = this.getRegionPartnerQuotaStatus(regionCode);
+        if (quotaStatus.vacantFranchises <= 0) {
+            throw new Error(
+                `В регионе «${quotaStatus.regionName}» нет вакантных франшиз `
+                + `(занято ${quotaStatus.occupiedFranchisesCount} из ${quotaStatus.maxPartnersQuota}, пропорционально населению ${quotaStatus.populationMillions} млн чел.)`
+            );
+        }
+
+        const now = Date.now();
+        const reservationId = 'RES-' + quotaStatus.regionCode.replace(/^RU-/, '') + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+        const depositRub = FRANCHISE_PROGRAM.reservationDepositRub;
+        const orderId = 'ORD-FR-' + Date.now().toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+
+        const reservation = {
+            reservationId,
+            orderId,
+            regionCode: quotaStatus.regionCode,
+            regionName: quotaStatus.regionName,
+            district: quotaStatus.district,
+            companyName: String(companyName).trim(),
+            inn: String(inn || '').trim(),
+            email: String(email || 'franchise@odant.org').trim(),
+            phone: String(phone || '').trim(),
+            contactPerson: String(contactPerson || '').trim(),
+            franchiseFeeRub: quotaStatus.franchiseFeeRub,
+            nonRefundableDepositRub: depositRub,
+            remainingFranchiseFeeRub: Math.max(0, quotaStatus.franchiseFeeRub - depositRub),
+            status: 'reserved_pending_deposit',
+            depositPaid: false,
+            createdAt: now,
+            expiresAt: now + 14 * 24 * 3600_000,
+        };
+
+        const order = {
+            orderId,
+            kind: 'franchise_reservation',
+            reservationId,
+            licenseId: reservationId,
+            regionCode: quotaStatus.regionCode,
+            regionName: quotaStatus.regionName,
+            tierName: `Резерв франшизы (${quotaStatus.regionName})`,
+            addonSeats: 1,
+            years: 1,
+            amountRub: depositRub,
+            franchiseFeeRub: quotaStatus.franchiseFeeRub,
+            items: [
+                {
+                    title: `Невозвратный залог за резервирование региональной франшизы ODANT-WORK (${quotaStatus.regionName}, стоимость франшизы ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽)`,
+                    quantity: 1,
+                    unitPriceRub: depositRub,
+                    totalRub: depositRub,
+                },
+            ],
+            customer: {
+                name: reservation.companyName,
+                inn: reservation.inn,
+                email: reservation.email,
+                phone: reservation.phone,
+            },
+            status: 'pending',
+            paymentId: '',
+            confirmationUrl: '',
+            returnUrl: returnUrl || 'https://work.odant.org',
+            createdAt: now,
+            paidAt: null,
+        };
+
+        this.state.reservations[reservationId] = reservation;
+        this.state.orders[orderId] = order;
+        this._save();
+
+        return {
+            reservation,
+            order,
+            regionQuota: this.getRegionPartnerQuotaStatus(quotaStatus.regionCode),
         };
     }
 

@@ -79,7 +79,7 @@ export class SupportBotsHub {
                     `Чат (${ch.toUpperCase()}) успешно привязан к ПАК WORK!`,
                     `• Лицензия: ${lic.licenseId}`,
                     `• Организация: ${lic.customer?.name || '—'}`,
-                    `• Платформа: ${lic.hardware?.cpu || 'AMD Ryzen 495 8085'} (${lic.hardware?.ramGb || 192} ГБ RAM, SSD ${lic.hardware?.ssdTb || 4} ТБ)`,
+                    `• Платформа: ${lic.hardware?.cpu || 'AMD Ryzen™ AI Max+ PRO 495'} (${lic.hardware?.ramGb || 192} ГБ RAM, SSD ${lic.hardware?.ssdTb || 4} ТБ)`,
                     `• Рабочие места: ${lic.totalSeats} (${lic.baseSeats} вечных + ${lic.addonSeats} годовых)`,
                     `• Уровень поддержки: ${lic.support.tierName} (время реакции ${lic.support.reactionLabel})`,
                     `• Остаток обращений: ${lic.support.ticketsRemaining} из ${lic.support.ticketsQuota}`,
@@ -104,7 +104,7 @@ export class SupportBotsHub {
             }
             const reply = [
                 `Статус лицензии ПАК WORK: ${lic.licenseId}`,
-                `• Оборудование: ${lic.hardware?.cpu || 'AMD Ryzen 495 8085'} · ${lic.hardware?.ramGb || 192} ГБ RAM · SSD ${lic.hardware?.ssdTb || 4} ТБ`,
+                `• Оборудование: ${lic.hardware?.cpu || 'AMD Ryzen™ AI Max+ PRO 495'} · ${lic.hardware?.ramGb || 192} ГБ RAM · SSD ${lic.hardware?.ssdTb || 4} ТБ`,
                 `• HWID: ${lic.hardware?.hwid || '—'}`,
                 `• Доступно одновременных сессий: ${lic.totalSeats} (${lic.baseSeats} вечных + ${lic.addonSeats} срочных годовых)`,
                 `• Уровень SLA поддержки: ${lic.support.tierName} (${lic.support.scheduleLabel})`,

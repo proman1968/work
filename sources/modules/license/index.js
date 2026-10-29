@@ -2,7 +2,7 @@
  * Клиентский модуль лицензирования ПАК WORK (sources/modules/license/index.js).
  *
  * Отвечает за:
- *  - паспорт программно-аппаратного комплекса (AMD Ryzen 495 8085, 192 ГБ RAM, SSD 4 ТБ)
+ *  - паспорт программно-аппаратного комплекса (AMD Ryzen™ AI Max+ PRO 495, 192 ГБ RAM, SSD 4 ТБ)
  *    и реестр предустановленных моделей ИИ (Qwen 3 30B + Голосовая + Генерация изображений + Embedding);
  *  - хранение и криптографическую проверку сертификата лицензии Ed25519 (#system/license.json);
  *  - учёт рабочих мест: 5 вечных (базовый комплект ПАК) + срочные годовые лицензии (Start / Business / Enterprise);
@@ -21,54 +21,55 @@ export const LICENSE_PROTOCOL = 'WORK-LIC-v1';
 export const DEFAULT_LICENSE_HUB_URL = process.env.WORK_LICENSE_HUB_URL || 'https://work.odant.org';
 const LICENSE_FILE = './#system/license.json';
 
-/** Эталонная спецификация базового ПАК WORK. */
+/** Эталонная спецификация базового комплекса ODANT-WORK. */
 export const PAK_HARDWARE_SPEC = Object.freeze({
     sku: 'WORK-PAK-495-192-4T',
-    title: 'ПАК WORK AI-Server (Базовый комплект)',
-    cpu: 'AMD Ryzen 495 8085',
+    title: 'ODANT-WORK (Программно-аппаратный комплекс)',
+    cpu: 'AMD Ryzen™ AI Max+ PRO 495 (16 ядер / 32 потока Zen 5, до 5.2 ГГц)',
+    gpu: 'AMD Radeon™ 8065S Graphics (40 ядер, 3000 МГц, до 61 TFLOPS FP16)',
+    npu: 'AMD Ryzen™ AI (до 132 TOPS общий ИИ / 55 TOPS NPU)',
+    ram: '192 ГБ 256-bit LPDDR5x-8533 Unified Memory',
     ramGb: 192,
+    ssd: 'SSD 4 ТБ NVMe PCIe 4.0 (RAID0/RAID1)',
     ssdTb: 4,
+    security: 'AMD PRO Technologies, AMD Memory Guard, AMD Secure Processor',
     basePriceRub: 5_000_000,
     baseSeats: 5,
     perpetualBase: true,
     includedSupportYears: 1,
     includedSupportTier: 'business',
-    configuration: 'Типовая комплексная учётная конфигурация (аналог 1С: Предприятие — справочники, план счетов, двойная запись, ведомости, первичные документы, импорт 1С)',
+    configuration: 'Встроенная система учёта, документооборота, управления процессами и приватный мультимодальный ИИ (справочники, план счетов, двойная запись, ведомости, первичные документы, сквозные процессы и корпоративные коммуникации)',
     preinstalledModels: Object.freeze([
         {
             id: 'Qwen3-30B-A3B',
             category: 'llm',
-            title: 'Qwen 3 30B',
-            role: 'Основная языковая модель (диалог, ИИ-агент, учётные операции, аналитика, код)',
+            title: 'Большая языковая модель (LLM)',
+            role: 'Диалог, ведение учёта, документооборот, управление процессами, аналитика и генерация кода',
             path: '/MODELS/Local/Qwen3-30B-A3B',
-            hfRepo: 'Qwen/Qwen3-30B-A3B',
             ramEstimateGb: 18.5,
         },
         {
             id: 'Qwen3-Voice',
             category: 'voice',
             title: 'Голосовая модель (ASR + TTS)',
-            role: 'Полнодуплексный голосовой диалог с перебиванием, распознавание и синтез речи (Qwen3-ASR + Qwen3-TTS)',
+            role: 'Полнодуплексный голосовой диалог с перебиванием, распознавание и синтез естественной речи',
             path: '/MODELS/Local/Qwen3-Voice',
-            hfRepo: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
             ramEstimateGb: 4.2,
         },
         {
             id: 'Flux-Image',
             category: 'image',
-            title: 'Генерация изображений',
+            title: 'Модель генерации изображений',
             role: 'Локальный синтез иллюстраций, карточек товаров, схем и визуальных материалов',
             path: '/MODELS/Local/Flux-Image',
-            hfRepo: 'black-forest-labs/FLUX.1-schnell',
             ramEstimateGb: 12.0,
         },
         {
             id: 'Qwen3-Embedding',
             category: 'embedding',
-            title: 'Embedding-модель (RAG)',
-            role: 'Семантический векторный поиск по документам, договорам, проводкам и базе знаний',
+            title: 'Модель векторного поиска (Embedding / RAG)',
+            role: 'Семантический поиск и индексация договоров, первичных документов, проводок и базы знаний',
             path: '/MODELS/Local/Qwen3-Embedding',
-            hfRepo: 'Qwen/Qwen3-Embedding-4B',
             ramEstimateGb: 2.5,
         },
     ]),
@@ -79,7 +80,7 @@ export const SUPPORT_TIERS = Object.freeze({
     start: Object.freeze({
         id: 'start',
         name: 'Start',
-        pricePerUserYearRub: 15_000,
+        pricePerUserYearRub: 10_000,
         ticketsPerSeatYear: 12,
         reactionMinutes: 480,
         reactionText: 'до 8 рабочих часов',
@@ -90,24 +91,24 @@ export const SUPPORT_TIERS = Object.freeze({
     business: Object.freeze({
         id: 'business',
         name: 'Business',
-        pricePerUserYearRub: 40_000,
+        pricePerUserYearRub: 15_000,
         ticketsPerSeatYear: 48,
         reactionMinutes: 120,
         reactionText: 'до 2 часов',
         scheduleText: '7 дней в неделю (08:00–22:00 МСК)',
         channels: ['MAX', 'Telegram', 'VK'],
-        description: 'Бизнес-поддержка: до 48 обращений в год на место, время реакции до 2 часов, помощь по настройке учёта и локальных моделей.',
+        description: 'Бизнес-поддержка: до 48 обращений в год на место, время реакции до 2 часов, помощь по настройке учёта, процессов и моделей ИИ.',
     }),
     enterprise: Object.freeze({
         id: 'enterprise',
         name: 'Enterprise',
-        pricePerUserYearRub: 100_000,
+        pricePerUserYearRub: 20_000,
         ticketsPerSeatYear: 9999,
         reactionMinutes: 15,
         reactionText: 'до 15 минут (24/7)',
         scheduleText: '24/7/365 (круглосуточно)',
         channels: ['MAX', 'Telegram', 'VK', 'Выделенный инженер'],
-        description: 'Приоритетная поддержка 24/7: безлимитные обращения, реакция до 15 минут, персональный инженер и помощь в дообучении моделей (LoRA).',
+        description: 'Приоритетная поддержка 24/7: безлимитные обращения, реакция до 15 минут, персональный инженер и помощь в дообучении моделей.',
     }),
 });
 

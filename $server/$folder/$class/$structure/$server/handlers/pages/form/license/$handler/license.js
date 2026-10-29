@@ -181,7 +181,7 @@ export default {
                 <div class="kv-list">
                     <div class="kv-row">
                         <span class="kv-label">Платформа ПАК</span>
-                        <span class="kv-val">{{status?.pakSpec?.cpu || 'AMD Ryzen 495 8085'}} · {{status?.pakSpec?.ramGb || 192}} ГБ RAM · SSD {{status?.pakSpec?.ssdTb || 4}} ТБ</span>
+                        <span class="kv-val">{{status?.pakSpec?.cpu || 'AMD Ryzen™ AI Max+ PRO 495'}} · {{status?.pakSpec?.ramGb || 192}} ГБ RAM · SSD {{status?.pakSpec?.ssdTb || 4}} ТБ</span>
                     </div>
                     <div class="kv-row">
                         <span class="kv-label">Hardware ID (HWID)</span>
@@ -238,9 +238,9 @@ export default {
             <div class="card-head">
                 <div class="card-title">
                     <oda-icon icon="carbon:machine-learning-model" :icon-size="20"></oda-icon>
-                    <span>Предустановленный локальный стек ИИ ПАК WORK</span>
+                    <span>Предустановленный локальный стек ИИ ODANT-WORK</span>
                 </div>
-                <span class="badge">4 контура ИИ + Типовая конфигурация (1С-класс)</span>
+                <span class="badge">Встроенная система учёта, документооборота, процессов и приватный ИИ</span>
             </div>
             <div class="models-grid">
                 <div class="model-box" ~for="status?.preinstalledModels || []">

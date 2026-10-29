@@ -1,6 +1,6 @@
 {
   "name": "work-license-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Лицензионный сервер, биллинг ЮKassa, боты поддержки (MAX, Telegram, VK) и лендинг ПАК WORK (work.odant.org)",
   "type": "module",
   "main": "src/index.js",
@@ -8,6 +8,7 @@
     "work-license-server": "bin/server.mjs"
   },
   "files": [
+    "assets/",
     "bin/",
     "src/",
     "README.md"

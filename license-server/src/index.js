@@ -1,6 +1,11 @@
 export {
     PAK_PRODUCT,
+    AI_PLATFORM,
+    VENDOR_CONTACTS,
+    FEDERAL_DISTRICTS,
     SLA_TIERS,
+    SEAT_VOLUME_DISCOUNTS,
+    calculateSeatVolumeDiscount,
     calculateOrderQuote,
     FRANCHISE_PROGRAM,
     REGIONS_CATALOG,
@@ -14,4 +19,5 @@ export { LICENSE_PROTOCOL, loadOrCreateAuthorityKeys, canonicalLicenseString, si
 export { LicenseStore } from './store.js';
 export { YooKassaService } from './yookassa.js';
 export { SupportBotsHub } from './bots.js';
+export { LicenseServerAiAgent } from './agent.js';
 export { createLicenseServerApp } from './server.js';
