@@ -9,10 +9,12 @@ export const PAK_PRODUCT = Object.freeze({
     name: 'ODANT-WORK',
     domain: 'work.odant.org',
     basePriceRub: 5_000_000,
-    baseSeats: 5,
+    baseSeats: 10,
     perpetualBase: true,
     includedSupportYears: 1,
-    includedSupportTier: 'business',
+    includedSupportTier: 'enterprise',
+    includedSupportTierName: 'Enterprise',
+    postYearPolicy: 'Дальнейшее продление поддержки и докупка мест — по желанию клиента (10 вечных лицензий работают бессрочно)',
     hardware: Object.freeze({
         cpu: 'AMD Ryzen™ AI Max+ PRO 495 (Zen 5, 16 ядер / 32 потока, до 5.2 ГГц, кэш 80 МБ)',
         gpu: 'AMD Radeon™ 8065S Graphics (40 ядер, 3000 МГц, до 61 TFLOPS FP16)',
@@ -25,16 +27,17 @@ export const PAK_PRODUCT = Object.freeze({
     }),
     software: Object.freeze({
         accounting: 'Встроенная система учёта, документооборота, управления процессами и приватный мультимодальный ИИ (справочники, план счетов, двойная запись, оборотно-сальдовая ведомость, анализ счёта, первичные документы и сквозные процессы)',
-        seatModel: 'По одновременным активным сессиям (5 вечных рабочих мест в базовом комплекте + докупка срочных годовых лицензий со скидкой от количества)',
+        seatModel: 'По одновременным активным сессиям (10 вечных лицензий в базовом комплекте + 1 год поддержки Enterprise; дальше — продление и докупка мест по желанию)',
         hardwareBinding: 'Привязка вечной лицензии к Hardware ID материнской платы/CPU AMD Ryzen + криптографическому ключу узла (#system/node-key.json)',
     }),
+    modelsPolicy: 'Интегрированные локальные модели предназначены для базовых ежедневных операций внутри контура. Если требуются более мощные модели ИИ, их можно подключить через стандартный API из любого источника (облачные провайдеры, собственный GPU-кластер или API регионального партнёра).',
     preinstalledModels: Object.freeze([
         {
             id: 'llm-core',
             type: 'Большая языковая модель (LLM)',
-            title: 'Интеллектуальное текстовое и аналитическое ядро',
-            badge: 'Диалог · Учёт · Документы · Процессы',
-            description: 'Ведение живого диалога, проведение хозяйственных операций, подготовка документов, управление бизнес-процессами, финансовый анализ и генерация программного кода.',
+            title: 'Базовое текстовое и учётное ядро',
+            badge: 'Базовые операции · Учёт · Документы',
+            description: 'Выполнение базовых операций: живой диалог, типовые хозяйственные проводки, шаблоны документов и повседневные задачи. Для глубокой аналитики и тяжёлых задач подключаются более мощные модели через API из любого источника.',
             ramGb: 18.5,
         },
         {
@@ -77,7 +80,7 @@ export const AI_PLATFORM = Object.freeze({
             'Действует в рамках роли и прав пользователя (ADMIN · BOSS · USER)',
             'Инструменты учётного ядра: описание класса, поиск объектов, проведение операций, отчёты',
             'Каждая консультация сохраняется задачей в личном кабинете и в ленте пользователя',
-            'Работает полностью локально на комплексе — данные не покидают контур предприятия',
+            'Базовые операции выполняются интегрированными локальными моделями, а при необходимости более мощных ИИ — подключение через API из любого источника',
         ]),
     }),
     orchestration: Object.freeze([
@@ -236,7 +239,7 @@ export function calculateOrderQuote({
     const items = [];
     if (includeBasePak) {
         items.push({
-            title: `${PAK_PRODUCT.name} (${PAK_PRODUCT.hardware.cpu}, ${PAK_PRODUCT.hardware.ramGb} ГБ RAM, SSD ${PAK_PRODUCT.hardware.ssdTb} ТБ, вечная лицензия на 5 мест + 1 год поддержки)`,
+            title: `${PAK_PRODUCT.name} (${PAK_PRODUCT.hardware.cpu}, ${PAK_PRODUCT.hardware.ramGb} ГБ RAM, SSD ${PAK_PRODUCT.hardware.ssdTb} ТБ, вечная лицензия на ${PAK_PRODUCT.baseSeats} мест + 1 год поддержки Enterprise)`,
             quantity: 1,
             unitPriceRub: PAK_PRODUCT.basePriceRub,
             totalRub: PAK_PRODUCT.basePriceRub,
@@ -536,7 +539,7 @@ export const PARTNER_TRAINING_TRACKS = Object.freeze([
         passScore: 75,
         requiredForFranchise: true,
         topics: [
-            'Экономическое обоснование внедрения ODANT-WORK (5 вечных мест + локальный ИИ в собственном контуре)',
+            'Экономическое обоснование внедрения ODANT-WORK (10 вечных лицензий + 1 год поддержки Enterprise + локальный ИИ в собственном контуре)',
             'Лицензионная политика: расчёт конкурентных сессий со скидками от объёма и подбор тарифов SLA (Start / Business / Enterprise)',
             'Регламент первой и второй линии поддержки через боты MAX, Telegram и VK',
         ],

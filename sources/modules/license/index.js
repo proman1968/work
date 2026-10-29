@@ -5,7 +5,7 @@
  *  - паспорт программно-аппаратного комплекса (AMD Ryzen™ AI Max+ PRO 495, 192 ГБ RAM, SSD 4 ТБ)
  *    и реестр предустановленных моделей ИИ (Qwen 3 30B + Голосовая + Генерация изображений + Embedding);
  *  - хранение и криптографическую проверку сертификата лицензии Ed25519 (#system/license.json);
- *  - учёт рабочих мест: 5 вечных (базовый комплект ПАК) + срочные годовые лицензии (Start / Business / Enterprise);
+ *  - учёт рабочих мест: 10 вечных (базовый комплект ПАК + 1 год поддержки Enterprise) + срочные годовые лицензии по желанию (Start / Business / Enterprise);
  *  - контроль лимита одновременных пользовательских сессий при входе в WORK;
  *  - взаимодействие с лицензионным сервером https://work.odant.org (синхронизация, покупка через ЮKassa,
  *    привязка ботов поддержки MAX, Telegram, VK).
@@ -34,10 +34,12 @@ export const PAK_HARDWARE_SPEC = Object.freeze({
     ssdTb: 4,
     security: 'AMD PRO Technologies, AMD Memory Guard, AMD Secure Processor',
     basePriceRub: 5_000_000,
-    baseSeats: 5,
+    baseSeats: 10,
     perpetualBase: true,
     includedSupportYears: 1,
-    includedSupportTier: 'business',
+    includedSupportTier: 'enterprise',
+    postYearPolicy: 'Дальнейшее продление поддержки и докупка мест — по желанию (10 вечных лицензий работают бессрочно)',
+    modelsPolicy: 'Интегрированные локальные модели предназначены для базовых операций; более мощные ИИ можно подключать через API из любого источника',
     configuration: 'Встроенная система учёта, документооборота, управления процессами и приватный мультимодальный ИИ (справочники, план счетов, двойная запись, ведомости, первичные документы, сквозные процессы и корпоративные коммуникации)',
     preinstalledModels: Object.freeze([
         {
@@ -301,8 +303,8 @@ export function evaluateLicenseState(lic = loadLocalLicense(), now = Date.now())
     const baseSupportActive = baseSupportUntil > now;
 
     if (baseSupportActive) {
-        const baseTierKey = String(lic.support?.tier || PAK_HARDWARE_SPEC.includedSupportTier || 'business').toLowerCase();
-        const baseTierSpec = SUPPORT_TIERS[baseTierKey] || SUPPORT_TIERS.business;
+        const baseTierKey = String(lic.support?.tier || PAK_HARDWARE_SPEC.includedSupportTier || 'enterprise').toLowerCase();
+        const baseTierSpec = SUPPORT_TIERS[baseTierKey] || SUPPORT_TIERS.enterprise;
         highestTier = baseTierKey;
         totalTicketsQuota += baseSeats * baseTierSpec.ticketsPerSeatYear;
         nearestExpiry = baseSupportUntil;

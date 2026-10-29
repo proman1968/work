@@ -207,8 +207,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     </div>
                     <div class="trust">
                         <span>${icon('shield')} Данные не покидают контур</span>
-                        <span>${icon('key')} 5 вечных рабочих мест</span>
-                        <span>${icon('check')} 1 год поддержки включён</span>
+                        <span>${icon('key')} ${P.baseSeats} вечных лицензий</span>
+                        <span>${icon('check')} 1 год поддержки Enterprise (далее — по желанию)</span>
                     </div>
                 </div>
                 <div class="showcase" aria-hidden="true">
@@ -250,7 +250,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <span class="kicker">Паспорт комплекса</span>
                         <h2 class="h2">ODANT-WORK · ${esc(P.sku)}</h2>
                         <div class="price-big">${rub(P.basePriceRub)}</div>
-                        <p class="note">Вечная лицензия на ${P.baseSeats} одновременных рабочих сессий, привязанная к оборудованию, и ${P.includedSupportYears} год поддержки уровня Business — в комплекте.</p>
+                        <p class="note">Вечная лицензия на ${P.baseSeats} одновременных рабочих сессий, привязанная к оборудованию, и ${P.includedSupportYears} год максимальной поддержки уровня Enterprise (24/7, реакция ≤ 15 мин) — в комплекте. Дальнейшее продление поддержки и докупка мест — по желанию.</p>
                         <div class="hero-cta" style="margin-top:20px">
                             <button class="btn btn-primary" data-stage="order">Оформить заказ</button>
                             <button class="btn btn-ghost" data-stage="pricing">Тарифы поддержки</button>
@@ -270,12 +270,20 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
 
             <div class="sec-head reveal">
                 <div>
-                    <span class="kicker">Приватный мультимодальный ИИ</span>
-                    <h2 class="h2">Четыре типа моделей уже установлены</h2>
+                    <span class="kicker">Приватный и гибридный ИИ</span>
+                    <h2 class="h2">Четыре типа базовых моделей уже установлены</h2>
                 </div>
-                <p>Модели работают на самом комплексе. Их можно дообучить на данных предприятия — с проверкой результатов учётным ядром.</p>
+                <p>Интегрированные локальные модели предназначены для базовых ежедневных операций внутри контура. Если требуются более мощные модели ИИ, их можно подключить через API из любого источника.</p>
             </div>
             <div class="grid g4">${renderModels()}</div>
+            <div class="card reveal" style="display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap">
+                <div>
+                    <span class="kicker">Подключение мощных моделей ИИ по API</span>
+                    <h3 class="h3" style="margin:4px 0 6px">Нужны более мощные модели? Подключайте из любого источника</h3>
+                    <p class="note" style="margin:0">Предустановленные на комплексе модели закрывают базовые операции учёта, голоса, иллюстраций и поиска без внешних каналов. Для сложной аналитики, больших контекстов и специализированных агентов вы можете в один клик подключить по стандартному API модели из любого источника: внешних облачных провайдеров, корпоративного GPU-кластера или коммерческого API регионального партнёра.</p>
+                </div>
+                <button class="btn btn-ghost btn-sm" data-stage="agents">Подробнее об ИИ-агентах →</button>
+            </div>
         </section>
 
         <!-- ============ ИИ-АГЕНТЫ ============ -->
@@ -333,9 +341,9 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="sec-head">
                 <div>
                     <span class="kicker">Лицензии и поддержка</span>
-                    <h2 class="h2">Платите только за дополнительные места</h2>
+                    <h2 class="h2">10 вечных лицензий + 1 год Enterprise в базе, дальше — по желанию</h2>
                 </div>
-                <p>${P.baseSeats} рабочих мест входят в комплекс навсегда. Дополнительные места — годовые, цена зависит от уровня поддержки. Считаются одновременные активные сессии, а не учётные записи.</p>
+                <p>${P.baseSeats} рабочих мест входят в комплекс навсегда вместе с 1-м годом поддержки уровня Enterprise. Дальнейшее продление поддержки и докупка годовых мест — по желанию. Считаются одновременные активные сессии, а не учётные записи.</p>
             </div>
             <div class="tiers">${renderTiers()}</div>
             <div class="card">
@@ -351,7 +359,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         <section class="stage" id="stage-order">
             <div class="sec-head">
                 <div><span class="kicker">Заказ</span><h2 class="h2">Программно-аппаратный комплекс ODANT-WORK</h2></div>
-                <p>Сервер AMD Ryzen™ AI Max+ PRO 495 · 192 ГБ · 4 ТБ с установленной платформой, вечной лицензией на ${P.baseSeats} мест и годом поддержки. Оплата через ЮKassa с чеком по 54-ФЗ.</p>
+                <p>Сервер AMD Ryzen™ AI Max+ PRO 495 · 192 ГБ · 4 ТБ с установленной платформой, вечной лицензией на ${P.baseSeats} мест и 1 годом поддержки Enterprise (дальше — по желанию). Оплата через ЮKassa с чеком по 54-ФЗ.</p>
             </div>
             <div class="split">
                 <div class="card">
@@ -606,89 +614,130 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <div class="stat"><b id="admStatTickets">0</b><span id="admStatTicketsSub">открытых тикетов SLA</span></div>
             </div>
 
-            <div class="card">
-                <div class="sec-head" style="margin-bottom:14px">
-                    <div>
-                        <span class="kicker">Выпуск сертификата Ed25519</span>
-                        <h3 class="h3" style="margin:4px 0 0">Выпустить базовую лицензию комплекса (${P.baseSeats} вечных мест + 1 год поддержки)</h3>
+            <div class="admin-workspace" id="adminWorkspace">
+                <!-- Левая вкладка ИИ-агента и навигации админки -->
+                <aside class="admin-left">
+                    <nav class="admin-nav" aria-label="Вкладки админ-панели">
+                        <button class="adm-tab on" data-adm-tab="all">${icon('ai')}<span>ИИ-агент + Все разделы</span><i class="live-dot"></i></button>
+                        <button class="adm-tab" data-adm-tab="agent">${icon('agents')}<span>Только ИИ-агент</span></button>
+                        <button class="adm-tab" data-adm-tab="licenses">${icon('key')}<span>Лицензии (${P.baseSeats} вечн. + доп.)</span></button>
+                        <button class="adm-tab" data-adm-tab="orders">${icon('cart')}<span>Заказы ЮKassa</span></button>
+                        <button class="adm-tab" data-adm-tab="partners">${icon('map')}<span>Франшизы и партнёры</span></button>
+                        <button class="adm-tab" data-adm-tab="tickets">${icon('chat')}<span>Тикеты SLA (MAX·TG·VK)</span></button>
+                    </nav>
+
+                    <div class="card adm-agent-card" id="admAgentCard">
+                        <div class="ai-head" style="padding:0 0 12px;margin-bottom:10px">
+                            <img src="/assets/odant-logo.png" alt="">
+                            <div>
+                                <b>ИИ-агент администратора</b>
+                                <span>● управление реестром · в сети</span>
+                            </div>
+                        </div>
+                        <div class="ai-msgs adm-ai-msgs" id="admAiMessages">
+                            <div class="msg bot">Здравствуйте! Я ИИ-агент панели администратора ODANT-WORK. Помогу проанализировать реестр лицензий (${P.baseSeats} вечных мест + 1 год Enterprise), выпустить сертификат Ed25519, провести оплату заказов ЮKassa или проверить квоты франшиз по регионам РФ.</div>
+                        </div>
+                        <div class="ai-sugg" style="padding:8px 0;border-top:1px solid var(--line)">
+                            <button data-adm-ask="Сводка по серверу лицензий">Сводка реестра</button>
+                            <button data-adm-ask="Выпусти базовую лицензию для ООО «АгроТех» ИНН 6234001122">+ Выпустить лицензию</button>
+                            <button data-adm-ask="Проведи оплату ожидающих заказов">Провести оплаты</button>
+                            <button data-adm-ask="Сколько вакантных франшиз в Татарстане?">Квота Татарстана</button>
+                            <button data-adm-ask="Какие модели входят в комплекс и как подключить мощные ИИ по API?">Модели и API</button>
+                        </div>
+                        <div class="ai-input" style="padding:10px 0 0">
+                            <input type="text" id="admAiInput" placeholder="Команда или вопрос ИИ-агенту админки…" autocomplete="off">
+                            <button class="btn btn-primary" data-action="adm-ai-send" aria-label="Отправить">${icon('send')}</button>
+                        </div>
                     </div>
-                </div>
-                <div class="grid g4" style="align-items:end">
-                    <div class="field" style="margin:0"><label for="admLicOrg">Организация</label><input type="text" id="admLicOrg" value="АО «РязаньАгроПром»"></div>
-                    <div class="field" style="margin:0"><label for="admLicInn">ИНН</label><input type="text" id="admLicInn" value="6234109876"></div>
-                    <div class="field" style="margin:0"><label for="admLicEmail">Email клиента</label><input type="email" id="admLicEmail" value="it@ryazan-agro.ru"></div>
-                    <div class="field" style="margin:0"><label for="admLicHwid">HWID комплекса (необязательно)</label><input type="text" id="admLicHwid" placeholder="WORK-HWID-..."></div>
-                </div>
-                <div style="display:flex;align-items:center;gap:14px;margin-top:14px;flex-wrap:wrap">
-                    <button class="btn btn-primary btn-sm" data-action="adm-issue-lic">${icon('key')} Выпустить и подписать сертификат</button>
-                    <span class="small muted" id="admIssueStatus"></span>
-                </div>
-            </div>
+                </aside>
 
-            <div class="card">
-                <h3 class="h3" style="margin:0 0 12px">Выпущенные лицензии комплексов ODANT-WORK</h3>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Лицензия / Код бота</th>
-                            <th>Организация / ИНН</th>
-                            <th>Привязка оборудования</th>
-                            <th class="num">Сессии (вечные + доп.)</th>
-                            <th>SLA и срок</th>
-                            <th>Сертификат</th>
-                        </tr></thead>
-                        <tbody id="admLicensesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
+                <!-- Правая область разделов админки -->
+                <div class="admin-main" id="adminMain">
+                    <div class="card" data-adm-sec="licenses">
+                        <div class="sec-head" style="margin-bottom:14px">
+                            <div>
+                                <span class="kicker">Выпуск сертификата Ed25519</span>
+                                <h3 class="h3" style="margin:4px 0 0">Выпустить базовую лицензию комплекса (${P.baseSeats} вечных лицензий + 1 год поддержки Enterprise, далее — по желанию)</h3>
+                            </div>
+                        </div>
+                        <div class="grid g4" style="align-items:end">
+                            <div class="field" style="margin:0"><label for="admLicOrg">Организация</label><input type="text" id="admLicOrg" value="АО «РязаньАгроПром»"></div>
+                            <div class="field" style="margin:0"><label for="admLicInn">ИНН</label><input type="text" id="admLicInn" value="6234109876"></div>
+                            <div class="field" style="margin:0"><label for="admLicEmail">Email клиента</label><input type="email" id="admLicEmail" value="it@ryazan-agro.ru"></div>
+                            <div class="field" style="margin:0"><label for="admLicHwid">HWID комплекса (необязательно)</label><input type="text" id="admLicHwid" placeholder="WORK-HWID-..."></div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:14px;margin-top:14px;flex-wrap:wrap">
+                            <button class="btn btn-primary btn-sm" data-action="adm-issue-lic">${icon('key')} Выпустить и подписать сертификат</button>
+                            <span class="small muted" id="admIssueStatus"></span>
+                        </div>
+                    </div>
 
-            <div class="card">
-                <h3 class="h3" style="margin:0 0 12px">Заказы и платежи ЮKassa</h3>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Заказ / Платёж</th>
-                            <th>Назначение</th>
-                            <th>Плательщик</th>
-                            <th class="num">Сумма</th>
-                            <th>Статус</th>
-                            <th>Действия</th>
-                        </tr></thead>
-                        <tbody id="admOrdersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
+                    <div class="card" data-adm-sec="licenses">
+                        <h3 class="h3" style="margin:0 0 12px">Выпущенные лицензии комплексов ODANT-WORK</h3>
+                        <div class="table-wrap">
+                            <table class="t">
+                                <thead><tr>
+                                    <th>Лицензия / Код бота</th>
+                                    <th>Организация / ИНН</th>
+                                    <th>Привязка оборудования</th>
+                                    <th class="num">Сессии (вечные + доп.)</th>
+                                    <th>SLA и срок</th>
+                                    <th>Сертификат</th>
+                                </tr></thead>
+                                <tbody id="admLicensesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
 
-            <div class="card">
-                <h3 class="h3" style="margin:0 0 12px">Резервы региональных франшиз и действующие партнёры</h3>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>ID / Тип</th>
-                            <th>Субъект РФ</th>
-                            <th>Компания / ИНН</th>
-                            <th>Условия / Скидка</th>
-                            <th>Статус</th>
-                            <th>Действия</th>
-                        </tr></thead>
-                        <tbody id="admPartnersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
+                    <div class="card" data-adm-sec="orders">
+                        <h3 class="h3" style="margin:0 0 12px">Заказы и платежи ЮKassa</h3>
+                        <div class="table-wrap">
+                            <table class="t">
+                                <thead><tr>
+                                    <th>Заказ / Платёж</th>
+                                    <th>Назначение</th>
+                                    <th>Плательщик</th>
+                                    <th class="num">Сумма</th>
+                                    <th>Статус</th>
+                                    <th>Действия</th>
+                                </tr></thead>
+                                <tbody id="admOrdersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
 
-            <div class="card">
-                <h3 class="h3" style="margin:0 0 12px">Обращения техподдержки (MAX · Telegram · VK)</h3>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Тикет / Канал</th>
-                            <th>Клиент / Лицензия</th>
-                            <th>SLA</th>
-                            <th>Переписка</th>
-                            <th>Ответ инженера</th>
-                        </tr></thead>
-                        <tbody id="admTicketsBody"><tr><td colspan="5" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
+                    <div class="card" data-adm-sec="partners">
+                        <h3 class="h3" style="margin:0 0 12px">Резервы региональных франшиз и действующие партнёры</h3>
+                        <div class="table-wrap">
+                            <table class="t">
+                                <thead><tr>
+                                    <th>ID / Тип</th>
+                                    <th>Субъект РФ</th>
+                                    <th>Компания / ИНН</th>
+                                    <th>Условия / Скидка</th>
+                                    <th>Статус</th>
+                                    <th>Действия</th>
+                                </tr></thead>
+                                <tbody id="admPartnersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="card" data-adm-sec="tickets">
+                        <h3 class="h3" style="margin:0 0 12px">Обращения техподдержки (MAX · Telegram · VK)</h3>
+                        <div class="table-wrap">
+                            <table class="t">
+                                <thead><tr>
+                                    <th>Тикет / Канал</th>
+                                    <th>Клиент / Лицензия</th>
+                                    <th>SLA</th>
+                                    <th>Переписка</th>
+                                    <th>Ответ инженера</th>
+                                </tr></thead>
+                                <tbody id="admTicketsBody"><tr><td colspan="5" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -697,13 +746,13 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="footer">
                 <div>
                     <div class="brand" style="cursor:default"><img src="/assets/odant-logo.png" alt="" style="width:34px;height:34px"><span class="brand-name">ODANT<b>·</b>WORK</span></div>
-                    <p style="margin-top:12px">Программно-аппаратный комплекс: встроенная система учёта, документооборот, управление процессами, ИИ-консультант и мультиагентная система внутри контура предприятия.</p>
+                    <p style="margin-top:12px">Программно-аппаратный комплекс: встроенная система учёта, документооборот, управление процессами, ИИ-консультант и мультиагентная система. Интегрированные модели — для базовых операций, более мощные ИИ подключаются через API из любого источника.</p>
                 </div>
                 <div>
                     <h4>Комплекс</h4>
                     <p>AMD Ryzen™ AI Max+ PRO 495 · Radeon™ 8065S</p>
                     <p>192 ГБ LPDDR5x-8533 · SSD 4 ТБ</p>
-                    <p>От ${rub(P.basePriceRub)} · ${P.baseSeats} вечных мест</p>
+                    <p>От ${rub(P.basePriceRub)} · ${P.baseSeats} вечных лицензий + 1 год Enterprise</p>
                 </div>
                 <div>
                     <h4>${esc(VENDOR_CONTACTS.company)}</h4>

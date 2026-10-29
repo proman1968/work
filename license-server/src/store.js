@@ -138,7 +138,7 @@ export class LicenseStore {
             perpetualBase: true,
             addonSubscriptions: Array.isArray(existing?.addonSubscriptions) ? existing.addonSubscriptions : [],
             support: {
-                tier: existing?.support?.tier || includedSupportTier || 'business',
+                tier: existing?.support?.tier || includedSupportTier || PAK_PRODUCT.includedSupportTier || 'enterprise',
                 includedUntil: existing?.support?.includedUntil || (issuedAt + ONE_YEAR_MS),
                 ticketsUsed: Number(existing?.support?.ticketsUsed || 0),
                 bindCode,
@@ -247,9 +247,9 @@ export class LicenseStore {
         const baseSupportActive = baseSupportUntil > now;
 
         let addonSeats = 0;
-        let highestTier = baseSupportActive ? (lic.support?.tier || 'business') : null;
+        let highestTier = baseSupportActive ? (lic.support?.tier || PAK_PRODUCT.includedSupportTier || 'enterprise') : null;
         let ticketsQuota = baseSupportActive
-            ? baseSeats * (SLA_TIERS[lic.support?.tier || 'business']?.ticketsLimitPerSeatYear || 48)
+            ? baseSeats * (SLA_TIERS[lic.support?.tier || PAK_PRODUCT.includedSupportTier || 'enterprise']?.ticketsLimitPerSeatYear || 9999)
             : 0;
 
         const rank = { start: 1, business: 2, enterprise: 3 };

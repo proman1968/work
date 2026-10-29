@@ -56,6 +56,7 @@
         if (id === 'addons' && !currentUser) { openAuth(); return; }
         if (!$('#stage-' + id)) id = 'product';
         currentStage = id;
+        document.body.setAttribute('data-stage', id);
         $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.stage === id));
         $$('.stage').forEach(s => s.classList.toggle('active', s.id === 'stage-' + id));
         const admBtn = $('#btnAdminTop');
@@ -203,7 +204,7 @@
             ['Мест × лет', `${seats} × ${years}`],
             ['Без скидки', rub(gross)],
             ['Скидка', `−${disc.discountPercent}%`],
-            ['Всего мест после докупки', `${(D.product?.baseSeats || 5) + seats}`],
+            ['Всего мест после докупки', `${(D.product?.baseSeats || 10) + seats}`],
         ]);
         markLadder('ladderAddons', seats);
     }
@@ -224,7 +225,7 @@
         const rows = [
             ['Комплекс ODANT-WORK', rub(D.product.basePriceRub)],
             ['Вечные рабочие места', String(D.product.baseSeats)],
-            ['Поддержка в комплекте', '1 год · Business'],
+            ['Поддержка в комплекте', '1 год · Enterprise (далее — по желанию)'],
         ];
         if (extra > 0) rows.push([`Доп. места · ${esc(tier.name)}${disc.discountPercent ? ' · −' + disc.discountPercent + '%' : ''}`, `${extra} · ${rub(net)}`]);
         $('#lblPakBreakdown').innerHTML = lines(rows);
@@ -696,7 +697,7 @@
         const out = [];
         out.push(`Лицензии (${data.licenses?.length || 0})`);
         for (const l of data.licenses || [])
-            out.push(`  ${l.licenseId} · ${l.customer?.name || '—'} · мест ${l.totalSeats} (${l.baseSeats ?? 5} вечных + ${l.addonSeats}) · ${l.support?.tierName || ''}`);
+            out.push(`  ${l.licenseId} · ${l.customer?.name || '—'} · мест ${l.totalSeats} (${l.baseSeats ?? 10} вечных + ${l.addonSeats}) · ${l.support?.tierName || ''}`);
         out.push('', `Резервы франшиз (${data.reservations?.length || 0})`);
         for (const r of data.reservations || [])
             out.push(`  ${r.reservationId} · ${r.regionName} · ${r.companyName} · залог ${r.depositPaid ? 'оплачен' : 'ожидает оплаты'}`);
@@ -743,8 +744,8 @@
                 <td><b>${esc(l.licenseId)}</b><div class="small muted">Код бота: <code>${esc(l.bindingCode || l.licenseId)}</code></div></td>
                 <td><b>${esc(l.customer?.name || '—')}</b><div class="small muted">ИНН ${esc(l.customer?.inn || '—')} · ${esc(l.customer?.email || '—')}</div></td>
                 <td><code>${esc(l.boundHwid || 'не привязан')}</code><div class="small muted">${esc((l.boundNodeFingerprint || '').slice(0, 18) || 'ожидает синхронизации')}</div></td>
-                <td class="num"><b>${l.totalSeats}</b> <span class="muted">(${l.baseSeats ?? 5} вечн. + ${l.addonSeats || 0} доп.)</span></td>
-                <td><span class="tag ok">${esc(l.support?.tierName || 'Business')}</span><div class="small muted">до ${fmtDate(l.support?.expiresAt)}</div></td>
+                <td class="num"><b>${l.totalSeats}</b> <span class="muted">(${l.baseSeats ?? 10} вечн. + ${l.addonSeats || 0} доп.)</span></td>
+                <td><span class="tag ok">${esc(l.support?.tierName || 'Enterprise')}</span><div class="small muted">до ${fmtDate(l.support?.expiresAt)}</div></td>
                 <td><button class="btn btn-ghost btn-sm" data-cert="${esc(l.licenseId)}">Сертификат JSON</button></td>
             </tr>`).join('') || '<tr><td colspan="6" class="muted">Лицензий пока нет — нажмите «+ Демо-лицензия ПАК»</td></tr>';
         }
@@ -895,6 +896,44 @@
         $('#certModal').classList.add('open');
     }
 
+    function switchAdminTab(tab = 'all') {
+        $$('[data-adm-tab]').forEach(b => b.classList.toggle('on', b.dataset.admTab === tab));
+        const ws = $('#adminWorkspace');
+        if (ws) ws.classList.toggle('only-agent', tab === 'agent');
+        $$('[data-adm-sec]').forEach(sec => {
+            sec.style.display = (tab === 'all' || tab === sec.dataset.admSec) ? '' : 'none';
+        });
+        if (tab === 'agent') setTimeout(() => $('#admAiInput')?.focus(), 50);
+    }
+
+    async function sendAdminAi(text) {
+        const inp = $('#admAiInput');
+        text = (text ?? inp?.value ?? '').trim();
+        if (!text) return;
+        if (inp) inp.value = '';
+        const box = $('#admAiMessages');
+        if (!box) return;
+        box.insertAdjacentHTML('beforeend', `<div class="msg me">${esc(text)}</div><div class="msg bot" id="admAiTyping"><span class="typing"><i></i><i></i><i></i></span></div>`);
+        box.scrollTop = box.scrollHeight;
+        let data;
+        try { data = await api('/api/agent/chat', { message: text, sessionKey: currentUser?.sessionKey || '' }); }
+        catch (err) { data = { reply: err.message, actions: [] }; }
+        $('#admAiTyping')?.remove();
+        box.insertAdjacentHTML('beforeend', `<div class="msg bot">${md(data.reply || '')}</div>`);
+        box.scrollTop = box.scrollHeight;
+        for (const act of data.actions || []) {
+            if (act.type === 'refresh_admin') {
+                refreshRegistry();
+            }
+            else if (act.type === 'admin_tab' && act.tab) {
+                switchAdminTab(act.tab);
+            }
+            else if (act.type === 'select_region' && act.regionCode) {
+                selectRegion(act.regionCode, { zoom: true, scrollTable: false });
+            }
+        }
+    }
+
     /* ================= ИИ-агент лицензионного центра ================= */
     function toggleAi(force) {
         const d = $('#aiDrawer');
@@ -903,7 +942,10 @@
         if (open) setTimeout(() => $('#aiInput').focus(), 60);
     }
     function md(text) {
-        return esc(text).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/(^|\s)\*(.+?)\*(?=\s|$)/g, '$1<i>$2</i>');
+        return esc(text)
+            .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/(^|\s)\*(.+?)\*(?=\s|$)/g, '$1<i>$2</i>');
     }
     async function sendAi(text) {
         const inp = $('#aiInput');
@@ -920,7 +962,10 @@
         box.insertAdjacentHTML('beforeend', `<div class="msg bot">${md(data.reply || '')}</div>`);
         box.scrollTop = box.scrollHeight;
         for (const act of data.actions || []) {
-            if (act.type === 'select_region') {
+            if (act.type === 'refresh_admin') {
+                refreshRegistry();
+            }
+            else if (act.type === 'select_region') {
                 switchStage('franchise');
                 setTimeout(() => selectRegion(act.regionCode, { zoom: true, scrollTable: true }), 80);
             }
@@ -1101,9 +1146,11 @@
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-stage],[data-action],[data-reserve],[data-bot],[data-ask],[data-district],[data-cert],[data-pay-order],[data-activate-res],[data-certify-partner],[data-reply-ticket],th[data-sort],#regionsTableBody tr');
+            const el = e.target.closest('[data-stage],[data-action],[data-reserve],[data-bot],[data-ask],[data-adm-ask],[data-adm-tab],[data-district],[data-cert],[data-pay-order],[data-activate-res],[data-certify-partner],[data-reply-ticket],th[data-sort],#regionsTableBody tr');
             if (!el) return;
             if (el.matches('[data-reserve]')) { e.stopPropagation(); reserveRegionFranchise(el.dataset.reserve); return; }
+            if (el.matches('[data-adm-tab]')) { switchAdminTab(el.dataset.admTab); return; }
+            if (el.matches('[data-adm-ask]')) { sendAdminAi(el.dataset.admAsk); return; }
             if (el.matches('[data-cert]')) { openCertModal(el.dataset.cert); return; }
             if (el.matches('[data-pay-order]')) { adminConfirmOrder(el.dataset.payOrder); return; }
             if (el.matches('[data-activate-res]')) { adminActivateReservation(el.dataset.activateRes); return; }
@@ -1137,6 +1184,7 @@
                 case 'registry': refreshRegistry(); break;
                 case 'demo-pak': createDemoPak(); break;
                 case 'adm-issue-lic': adminIssueLicense(); break;
+                case 'adm-ai-send': sendAdminAi(); break;
                 case 'cert-close': $('#certModal')?.classList.remove('open'); break;
                 case 'cert-copy':
                     navigator.clipboard?.writeText($('#certJsonBox')?.textContent || '');
@@ -1152,6 +1200,7 @@
         });
         $('#authModal').addEventListener('keydown', (e) => { if (e.key === 'Enter') performLogin(); });
         $('#aiInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAi(); });
+        $('#admAiInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAdminAi(); });
         $('#botText').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBot(); });
         $('#rngAddonSeats').addEventListener('input', (e) => syncSeats(e.target.value));
         $('#inpSeats').addEventListener('input', (e) => syncSeats(e.target.value));

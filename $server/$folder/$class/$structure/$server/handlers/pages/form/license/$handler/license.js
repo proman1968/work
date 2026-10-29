@@ -204,19 +204,19 @@ export default {
                         <oda-icon icon="carbon:user-multiple" :icon-size="20"></oda-icon>
                         <span>Одновременные сессии (рабочие места)</span>
                     </div>
-                    <span class="badge">Вечная база: {{status?.baseSeats || 5}} мест</span>
+                    <span class="badge">Вечная база: {{status?.baseSeats || 10}} мест</span>
                 </div>
                 <div class="seats-meter">
-                    <span class="seats-big">{{status?.activeSeatsCount || 0}} / {{status?.totalSeats || 5}}</span>
-                    <span>активных сессий ({{status?.baseSeats || 5}} вечных + {{status?.addonSeats || 0}} срочных годовых)</span>
+                    <span class="seats-big">{{status?.activeSeatsCount || 0}} / {{status?.totalSeats || 10}}</span>
+                    <span>активных сессий ({{status?.baseSeats || 10}} вечных + {{status?.addonSeats || 0}} срочных годовых)</span>
                 </div>
                 <div class="kv-list">
                     <div class="kv-row">
                         <span class="kv-label">Уровень поддержки (SLA)</span>
-                        <span class="kv-val">{{status?.support?.tierName || 'Business'}} ({{status?.support?.reactionText || 'до 2 часов'}})</span>
+                        <span class="kv-val">{{status?.support?.tierName || 'Enterprise'}} ({{status?.support?.reactionText || 'до 15 минут'}})</span>
                     </div>
                     <div class="kv-row">
-                        <span class="kv-label">Включённый 1-й год поддержки ПАК</span>
+                        <span class="kv-label">Включённый 1-й год поддержки ПАК (Enterprise, далее — по желанию)</span>
                         <span class="kv-val">{{baseSupportText}}</span>
                     </div>
                     <div class="kv-row">
@@ -240,7 +240,10 @@ export default {
                     <oda-icon icon="carbon:machine-learning-model" :icon-size="20"></oda-icon>
                     <span>Предустановленный локальный стек ИИ ODANT-WORK</span>
                 </div>
-                <span class="badge">Встроенная система учёта, документооборота, процессов и приватный ИИ</span>
+                <span class="badge">Базовые операции локально · мощные ИИ — через API из любого источника</span>
+            </div>
+            <div style="font-size:12.5px; color:var(--text-muted, #64748b); margin-bottom:10px;">
+                Интегрированные модели предназначены для базовых ежедневных операций. Если требуются более мощные модели ИИ, их можно подключить через API из любого внешнего или корпоративного источника в разделе <code>/MODELS</code>.
             </div>
             <div class="models-grid">
                 <div class="model-box" ~for="status?.preinstalledModels || []">

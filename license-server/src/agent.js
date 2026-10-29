@@ -62,11 +62,88 @@ export class LicenseServerAiAgent {
         const text = String(message || '').trim();
         if (!text) {
             return {
-                reply: 'Здравствуйте! Я ИИ-агент лицензионного центра ODANT-WORK. Спросите о комплексе, ИИ-агентах платформы, расчёте лицензий со скидкой или вакантных франшизах в вашем регионе.',
+                reply: 'Здравствуйте! Я ИИ-агент лицензионного центра ODANT-WORK. Спросите о комплексе, ИИ-агентах платформы, расчёте лицензий со скидкой, вакантных франшизах или управлении реестром сервера.',
                 actions: [],
             };
         }
         const lower = text.toLowerCase();
+
+        // 0.1 Команда администратора: выпуск новой лицензии ПАК
+        if (/(выпуст|создай|оформ)\S*\s+(?:базов\S*\s+|демо[-\s]*)?лиценз/i.test(lower)) {
+            const orgMatch = text.match(/(?:для\s+)?((?:ООО|АО|ПАО|ЗАО|ИП)\s*«[^»]+»)/i);
+            const innMatch = text.match(/ИНН\s*(\d{10,12})/i) || text.match(/\b(\d{10,12})\b/);
+            const emailMatch = text.match(/([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i);
+            const lic = this.store.issueOrUpdateLicense({
+                customer: {
+                    name: orgMatch ? orgMatch[1] : 'ООО «ТехноПром-Интеграция»',
+                    inn: innMatch ? innMatch[1] : '6234109876',
+                    email: emailMatch ? emailMatch[1] : 'it@technoprom.ru',
+                },
+            });
+            return {
+                reply: [
+                    `Выпущена и подписана сертификатом **Ed25519** базовая лицензия **${lic.licenseId}**:`,
+                    `• Организация: **${lic.customer?.name || '—'}** (ИНН ${lic.customer?.inn || '—'})`,
+                    `• Рабочие места: **${lic.totalSeats}** (${lic.baseSeats} вечных лицензий в комплекте)`,
+                    `• Поддержка: **1 год ${lic.support?.tierName || 'Enterprise'}** (${lic.support?.reactionLabel || 'до 15 минут'}, далее — по желанию)`,
+                    `• Код привязки бота MAX/TG/VK: \`${lic.support?.bindCode || lic.licenseId}\``,
+                ].join('\n'),
+                actions: [{ type: 'refresh_admin' }, { type: 'admin_tab', tab: 'licenses' }],
+                data: { license: lic },
+            };
+        }
+
+        // 0.2 Команда администратора: проведение оплаты ожидающих заказов ЮKassa
+        if (/(провед|подтверд)\S*\s+оплат/i.test(lower)) {
+            const pending = Object.values(this.store.state.orders || {}).filter(o => o.status === 'pending');
+            if (!pending.length) {
+                return {
+                    reply: 'Все выставленные заказы ЮKassa уже оплачены — ожидающих платежей сейчас нет.',
+                    actions: [{ type: 'refresh_admin' }],
+                };
+            }
+            const completed = [];
+            for (const o of pending) {
+                const done = this.store.completePaidOrder(o.orderId, { paymentId: o.paymentId || ('yk_' + o.orderId) });
+                if (done) completed.push(done);
+            }
+            return {
+                reply: [
+                    `Проведена оплата по **${completed.length}** заказам ЮKassa:`,
+                    ...completed.map(o => `• **${o.orderId}** — ${o.customer?.name || 'Клиент'} · **${fmt(o.amountRub)} ₽** (статус: оплачен)`),
+                    'Сертификаты лицензий и резервы франшиз автоматически обновлены.',
+                ].join('\n'),
+                actions: [{ type: 'refresh_admin' }, { type: 'admin_tab', tab: 'orders' }],
+            };
+        }
+
+        // 0.3 Команда администратора: сводка по реестру сервера лицензий / заказам / тикетам
+        if (/(сводк|реестр|статус сервер|обзор сервер|неоплачен\S*\s+заказ|покажи заказ|открыт\S*\s+тикет|покажи тикет|резерв\S*\s+франш)/i.test(lower)) {
+            const licenses = this.store.listLicenses();
+            const orders = Object.values(this.store.state.orders || {});
+            const partners = this.store.listPartners();
+            const reservations = Object.values(this.store.state.franchiseReservations || {});
+            const tickets = this.store.listTickets();
+            const totalSeats = licenses.reduce((s, l) => s + (l.totalSeats || 0), 0);
+            const paidOrders = orders.filter(o => o.status === 'paid');
+            const pendingOrders = orders.filter(o => o.status === 'pending');
+            const paidSum = paidOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
+            const pendingSum = pendingOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
+            const openTickets = tickets.filter(t => t.status !== 'answered' && t.status !== 'closed');
+
+            return {
+                reply: [
+                    '**Сводка центра лицензирования и биллинга ODANT-WORK:**',
+                    `• Выпущено лицензий ПАК: **${licenses.length}** (суммарно **${totalSeats}** активных мест, по ${PAK_PRODUCT.baseSeats} вечных в базе)`,
+                    `• Оплачено заказов ЮKassa: **${paidOrders.length}** на сумму **${fmt(paidSum)} ₽**`,
+                    `• Ожидают оплаты: **${pendingOrders.length}** на сумму **${fmt(pendingSum)} ₽**`,
+                    `• Франшизы: **${partners.length}** действующих партнёров и **${reservations.length}** активных резервов`,
+                    `• Техподдержка (MAX · TG · VK): **${openTickets.length}** открытых из **${tickets.length}** обращений`,
+                    pendingOrders.length > 0 ? '\nНапишите «Проведи оплату заказов», чтобы подтвердить ожидающие платежи.' : '',
+                ].filter(Boolean).join('\n'),
+                actions: [{ type: 'refresh_admin' }],
+            };
+        }
 
         // 1. Франшиза в конкретном субъекте РФ
         const region = findRegionInText(text);
@@ -146,7 +223,7 @@ export class LicenseServerAiAgent {
         }
 
         // 5. Комплекс и аппаратная платформа
-        if (/(ryzen|процессор|желез|характерист|radeon|8065|памят|192|модел|комплекс|продукт|сервер|(^|[^а-яё])ии([^а-яё]|$))/i.test(lower)) {
+        if (/(ryzen|процессор|желез|характерист|radeon|8065|памят|192|модел|комплекс|продукт|сервер|api|источник|(^|[^а-яё])ии([^а-яё]|$))/i.test(lower)) {
             const H = PAK_PRODUCT.hardware;
             return {
                 reply: [
@@ -156,8 +233,9 @@ export class LicenseServerAiAgent {
                     `• ИИ-ускорение: ${H.aiEngine}`,
                     `• Память и диск: ${H.ram} · ${H.storage}`,
                     `• Защита: ${H.security}`,
-                    '• Внутри: система учёта, документооборот, управление процессами, ИИ-консультант, мультиагентная система и 4 типа локальных моделей (языковая, голосовая, генерация изображений, векторный поиск).',
-                    `• В комплекте: вечная лицензия на ${PAK_PRODUCT.baseSeats} одновременных сессий + ${PAK_PRODUCT.includedSupportYears} год поддержки.`,
+                    '• Внутри: система учёта, документооборот, управление процессами, ИИ-консультант, мультиагентная система и 4 типа интегрированных локальных моделей (языковая, голосовая, генерация изображений, векторный поиск).',
+                    '• **Гибридный контур моделей:** интегрированные локальные модели предназначены для базовых ежедневных операций; если требуются более мощные модели ИИ, их можно подключить через API из любого источника.',
+                    `• **В комплекте:** вечная лицензия на **${PAK_PRODUCT.baseSeats} одновременных сессий** + **${PAK_PRODUCT.includedSupportYears} год поддержки уровня Enterprise** (24/7, реакция ≤ 15 мин). Дальнейшее продление поддержки и докупка мест — **по желанию**.`,
                 ].join('\n'),
                 actions: [{ type: 'switch_stage', stage: 'product' }],
             };
@@ -174,7 +252,7 @@ export class LicenseServerAiAgent {
                     `• Резерв субъекта: невозвратный залог **${fmt(FRANCHISE_PROGRAM.reservationDepositRub)} ₽** через ЮKassa, полная оплата паушального взноса — **в течение 1 года**`,
                     `• Сейчас свободно **${totalVacant}** франшиз в **${all.length}** субъектах РФ (квота пропорциональна населению)`,
                     `• Скидка партнёра: от ${FRANCHISE_PROGRAM.minDiscountPercent}% до ${FRANCHISE_PROGRAM.maxDiscountPercent}% от годового объёма продаж`,
-                    '• 100% дохода партнёра: оборудование и гарантия на него, NAS для резервных копий, серверы инференса, собственный API к моделям, поддержка, дообучение агентов и навыков.',
+                    '• 100% дохода партнёра: оборудование и гарантия на него, NAS для резервных копий, серверы инференса, собственный API к мощным моделям, поддержка, дообучение агентов и навыков.',
                 ].join('\n'),
                 actions: [{ type: 'switch_stage', stage: 'franchise' }],
             };
@@ -184,10 +262,10 @@ export class LicenseServerAiAgent {
         return {
             reply: [
                 'Я ИИ-агент лицензионного центра **ODANT-WORK**. Коротко об условиях:',
-                `1. **Комплекс** — ${fmt(PAK_PRODUCT.basePriceRub)} ₽: AMD Ryzen™ AI Max+ PRO 495, Radeon™ 8065S, 192 ГБ, 4 ТБ, ${PAK_PRODUCT.baseSeats} вечных мест и год поддержки.`,
+                `1. **Комплекс** — ${fmt(PAK_PRODUCT.basePriceRub)} ₽: AMD Ryzen™ AI Max+ PRO 495, Radeon™ 8065S, 192 ГБ, 4 ТБ, **${PAK_PRODUCT.baseSeats} вечных лицензий** и **1 год поддержки Enterprise** в комплекте (дальше — по желанию). Интегрированные модели — для базовых операций, более мощные ИИ подключаются через API из любого источника.`,
                 '2. **Доп. места на год:** Start 10 000 ₽ · Business 15 000 ₽ · Enterprise 20 000 ₽, скидка за количество до −25%.',
                 `3. **Франшиза:** паушальный взнос ${fmt(FRANCHISE_PROGRAM.baseFranchiseFeeRub)} ₽ × индекс субъекта, залог за резерв ${fmt(FRANCHISE_PROGRAM.reservationDepositRub)} ₽, полная оплата в течение 1 года.`,
-                'Спросите, например: «Рассчитай 25 мест Business», «Франшиза в Рязанской области» или «Что умеют ИИ-агенты?»',
+                'Спросите, например: «Рассчитай 25 мест Business», «Франшиза в Рязанской области», «Сводка по серверу» или «Выпусти лицензию».',
             ].join('\n'),
             actions: [],
         };

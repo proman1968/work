@@ -39,7 +39,7 @@ export class YooKassaService {
     buildYooKassaPaymentPayload(order) {
         const valueStr = Number(order.amountRub || 0).toFixed(2);
         const description = order.includeBasePak
-            ? `Заказ ${order.orderId}: ПАК WORK (5 вечных мест) + доп. лицензии (${order.addonSeats} мест, ${order.tierName})`
+            ? `Заказ ${order.orderId}: ПАК ODANT-WORK (10 вечных лицензий + 1 год Enterprise) + доп. места (${order.addonSeats} мест, ${order.tierName})`
             : `Заказ ${order.orderId}: Годовая лицензия WORK (${order.addonSeats} польз., уровень ${order.tierName}, ${order.years} г.)`;
 
         return {

@@ -76,9 +76,11 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(PAK_HARDWARE_SPEC.ramGb, 192);
         assert.equal(PAK_HARDWARE_SPEC.ssdTb, 4);
         assert.equal(PAK_HARDWARE_SPEC.basePriceRub, 5_000_000);
-        assert.equal(PAK_HARDWARE_SPEC.baseSeats, 5);
+        assert.equal(PAK_HARDWARE_SPEC.baseSeats, 10);
         assert.equal(PAK_HARDWARE_SPEC.perpetualBase, true);
         assert.equal(PAK_HARDWARE_SPEC.includedSupportYears, 1);
+        assert.equal(PAK_HARDWARE_SPEC.includedSupportTier, 'enterprise');
+        assert.match(PAK_HARDWARE_SPEC.modelsPolicy, /API из любого источника/);
 
         const models = inspectPreinstalledModels('.');
         assert.equal(models.length, 4);
@@ -122,10 +124,11 @@ describe('ПАК WORK: спецификация, лицензирование, �
         const synced = await syncWithLicenseHub({ hubUrl, licensePath: clientLicFile });
 
         assert.ok(synced.licenseId);
-        assert.equal(synced.baseSeats, 5);
+        assert.equal(synced.baseSeats, 10);
         assert.equal(synced.perpetualBase, true);
-        assert.equal(synced.totalSeats, 5);
-        assert.equal(synced.baseSupportActive, true, 'Первый год поддержки входит в базовый комплект ПАК');
+        assert.equal(synced.totalSeats, 10);
+        assert.equal(synced.baseSupportActive, true, 'Первый год поддержки Enterprise входит в базовый комплект ПАК');
+        assert.equal(synced.support.tier, 'enterprise');
         assert.equal(synced.hardwareMatch, true, 'Лицензия привязана к HWID и отпечатку ключа узла');
         assert.equal(synced.signed, true);
 
@@ -137,33 +140,37 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(verifyLicenseCertificate(forged, hubApp.store.authorityKeys.publicKey), false);
     });
 
-    it('4. Подсчёт рабочих мест по одновременным активным сессиям (concurrent sessions) и лимит 5 вечных + N годовых', () => {
+    it('4. Подсчёт рабочих мест по одновременным активным сессиям (concurrent sessions) и лимит 10 вечных + N годовых', () => {
         const now = Date.now();
         const mockSessions = {
             s1: { ssid: 's1', uid: 'U000000000000001', lastSeen: now },
             s2: { ssid: 's2', uid: 'U000000000000002', lastSeen: now },
             s3: { ssid: 's3', uid: 'U000000000000003', lastSeen: now },
             s4: { ssid: 's4', uid: 'U000000000000004', lastSeen: now },
-            // Один и тот же пользователь открыл вторую сессию — в конкурентной модели 1С занимает 5-е место
             s5: { ssid: 's5', uid: 'U000000000000001', lastSeen: now },
+            s6: { ssid: 's6', uid: 'U000000000000005', lastSeen: now },
+            s7: { ssid: 's7', uid: 'U000000000000006', lastSeen: now },
+            s8: { ssid: 's8', uid: 'U000000000000007', lastSeen: now },
+            s9: { ssid: 's9', uid: 'U000000000000008', lastSeen: now },
+            s10: { ssid: 's10', uid: 'U000000000000009', lastSeen: now },
         };
 
         const active = getActiveWorkplaces(mockSessions);
-        assert.equal(active.length, 5, 'Считаются все 5 одновременных активных сессий');
+        assert.equal(active.length, 10, 'Считаются все 10 одновременных активных сессий');
 
         const baseLic = {
-            licenseId: 'PAK-TEST-5',
+            licenseId: 'PAK-TEST-10',
             issuedAt: now,
-            baseSeats: 5,
+            baseSeats: 10,
             perpetualBase: true,
             addonSubscriptions: [],
         };
 
-        // 6-я одновременная сессия блокируется при базовой лицензии на 5 мест
+        // 11-я одновременная сессия блокируется при базовой лицензии на 10 мест
         assert.throws(
-            () => assertWorkplaceAvailableForLogin('U000000000000006', {
+            () => assertWorkplaceAvailableForLogin('U000000000000011', {
                 sessions: mockSessions,
-                currentSsid: 's6',
+                currentSsid: 's11',
                 license: baseLic,
                 isAdmin: false,
             }),
@@ -192,18 +199,18 @@ describe('ПАК WORK: спецификация, лицензирование, �
             true
         );
 
-        // Даже спустя 10 лет вечные 5 мест остаются активными!
+        // Даже спустя 10 лет вечные 10 мест остаются активными!
         const tenYearsLater = now + 10 * 365 * 24 * 3600_000;
         const stateAfter10Years = evaluateLicenseState(baseLic, tenYearsLater);
-        assert.equal(stateAfter10Years.baseSeats, 5);
-        assert.equal(stateAfter10Years.totalSeats, 5, 'Вечная лицензия на 5 мест никогда не сгорает');
+        assert.equal(stateAfter10Years.baseSeats, 10);
+        assert.equal(stateAfter10Years.totalSeats, 10, 'Вечная лицензия на 10 мест никогда не сгорает');
         assert.equal(stateAfter10Years.baseSupportActive, false, 'Включённый 1-й год поддержки истекает через год');
     });
 
     it('5. Интеграция ЮKassa: оформление заказа, чек 54-ФЗ и автовыпуск годовых мест по Webhook payment.succeeded', async () => {
         const clientLicFile = path.join(tmpDir, 'client-yk.json');
         const initial = await syncWithLicenseHub({ hubUrl, licensePath: clientLicFile });
-        assert.equal(initial.totalSeats, 5);
+        assert.equal(initial.totalSeats, 10);
 
         // Создаём заказ на 3 дополнительных годовых места уровня Enterprise (3 * 20 000 = 60 000 ₽)
         const checkout = await createHubCheckoutOrder({
@@ -250,12 +257,12 @@ describe('ПАК WORK: спецификация, лицензирование, �
         const whData = await whRes.json();
         assert.equal(whData.ok, true);
         assert.equal(whData.status, 'paid');
-        assert.equal(whData.totalSeats, 8, '5 вечных + 3 докупленных годовых = 8 мест');
+        assert.equal(whData.totalSeats, 13, '10 вечных + 3 докупленных годовых = 13 мест');
         assert.equal(whData.tier, 'Enterprise');
 
-        // Клиентский ПАК синхронизируется и получает обновлённый подписанный сертификат на 8 мест
+        // Клиентский ПАК синхронизируется и получает обновлённый подписанный сертификат на 13 мест
         const updated = await syncWithLicenseHub({ hubUrl, licensePath: clientLicFile });
-        assert.equal(updated.totalSeats, 8);
+        assert.equal(updated.totalSeats, 13);
         assert.equal(updated.addonSeats, 3);
         assert.equal(updated.support.tier, 'enterprise');
         assert.equal(updated.support.reactionMinutes, 15);
@@ -371,6 +378,8 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(html.includes('toggleTheme()'));
         assert.ok(html.includes('russiaMapSvg'));
         assert.ok(html.includes('id="tileAddons"') && html.includes('style="display:none;"'), 'Докупка лицензий скрыта до авторизации пользователя');
+        assert.ok(html.includes('id="admAgentCard"') && html.includes('data-adm-tab="agent"'), 'ИИ-агент интегрирован на левую вкладку админки');
+        assert.ok(html.includes('через API из любого источника'), 'Указано подключение более мощных моделей ИИ через API из любого источника');
         assert.ok(!html.includes('1С'), 'В лендинге нет упоминаний 1С');
 
         // Авторизация пользователя для доступа к докупке лицензий
@@ -391,6 +400,14 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(agentReply.reply.includes('−15%'));
         assert.equal(agentReply.data.quote.volumeDiscountPercent, 15);
 
+        // Запрос к ИИ-агенту из админки: сводка по серверу
+        const admSummary = await fetch(`${hubUrl}/api/agent/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: 'Сводка по серверу лицензий', sessionKey: authRes.sessionKey }),
+        }).then(r => r.json());
+        assert.ok(admSummary.reply.includes('Сводка центра лицензирования'));
+
         const npmIgnore = fs.readFileSync('.npmignore', 'utf8');
         assert.ok(npmIgnore.includes('torus/'), 'torus исключён из публикации в npm');
         assert.ok(npmIgnore.includes('license-server/'), 'license-server исключён из клиентского пакета work');
@@ -398,7 +415,8 @@ describe('ПАК WORK: спецификация, лицензирование, �
         const licPkg = JSON.parse(fs.readFileSync('license-server/package.json', 'utf8'));
         assert.equal(licPkg.name, 'work-license-server');
         assert.ok(licPkg.bin['work-license-server']);
-        assert.equal(PAK_PRODUCT.baseSeats, 5);
+        assert.equal(PAK_PRODUCT.baseSeats, 10);
+        assert.equal(PAK_PRODUCT.includedSupportTier, 'enterprise');
     });
 
     it('8. Региональная франшиза: стоимость пропорциональна экономике региона, квота партнёров — населению, скидка 10%→50% — объёму продаж, обучение и сертификация', async () => {
