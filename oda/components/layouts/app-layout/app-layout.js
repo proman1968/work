@@ -219,6 +219,9 @@ ODA({is: 'app-layout-drawer',
         set(n) {
             this._persistActiveTab(n);
             this.updateControls();
+            const tabs = this.$?.('app-tabs');
+            if (tabs && tabs.focusedIndex !== n)
+                tabs.focusedIndex = n;
         }
     },
     _tabStorageKey() {
@@ -230,7 +233,7 @@ ODA({is: 'app-layout-drawer',
         return String(ctrl.$item?.path || ctrl.$item?.short || ctrl.id || ctrl.getAttribute?.('label') || ctrl.label || idx || 0);
     },
     _persistActiveTab(idx = this.focusedIndex) {
-        if (!this._restoredTab || typeof localStorage === 'undefined')
+        if (typeof localStorage === 'undefined')
             return;
         const ctrl = this.controls?.[idx];
         if (!ctrl)
@@ -267,6 +270,21 @@ ODA({is: 'app-layout-drawer',
         if (typeof tabsIdx === 'number' && tabsIdx >= 0 && tabsIdx < list.length)
             return tabsIdx;
         return 0;
+    },
+    selectControl(matchFn) {
+        const list = this.controls || [];
+        const idx = typeof matchFn === 'function' ? list.findIndex(matchFn) : Number(matchFn);
+        if (idx >= 0 && idx < list.length) {
+            this.closed = false;
+            this.focusedIndex = idx;
+            const tabs = this.$?.('app-tabs');
+            if (tabs)
+                tabs.focusedIndex = idx;
+            this._persistActiveTab(idx);
+            this.updateControls();
+            return list[idx];
+        }
+        return null;
     },
 
     get reverse() {
@@ -335,18 +353,46 @@ ODA({is: 'app-tabs',
         <style>
             :host {
                 @apply --vertical;
+                align-items: center;
+                box-sizing: border-box;
+                padding: 6px 4px;
+                gap: 4px;
+                min-width: 52px;
+                width: 52px;
                 font-size: x-small;
                 order: {{mobile?1:0}};
+                user-select: none;
             }
-            oda-button{
-                border-radius: 0px !important;
+            .nav-list {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 4px;
+                width: 100%;
+            }
+            .nav-list[horizontal] {
+                flex-direction: row;
+                width: auto;
+            }
+            .nav-list oda-button {
+                border-radius: 10px !important;
+                min-width: 44px;
+                max-width: 44px;
+                min-height: 44px;
+                padding: 4px 2px !important;
+                box-sizing: border-box;
+                transition: background 140ms ease, transform 120ms ease, box-shadow 140ms ease;
+            }
+            .nav-list oda-button[light] {
+                font-weight: 700;
+                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
             }
         </style>
-        <div :horizontal="mobile">
-            <oda-button :label="$for.item.label" :light="focusedIndex === $for?.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 40px; max-width: 40px; font-size: xx-small;" @tap="setIndex($for.index)"></oda-button>
+        <div class="nav-list" :horizontal="mobile">
+            <oda-button :label="$for.item.label" :light="focusedIndex === $for?.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 44px; max-width: 44px; font-size: xx-small;" @tap="setIndex($for.index)"></oda-button>
         </div>
         <div flex></div>
-        <span ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" style="margin: 8px;overflow: hidden; text-overflow: ellipsis;" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>
+        <span ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" style="margin: 6px; overflow: hidden; text-overflow: ellipsis;" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>
     `,
     get mobile() {
         return this.host.mobile

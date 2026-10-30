@@ -23,7 +23,7 @@
 import fs from 'node:fs';
 import { DEV_MODE } from '../host/config.js';
 import { dataDb, baseDbFile, dataGeneration } from './db.js';
-import { refreshClasses, getClass, descendants, isLeaf, classesOfType, classesGeneration, DEFAULT_ROOTS, STRUCTURE_TYPES } from './classes.js';
+import { refreshClasses, getClass, descendants, isLeaf, classesOfType, classesGeneration, DEFAULT_ROOTS, STRUCTURE_TYPES, clearScanCache } from './classes.js';
 import { classSchema, checkSchema, analyticSlots, FAMILY } from './schema.js';
 import {
     createObject, readObject, objectVersions, updateObject, deleteObject, restoreObject, queryObjects, linkCids,
@@ -32,7 +32,7 @@ import {
     registerOperation, correctOperation, cancelOperation, previewEntries, operationEntries, closePeriod, closedUntil,
 } from './posting.js';
 import {
-    journal, trialBalance, accountCard, accountTurnovers, readEntry, objectState, objectTrajectory, virtualMembers, isVirtualMember, namesOf,
+    journal, trialBalance, accountCard, accountTurnovers, readEntry, objectState, objectTrajectory, virtualMembers, countVirtualMembers, isVirtualMember, namesOf,
 } from './reports.js';
 import { linkChoices } from './choices.js';
 import { printTemplates, renderPrint } from './print.js';
@@ -68,6 +68,7 @@ function rootsForBase(basePath) {
 /** Кэш классов устарел (правка class.js): обновится перед следующим обращением. */
 export function markClassesDirty() {
     dirtyGeneration++;
+    clearScanCache();
 }
 
 /** БД данных организации ($base) с актуальным кэшем классов. */
@@ -148,7 +149,7 @@ function getDbSummary(db) {
                 return subtreeCounts.get(key);
             let total = 0;
             if (type === '$virtual') {
-                total = virtualMembers(db, { cid: cls?.cid || clsPath }).items.length;
+                total = countVirtualMembers(db, cls?.cid || clsPath);
             }
             else if (type === '$account' || type === '$register') {
                 const accs = cls ? descendants(db, cls.cid) : [clsPath];

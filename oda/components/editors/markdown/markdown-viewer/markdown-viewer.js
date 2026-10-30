@@ -1,18 +1,34 @@
 import * as markdown from './lib/markdown-wasm/markdown.es.js';
-import './lib/mathjax-config.js';
-import './lib/mathjax/tex-mml-chtml.js';
 import './lib/highlight.min.js';
-import './lib/mermaid.min.js';
 await markdown.ready;
-await MathJax.startup.promise;
 
-const mermaid = globalThis.mermaid;
-mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    suppressErrorRendering: true,
-    theme: 'neutral',
-});
+let mermaidReadyPromise = null;
+async function ensureMermaid() {
+    if (globalThis.mermaid)
+        return globalThis.mermaid;
+    return mermaidReadyPromise ??= import('./lib/mermaid.min.js').then(() => {
+        const m = globalThis.mermaid;
+        m?.initialize?.({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            suppressErrorRendering: true,
+            theme: 'neutral',
+        });
+        return m;
+    });
+}
+
+let mathJaxReadyPromise = null;
+async function ensureMathJax() {
+    if (globalThis.MathJax?.typesetPromise)
+        return globalThis.MathJax;
+    return mathJaxReadyPromise ??= (async () => {
+        await import('./lib/mathjax-config.js');
+        await import('./lib/mathjax/tex-mml-chtml.js');
+        await globalThis.MathJax?.startup?.promise;
+        return globalThis.MathJax;
+    })();
+}
 
 function escapeHtml(s) {
     return s.replace(/[&<>"']/g, ch => ({
@@ -217,8 +233,12 @@ function embedMedia(root) {
 }
 
 async function renderMermaid(root) {
-    if (!root || !mermaid) return;
-    for (const node of root.querySelectorAll('.mermaid')) {
+    if (!root) return;
+    const nodes = root.querySelectorAll('.mermaid');
+    if (!nodes.length) return;
+    const mermaid = await ensureMermaid();
+    if (!mermaid) return;
+    for (const node of nodes) {
         const src = node.textContent.trim();
         if (!src) continue;
         try {
@@ -246,7 +266,6 @@ ODA({ is: 'oda-markdown-viewer',
         <div ~html style="padding: 0px 16px;"></div>
     `,
     value: String,
-    _mdGen: 0,
     /**
      * Клик по ссылке → событие `md-link` { href } на хосте (bubbles, composed, cancelable):
      * хост-приложение может перехватить навигацию (preventDefault). Shadow root закрыт —
@@ -270,28 +289,36 @@ ODA({ is: 'oda-markdown-viewer',
         });
     },
     get html(){
-        if (this.value){
-            const gen = ++this._mdGen;
+        const val = this.value;
+        if (val){
+            const gen = (this.__mdGen = (this.__mdGen || 0) + 1);
+            const hasMath = /(\$\$|\$[^\s$]|\\\(|\\\[|\\begin\{)/.test(val);
             this.async(async ()=>{
-                if (gen !== this._mdGen) return;
+                if (gen !== this.__mdGen) return;
                 const root = this.$('div');
                 if (!root) return;
                 this._bindLinks(root);
                 try {
-                    MathJax.texReset();
-                    MathJax.typesetClear();
-                    await MathJax.typesetPromise([root]);
-                    if (gen !== this._mdGen) return;
-                    await renderMermaid(root);
-                    if (gen !== this._mdGen) return;
+                    if (hasMath) {
+                        const mj = await ensureMathJax();
+                        if (gen !== this.__mdGen) return;
+                        mj?.texReset?.();
+                        mj?.typesetClear?.();
+                        await mj?.typesetPromise?.([root]);
+                        if (gen !== this.__mdGen) return;
+                    }
+                    if (root.querySelector('.mermaid')) {
+                        await renderMermaid(root);
+                        if (gen !== this.__mdGen) return;
+                    }
                     embedMedia(root);
                 } catch (err) {
                     console.error(err);
                 }
-                if (gen === this._mdGen)
-                    this.fire('loaded');
+                if (gen === this.__mdGen)
+                    this.fire('loaded', undefined, { bubbles: false, composed: false });
             });
-            return parseMarkdown(this.value);
+            return parseMarkdown(val);
         }
     }
 })

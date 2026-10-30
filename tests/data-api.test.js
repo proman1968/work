@@ -439,7 +439,13 @@ describe('методы учётного ядра у классов', () => {
         assert.equal(entryCard.debit.account, '/DATA/REGISTER/62');
         assert.equal(entryCard.credit.account, '/DATA/REGISTER/90');
 
-        // 5. Глобальный поиск (search_tree): возвращает только доступные пользователю элементы и объекты
+        // 5. Глобальный поиск (search_tree) и глубокий серверный поиск в db_query (по вхождениям внутри слова и по названию связанного объекта Link):
+        const saleCls = await item('/DATA/OPERATIONS/SALE');
+        const byLinkName = await invoke(saleCls, 'db_query', { search: 'Альфа', ...as(USER1) });
+        assert.ok(byLinkName.total >= 1, 'серверный поиск в db_query находит операции по названию связанного объекта (Link)');
+        const bySubstr = await invoke(await item('/DATA/CATALOGS/SUBJECTS'), 'db_query', { search: 'льф', ...as(USER1) });
+        assert.ok(bySubstr.items.some(o => o.id === alpha.id), 'серверный поиск в db_query находит объекты по вхождению подстроки внутри слова');
+
         const dataDom = await item('/DATA');
         const sUser = await invoke(dataDom, 'search_tree', { q: 'Альфа', ...as(USER1) });
         assert.ok(sUser.objects.some(o => o.id === alpha.id), 'USER1 видит объект ООО «Альфа»');

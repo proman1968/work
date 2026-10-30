@@ -39,51 +39,44 @@ ODA({ is: 'phone-call', imports: '~/lib//icon.js', template: /* html */`
     `,
     $item: undefined,
     get message() {
-        return this.$item?.load();
+        return Promise.resolve(this.$item?.load()).then(raw => {
+            if (!raw)
+                return null;
+            return typeof raw === 'string' ? JSON.parse(raw) : raw;
+        }).catch(() => null);
     },
     get user() {
-        if (this.message instanceof Promise)
-            return this.message.then(message => {
-                return WORK.get_$user(message.user);
-            })
-        if (this.message?.user)
-            return WORK.get_$user(this.message.user);
-        return null;
+        return Promise.resolve(this.message).then(message => {
+            return message?.user ? WORK.get_$user(message.user) : null;
+        });
     },
     get receivers() {
-        return WORK.$users().then(async users => {
-            const message = await this.message;
-            return message.receivers.map(id => users.find(u => u.id === id)).filter(Boolean);
-        })
+        return Promise.all([WORK.users, this.message]).then(([users, message]) => {
+            const list = Array.isArray(users) ? users : [];
+            const ids = Array.isArray(message?.receivers) ? message.receivers : [];
+            return ids.map(id => list.find(u => u.id === id)).filter(Boolean);
+        }).catch(() => []);
     },
     attached() {
         this.async(() => {
-            if (this.message instanceof Promise) {
-                this.message?.then(message => {
+            Promise.resolve(this.message).then(message => {
+                if (message?.type && this.$pdp)
                     this.$pdp.colorMode = COLORS[message.type] || '';
-                });
-            }
-            else {
-                this.$pdp.colorMode = COLORS[this.message?.type] || '';
-            }
+            });
         });
     },
     get type() {
-        if (this.message instanceof Promise)
-            return this.message?.then(message => message.type);
-        return this.message?.type;
+        return Promise.resolve(this.message).then(message => message?.type || '');
     },
     get theme() {
-        if (this.message instanceof Promise)
-            return this.message?.then(message => {
-                return message.theme || THEMES[message.type];
-            });
-        return this.message.theme || THEMES[this.message?.type];
+        return Promise.resolve(this.message).then(message => {
+            if (!message)
+                return '';
+            return message.theme || THEMES[message.type] || '';
+        });
     },
     get icon() {
-        if (this.type instanceof Promise)
-            return this.type?.then(type => (ICONS[type] || ('@:' + type)));
-        return ICONS[this.type] || ('@:' + this.type);
+        return Promise.resolve(this.type).then(type => (ICONS[type] || (type ? '@:' + type : '')));
     }
 })
 const ICONS = {

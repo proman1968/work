@@ -17,6 +17,7 @@ import { FS } from '../../../server/index.js';
 import { getItem, callAs, writeBinary, absPath, markUntrustedByPaths } from './work.js';
 import { run } from '../system.js';
 import { assertZipSafe } from '../../../server/zip-guard.js';
+import { buildPresentationBuffer, buildSpreadsheetBuffer, buildDocumentBuffer } from '../../office/index.js';
 
 const IMPORT_MAX = 1000;
 const PDF_SOURCE_MAX = 5 * 1024 * 1024;
@@ -28,8 +29,13 @@ const PDF_RENDER_TIMEOUT = 60000;
 const PDF_BROWSER_CANDIDATES = {
     win32: [
         'C:/Program Files/Google/Chrome/Application/chrome.exe',
+        'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
         'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
         'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
+        ...(process.env.LOCALAPPDATA ? [
+            path.join(process.env.LOCALAPPDATA, 'Google/Chrome/Application/chrome.exe').replace(/\\/g, '/'),
+            path.join(process.env.LOCALAPPDATA, 'Microsoft/Edge/Application/msedge.exe').replace(/\\/g, '/'),
+        ] : []),
     ],
     darwin: [
         '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -112,32 +118,41 @@ export async function renderPdf(htmlFile, pdfFile, { browser, timeoutMs = PDF_RE
     const exe = browser || findPdfBrowser();
     if (!exe)
         throw new Error('export_pdf: браузер для рендера PDF не найден (Chrome/Edge). Укажите WORK_PDF_BROWSER=путь к chrome.exe/msedge.exe или установите браузер.');
-    // Изолированный профиль на каждый рендер: без него процесс при открытом браузере
-    // молча передаёт команду уже запущенному экземпляру и выходит за ~30 мс без PDF.
-    const profile = profileDir
-        || path.join(path.dirname(pdfFile), 'profile-' + process.pid + '-' + (++pdfProfileSeq) + '-' + Date.now().toString(36));
     // рендер только защищённой копии: CSP запрещает file: и внешние ресурсы (F11)
     const sandboxFile = await prepareSandboxHtml(htmlFile);
     const url = pathToFileURL(sandboxFile).href;
-    const r = await run(exe, [
-        '--headless', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
-        '--user-data-dir=' + profile,
-        '--print-to-pdf=' + pdfFile, '--print-to-pdf-no-header',
-        '--proxy-server=http://127.0.0.1:9', '--host-resolver-rules=MAP * ~NOTFOUND',
-        url,
-    ], { timeout: timeoutMs, signal });
+    const tryOnce = async (headlessFlag, attempt) => {
+        const profile = profileDir
+            ? (attempt > 0 ? profileDir + '-r' + attempt : profileDir)
+            : path.join(path.dirname(pdfFile), 'profile-' + process.pid + '-' + (++pdfProfileSeq) + '-' + Date.now().toString(36));
+        const r = await run(exe, [
+            headlessFlag, '--disable-gpu', '--no-first-run', '--no-default-browser-check',
+            '--disable-extensions', '--disable-background-networking', '--disable-sync', '--no-sandbox',
+            '--user-data-dir=' + profile,
+            '--print-to-pdf=' + pdfFile, '--print-to-pdf-no-header',
+            '--proxy-server=http://127.0.0.1:9', '--host-resolver-rules=MAP * ~NOTFOUND',
+            url,
+        ], { timeout: timeoutMs, signal });
+        if (r.timedOut)
+            return { r, buf: null };
+        const buf = await waitPdf(pdfFile, signal, 8000);
+        return { r, buf };
+    };
+    let lastRes = await tryOnce('--headless=new', 0);
+    if (!lastRes.buf && !lastRes.r?.timedOut && !signal?.aborted) {
+        lastRes = await tryOnce('--headless', 1);
+    }
     try {
         await fsp.rm(sandboxFile, { force: true });
     }
     catch { /* копия во временном каталоге и так уйдёт */ }
-    if (r.timedOut)
+    if (lastRes.r?.timedOut)
         throw new Error('export_pdf: таймаут рендера PDF');
-    const buf = await waitPdf(pdfFile, signal);
-    if (!buf)
-        throw new Error('export_pdf: браузер не создал PDF (код ' + r.code + ')'
-            + (r.stderr ? ': ' + String(r.stderr).trim().slice(-500) : '')
+    if (!lastRes.buf)
+        throw new Error('export_pdf: браузер не создал PDF (код ' + lastRes.r?.code + ')'
+            + (lastRes.r?.stderr ? ': ' + String(lastRes.r.stderr).trim().slice(-500) : '')
             + '. Проверьте установку Chrome/Edge или задайте WORK_PDF_BROWSER.');
-    return buf;
+    return lastRes.buf;
 }
 
 /** Дождаться сброса PDF на диск: процесс иногда выходит раньше flush. */
@@ -275,7 +290,101 @@ export function slidesHtml(slides, { title: deckTitle, date } = {}) {
         + body + '\n</body></html>';
 }
 
-/** Результат записи: фактический путь отдельно от запрошенного (файл класса уходит в зону роли). */
+/** Преобразовать список слайдов [{title, bullets, paras}] в структуру OOXML для локального редактора .pptx. */
+export function slidesToPptxData(slides, { title: deckTitle, date } = {}) {
+    const out = [];
+    if (deckTitle) {
+        const sub = date ? String(date) : '';
+        out.push({
+            id: 'slide_1',
+            title: String(deckTitle).trim(),
+            background: '#0f172a',
+            notes: '',
+            elements: [
+                {
+                    id: 'title_main',
+                    type: 'text',
+                    x: 80,
+                    y: 180,
+                    w: 800,
+                    h: 110,
+                    text: String(deckTitle).trim(),
+                    fontSize: 44,
+                    bold: true,
+                    italic: false,
+                    align: 'center',
+                    color: '#ffffff',
+                    fill: 'transparent',
+                },
+                ...(sub ? [{
+                    id: 'title_sub',
+                    type: 'text',
+                    x: 160,
+                    y: 310,
+                    w: 640,
+                    h: 60,
+                    text: sub,
+                    fontSize: 22,
+                    bold: false,
+                    italic: false,
+                    align: 'center',
+                    color: '#94a3b8',
+                    fill: 'transparent',
+                }] : []),
+            ],
+        });
+    }
+    slides.forEach((s, i) => {
+        const idx = out.length + 1;
+        const elements = [];
+        if (s.title) {
+            elements.push({
+                id: `s${idx}_h`,
+                type: 'text',
+                x: 60,
+                y: 44,
+                w: 840,
+                h: 68,
+                text: String(s.title),
+                fontSize: 32,
+                bold: true,
+                italic: false,
+                align: 'left',
+                color: '#0f172a',
+                fill: 'transparent',
+            });
+        }
+        const lines = [
+            ...(s.bullets || []).map(b => `• ${b}`),
+            ...(s.paras || []),
+        ];
+        if (lines.length) {
+            elements.push({
+                id: `s${idx}_b`,
+                type: 'text',
+                x: 60,
+                y: s.title ? 132 : 60,
+                w: 840,
+                h: 360,
+                text: lines.join('\n\n'),
+                fontSize: 20,
+                bold: false,
+                italic: false,
+                align: 'left',
+                color: '#1e293b',
+                fill: 'transparent',
+            });
+        }
+        out.push({
+            id: `slide_${idx}`,
+            title: s.title || `Слайд ${idx}`,
+            background: '#ffffff',
+            notes: '',
+            elements,
+        });
+    });
+    return { slideWidth: 960, slideHeight: 540, slides: out };
+}
 export function savedNote(requested, real) {
     return real && real !== requested
         ? 'сохранено ' + real + ' (запрошено ' + requested + '; в классе файлы ложатся в зону роли — используй этот путь)'
@@ -583,20 +692,21 @@ export const docTools = [
         name: 'export_presentation',
         risk: 'write',
         target: args => absPath(args?.path, null),
-        description: 'Презентация PDF (16:9) из слайдов: source — WORK-путь .md/.txt (слайды через «---», первая строка — заголовок, «- пункт» — список) или slides — [{title, bullets}]. path — результат .pdf; title — титульный слайд. Слайды ≤30, текст слайда ≤4000 символов. Проверь результат через read.',
+        description: 'Создать презентацию .pptx (встроенный редактор слайдов WORK и PowerPoint) или .pdf (16:9) из слайдов: source — WORK-путь .md/.txt (слайды через «---», первая строка — заголовок, «- пункт» — список) или slides — [{title, bullets}]. path — результат .pptx или .pdf; title — титульный слайд. Слайды ≤30, текст слайда ≤4000 символов.',
         parameters: {
             type: 'object',
             properties: {
                 source: { type: 'string', description: 'WORK-путь .md/.txt со слайдами (разделитель «---»)' },
                 slides: { type: 'array', items: { type: 'object' }, description: 'Или список: [{title: «…», bullets: [«…»]}] (или строки-заголовки)' },
-                path: { type: 'string', description: 'WORK-путь результата .pdf' },
+                path: { type: 'string', description: 'WORK-путь результата (.pptx или .pdf)' },
                 title: { type: 'string', description: 'Название презентации (титульный слайд)' },
             },
             required: ['path'],
         },
         async run(args, ctx) {
-            if (String(args.path).split('.').pop().toLowerCase() !== 'pdf')
-                throw new Error('export_presentation: результат — .pdf');
+            const outExt = String(args.path).split('.').pop().toLowerCase();
+            if (!['pdf', 'pptx'].includes(outExt))
+                throw new Error('export_presentation: результат — .pptx или .pdf');
             let slides = [];
             if (args.source) {
                 const src = await fileAt(args.source, ctx);
@@ -611,9 +721,22 @@ export const docTools = [
                 slides = slidesOfMarkdown(text);
             }
             if (args.slides != null) {
-                if (!Array.isArray(args.slides))
-                    throw new Error('export_presentation: slides — массив [{title, bullets}] или строк-заголовков');
-                slides = [...slides, ...args.slides.map(slideOfArg).filter(Boolean)];
+                let rawSlides = args.slides;
+                if (typeof rawSlides === 'string') {
+                    const s = rawSlides.trim();
+                    if (s.startsWith('[')) {
+                        try { rawSlides = JSON.parse(s); } catch { /* fallback below */ }
+                    }
+                    if (typeof rawSlides === 'string') {
+                        slides = [...slides, ...slidesOfMarkdown(rawSlides)];
+                        rawSlides = null;
+                    }
+                }
+                if (rawSlides != null) {
+                    if (!Array.isArray(rawSlides))
+                        throw new Error('export_presentation: slides — массив [{title, bullets}] или строк-заголовков');
+                    slides = [...slides, ...rawSlides.map(slideOfArg).filter(Boolean)];
+                }
             }
             if (!slides.length)
                 throw new Error('export_presentation: нет слайдов (source или slides)');
@@ -624,7 +747,19 @@ export const docTools = [
                 if (size > SLIDE_TEXT_MAX)
                     throw new Error('export_presentation: слайд ' + (i + 1) + ' больше ' + SLIDE_TEXT_MAX + ' символов — сократи');
             }
-            const html = slidesHtml(slides, { title: args.title, date: args.title ? new Date().toLocaleDateString('ru-RU') : undefined });
+            const dateStr = args.title ? new Date().toLocaleDateString('ru-RU') : undefined;
+            const totalSlidesCount = slides.length + (args.title ? 1 : 0);
+
+            if (outExt === 'pptx') {
+                const pptxData = slidesToPptxData(slides, { title: args.title, date: dateStr });
+                const pptxBuf = buildPresentationBuffer(pptxData);
+                const real = await writeBinary(args.path, pptxBuf, ctx);
+                if (ctx.entry)
+                    ctx.entry.path = real;
+                return savedNote(absPath(args.path, ctx), real) + ': ' + totalSlidesCount + ' слайдов, PPTX ' + (pptxBuf.length / 1024).toFixed(1) + ' КБ';
+            }
+
+            const html = slidesHtml(slides, { title: args.title, date: dateStr });
             const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-slides-'));
             try {
                 const htmlFile = path.join(dir, 'deck.html');
@@ -634,11 +769,108 @@ export const docTools = [
                 const real = await writeBinary(args.path, buf, ctx);
                 if (ctx.entry)
                     ctx.entry.path = real;
-                return savedNote(absPath(args.path, ctx), real) + ': ' + (slides.length + (args.title ? 1 : 0)) + ' слайдов, PDF ' + (buf.length / 1024).toFixed(1) + ' КБ';
+                let pptxNote = '';
+                try {
+                    const pptxPath = String(args.path).replace(/\.pdf$/i, '.pptx');
+                    const pptxBuf = buildPresentationBuffer(slidesToPptxData(slides, { title: args.title, date: dateStr }));
+                    const realPptx = await writeBinary(pptxPath, pptxBuf, ctx);
+                    pptxNote = '; также сохранена редактируемая копия ' + realPptx;
+                }
+                catch { /* ignore secondary pptx */ }
+                return savedNote(absPath(args.path, ctx), real) + ': ' + totalSlidesCount + ' слайдов, PDF ' + (buf.length / 1024).toFixed(1) + ' КБ' + pptxNote;
+            }
+            catch (pdfErr) {
+                const pptxPath = String(args.path).replace(/\.pdf$/i, '.pptx');
+                const pptxBuf = buildPresentationBuffer(slidesToPptxData(slides, { title: args.title, date: dateStr }));
+                const realPptx = await writeBinary(pptxPath, pptxBuf, ctx);
+                if (ctx.entry)
+                    ctx.entry.path = realPptx;
+                return savedNote(pptxPath, realPptx) + ': ' + totalSlidesCount + ' слайдов, PPTX ' + (pptxBuf.length / 1024).toFixed(1) + ' КБ (открывается во встроенном редакторе презентаций WORK; PDF-рендер пропущен: ' + (pdfErr?.message || pdfErr) + ')';
             }
             finally {
                 await fsp.rm(dir, { recursive: true, force: true });
             }
+        },
+    },
+    {
+        name: 'create_office_file',
+        risk: 'write',
+        target: args => absPath(args?.path, null),
+        description: 'Создать нативный офисный файл WORK без внешних серверов (открывается во встроенном редакторе oda-office-editor и по WebDAV в MS Office / LibreOffice / Р7): .xlsx (таблица с листами, формулами =SUM/AVERAGE/MIN/MAX и стилями), .docx (документ Word из HTML с заголовками h1-h3, абзацами и таблицами), .pptx (презентация из слайдов [{title, bullets, text}]).',
+        parameters: {
+            type: 'object',
+            properties: {
+                path: { type: 'string', description: 'WORK-путь файла (.xlsx, .docx или .pptx)' },
+                title: { type: 'string', description: 'Заголовок документа или титульного слайда' },
+                html: { type: 'string', description: 'Для .docx: HTML-содержимое документа (<h1>, <p>, <table> и т.д.)' },
+                sheets: { type: 'array', items: { type: 'object' }, description: 'Для .xlsx: листы [{name, rows: [[...], ...], colWidths: [140, 120]}]' },
+                slides: { type: 'array', items: { type: 'object' }, description: 'Для .pptx: слайды [{title, bullets: [...], text}]' },
+            },
+            required: ['path'],
+        },
+        async run(args, ctx) {
+            const ext = String(args.path || '').split('.').pop().toLowerCase();
+            if (ext === 'pptx') {
+                let rawSlides = args.slides;
+                if (typeof rawSlides === 'string' && rawSlides.trim().startsWith('[')) {
+                    try { rawSlides = JSON.parse(rawSlides); } catch {}
+                }
+                const norm = (Array.isArray(rawSlides) ? rawSlides : []).map(slideOfArg).filter(Boolean);
+                if (!norm.length && !args.title)
+                    throw new Error('create_office_file (.pptx): укажите slides или title');
+                const pptxData = slidesToPptxData(norm, { title: args.title, date: args.title ? new Date().toLocaleDateString('ru-RU') : undefined });
+                const buf = buildPresentationBuffer(pptxData);
+                const real = await writeBinary(args.path, buf, ctx);
+                if (ctx.entry)
+                    ctx.entry.path = real;
+                return savedNote(absPath(args.path, ctx), real) + ': презентация PPTX (' + pptxData.slides.length + ' слайдов, ' + (buf.length / 1024).toFixed(1) + ' КБ)';
+            }
+            if (ext === 'docx') {
+                const bodyHtml = String(args.html || (args.title ? `<h1>${escHtml(args.title)}</h1><p></p>` : '<p></p>'));
+                const buf = buildDocumentBuffer({ html: bodyHtml });
+                const real = await writeBinary(args.path, buf, ctx);
+                if (ctx.entry)
+                    ctx.entry.path = real;
+                return savedNote(absPath(args.path, ctx), real) + ': документ DOCX (' + (buf.length / 1024).toFixed(1) + ' КБ)';
+            }
+            if (ext === 'xlsx' || ext === 'csv') {
+                let rawSheets = args.sheets;
+                if (typeof rawSheets === 'string' && rawSheets.trim().startsWith('[')) {
+                    try { rawSheets = JSON.parse(rawSheets); } catch {}
+                }
+                const sheetsInput = Array.isArray(rawSheets) && rawSheets.length ? rawSheets : [{ name: args.title || 'Лист1', rows: [] }];
+                const converted = sheetsInput.map((sh, idx) => {
+                    if (sh?.cells && typeof sh.cells === 'object')
+                        return sh;
+                    const cells = {};
+                    const rows = Array.isArray(sh?.rows) ? sh.rows : [];
+                    rows.forEach((row, r) => {
+                        if (!Array.isArray(row))
+                            return;
+                        row.forEach((val, c) => {
+                            if (val === undefined || val === null || val === '')
+                                return;
+                            const sVal = String(val);
+                            if (sVal.startsWith('='))
+                                cells[`${r}:${c}`] = { f: sVal.slice(1), v: '', bold: r === 0 };
+                            else
+                                cells[`${r}:${c}`] = { v: val, bold: r === 0 };
+                        });
+                    });
+                    return {
+                        name: sh?.name || `Лист${idx + 1}`,
+                        colWidths: Array.isArray(sh?.colWidths) ? sh.colWidths : [180, 140, 140, 140],
+                        merges: Array.isArray(sh?.merges) ? sh.merges : [],
+                        cells,
+                    };
+                });
+                const buf = buildSpreadsheetBuffer({ sheets: converted }, ext);
+                const real = await writeBinary(args.path, buf, ctx);
+                if (ctx.entry)
+                    ctx.entry.path = real;
+                return savedNote(absPath(args.path, ctx), real) + ': таблица ' + ext.toUpperCase() + ' (' + converted.length + ' лист., ' + (buf.length / 1024).toFixed(1) + ' КБ)';
+            }
+            throw new Error('create_office_file: поддерживаются расширения .xlsx, .docx, .pptx (сейчас .' + ext + ')');
         },
     },
 ];

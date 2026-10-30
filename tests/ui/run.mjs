@@ -111,7 +111,8 @@ for (const file of pages) {
 // --- smoke-экраны: открываются без исключений ---
 const SMOKE = [
     ['проводник', '/~/handlers//explorer/index.html', 'document.querySelector("body *") && document.body.style.visibility !== "hidden"'],
-    ['форма класса BASE', '/BASE/~/handlers//form/index.html', '!!document.querySelector("pages-form")'],
+    ['открытие формы в проводнике (iframe + закладка)', '/~/handlers//explorer/index.html#/ORGANIZATIONS/Маслоторг/sales/~/handlers/pages/form', '(() => { const exp = window.explorer; const ifr = exp?.$$?.("iframe")?.find(f => !f.hidden); const rect = ifr?.getBoundingClientRect?.(); const wf = ifr?.contentWindow?.document?.querySelector?.("pages-form"); return rect && rect.height > 200 && exp?.bookmarks?.length >= 1 && !!wf; })()'],
+    ['форма класса BASE', '/ORGANIZATIONS/Маслоторг/sales/~/handlers//form/index.html', '!!document.querySelector("pages-form")'],
 ].filter(([name]) => name.includes(filter) || !filter || pages.length === 0);
 if (!filter || SMOKE.length) {
     console.log('▶ smoke');

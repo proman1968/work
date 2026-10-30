@@ -668,7 +668,10 @@ export class RTCCaller extends EventTarget {
         this.#videoStream = undefined;
         this.#screenStream = undefined;
     }
-    static audioCtx = new AudioContext();
+    static #audioCtx = null;
+    static get audioCtx() {
+        return this.#audioCtx ??= new AudioContext();
+    }
     static #audioBuffers = Object.create(null);
     static async getAudioBuffer(path) {
         if (this.#audioBuffers[path]) {

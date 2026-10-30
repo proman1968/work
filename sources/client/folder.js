@@ -129,8 +129,10 @@ export class $folder extends $item {
         }
         return this._syncRolePromise ??= (async () => {
             try {
-                const order = syncOrder || await this.roleOrder;
-                const mine = WORK?.DEV_MODE ? order : await this.myRoles;
+                const [order, mine] = await Promise.all([
+                    syncOrder ? Promise.resolve(syncOrder) : this.roleOrder,
+                    WORK?.DEV_MODE ? (syncOrder ? Promise.resolve(syncOrder) : this.roleOrder) : this.myRoles,
+                ]);
                 const next = effectiveRole(mine, order, WORK.preferredRole);
                 if (this.role !== next)
                     this.role = next;

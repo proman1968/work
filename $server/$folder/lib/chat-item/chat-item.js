@@ -315,6 +315,8 @@ ODA({is: 'chat-item',
         if (this.log?.time)
             return Promise.resolve(this.log);
         if (this.history && this._includeFile) {
+            if (this._historyBody)
+                return Promise.resolve(this._historyBody);
             return this.applyHistoryFile().catch(e => {
                 console.warn('[chat-item] history', e);
                 return null;
@@ -411,6 +413,8 @@ ODA({is: 'chat-item',
         get() {
             if (this._includeFile)
                 return this._includeFile;
+            if (this.history || (!this.$item && !this.log?.path))
+                return null;
             return Promise.resolve(this.itemBody).then(async body => {
                 if (!body?.path)
                     return null;
@@ -425,9 +429,14 @@ ODA({is: 'chat-item',
         },
         set($file) {
             const run = async (file) => {
-                this._resetBodyCache();
+                if (file && this._includeFile === file && (this.previewIsReady || this._loadingIncludeFile === file))
+                    return;
+                this._loadingIncludeFile = file;
                 this._includeFile = file;
                 this._historyBody = null;
+                this._resetBodyCache();
+                if (this[R]?.cache)
+                    this[R].cache.$file = file;
                 this.previewIsReady = false;
                 this.senderIsReady = false;
                 this._applySenderFromRef(file);
@@ -439,6 +448,8 @@ ODA({is: 'chat-item',
                     this.previewIsReady = true;
                     this.render();
                 }
+                if (this[R]?.cache && this._includeFile === file)
+                    this[R].cache.$file = file;
             };
             if ($file != null && typeof $file.then === 'function')
                 $file.then(run).catch(() => {});

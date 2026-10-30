@@ -196,6 +196,39 @@ await test('oda-markdown-viewer: md-link с href, preventDefault отменяе�
     el.remove();
 });
 
+await test('~for с null/undefined пропускает пустые элементы без уничтожения списка (W9)', async () => {
+    await ODA({
+        is: 't-for-null',
+        template: `<div id="box"><b ~for="items">{{$for.item}}</b></div>`,
+        items: ['a', null, 'b', undefined, 'c'],
+    });
+    const el = await mount('t-for-null');
+    assert(await until(() => el.$$('#box b').length === 3), 'ожидалось 3 элемента');
+    eq(el.$$('#box b').map(text).join(','), 'a,b,c');
+    el.remove();
+});
+
+await test('$keyBindings и кавычки в текстовой интерполяции работают в компоненте (W4, W7)', async () => {
+    let triggered = 0;
+    await ODA({
+        is: 't-keys-quote',
+        template: `<div id="q">it's {{label}}</div>`,
+        label: 'ready',
+        autoRun: false,
+        $keyBindings: {
+            'ctrl+k'(e) { e.preventDefault(); triggered++; }
+        }
+    });
+    const el = document.createElement('t-keys-quote');
+    el.setAttribute('auto-run', '');
+    document.body.appendChild(el);
+    assert(await until(() => text(el.$('#q')) === "it's ready"), 'кавычка в шаблоне: ' + text(el.$('#q')));
+    eq(el.autoRun, true, 'булев атрибут auto-run применён без $attr');
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true }));
+    eq(triggered, 1, 'сработал ctrl+k');
+    el.remove();
+});
+
 window.__done = true;
 </script>
 </body>

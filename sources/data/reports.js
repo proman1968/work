@@ -991,6 +991,27 @@ export function virtualMembers(db, q = {}) {
     return { cid: schema.cid, label: schema.label, slot, mode, registry: { cid: registry.cid, path: registry.path, label: registry.label }, items };
 }
 
+/** Быстрый подсчёт количества участников виртуального справочника без чтения JSON-тел объектов. */
+export function countVirtualMembers(db, cid) {
+    const { regCids, accounts, slot, mode: srcMode } = virtualSource(db, cid);
+    if (!regCids.length || !accounts.length)
+        return 0;
+    const mode = String(srcMode || 'balance').toLowerCase();
+    const { sql, args } = sideRows({ accounts, by: [slot], conds: [] });
+    const having = mode === 'turnover'
+        ? 'HAVING da <> 0 OR ca <> 0 OR abs(dq) > 1e-9 OR abs(cq) > 1e-9 OR sum(amt) <> 0 OR abs(sum(q)) > 1e-9 OR abs(sum(q2)) > 1e-9'
+        : 'HAVING sum(amt) <> 0 OR abs(sum(q)) > 1e-9 OR abs(sum(q2)) > 1e-9';
+    const r = db.prepare(`SELECT count(*) n FROM (
+        SELECT k0 id,
+            coalesce(sum(CASE WHEN side = 'D' THEN amt ELSE 0 END), 0) da,
+            coalesce(sum(CASE WHEN side = 'C' THEN -amt ELSE 0 END), 0) ca,
+            coalesce(sum(CASE WHEN side = 'D' THEN q ELSE 0 END), 0) dq,
+            coalesce(sum(CASE WHEN side = 'C' THEN -q ELSE 0 END), 0) cq
+        FROM (${sql}) WHERE k0 IS NOT NULL GROUP BY k0 ${having}
+    ) g JOIN objects o ON o.id = g.id WHERE o.status <> 'deleted' AND o.cid IN (${regCids.map(() => '?').join(',')})`).get(...args, ...regCids);
+    return Number(r?.n) || 0;
+}
+
 /** Объект — участник виртуального справочника на момент (`visible` — только по видимым проводкам). */
 export function isVirtualMember(db, cid, id, at, visible = null, modeOverride = null) {
     const { regCids, accounts, slot, mode: srcMode } = virtualSource(db, cid);

@@ -59,10 +59,10 @@ function collectSnapshots(items, out = []) {
         for (const t of it.tools || []) {
             // любой инструмент со снимком — файл создан в WORK
             if (t?.status === 'ok' && t?.snapshot)
-                out.push({ snapshot: t.snapshot, title: t.path ? String(t.path).split('/').pop() : null });
+                out.push({ snapshot: t.snapshot, path: t.path || null, title: t.path ? String(t.path).split('/').pop() : null });
             // вложения, сохранённые через call → save_files (результат — JSON с includes)
             for (const snapshot of callSnapshots(t))
-                out.push({ snapshot, title: snapshotName(snapshot) });
+                out.push({ snapshot, path: null, title: snapshotName(snapshot) });
             if (Array.isArray(t?.items))
                 collectSnapshots(t.items, out);
         }
@@ -342,14 +342,16 @@ export const metaTools = [
             if (action === 'remove')
                 return formatResults(await core.addTaskResult(ctx.task, { snapshot, remove: true }, ctx.session));
             const known = collectSnapshots((await core.getBody(ctx.task)).items);
-            const hit = known.find(s => s.snapshot === snapshot);
+            const hit = known.find(s => s.snapshot === snapshot)
+                || [...known].reverse().find(s => s.path && s.path === snapshot);
             if (!hit)
                 throw new Error('publish: снимок не из этой задачи — передай snapshot из результата записи (write/append/edit/sandbox_export) или includes результата call → save_files, а не живой путь файла');
-            const item = await getItem(snapshot, ctx).catch(() => null);
+            const effectiveSnapshot = hit.snapshot;
+            const item = await getItem(effectiveSnapshot, ctx).catch(() => null);
             if (!item || Array.isArray(item))
-                throw new Error('publish: снимок не найден: ' + snapshot);
+                throw new Error('publish: снимок не найден: ' + effectiveSnapshot);
             const results = await core.addTaskResult(ctx.task,
-                { snapshot, title: args?.title || hit.title }, ctx.session);
+                { snapshot: effectiveSnapshot, title: args?.title || hit.title }, ctx.session);
             return 'опубликовано (' + results.length + '):\n' + formatResults(results);
         },
     },

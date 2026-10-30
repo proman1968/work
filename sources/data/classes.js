@@ -55,8 +55,13 @@ export function plainData(value, depth = 0) {
 }
 
 const ownFileCache = new Map();
+const rootScanCache = new Map();
 
-/** Собственный слой class.js как данные (импорт модуля с учётом времени изменения файла). */
+export function clearScanCache() {
+    rootScanCache.clear();
+}
+
+/** Собственный слой class.js как данные (быстрый разбор литерала с фолбэком на ESM-импорт). */
 async function readOwn(file) {
     let stat;
     try {
@@ -71,8 +76,23 @@ async function readOwn(file) {
     const cached = ownFileCache.get(file);
     if (cached && cached.mtime === mtime)
         return cached.data;
-    const mod = await import(pathToFileURL(file).href + '?mtime=' + mtime);
-    const data = plainData(mod.default ?? {}) || {};
+    let rawMod;
+    try {
+        const src = await fsp.readFile(file, 'utf-8');
+        const trimmed = src.replace(/^\uFEFF/, '').trim();
+        if (trimmed.startsWith('export default') && !/\bimport\b/.test(trimmed)) {
+            const expr = trimmed.replace(/^export\s+default\s+/, '').replace(/;\s*$/, '');
+            rawMod = new Function(`"use strict"; return (${expr});`)();
+        }
+    }
+    catch {
+        rawMod = undefined;
+    }
+    if (rawMod === undefined) {
+        const mod = await import(pathToFileURL(file).href + '?mtime=' + mtime);
+        rawMod = mod.default ?? {};
+    }
+    const data = plainData(rawMod ?? {}) || {};
     ownFileCache.set(file, { mtime, data });
     return data;
 }
@@ -88,7 +108,7 @@ export async function scanClasses(rootDir, roots = DEFAULT_ROOTS) {
     const classes = [];
     const problems = [];
 
-    async function visit(rel) {
+    async function visit(rel, probList = problems) {
         let entries;
         try {
             entries = await fsp.readdir(path.join(rootDir, rel), { withFileTypes: true });
@@ -106,19 +126,19 @@ export async function scanClasses(rootDir, roots = DEFAULT_ROOTS) {
             const type = ranked[0];
             const clsPath = '/' + rel.split(path.sep).join('/');
             if (metas.length > 1)
-                problems.push(`${clsPath}: несколько метапапок (${metas.join(', ')}), выбран ${type}`);
+                probList.push(`${clsPath}: несколько метапапок (${metas.join(', ')}), выбран ${type}`);
             let own = {};
             try {
                 own = await readOwn(path.join(rootDir, rel, type, 'class.js'));
             }
             catch (e) {
-                problems.push(`${clsPath}: class.js не загружен — ${e.message}`);
+                probList.push(`${clsPath}: class.js не загружен — ${e.message}`);
             }
             const label = typeof own.label === 'string' && own.label ? own.label : path.basename(rel);
             selfItem = { cid: clsPath, path: clsPath, type, label, own };
         }
         const childDirs = dirs.filter(name => !name.startsWith('$') && !name.startsWith('.') && !name.startsWith('#') && !SKIP.has(name));
-        const subLists = await Promise.all(childDirs.map(name => visit(path.join(rel, name))));
+        const subLists = await Promise.all(childDirs.map(name => visit(path.join(rel, name), probList)));
         const out = selfItem ? [selfItem] : [];
         for (const sub of subLists) {
             if (sub?.length)
@@ -127,7 +147,32 @@ export async function scanClasses(rootDir, roots = DEFAULT_ROOTS) {
         return out;
     }
 
-    const rootLists = await Promise.all(roots.map(root => visit(root)));
+    const now = Date.now();
+    const absRoot = path.resolve(rootDir);
+    const isMainRepo = absRoot === path.resolve(process.cwd());
+    const rootLists = await Promise.all(roots.map(async root => {
+        const cacheKey = `${absRoot}::${root}`;
+        if (isMainRepo && root === 'MODULES') {
+            const hit = rootScanCache.get(cacheKey);
+            if (hit && now - hit.ts < 5000) {
+                const res = await hit.promise;
+                if (res.problems.length)
+                    problems.push(...res.problems);
+                return res.items;
+            }
+            const promise = (async () => {
+                const localProblems = [];
+                const items = await visit(root, localProblems);
+                return { items: items || [], problems: localProblems };
+            })();
+            rootScanCache.set(cacheKey, { ts: now, promise });
+            const res = await promise;
+            if (res.problems.length)
+                problems.push(...res.problems);
+            return res.items;
+        }
+        return visit(root, problems);
+    }));
     for (const list of rootLists) {
         if (list?.length)
             classes.push(...list);

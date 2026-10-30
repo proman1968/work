@@ -50,8 +50,7 @@
 | удалены как нерабочие и без потребителей | `jspreadsheet-editor`, `barcode-scanner`, `layout-designer`, `scheme-layout` (+ `ruler-grid`), `layouts/form`, `radio-button`, `tools/icons/icons.js`, `tools/playground`, `tree-*-editor` |
 
 Известные ограничения:
-- 🔧 `oda-table` пишет служебные поля (`level`, `expanded`, `checked`) в строки данных; агрегаты подвала не считаются.
-- 🔧 `oda-tree` сохраняет собственные колонки (дубль возможностей таблицы).
+- 🔧 `oda-tree` пишет `expanded` в строки данных и сохраняет собственные колонки (дубль возможностей `oda-table`; в `oda-table` служебные поля уже вынесены в обёртку `ViewRow`).
 - 🔧 Системные страницы редактора класса (`handlers/pages/form/editor`) работают через прежний `item-editor-form` (формат данных `DataAccessNode`).
 
 ## 6. Дальнейшие планы

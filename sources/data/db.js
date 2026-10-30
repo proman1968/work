@@ -175,6 +175,11 @@ export const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS logs_stub_path     ON logs(stub_path);
     CREATE INDEX IF NOT EXISTS logs_path          ON logs(path);
     `,
+    // 4 — покрывающие индексы для мгновенного подсчёта объектов и проводок по классам (getDbSummary)
+    `
+    CREATE INDEX IF NOT EXISTS objects_cid_status_ext     ON objects(cid, status, ext_of);
+    CREATE INDEX IF NOT EXISTS account_entries_acc_storno ON account_entries(account_cid, storno);
+    `,
 ];
 
 /** Применить недостающие миграции. @returns {number} версия схемы после миграции */

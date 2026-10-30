@@ -570,9 +570,8 @@ ODA({is: 'work-form',
             const ext = $item?.ext;
             for (const v of views) {
                 v.$context = $item;
-                if (v.id === 'file' && ext) {
-                    v.icon = 'files-color:s-' + ext;
-                    v.label = ext.toUpperCase();
+                if (v.id === 'file' && ext && v.DATA) {
+                    v.DATA.icon = 'files-color:s-' + ext;
                 }
             }
             return views;
@@ -584,7 +583,9 @@ ODA({is: 'work-form',
     async resolveView(name, targetItem = this.currentItem) {
         const $item = targetItem || this.currentItem;
         const role = $item?.role || this.activeRole;
-        const views = $item === this.currentItem ? await this.formViews : await this.loadFormViews($item, role);
+        let views = $item === this.currentItem ? await this.formViews : await this.loadFormViews($item, role);
+        if ((!Array.isArray(views) || !views.length) && $item && role)
+            views = await this.loadFormViews($item, role);
         if (name) {
             const inList = (views || []).find(v => v.id === name);
             if (inList)
@@ -601,27 +602,50 @@ ODA({is: 'work-form',
         $def: null,
         async set(n) {
             if (n) {
-                // Если уже открыта дочерняя вкладка и родительский биндинг повторно передаёт корневой $item — не сбрасываем активную вкладку
-                if (this._rootItem && this._rootItem === n && this.formTabs?.length > 0)
+                // Если уже открыта дочерняя вкладка или идёт первичная инициализация того же $item — не перезапускаем
+                if (this._rootItem && this._rootItem === n && (this._initializingItem || this.formTabs?.length > 0))
                     return;
                 this._rootItem = n;
                 this.activeItem = n;
-                const $class = await n.$class;
-                this._savePath = ($class?.short || n.short) + '/' + this.localName + (this.$saveKey ? '[' + this.$saveKey + ']' : '');
-
-                await n.ensureRole?.();
+                this._initializingItem = true;
+                try {
+                    await n.ensureRole?.();
+                    this._appliedRoleItem = n;
+                    this._appliedRole = n.role || '';
+                }
+                finally {
+                    this._initializingItem = false;
+                }
+                this._applyRoleColor(n, this._appliedRole);
                 const nav = this._takeNav(n.short || n.path);
                 if (nav) {
                     if (nav.view === 'objects' && nav.id)
                         nav.view = 'object';
                     this._pendingNav = nav;
                 }
-                const view_name = nav?.view || this.host.default_view || n?.form || this.host.view_name;
-                this.view = await this.resolveView(view_name, n);
+                const view_name = nav?.view || this.host?.default_view || n?.form || this.host?.view_name;
+                const resolvedView = await this.resolveView(view_name, n);
+                if (this.view === resolvedView)
+                    await this._mountActiveView(resolvedView);
+                else
+                    this.view = resolvedView;
             }
         }
     },
+    _initializingItem: false,
     _rootItem: null,
+    _appliedRoleItem: null,
+    _appliedRole: '',
+    view_control: null,
+    async _applyRoleColor(item, role) {
+        if (!item || !role)
+            return;
+        try {
+            const declared = await item.fetch('declared_roles');
+            const color = declared?.[role]?.color || 'indigo';
+            document.documentElement?.style?.setProperty('--main-color', color);
+        } catch { /* цвет по умолчанию */ }
+    },
     _mountSeq: 0,
     formTabs: [],
     activeTabKey: '',
@@ -739,17 +763,18 @@ ODA({is: 'work-form',
     },
     $observers: {
         // смена роли (из формы, меню или другого окна): цвет страницы,
-        // сброс кэша класса, пересоздание представлений и перепроверка вида
+        // пересоздание представлений и перепроверка вида
         async _roleChanged(itemRole) {
-            if (!this.$item || !itemRole)
+            if (this._initializingItem)
                 return;
-            try {
-                const declared = await this.$item.fetch('declared_roles');
-                const color = declared?.[itemRole]?.color || 'indigo';
-                document.documentElement?.style?.setProperty('--main-color', color);
-            } catch { /* цвет по умолчанию */ }
-            // Сброс кэша класса для актуализации данных по новой роли
-            this.$item.reset?.();
+            const cur = this.currentItem;
+            if (!cur || !itemRole)
+                return;
+            if (this._appliedRoleItem === cur && this._appliedRole === itemRole)
+                return;
+            this._appliedRoleItem = cur;
+            this._appliedRole = itemRole;
+            this._applyRoleColor(cur, itemRole);
             // Сброс кэша представлений — каждое пересоздаётся заново,
             // чтобы перезагрузить логи и данные по новой роли
             for (const id in this.controls) {
@@ -829,7 +854,8 @@ ODA({is: 'work-form',
         e?.stopPropagation?.();
         e?.preventDefault?.();
         if (this.view?.id === handler.id) return;
-        this.host.view_name = handler.id;
+        if (this.host)
+            this.host.view_name = handler.id;
         this.view = handler;
     },
     _viewIconOf(viewHandler, $item) {
@@ -1181,12 +1207,16 @@ ODA({is: 'work-form',
         this.topMainToolItems = [];
         this.topFocusedToolItems = [];
         this.view_control = el;
+        if (el[R]?.states)
+            el[R].states.sleep = false;
+        el.render?.(true);
         if (n.allowTools !== false && n.DATA?.allowTools !== false)
             el.mountToolbarSlots?.(this);
         this._checkToolbarSlots();
         this.syncFromView(el);
         this._wakeBars();
-        this.host.view_name = n.id;
+        if (this.host)
+            this.host.view_name = n.id;
         if (nav && this._pendingNav === nav && el._attachedDone && typeof el?.applyNav === 'function') {
             this._pendingNav = null;
             Promise.resolve(el.applyNav(nav)).catch(err => console.error(err));
@@ -1198,6 +1228,9 @@ ODA({is: 'work-form',
                 const ctx = this.buildConsultantContext();
                 cons.activeFormContext = ctx;
                 cons.activeFormSummary = ctx;
+            }
+            if (exp && typeof exp.syncTreeToPath === 'function' && curItem) {
+                exp.syncTreeToPath(curItem.short || curItem.path || '');
             }
         } catch { /* ignore */ }
     },

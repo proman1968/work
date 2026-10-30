@@ -147,7 +147,8 @@ ODA({is: 'oda-icon',
     },
     _onLoad(e) {
         this.bb = undefined;
-        if ((!this.bb || !this.bb.height || !this.bb.width) && !this[R].states.sleep) {
+        const bb = this.bb;
+        if ((!bb || !bb.height || !bb.width) && !this[R].states.sleep) {
             this._icon.error = e;
             this._index += 1;
         }
@@ -187,13 +188,14 @@ ODA({is: 'oda-icon',
         }
     },
     get bb2str(){
-        if (!this.bb || !this.bb.height || !this.bb.width) {
+        const bb = this.bb;
+        if (!bb || !bb.height || !bb.width) {
             return;
         }
         if (this._icon.lib === '@'){
-            return `${this.bb.x} ${this.bb.y} ${this.bb.width} ${this.bb.height}`;
+            return `${bb.x} ${bb.y} ${bb.width} ${bb.height}`;
         }
-        const max = Math.max((this.bb.x || 0) * 2 + (this.bb.width || 0), (this.bb.y || 0) * 2 + (this.bb.height || 0));
+        const max = Math.max((bb.x || 0) * 2 + (bb.width || 0), (bb.y || 0) * 2 + (bb.height || 0));
         return `0 0 ${max} ${max}`;
     },
     get bb() {

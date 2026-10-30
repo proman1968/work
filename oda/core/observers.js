@@ -6,7 +6,7 @@
 export function initObservers() {
     ODA.resizeObserver = new ResizeObserver(entries => {
         for (const entry of entries) {
-            entry.target.fire('resize');
+            entry.target.fire('resize', undefined, { bubbles: false, composed: false });
         }
     })
 
@@ -15,15 +15,17 @@ export function initObservers() {
         for (let i = 0, entry, l = entries.length; i < l; i++) {
             entry = entries[i];
             if (!entry.target.isConnected) continue;
-            entry.target[R].states.sleep = !entry.isIntersecting;
-            if (!entry.target[R].states.sleep) {
-                wake ??= [];
-                wake.add(entry.target)
+            const states = entry.target[R].states;
+            const wasSleeping = states.sleep === true;
+            states.sleep = !entry.isIntersecting;
+            if (wasSleeping && entry.isIntersecting) {
+                wake ??= new Set();
+                wake.add(entry.target);
             }
         }
         if (!wake) return;
         for (let t of wake) {
-            t.fire('wake');
+            t.fire('wake', undefined, { bubbles: false, composed: false });
             t.render?.(true);
         }
 

@@ -262,36 +262,68 @@ export default {
         if (!formHost || typeof document === 'undefined')
             return;
         const container = formHost.$?.('.toolbar-zone.right') || formHost;
+        let searchWrap = container.querySelector?.('[data-objects-search-wrap]');
         let searchInput = container.querySelector?.('input[data-objects-search]');
-        if (!searchInput) {
+        if (!searchWrap) {
+            searchWrap = document.createElement('div');
+            searchWrap.setAttribute('slot', 'tool-right');
+            searchWrap.setAttribute('data-toolbar-widget', '1');
+            searchWrap.setAttribute('data-objects-search-wrap', '1');
+            searchWrap.style.cssText = 'display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--border-color); border-radius: 3px; background: var(--content-background); padding: 0 2px 0 6px; min-height: 24px; box-sizing: border-box;';
+
             searchInput = document.createElement('input');
-            searchInput.setAttribute('slot', 'tool-right');
-            searchInput.setAttribute('data-toolbar-widget', '1');
             searchInput.setAttribute('data-objects-search', '1');
             searchInput.type = 'search';
-            searchInput.placeholder = 'Поиск…';
-            searchInput.style.cssText = 'width: 210px; min-height: 24px; padding: 2px 8px; font-size: 12.5px; border: 1px solid var(--border-color); border-radius: 3px; background: var(--content-background); color: var(--content-color); outline: none;';
+            searchInput.placeholder = 'Поиск по объектам…';
+            searchInput.title = 'Серверный поиск по всему содержимому объектов (Enter или кнопка поиска)';
+            searchInput.style.cssText = 'width: 195px; min-height: 22px; padding: 1px 4px; font-size: 12.5px; border: none; background: transparent; color: var(--content-color); outline: none;';
+
+            const searchBtn = document.createElement('button');
+            searchBtn.type = 'button';
+            searchBtn.title = 'Найти на сервере во всём содержимом объектов';
+            searchBtn.textContent = '🔍';
+            searchBtn.style.cssText = 'border: none; background: transparent; color: var(--accent-color); cursor: pointer; font-size: 12px; padding: 1px 5px; border-radius: 2px; line-height: 1;';
+
             let searchTimer = null;
-            const runNow = () => {
+            const runNow = (force = false) => {
                 if (searchTimer) {
                     clearTimeout(searchTimer);
                     searchTimer = null;
                 }
-                const owner = searchInput._ownerView || this;
-                if (String(searchInput.value ?? '').trim() !== String(owner.searchQuery ?? '').trim())
-                    owner.onSearch(searchInput.value);
+                const owner = searchWrap._ownerView || this;
+                const val = String(searchInput.value ?? '').trim();
+                if (force || val !== String(owner.searchQuery ?? '').trim())
+                    owner.onSearch(val);
             };
             searchInput.addEventListener('input', () => {
                 if (searchTimer)
                     clearTimeout(searchTimer);
-                searchTimer = setTimeout(runNow, 180);
+                searchTimer = setTimeout(() => runNow(false), 260);
             });
-            searchInput.addEventListener('change', runNow);
-            searchInput.addEventListener('search', runNow);
-            container.appendChild(searchInput);
+            searchInput.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    runNow(true);
+                }
+                else if (ev.key === 'Escape' && searchInput.value) {
+                    ev.preventDefault();
+                    searchInput.value = '';
+                    runNow(true);
+                }
+            });
+            searchInput.addEventListener('change', () => runNow(false));
+            searchInput.addEventListener('search', () => runNow(true));
+            searchBtn.addEventListener('click', () => runNow(true));
+
+            searchWrap.appendChild(searchInput);
+            searchWrap.appendChild(searchBtn);
+            container.appendChild(searchWrap);
         }
-        searchInput._ownerView = this;
-        searchInput.value = this.searchQuery || '';
+        searchWrap._ownerView = this;
+        if (searchInput) {
+            searchInput._ownerView = this;
+            searchInput.value = this.searchQuery || '';
+        }
         formHost._checkToolbarSlots?.();
     },
     getItemButtons() {

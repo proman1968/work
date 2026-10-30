@@ -98,6 +98,31 @@ function runObservers(el) {
     }
 }
 
+function initKeyBindings(el) {
+    const keyBindings = el.$keyBindings || el.$keys;
+    if (!keyBindings || typeof keyBindings !== 'object' || el.__keyBindingsHandler__)
+        return;
+    el.__keyBindingsHandler__ = (e) => {
+        const key = (e.key || '').toLowerCase();
+        if (!key) return;
+        const parts = [];
+        if (e.ctrlKey || e.metaKey) parts.push('ctrl');
+        if (e.altKey) parts.push('alt');
+        if (e.shiftKey && key.length > 1 && key !== 'shift') parts.push('shift');
+        if (!['control', 'meta', 'alt', 'shift'].includes(key)) parts.push(key);
+        const combo = parts.join('+');
+        for (const k of Object.keys(keyBindings)) {
+            const norm = k.toLowerCase().split('+').map(s => s.trim()).filter(Boolean).join('+');
+            if (norm === combo || norm === key) {
+                const fn = typeof keyBindings[k] === 'string' ? el[keyBindings[k]] : keyBindings[k];
+                fn?.call(el, e);
+                break;
+            }
+        }
+    };
+    el.addEventListener('keydown', el.__keyBindingsHandler__);
+}
+
 export function registerODA() {
     globalThis.ODA = async function ODA(prototype = {}) {
         return ODA.telemetry[prototype.is] ??= (async () => {
@@ -107,7 +132,7 @@ export function registerODA() {
                 if (imports) {
                     if (typeof imports === 'string')
                         imports = imports.split(',');
-                    imports = prototype.imports = imports.map(i => i.trim().toLowerCase());
+                    imports = prototype.imports = imports.filter(i => typeof i === 'string').map(i => i.trim().toLowerCase()).filter(Boolean);
                     imports = imports.map(async i => {
                         if (!i.endsWith('.js'))
                             i += '.js';
@@ -132,11 +157,13 @@ export function registerODA() {
                     if (typeof exts === 'string')
                         exts = exts.split(',');
 
-                    exts = prototype.extends = exts.map(i => i.trim()).map(i => {
+                    const extNames = exts.filter(i => typeof i === 'string').map(i => i.trim()).filter(Boolean);
+                    prototype.extends = extNames;
+                    exts = extNames.map(i => {
                         if (i === 'this')
                             return prototype;
                         return ODA.telemetry[i];
-                    });
+                    }).filter(Boolean);
 
                     exts = await Promise.all(exts);
                     exts.add(prototype);
@@ -216,6 +243,7 @@ export function registerODA() {
                                 if (this.$listeners.resize)
                                     ODA.resizeObserver.observe(this);
                             }
+                            initKeyBindings(this);
 
                             const fields = Object.getOwnPropertyDescriptors(this);
                             for (let field in fields) {
@@ -262,6 +290,7 @@ export function registerODA() {
                         this.detached?.();
                         if (this.$listeners?.resize)
                             ODA.resizeObserver.unobserve?.(this);
+                        ODA.intersectionObserver?.unobserve?.(this);
                         Reactor.cleanupDeps(this);
                     }
                     static get observedAttributes() {

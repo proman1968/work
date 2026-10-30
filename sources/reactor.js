@@ -103,9 +103,15 @@ if (!('fire' in EventTarget.prototype)) {
             enumerable: true,
             writable: false,
             value: function (event, handler, props = { target: this, once: false, useCapture: false }) {
-                if (typeof handler === 'string')
-                    handler = this[handler]?.bind(this);
-                (props.target || this).addEventListener?.(event, handler, props);
+                if (typeof handler === 'string') {
+                    const name = handler;
+                    const fn = this[name];
+                    if (typeof fn !== 'function') return;
+                    const map = this.__boundHandlers__ ??= Object.create(null);
+                    handler = map[name] ??= fn.bind(this);
+                }
+                if (typeof handler === 'function')
+                    (props.target || this).addEventListener?.(event, handler, props);
             }
         },
         unlisten: {
@@ -114,8 +120,9 @@ if (!('fire' in EventTarget.prototype)) {
             writable: false,
             value: function (event, handler, props = { target: this, once: false, useCapture: false }) {
                 if (typeof handler === 'string')
-                    handler = this[handler]?.bind(this);
-                (props.target || this).removeEventListener?.(event, handler, props);
+                    handler = this.__boundHandlers__?.[handler] ?? this[handler]?.bind(this);
+                if (typeof handler === 'function')
+                    (props.target || this).removeEventListener?.(event, handler, props);
             }
         },
         fire: {
@@ -315,8 +322,8 @@ export class Reactor extends EventTarget {
 
     static activate(target, host) {
         if (target?.[R]?.active) {
-            if (host)
-                target[R].hosts.add(host);
+            if (host && !(target instanceof Reactor) && !target[R].hosts.includes(host))
+                target[R].hosts.push(host);
             return target[R].proxy;
         }
 
@@ -352,7 +359,7 @@ export class Reactor extends EventTarget {
             value: context
         });
 
-        if (host) {
+        if (host && !(target instanceof Reactor)) {
             context.hosts.push(host);
         }
 
@@ -443,6 +450,8 @@ export class Reactor extends EventTarget {
             return false;
         actor.detached = false;
         for (const value of Object.values(actor.cache)) {
+            if (value instanceof Reactor)
+                continue;
             const hosts = value?.[R]?.hosts;
             if (hosts && !hosts.includes(target))
                 hosts.push(target);
@@ -484,11 +493,16 @@ export class Reactor extends EventTarget {
         }
     }
 
-    static _notifyTarget(target) {
+    static _notifyTarget(target, prop, value) {
         if (!target)
             return;
-        if (typeof target.notify === 'function')
-            target.notify();
+        const raw = target[R]?.target || target;
+        if ('notify' in raw && typeof raw.notify === 'function') {
+            if (prop !== undefined)
+                raw.notify(prop, value);
+            else
+                raw.notify();
+        }
     }
 
     static reset_deps = function (target, key = '', keep_notify = false) {
@@ -589,8 +603,7 @@ export class Reactor extends EventTarget {
                         res = getTypeConverter(prop?.$type)(res);
                         res = actor.cache[key] = Reactor.activate(res, target);
                         Reactor.reset_deps(target, key);
-                        if (typeof target.notify === 'function')
-                            target.notify(prop, res);
+                        Reactor._notifyTarget(target, prop, res);
                     }).catch(err => {
                         // При ошибке очищаем кэш без уведомления — избегаем цикла повторных вызовов
                         if (actor.cache[key] === pending) {
@@ -598,13 +611,14 @@ export class Reactor extends EventTarget {
                             console.warn(`Асинхронный геттер '${key}' отклонён:`, err);
                         }
                     });
+                    value = actor.cache[key] = Reactor.activate(value, target);
                 }
-                else
+                else {
                     value = getTypeConverter(prop?.$type)(value);
-                value = actor.cache[key] = Reactor.activate(value, target);
-                Reactor.reset_deps(target, key);
-                if (typeof target.notify === 'function')
-                    target.notify(prop, value);
+                    value = actor.cache[key] = Reactor.activate(value, target);
+                    Reactor.reset_deps(target, key);
+                    Reactor._notifyTarget(target, prop, value);
+                }
             }
 
         }
@@ -615,19 +629,40 @@ export class Reactor extends EventTarget {
         const actor = target[R];
         const old = actor.cache[key];
         if (!Reactor.equal(old, value)) {
-            const prop = actor.props[key];
-            if (value !== undefined) {
-                value = getTypeConverter(prop?.$type)(value);
+            const beforeTarget = Reactor._collectorTarget;
+            const beforeKey = Reactor._collectorKey;
+            if (beforeTarget && beforeKey && actor.deps[key]) {
+                const selfSet = actor.deps[key].get(beforeTarget);
+                if (selfSet) {
+                    selfSet.delete(beforeKey);
+                    if (!selfSet.size)
+                        actor.deps[key].delete(beforeTarget);
+                }
             }
-            value = Reactor.activate(value, target);
-            value = actor.cache[key] = value;
-            if (prop?.set?.setter)
-                prop?.set?.setter?.call(target, value, old);
-            else
-                Reflect.set(target, key, value)
-            Reactor.reset_deps(target, key);
-            if (typeof target.notify === 'function')
-                target.notify(prop, value);
+            Reactor._collectorTarget = null;
+            Reactor._collectorKey = null;
+            try {
+                const prop = actor.props[key];
+                if (value !== undefined) {
+                    value = getTypeConverter(prop?.$type)(value);
+                }
+                value = Reactor.activate(value, target);
+                value = actor.cache[key] = value;
+                if (prop?.set?.setter) {
+                    prop?.set?.setter?.call(target, value, old);
+                    if (actor.cache[key] === undefined && value !== undefined)
+                        actor.cache[key] = value;
+                }
+                else
+                    Reflect.set(target, key, value)
+                Reactor.reset_deps(target, key);
+                if (beforeTarget !== target || actor.deps[key]?.size)
+                    Reactor._notifyTarget(target, prop, value);
+            }
+            finally {
+                Reactor._collectorTarget = beforeTarget;
+                Reactor._collectorKey = beforeKey;
+            }
         }
         return true;
     }

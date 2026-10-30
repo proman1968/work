@@ -38,18 +38,20 @@ export const DIRECTIVES = {
 
         const prevFor = this.$for;
         const childs = this.childNodes;
-        const itemsLen = items.length;
+        const validItems = [];
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item !== undefined && item !== null)
+                validItems.push({ item, index: i });
+        }
+        const itemsLen = validItems.length;
         const currentLen = childs.length;
 
         // Обновляем существующие или создаём новые
-        for (let i = 0; i < itemsLen; i++) {
-            const item = items[i];
-            if (item === undefined || item === null) {
-                while (this.firstChild) this.removeChild(this.firstChild);
-                return;
-            }
+        for (let pos = 0; pos < itemsLen; pos++) {
+            const { item, index: i } = validItems[pos];
 
-            let el = childs[i];
+            let el = childs[pos];
             if (!el) {
                 el = this.__vnode__.isComment ? this.__vnode__.createElement('#comment') : this.__vnode__.createElement();
                 this.appendChild(el);
@@ -63,7 +65,7 @@ export const DIRECTIVES = {
                 }
             }
 
-            const $for = { item, index: i, items /* , key: item.key ?? i*/ };
+            const $for = { item, index: i, items };
             if (!Reactor.equal(target.$for, $for, 2)) {
                 target.$for = $for;
             }

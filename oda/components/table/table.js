@@ -341,6 +341,12 @@ ODA({
                 this.columnSizing = parsed.sizing;
             if (parsed?.view && typeof parsed.view === 'object' && Object.keys(parsed.view).length)
                 this.columnView = parsed.view;
+            if (typeof parsed?.showGroupPanel === 'boolean')
+                this.showGroupPanel = parsed.showGroupPanel;
+            if (typeof parsed?.showAutoFilterRow === 'boolean')
+                this.showAutoFilterRow = parsed.showAutoFilterRow;
+            if (typeof parsed?.showSearchPanel === 'boolean')
+                this.showSearchPanel = parsed.showSearchPanel;
         }
         catch {}
     },
@@ -352,6 +358,9 @@ ODA({
             localStorage.setItem(sk, JSON.stringify({
                 sizing: this.columnSizing || {},
                 view: this.columnView || {},
+                showGroupPanel: Boolean(this.showGroupPanel),
+                showAutoFilterRow: Boolean(this.showAutoFilterRow),
+                showSearchPanel: Boolean(this.showSearchPanel),
             }));
         }
         catch {}

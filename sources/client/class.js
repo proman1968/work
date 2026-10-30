@@ -1,6 +1,9 @@
 import { $folder } from './folder.js';
 
 export class $class extends $folder{
+    get $class(){
+        return this;
+    }
     get $public(){
         return {
             icon:{

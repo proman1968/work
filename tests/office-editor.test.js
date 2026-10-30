@@ -238,4 +238,22 @@ describe('локальный офисный пакет WORK (xlsx / docx / pptx 
             await fsp.rm(tmp, { recursive: true, force: true }).catch(() => {});
         }
     });
+
+    it('инструменты агента: slidesToPptxData, export_presentation (с парсингом JSON-строки slides и поддержкой .pptx) и create_office_file', async () => {
+        const { slidesToPptxData, docTools } = await import('../sources/modules/agent/tools/docs.js');
+        const exportPres = docTools.find(t => t.name === 'export_presentation');
+        const createOffice = docTools.find(t => t.name === 'create_office_file');
+        assert.ok(exportPres, 'export_presentation зарегистрирован');
+        assert.ok(createOffice, 'create_office_file зарегистрирован');
+
+        const pptxData = slidesToPptxData([
+            { title: 'Кто я', bullets: ['ИИ-агент WORK', 'Работаю внутри класса'], paras: [] },
+        ], { title: 'ИИ-агент WORK', date: '30.10.2026' });
+        assert.equal(pptxData.slides.length, 2, 'титульный слайд + слайд контента');
+        const pptxBuf = buildPresentationBuffer(pptxData);
+        const parsedPptx = parsePresentation(pptxBuf, 'pptx');
+        assert.equal(parsedPptx.slides.length, 2);
+        assert.equal(parsedPptx.slides[0].title, 'ИИ-агент WORK');
+        assert.equal(parsedPptx.slides[1].title, 'Кто я');
+    });
 });

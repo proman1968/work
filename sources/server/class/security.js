@@ -8,9 +8,73 @@ import * as POLICY from '../access/policy.js';
 import * as REFS from '../access/refs.js';
 import * as LINKS from '../access/links.js';
 import * as WORKPLACES from '../access/workplaces.js';
-import { classObjectCount } from '../../data/api.js';
+import { classObjectCount, dataStore, resolveBasePath } from '../../data/api.js';
+import { getClass } from '../../data/classes.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
+
+const DEFAULT_LINK_ICONS = {
+    $catalog: 'carbon:catalog',
+    $virtual: 'carbon:filter',
+    $operation: 'carbon:task-complete',
+    $account: 'carbon:data-base',
+    $register: 'lineawesome:journal-whills-solid',
+    $struct: 'carbon:data-structured',
+    $module: 'odant:module',
+    $domain: 'odant:domain',
+};
+
+async function fastLinkNodeMeta(pathStr, item) {
+    if (item && item[R]?.cache?.init && item[R]?.__data__ && Object.keys(item[R].__data__).length) {
+        return {
+            label: item.DATA?.label || item.name || item.id || pathStr,
+            icon: item.DATA?.icon || DEFAULT_LINK_ICONS[item.type] || '',
+            type: item.type || '',
+        };
+    }
+    const basePath = resolveBasePath(pathStr);
+    if (basePath || String(pathStr).startsWith('/MODULES/')) {
+        try {
+            const db = await dataStore(basePath);
+            const cls = getClass(db, pathStr);
+            const modMatch = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+\/.+)$/.exec(pathStr);
+            const peerCls = modMatch ? getClass(db, '/MODULES/' + modMatch[1]) : null;
+            if (cls || peerCls) {
+                const own = cls?.own || {};
+                const peerOwn = peerCls?.own || {};
+                const type = item?.type || cls?.type || peerCls?.type || '';
+                const label = own.label || peerOwn.label || cls?.label || peerCls?.label || item?.name || pathStr.split('/').pop();
+                let icon = own.icon || peerOwn.icon || '';
+                if (!icon && peerCls) {
+                    for (let p = peerCls.parent; p; ) {
+                        const anc = getClass(db, p);
+                        if (anc?.own?.icon && anc.type === type) {
+                            icon = anc.own.icon;
+                            break;
+                        }
+                        p = anc?.parent;
+                    }
+                }
+                icon ||= DEFAULT_LINK_ICONS[type] || '';
+                return { label, icon, type };
+            }
+        }
+        catch { /* fallback to item.init */ }
+    }
+    if (!item) {
+        item = await globalThis.WORK.get_item(pathStr);
+        if (Array.isArray(item))
+            item = item.at(-1);
+    }
+    if (!item)
+        return null;
+    await item.init;
+    return {
+        label: item.DATA?.label || item.name || pathStr,
+        icon: item.DATA?.icon || DEFAULT_LINK_ICONS[item.type] || '',
+        type: item.type || '',
+    };
+}
 
 /** Кэш нормализованных ROLES по объекту DATA (DATA пересобирается при reset/init). */
 const declaredRolesCache = new WeakMap();
@@ -281,16 +345,16 @@ export const classSecurityMethods = {
 
         for (const n of byPath.values()) {
             try {
-                let t = resolvedItems.get(n.path) || await globalThis.WORK.get_item(n.path);
+                let t = resolvedItems.get(n.path);
                 if (Array.isArray(t))
                     t = t.at(-1);
-                if (!t)
-                    continue;
-                await t.init;
-                n.label = t.DATA?.label || t.name || n.label;
-                n.icon = t.DATA?.icon || '';
-                n.type = t.type || '';
-                const cnt = t.DATA?.objectCount ?? await classObjectCount(n.path, n.type);
+                const meta = await fastLinkNodeMeta(n.path, t);
+                if (meta) {
+                    n.label = meta.label || n.label;
+                    n.icon = meta.icon || '';
+                    n.type = meta.type || '';
+                }
+                const cnt = await classObjectCount(n.path, n.type);
                 if (cnt > 0)
                     n.objectCount = cnt;
             }
@@ -311,6 +375,10 @@ export const classSecurityMethods = {
         await this.init;
         const uid = this.constructor.resolveUid(params);
         const roles = await this.roles(params).catch(() => []);
+        const cacheKey = `_places:${uid || ''}:${roles.join(',')}`;
+        if (this[R]?.cache?.[cacheKey])
+            return this[R].cache[cacheKey];
+        const promise = (async () => {
         const sec = this.DATA?.['#security'];
         const { common, places } = WORKPLACES.normalizeSecurity(sec);
         const mine = new Set(WORKPLACES.memberTrailKeys(sec, uid));
@@ -320,13 +388,7 @@ export const classSecurityMethods = {
             if (!seen.has(id)) {
                 seen.set(id, (async () => {
                     try {
-                        let t = await globalThis.WORK.get_item(id);
-                        if (Array.isArray(t))
-                            t = t.at(-1);
-                        if (!t)
-                            return null;
-                        await t.init;
-                        return { label: t.DATA?.label || t.name || id, icon: t.DATA?.icon || '', type: t.type || '' };
+                        return await fastLinkNodeMeta(id, null);
                     }
                     catch {
                         return null;
@@ -370,6 +432,10 @@ export const classSecurityMethods = {
             return out;
         };
         return { common: outCommon, commonTree: await this._linkTrie(toEff(common, [null])), places: await walk(places) };
+        })();
+        if (this[R]?.cache)
+            this[R].cache[cacheKey] = promise;
+        return promise;
     },
 
     /** Право писать объекты точки (create/update/delete). */

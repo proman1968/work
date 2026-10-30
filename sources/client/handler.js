@@ -42,19 +42,20 @@ export class $handler extends $class{
         if(!path.endsWith('.js'))
             path += '.js'
         const module = await import(path);
-        let prototype = module?.default;
-        // ES-модуль кэшируется: module.default — один объект на все импорты.
-        // ??= оставляло имя первого импорта, и повторный импорт того же URL
-        // с другим is регистрировал старое имя, а элемент с новым is
-        // оставался незарегистрированным (пустой экран при открытии во вкладке).
-        // Поэтому при несовпадении имён клонируем прототип с сохранением
-        // дескрипторов (геттеры/сеттеры) и регистрируем клон под нужным именем.
-        const want = is || ('item-' + this.id);
-        if (prototype.is && prototype.is !== want) {
-            // Клонируем с сохранением дескрипторов (геттеры/сеттеры переживают
-            // клонирование; Object.assign здесь нельзя — он схлопывает их в значения).
-            prototype = Object.defineProperties(Object.create(Object.getPrototypeOf(prototype)), Object.getOwnPropertyDescriptors(prototype));
-        }
+        const rawProto = module?.default;
+        if (!rawProto || typeof rawProto !== 'object')
+            return rawProto;
+        const want = is || rawProto.is || ('item-' + this.id);
+        // Всегда клонируем экспорт ES-модуля с сохранением дескрипторов (геттеры/сеттеры),
+        // чтобы регистрация в WORK/ODA не мутировала общий кэшированный объект module.default.
+        const prototype = Object.defineProperties(
+            Object.create(Object.getPrototypeOf(rawProto)),
+            Object.getOwnPropertyDescriptors(rawProto)
+        );
+        if (Array.isArray(rawProto.extends))
+            prototype.extends = [...rawProto.extends];
+        if (Array.isArray(rawProto.imports))
+            prototype.imports = [...rawProto.imports];
         prototype.is = want;
         await WORK(prototype);
         return await prototype;

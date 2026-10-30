@@ -10,7 +10,6 @@ export function componentCounter() {
     return componentCounter.counter++;
 }
 componentCounter.counter = 0;
-componentCounter.counter = 0;
 
 export function setAttribute(name, value) {
     if (typeof value !== 'object') {
@@ -27,9 +26,17 @@ export function setAttribute(name, value) {
 }
 
 export function removeElement() {
+    const unobs = (node) => {
+        if (node?.nodeType === 1) {
+            globalThis.ODA?.intersectionObserver?.unobserve?.(node);
+            globalThis.ODA?.resizeObserver?.unobserve?.(node);
+        }
+    };
     for (let el of Object.values(this[R].cache.replacer || {})) {
+        unobs(el);
         el.remove();
     }
+    unobs(this);
     this.remove();
 }
 

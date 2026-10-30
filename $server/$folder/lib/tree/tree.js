@@ -1,5 +1,11 @@
 import { bindLinkTree, isLinkNode } from './link-nodes.js';
 
+const SEC_TREE_PROMISES = new WeakMap();
+const SEC_NODES_MAP = new WeakMap();
+function rawItem(it) {
+    return it?.[R]?.target || it;
+}
+
 /**
  * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет
  * или он неприменим: ветка настройки достраивает детей на клиенте, фильтры дерева отсекают часть.
@@ -7,6 +13,8 @@ import { bindLinkTree, isLinkNode } from './link-nodes.js';
 export function knownHasItems(it, pdp = {}) {
     if (!it || isLinkNode(it) || it.type === '$server')
         return undefined;
+    if ('isPlace' in Object(it) && it.isPlace)
+        return Array.isArray(it.items) ? it.items.length > 0 : false;
     if (pdp.hideSystem || pdp.hideFiles || pdp.onlyClasses || pdp.itemsSelector !== 'items')
         return undefined;
     // __version — реактивная зависимость: после события changed флаг удаляется и пересчитывается по items
@@ -91,6 +99,11 @@ export default {
                 await this.getItems(n, 1);
                 this._applySavedStateToItems([n]);
                 this.items = [n];
+                if (this._pendingRevealPath) {
+                    const p = this._pendingRevealPath;
+                    this._pendingRevealPath = '';
+                    this.revealPath(p);
+                }
             }
             else {
                 this._deferredItem = null;
@@ -125,14 +138,27 @@ export default {
             if (!raw)
                 return;
             const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed?.expanded)) {
-                for (const p of parsed.expanded) {
-                    if (p)
-                        this._savedExpandedSet.add(String(p));
+            const focused = parsed?.focused ? String(parsed.focused).replace(/\/+$/, '') : '';
+            if (focused)
+                this._savedFocusedKey = focused;
+            const rootPath = String(root?.short || root?.path || '/').replace(/\/+$/, '') || '/';
+            this._savedExpandedSet.add(rootPath);
+            if (focused && focused !== '/') {
+                const parts = focused.split('/').filter(Boolean);
+                let acc = '';
+                for (let i = 0; i < parts.length - 1; i++) {
+                    acc += '/' + parts[i];
+                    this._savedExpandedSet.add(acc);
                 }
             }
-            if (parsed?.focused)
-                this._savedFocusedKey = String(parsed.focused);
+            if (Array.isArray(parsed?.expanded)) {
+                const topDomains = new Set(['/', '/ORGANIZATIONS', '/MODULES', '/MODELS', '/NODES', '/SERVICES']);
+                for (const p of parsed.expanded) {
+                    const s = String(p || '');
+                    if (topDomains.has(s))
+                        this._savedExpandedSet.add(s);
+                }
+            }
         }
         catch { /* ignore */ }
     },
@@ -164,6 +190,220 @@ export default {
             return;
         this._savedFocusedKey = key;
         this._persistTreeState();
+    },
+    _findMountedForTarget(cleanTarget, preferredKey = '') {
+        if (preferredKey) {
+            for (const comp of this._mountedNodes || []) {
+                if (!comp?.isConnected)
+                    continue;
+                const it = comp.$item;
+                const p = it?.short || it?.path || '';
+                if (nodeStateKey(it) === preferredKey && p === cleanTarget)
+                    return comp;
+            }
+        }
+        if (this.focusedNode?.isConnected && this.focusedItem) {
+            const fp = this.focusedItem.short || this.focusedItem.path || '';
+            if (fp === cleanTarget)
+                return this.focusedNode;
+        }
+        for (const comp of this._mountedNodes || []) {
+            if (!comp?.isConnected)
+                continue;
+            const it = comp.$item;
+            const p = it?.short || it?.path || '';
+            if (p === cleanTarget)
+                return comp;
+        }
+        return null;
+    },
+    async revealPath(targetPath) {
+        if (!targetPath || !this.$item || this.hidden)
+            return null;
+        const rawStr = String(targetPath);
+        const placeIdx = rawStr.indexOf('#place:');
+        const preferredStateKey = placeIdx >= 0 ? rawStr : '';
+        const baseTarget = placeIdx >= 0 ? rawStr.slice(0, placeIdx) : rawStr;
+        const linkTarget = placeIdx >= 0 && rawStr.includes('->') ? rawStr.split('->').pop() : '';
+        const cleanTarget = String(linkTarget || baseTarget).replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '') || '/';
+        const structTarget = String(baseTarget).replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '') || '/';
+
+        // Если фокус уже стоит на этом элементе после клика пользователя в самом дереве — ничего не переключаем и не скроллим
+        const curFocusedPath = this.focusedItem?.short || this.focusedItem?.path || '';
+        const curFocusedKey = nodeStateKey(this.focusedItem);
+        if (this.focusedItem && (curFocusedPath === cleanTarget || (preferredStateKey && curFocusedKey === preferredStateKey))) {
+            if (Date.now() - (this._lastUserFocusTs || 0) < 1500)
+                return this.focusedItem;
+            if (this.focusedNode?.isConnected) {
+                this.scrollNodeIntoView(this.focusedNode, true);
+                this._onTreeScroll?.();
+                return this.focusedItem;
+            }
+        }
+
+        // Если узел с этим ТОЧНЫМ путём уже смонтирован и видим в открытой ветке — фокусируем его без раскрытия /MODULES
+        const matchingSavedKey = (this._savedFocusedKey === cleanTarget || this._savedFocusedKey?.endsWith('->' + cleanTarget))
+            ? this._savedFocusedKey
+            : '';
+        const alreadyMounted = this._findMountedForTarget(cleanTarget, preferredStateKey || matchingSavedKey);
+        if (alreadyMounted && alreadyMounted.offsetParent !== null) {
+            this.focusedItem = alreadyMounted.$item;
+            this.focusedNode = alreadyMounted;
+            this.recordNodeFocused(alreadyMounted.$item);
+            this.scrollNodeIntoView(alreadyMounted, true);
+            this._onTreeScroll?.();
+            return alreadyMounted.$item;
+        }
+
+        const rootPath = String(this.$item.short || this.$item.path || '/').replace(/\/+$/, '') || '/';
+        const walkTarget = placeIdx >= 0 ? structTarget : cleanTarget;
+        if (walkTarget !== rootPath && !(rootPath === '/' ? walkTarget.startsWith('/') : walkTarget.startsWith(rootPath + '/')))
+            return null;
+        if (!this._savedExpandedSet)
+            this._loadSavedTreeState(this.$item);
+        const rel = rootPath === '/' ? walkTarget.slice(1) : walkTarget.slice(rootPath.length + 1);
+        const parts = rel ? rel.split('/').filter(Boolean) : [];
+        let acc = rootPath === '/' ? '' : rootPath;
+        this._savedExpandedSet.add(rootPath);
+        for (let i = 0; i < (placeIdx >= 0 ? parts.length : parts.length - 1); i++) {
+            acc += '/' + parts[i];
+            this._savedExpandedSet.add(acc);
+        }
+        this._savedFocusedKey = preferredStateKey || cleanTarget;
+        this._persistTreeState();
+
+        let cur = this.$item;
+        if (!Array.isArray(this.items) || !this.items.length) {
+            this._pendingRevealPath = rawStr;
+            return null;
+        }
+        const expandItem = (it) => {
+            if (!it)
+                return;
+            it.expanded = true;
+            const raw = rawItem(it);
+            for (const comp of this._mountedNodes || []) {
+                if (comp?.isConnected && rawItem(comp.$item) === raw)
+                    comp.invalidate?.('expanded');
+            }
+        };
+        expandItem(cur);
+        for (let i = 0; i < parts.length; i++) {
+            const stepPath = (rootPath === '/' ? '' : rootPath) + '/' + parts.slice(0, i + 1).join('/');
+            const cachedKids = cur?.[R]?.cache?.[this.itemsSelector];
+            const children = Array.isArray(cachedKids) ? cachedKids : await cur?.[this.itemsSelector];
+            let next = Array.isArray(children)
+                ? children.find(ch => (ch?.short || ch?.path) === stepPath || ch?.id === parts[i])
+                : null;
+            const secNodes = SEC_NODES_MAP.get(rawItem(cur));
+            if (!next && i === 0 && Array.isArray(secNodes)) {
+                const findInSec = (nodes) => {
+                    for (const sn of nodes || []) {
+                        if ((sn?.short || sn?.path) === cleanTarget)
+                            return sn;
+                        const found = findInSec(sn?.items);
+                        if (found) {
+                            expandItem(sn);
+                            return found;
+                        }
+                    }
+                    return null;
+                };
+                const secMatch = findInSec(secNodes);
+                if (secMatch) {
+                    cur = secMatch;
+                    break;
+                }
+            }
+            if (!next)
+                break;
+            if (i < parts.length - 1 || placeIdx >= 0) {
+                expandItem(next);
+                this.recordNodeExpanded(next, true);
+            }
+            cur = next;
+        }
+        if (placeIdx >= 0 && cur) {
+            const secNodes = SEC_NODES_MAP.get(rawItem(cur)) || await this._buildSecNodes?.(cur);
+            if (Array.isArray(secNodes)) {
+                const findByStateOrPath = (nodes) => {
+                    for (const sn of nodes || []) {
+                        if (nodeStateKey(sn) === preferredStateKey || (sn?.short || sn?.path) === cleanTarget)
+                            return sn;
+                        const found = findByStateOrPath(sn?.items);
+                        if (found) {
+                            expandItem(sn);
+                            this.recordNodeExpanded(sn, true);
+                            return found;
+                        }
+                    }
+                    return null;
+                };
+                const match = findByStateOrPath(secNodes);
+                if (match)
+                    cur = match;
+            }
+        }
+        if (cur) {
+            this.focusedItem = cur;
+            this.recordNodeFocused(cur);
+            const findMounted = () => {
+                const rawCur = rawItem(cur);
+                for (const comp of this._mountedNodes || []) {
+                    if (comp?.isConnected && rawItem(comp?.$item) === rawCur)
+                        return comp;
+                }
+                return this._findMountedForTarget(cleanTarget, preferredStateKey);
+            };
+            const tryScroll = (attempt = 0) => {
+                const comp = findMounted();
+                if (comp && comp.offsetParent !== null) {
+                    this.focusedNode = comp;
+                    this.scrollNodeIntoView(comp, true);
+                    this._onTreeScroll?.();
+                    return;
+                }
+                if (attempt < 12)
+                    setTimeout(() => tryScroll(attempt + 1), 50);
+            };
+            this.async(() => tryScroll(0), 40);
+        }
+        return cur;
+    },
+    scrollNodeIntoView(comp, smooth = true) {
+        if (!comp)
+            return;
+        const scroller = this.$('div[style*="overflow: auto"]');
+        if (!scroller)
+            return;
+        const scrollerRect = scroller.getBoundingClientRect();
+        if (!scrollerRect.height)
+            return;
+        const lvl = Math.max(0, Number(comp.stickyLevel) || 0);
+        const stickyTopOffset = lvl * 30;
+        const visibleTop = scrollerRect.top + stickyTopOffset;
+        const visibleBottom = scrollerRect.bottom;
+
+        const hostRect = comp.getBoundingClientRect();
+        const rowEl = comp.$?.('.node');
+        const rowHeight = rowEl?.getBoundingClientRect?.().height || 30;
+        const rowTop = hostRect.top;
+        const rowBottom = rowTop + rowHeight;
+
+        if (rowTop < visibleTop) {
+            const delta = rowTop - visibleTop - 4;
+            scroller.scrollTo({
+                top: Math.max(0, scroller.scrollTop + delta),
+                behavior: smooth ? 'smooth' : 'auto',
+            });
+        }
+        else if (rowBottom > visibleBottom) {
+            const delta = rowBottom - visibleBottom + 4;
+            scroller.scrollTo({
+                top: Math.max(0, scroller.scrollTop + delta),
+                behavior: smooth ? 'smooth' : 'auto',
+            });
+        }
     },
     _applySavedStateToItems(list) {
         if (!Array.isArray(list) || (!this._savedExpandedSet?.size && !this._savedFocusedKey))
@@ -428,6 +668,8 @@ ODA({is: 'oda-tree-node',
         // Ветка настройки — только у подразделений ($structure и наследники)
         // с заполненной #security (ROLES, LINKS или назначения — флаг из $public).
         // Места и ссылки рисуются обычными дочерними узлами (см. items).
+        if (!this.$item || isLinkNode(this.$item) || ('isPlace' in Object(this.$item) && this.$item.isPlace))
+            return false;
         const t = this.$item?.type;
         if (t !== '$structure' && t !== '$base' && t !== '$server')
             return false;
@@ -455,18 +697,17 @@ ODA({is: 'oda-tree-node',
     },
     setItemFocus(e){
         e.stopPropagation();
+        const tree = this.$pdp?.tree;
+        if (tree)
+            tree._lastUserFocusTs = Date.now();
         this.$pdp.focusedItem = this.$item;
         this.$pdp.focusedNode = this;
-        this.$pdp?.tree?.recordNodeFocused?.(this.$item);
+        tree?.recordNodeFocused?.(this.$item);
     },
     get isFocused() {
         if (!this.$pdp.allowFocus)
             return false;
-        const focused = this.$pdp.focusedItem === this.$item;
-        if (focused && this.$pdp.focusedNode !== this) {
-            this.$pdp.focusedNode = this;
-        }
-        return focused;
+        return this.$pdp.focusedItem === this.$item;
     },
 
     get isCategory() {
@@ -526,7 +767,7 @@ ODA({is: 'oda-tree-node',
         const cachedKids = Array.isArray(rawKids) ? rawKids : (item[R]?.cache?.[this.$pdp.itemsSelector] || []);
         if (Array.isArray(cachedKids) && cachedKids.some(k => this._deepMatch(k, f)))
             return true;
-        const secKids = item._secNodes;
+        const secKids = SEC_NODES_MAP.get(rawItem(item));
         if (Array.isArray(secKids) && secKids.some(k => this._deepMatch(k, f)))
             return true;
         return false;
@@ -558,16 +799,33 @@ ODA({is: 'oda-tree-node',
         },
         async set(n) {
             if (this.$item && n !== undefined) {
+                const tree = this.$pdp?.tree;
+                const scroller = !n ? tree?.$('div[style*="overflow: auto"]') : null;
+                const rowEl = !n ? this.$('.node') : null;
+                const beforeVisualTop = rowEl ? rowEl.getBoundingClientRect().top : null;
+                const beforeHostTop = !n ? this.getBoundingClientRect().top : null;
+
                 if (n) {
                     await this.$pdp.getItems(this.$item, 1);
                     this.$item.expanded = true;
                 }
                 this.$item.expanded = n;
                 if (this.hideTops < 1 && this.hideRoots < 1)
-                    this.$pdp?.tree?.recordNodeExpanded?.(this.$item, !!n);
-                if (!n)
+                    tree?.recordNodeExpanded?.(this.$item, !!n);
+                if (!n) {
                     this.isStuck = false;
-                this.$pdp?.tree?._onTreeScroll?.();
+                    if (scroller && beforeVisualTop !== null && beforeHostTop !== null && beforeHostTop < beforeVisualTop - 1) {
+                        scroller.scrollTop = Math.max(0, scroller.scrollTop + (beforeHostTop - beforeVisualTop));
+                        requestAnimationFrame(() => {
+                            const curRow = this.$('.node') || this;
+                            const afterTop = curRow.getBoundingClientRect().top;
+                            if (Math.abs(afterTop - beforeVisualTop) > 2)
+                                scroller.scrollTop = Math.max(0, scroller.scrollTop + (afterTop - beforeVisualTop));
+                            tree?._onTreeScroll?.();
+                        });
+                    }
+                }
+                tree?._onTreeScroll?.();
             }
         }
     },
@@ -636,13 +894,15 @@ ODA({is: 'oda-tree-node',
             // (ветка настройки): места с пользователями, ссылки — цепочкой
             // от корня «Данные» через link-nodes. Кэш на узел, сброс — по 'changed'.
             try {
-                if (this.hasSecurity && Array.isArray(items)) {
-                    if (this._secTreeFor !== this.$item) {
-                        this._secTree = null;
-                        this._secTreeFor = this.$item;
+                if (this.hasSecurity && Array.isArray(items) && this.$item) {
+                    const keyObj = rawItem(this.$item);
+                    let p = SEC_TREE_PROMISES.get(keyObj);
+                    if (!p) {
+                        p = this._buildSecNodes(this.$item);
+                        SEC_TREE_PROMISES.set(keyObj, p);
                     }
-                    this._secTree ??= this._buildSecNodes(this.$item);
-                    const extra = await this._secTree;
+                    this._secTree = p;
+                    const extra = await p;
                     if (extra?.length)
                         items = [...extra, ...items];
                 }
@@ -651,6 +911,8 @@ ODA({is: 'oda-tree-node',
             this.$item?.addEventListener?.('changed', e=>{
                 this.async(async ()=>{
                     this._secTree = null;
+                    if (this.$item)
+                        SEC_TREE_PROMISES.delete(rawItem(this.$item));
                     this.$item.expanded = true;
                     if(e.detail.value){
                         let item = (await this.items)?.find(f=>f.id === e.detail.value);
@@ -680,10 +942,7 @@ ODA({is: 'oda-tree-node',
         const out = [];
         for (const p of d.places || [])
             out.push(await this._placeNode(item, p, ''));
-        try {
-            Object.defineProperty(item, '_secNodes', { value: out, configurable: true, writable: true });
-        }
-        catch { /* ignore */ }
+        SEC_NODES_MAP.set(rawItem(item), out);
         return out;
     },
     /** Узел рабочего места: сначала цепочка его ссылок (классы), затем вложенные рабочие места. */

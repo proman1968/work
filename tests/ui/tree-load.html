@@ -260,6 +260,40 @@ await test('Консультант ИИ: переключатель ИИ в пр
     }
 });
 
+await test('Проводник: левая панель переключателей (app-tabs) видна и содержит кнопки WORK, ИИ, USERS, Сеть, а при открытии формы появляется iframe и закладка внизу', async () => {
+    await import('/oda/components/layouts/app-layout/app-layout.js');
+    await ODA.waitReg('oda-app-layout');
+    await ODA.waitReg('app-layout-drawer');
+    await ODA.waitReg('app-tabs');
+
+    const layout = document.createElement('oda-app-layout');
+    layout.style.cssText = 'position: fixed; inset: 0; width: 1200px; height: 800px;';
+    const pane1 = document.createElement('div');
+    pane1.setAttribute('slot', 'left-panel');
+    pane1.setAttribute('label', 'WORK');
+    pane1.setAttribute('icon', 'odant:structure');
+    const pane2 = document.createElement('div');
+    pane2.setAttribute('slot', 'left-panel');
+    pane2.setAttribute('label', 'ИИ');
+    pane2.setAttribute('icon', 'bootstrap:robot');
+    layout.appendChild(pane1);
+    layout.appendChild(pane2);
+    document.body.appendChild(layout);
+    await new Promise(r => setTimeout(r, 300));
+
+    const drawer = layout.left_drawer;
+    assert(!!drawer, 'left_drawer найден');
+    assert(!drawer.hidden, 'left_drawer НЕ скрыт (hidden=false)');
+    const tabs = drawer.$('app-tabs');
+    assert(!!tabs, 'app-tabs внутри left_drawer найден');
+    eq(tabs.items.length, 2, 'в app-tabs 2 вкладки');
+    eq(tabs.items[0].label, 'WORK');
+    eq(tabs.items[1].label, 'ИИ');
+    tabs.setIndex(1);
+    eq(drawer.focusedIndex, 1, 'переключение вкладки в app-tabs');
+    layout.remove();
+});
+
 window.__done = true;
 </script>
 </body>

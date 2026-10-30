@@ -120,16 +120,16 @@ function createBodyEncoder(acceptEncoding, size = 0) {
             encoding: 'br',
             stream: zlib.createBrotliCompress({
                 params: {
-                    [zlib.constants.BROTLI_PARAM_QUALITY]: 4,
+                    [zlib.constants.BROTLI_PARAM_QUALITY]: size > 256 * 1024 ? 1 : 4,
                     [zlib.constants.BROTLI_PARAM_SIZE_HINT]: size,
                 },
             }),
         };
     }
     if (/\bgzip\b/.test(acceptEncoding))
-        return { encoding: 'gzip', stream: zlib.createGzip({ level: 4 }) };
+        return { encoding: 'gzip', stream: zlib.createGzip({ level: size > 256 * 1024 ? 1 : 4 }) };
     if (/\bdeflate\b/.test(acceptEncoding))
-        return { encoding: 'deflate', stream: zlib.createDeflate({ level: 4 }) };
+        return { encoding: 'deflate', stream: zlib.createDeflate({ level: size > 256 * 1024 ? 1 : 4 }) };
     return null;
 }
 
@@ -573,9 +573,14 @@ export function createRequestHandler() {
                 let mime_type = resolveFileContentType(item);
                 if(mime_type){
                     header["Content-Type"] = mime_type;
-                    if (isStaticAssetType(mime_type))
-                        // dev: ревалидация каждый раз (ETag → 304), правки видны сразу
-                        header["Cache-Control"] = DEV_MODE ? DEV_CACHE : STATIC_CACHE;
+                    if (isStaticAssetType(mime_type)) {
+                        const isVendorStatic = path.startsWith('/oda/tools/icons/')
+                            || path.includes('/lib/mermaid')
+                            || path.includes('/lib/mathjax')
+                            || path.includes('/lib/highlight')
+                            || path.includes('/lib/markdown-wasm');
+                        header["Cache-Control"] = (DEV_MODE && !isVendorStatic) ? DEV_CACHE : STATIC_CACHE;
+                    }
                 }
                 else
                     header["Content-Type"] = 'text/plain';

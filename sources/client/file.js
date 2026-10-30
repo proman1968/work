@@ -35,11 +35,11 @@ export class $file extends $folder{
         if (!this.path)
             return this.id || '';
         let parts = this.path.split('/');
-        this.id = parts.pop();
+        const id = parts.pop();
         parts.pop();
         if (parts.pop() === 'history')
             return this.constructor.historyEntryLabel(this.path);
-        return this.id;
+        return this.id || id;
     }
     get ext(){
         return this.id?.split('.').pop() || '';

@@ -174,6 +174,30 @@ export class $folder extends $item{
                     return this;
                 }
             }
+            if (this instanceof FS.$class && this.inherit_source && !fs.existsSync(this.dir)) {
+                let hasLocalFolderLayer = false;
+                for (let p = this.$parent; p && (p.path || '').startsWith('/ORGANIZATIONS/'); p = p.$parent) {
+                    if (p.meta_folder && fs.existsSync(p.meta_folder.dir + '/$folder')) {
+                        hasLocalFolderLayer = true;
+                        break;
+                    }
+                }
+                if (!hasLocalFolderLayer) {
+                    const src = this.real_source;
+                    if (src && src !== this) {
+                        await src.init;
+                        if (src.DATA)
+                            this.DATA = Object.defineProperties({}, Object.getOwnPropertyDescriptors(src.DATA));
+                        await this._liftMethods();
+                        const cnt = await classObjectCount(this.path, this.type);
+                        if (cnt > 0 && this.DATA)
+                            this.DATA.objectCount = cnt;
+                        else if (this.DATA && 'objectCount' in this.DATA)
+                            delete this.DATA.objectCount;
+                        return this;
+                    }
+                }
+            }
             let files = [];
             if (this.constructor === FS.$folder && this.isType) {
                 const classJsOf = (folder) =>
@@ -1160,6 +1184,11 @@ export class $folder extends $item{
     /** Каталог `$method`: `~/methods/*`. Прикладная `~/ai` — только дети-`$method`, не `~/ai/*`. */
     get _methods(){
         return new AsyncPromise(async ()=>{
+            if (this.inherit_source && !fs.existsSync(this.dir)) {
+                const src = this.real_source;
+                if (src && src !== this)
+                    return src._methods;
+            }
             const res = {};
             const layers = await this._tilde_layers();
             const seenReal = new Set();
@@ -1242,8 +1271,10 @@ export class $folder extends $item{
             return entries.filter(f => f instanceof FS.$file);
         })
     }
-    /** Сборка собственных файлов папки (без наследования). */
+    /** Кэш сборки собственных файлов папки (сбрасывается вместе с this[R].cache в reset()). */
     _collect_own(){
+        if (this[R]?.cache?._own_files)
+            return [...this[R].cache._own_files];
         let files = [];
         let dir = this.dir;
         if (fs.existsSync(dir) && !fs.statSync(dir).isFile()) {
@@ -1286,7 +1317,9 @@ export class $folder extends $item{
             if(!files.find(f => f.id === '$folder'))
                 files.push(this.parent.$folder)
         }
-        return files;
+        if (this[R]?.cache)
+            this[R].cache._own_files = files;
+        return [...files];
     }
     /**
      * Единая точка сборки дочерних элементов: собственные файлы + наследуемые от предка.

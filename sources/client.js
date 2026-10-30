@@ -50,7 +50,10 @@ for(let key in _ODA){
 globalThis.WORK = function (prototype = {}){
     if(!Array.isArray(prototype.extends))
         prototype.extends = (prototype.extends || '').split(',').map(i=>i.trim()).filter(Boolean);
-    prototype.extends.unshift('item-control');
+    else
+        prototype.extends = prototype.extends.filter(i => typeof i === 'string').map(i => i.trim()).filter(Boolean);
+    if (!prototype.extends.includes('item-control'))
+        prototype.extends.unshift('item-control');
     return ODA(prototype);
 }
 WORK.genGUID = CORE.$item.genGUID;
@@ -66,6 +69,7 @@ WORK.get_item = function (path = '/', method = 'info', params = {}){
     });
 }
 let fetches = {};
+let loaderTimerId;
 WORK.fetch = function (url, method = '', params = {}, postObject) {
     let {contentType} = params;
     url = encodeURI(url + (method ? '?' + method : ''));
@@ -103,11 +107,12 @@ WORK.fetch = function (url, method = '', params = {}, postObject) {
     return fetches[url] ??= new Promise((resolve, reject) => {
         queueMicrotask(async ()=>{
             try {
-                this.timerId ??= setTimeout(()=>{
+                loaderTimerId ??= setTimeout(()=>{
+                    loaderTimerId = undefined;
                     if(!top.document.body.contains(top.loader) && Object.keys(fetches).length){
                         top.document.body.appendChild(top.loader);
+                        top.loader.render();
                     }
-                    top.loader.render();
                 }, 500)
 
                 let response = await fetch(url, options);
@@ -166,8 +171,10 @@ WORK.fetch = function (url, method = '', params = {}, postObject) {
                 delete fetches[url];
                 setTimeout(()=>{
                     if(!Object.keys(fetches).length){
-                        clearTimeout(this.timerId);
-                        this.timerId = undefined;
+                        if (loaderTimerId) {
+                            clearTimeout(loaderTimerId);
+                            loaderTimerId = undefined;
+                        }
                         top.loader.remove();
                     }
 
@@ -381,33 +388,52 @@ if (typeof BroadcastChannel !== 'undefined') {
     });
 }
 
-WORK.login = async function(){
+WORK.login = async function(force = false){
         let secure = ODA.LocalStorage.create('work-secure');
-        WORK.credentials = secure.getItem('credentials');
-        let KEY = secure.getItem('KEY');
-        let uid = WORK.credentials?.uid;
-        if(uid && KEY){
-            if (WORK.uid && WORK.uid !== uid)
-                await WORK.removeCurrentPushSubscription?.();
-            let challengeId = crypto.randomUUID();
-            const challenge = await WORK.fetch("/", 'user_login_start', { uid, challengeId});
-            KEY = Uint8Array.from(atob(KEY), c => c.charCodeAt(0));
-            let privateKey = await crypto.subtle.importKey("pkcs8", KEY, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["sign"]);
-            let signature = await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, privateKey, new TextEncoder().encode(challenge));
-            signature = WORK.arrayBufferToBase64(signature);
-            const res = await WORK.fetch("/", 'user_login_finish' ,  { uid, time: WORK.credentials.time, challengeId}, {signature});
-            WORK.uid = uid;
-            await WORK.syncAuthUI();
-            WORK.notifyAuth?.({ uid, reason: 'login' });
-            return res;
+        let nextCreds = secure.getItem('credentials');
+        let nextUid = nextCreds?.uid || '';
+        if (!force && window.top && window.top !== window) {
+            try {
+                if (window.top.WORK?._loginPromise && window.top.WORK?._loginTargetUid === nextUid) {
+                    const res = await window.top.WORK._loginPromise;
+                    WORK.credentials = window.top.WORK.credentials;
+                    WORK.uid = window.top.WORK.uid || '';
+                    WORK.USER = window.top.WORK.USER;
+                    return res;
+                }
+            }
+            catch { /* cross-origin fallback */ }
         }
-        if (WORK.uid)
-            await WORK.removeCurrentPushSubscription?.();
-        WORK.uid = '';
-        WORK.USER = undefined;
-        await WORK.fetch("/", 'user_exit', {}, {}).catch(() => {});
-        await WORK.syncAuthUI();
-        WORK.notifyAuth?.({ uid: '', reason: 'logout' });
+        if (!force && WORK._loginPromise && WORK._loginTargetUid === nextUid)
+            return WORK._loginPromise;
+        WORK._loginTargetUid = nextUid;
+        return WORK._loginPromise = (async () => {
+            WORK.credentials = nextCreds;
+            let KEY = secure.getItem('KEY');
+            let uid = WORK.credentials?.uid;
+            if(uid && KEY){
+                if (WORK.uid && WORK.uid !== uid)
+                    await WORK.removeCurrentPushSubscription?.();
+                let challengeId = crypto.randomUUID();
+                const challenge = await WORK.fetch("/", 'user_login_start', { uid, challengeId});
+                KEY = Uint8Array.from(atob(KEY), c => c.charCodeAt(0));
+                let privateKey = await crypto.subtle.importKey("pkcs8", KEY, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["sign"]);
+                let signature = await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, privateKey, new TextEncoder().encode(challenge));
+                signature = WORK.arrayBufferToBase64(signature);
+                const res = await WORK.fetch("/", 'user_login_finish' ,  { uid, time: WORK.credentials.time, challengeId}, {signature});
+                WORK.uid = uid;
+                await WORK.syncAuthUI();
+                WORK.notifyAuth?.({ uid, reason: 'login' });
+                return res;
+            }
+            if (WORK.uid)
+                await WORK.removeCurrentPushSubscription?.();
+            WORK.uid = '';
+            WORK.USER = undefined;
+            await WORK.fetch("/", 'user_exit', {}, {}).catch(() => {});
+            await WORK.syncAuthUI();
+            WORK.notifyAuth?.({ uid: '', reason: 'logout' });
+        })();
 }
 WORK.requestNotificationPermission = async function () {
     let result = false;
@@ -490,8 +516,9 @@ class WebSocketEvents {
     onclose(e) {
         WORK.connected = false;
         WORK.wsid = '';
+        WORK._loginPromise = null;
         delete this;
-setTimeout(() => {
+        setTimeout(() => {
             new WebSocketEvents();
         }, 3000);
         // console.log('Close webSocket connection');

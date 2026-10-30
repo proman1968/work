@@ -192,15 +192,29 @@ function collectRefs(db, fields, body, prefix = '', row = -1, out = []) {
     return out;
 }
 
-function searchText(schema, body) {
+function searchText(schema, body, db = null) {
     const parts = [objectTitle(schema, body)];
     const walk = (fields, b) => {
-        for (const f of fields) {
-            const v = b[f.id];
+        for (const f of fields || []) {
+            const v = b?.[f.id];
             if (isEmpty(v))
                 continue;
-            if (['string', 'text', 'enum'].includes(f.type))
+            if (['string', 'text', 'enum', 'number', 'money', 'integer', 'date', 'datetime', 'file'].includes(f.type)) {
                 parts.push(String(v));
+            }
+            else if (f.type === 'link' && db) {
+                try {
+                    const refRow = db.prepare('SELECT cid, body FROM objects WHERE id = ?').get(String(v));
+                    if (refRow) {
+                        const refSchema = classSchema(db, refRow.cid);
+                        const refBody = JSON.parse(refRow.body);
+                        const refTitle = objectTitle(refSchema, refBody);
+                        if (refTitle)
+                            parts.push(String(refTitle));
+                    }
+                }
+                catch { /* ignore */ }
+            }
             if (f.type === 'struct' && v && typeof v === 'object')
                 walk(f.fields, v);
             if (f.type === 'table' && Array.isArray(v))
@@ -218,7 +232,7 @@ function writeDerived(db, schema, id, body) {
         ins.run(id, r.field, r.row, r.ref_id, r.ref_cid);
     const rowid = db.prepare('SELECT rowid FROM objects WHERE id = ?').get(id).rowid;
     db.prepare('DELETE FROM objects_fts WHERE rowid = ?').run(rowid);
-    db.prepare('INSERT INTO objects_fts (rowid, text) VALUES (?, ?)').run(rowid, searchText(schema, body));
+    db.prepare('INSERT INTO objects_fts (rowid, text) VALUES (?, ?)').run(rowid, searchText(schema, body, db));
 }
 
 /* ---------- чтение ---------- */
@@ -462,6 +476,16 @@ function ftsQuery(text) {
         .map(w => '"' + w.replace(/"/g, '""') + '"*').join(' ');
 }
 
+function sqlLowerCaseVariants(token) {
+    const t = String(token || '').trim();
+    if (!t)
+        return [];
+    const low = t.toLowerCase();
+    const up = t.toUpperCase();
+    const cap = low.charAt(0).toUpperCase() + low.slice(1);
+    return [...new Set([t, low, up, cap])];
+}
+
 /**
  * Выборка объектов класса (по умолчанию — с потомками).
  * @param {object} q
@@ -537,8 +561,34 @@ export function queryObjects(db, q) {
         args.push(String(q.ext_of));
     }
     if (!isEmpty(q.search)) {
-        where.push('o.rowid IN (SELECT rowid FROM objects_fts WHERE objects_fts MATCH ?)');
-        args.push(ftsQuery(q.search));
+        const rawSearch = String(q.search).trim();
+        const fts = ftsQuery(rawSearch);
+        const tokens = rawSearch.split(/\s+/).filter(Boolean).slice(0, 8);
+        const tokenConds = [];
+        const likeArgs = [];
+        for (const tok of tokens) {
+            const variants = sqlLowerCaseVariants(tok);
+            const subOr = [];
+            for (const v of variants) {
+                const pat = '%' + v.replace(/[\\%_]/g, m => '\\' + m) + '%';
+                subOr.push(`o.body LIKE ? ESCAPE '\\'`);
+                likeArgs.push(pat);
+                subOr.push(`EXISTS (SELECT 1 FROM refs rf JOIN objects ro ON ro.id = rf.ref_id WHERE rf.obj_id = o.id AND ro.body LIKE ? ESCAPE '\\')`);
+                likeArgs.push(pat);
+            }
+            subOr.push(`o.id LIKE ? ESCAPE '\\'`);
+            likeArgs.push('%' + tok.replace(/[\\%_]/g, m => '\\' + m) + '%');
+            tokenConds.push(`(${subOr.join(' OR ')})`);
+        }
+        const deepSql = tokenConds.length ? tokenConds.join(' AND ') : '0';
+        if (fts) {
+            where.push(`(o.rowid IN (SELECT rowid FROM objects_fts WHERE objects_fts MATCH ?) OR (${deepSql}))`);
+            args.push(fts, ...likeArgs);
+        }
+        else if (tokenConds.length) {
+            where.push(`(${deepSql})`);
+            args.push(...likeArgs);
+        }
     }
     for (const [key, cond] of Object.entries(q.where || {})) {
         const c = cond !== null && typeof cond === 'object' && !Array.isArray(cond) ? cond : { eq: cond };

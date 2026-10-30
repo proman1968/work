@@ -222,7 +222,7 @@ export class VNode{
                 const dirs = this.#directives;
                 for (const dir in dirs) {
                     const next = dirs[dir](element);
-                    if (next?.nodeType === 1 && element.isConnected) {
+                    if (next?.nodeType === 1 && next.isConnected) {
                         element = next;
                     } else if (next) {
                         return next;
@@ -253,10 +253,21 @@ export class VNode{
                         el = this.render(el);
                     }
 
-                    requestAnimationFrame(() => el.render?.());
+                    if (el.isConnected && el.parentNode && el.parentNode !== element.parentNode) {
+                        el.render?.();
+                        return el;
+                    }
 
-                    const filter = `slot[name='${el.slot}']`;
+                    const slotName = el.slot || this.slotName;
+                    const filter = `slot[name='${slotName}']`;
                     let domHost = el.host;
+
+                    if (domHost?.$(filter, true)) {
+                        if (el.parentNode !== domHost)
+                            domHost.appendChild(el);
+                        requestAnimationFrame(() => el.render?.());
+                        return el;
+                    }
 
                     for (const ch of domHost.$$('*', true)) {
                         if (!ch.isComment && !ch.children.length) ch.render();
@@ -265,6 +276,7 @@ export class VNode{
                                 ch?.appendChild(el);
                                 domHost?.render?.();
                             }
+                            requestAnimationFrame(() => el.render?.());
                             return el;
                         }
                     }
@@ -272,10 +284,11 @@ export class VNode{
                     while (domHost) {
                         for (const ch of domHost.children) {
                             if (!ch.isComment && !ch.children.length) ch.render();
-                            if (ch.$?.(filter, true) || (ch.nodeName.toLowerCase() === 'slot' && ch.name === el.slot)) {
+                            if (ch.$?.(filter, true) || (ch.nodeName.toLowerCase() === 'slot' && ch.name === slotName)) {
                                 if (el.parentNode !== ch) {
                                     ch?.appendChild(el);
                                 }
+                                requestAnimationFrame(() => el.render?.());
                                 return el;
                             }
                         }
@@ -283,11 +296,12 @@ export class VNode{
                             if (el.parentNode !== domHost) {
                                 domHost?.appendChild(el);
                             }
+                            requestAnimationFrame(() => el.render?.());
                             return el;
                         }
                         domHost = domHost.host;
                     }
-                    el.host?.render?.();
+                    return el;
                 }
                 this.#directives.if?.(element);
                 break;
@@ -326,7 +340,7 @@ export class VNode{
             else {
                 element = document.createElement(tag);
             }
-            if (tag.startsWith('for-') || (!this.isSvg && tag !== 'slot' && !this.isStyle && element.nodeType === 1))
+            if (!tag.startsWith('for-') && !this.isSvg && tag !== 'slot' && !this.isStyle && element.nodeType === 1)
                 ODA.intersectionObserver.observe(element);
             for (let attr in this.#attributes)
                 element.setAttribute(attr, this.#attributes[attr]);

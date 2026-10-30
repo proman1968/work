@@ -37,7 +37,28 @@ export function compileText(expr) {
     return new AsyncFunction('$this, $for', `with(this){ return ((${expr}) ?? '')}`);
 }
 
-/** Разбор текстового шаблона `a{{b}}c` в JS-выражение — было inline в VNode */
+/** Разбор текстового шаблона `a{{b}}c` в JS-выражение с экранированием кавычек */
 export function textTemplateToExpr(value) {
-    return value.replace(/^|$/g, "'").replace(/{{/g, "'+(").replace(/}}/g, ")+'").replace(/\n/g, "\\n").replace(/\+\'\'/g, "").replace(/\'\'\+/g, "");
+    const s = String(value ?? '');
+    if (!s.includes('{{') || !s.includes('}}'))
+        return JSON.stringify(s);
+    const parts = [];
+    let idx = 0;
+    while (idx < s.length) {
+        const open = s.indexOf('{{', idx);
+        if (open === -1) {
+            if (idx < s.length) parts.push(JSON.stringify(s.slice(idx)));
+            break;
+        }
+        if (open > idx) parts.push(JSON.stringify(s.slice(idx, open)));
+        const close = s.indexOf('}}', open + 2);
+        if (close === -1) {
+            parts.push(JSON.stringify(s.slice(open)));
+            break;
+        }
+        const inner = s.slice(open + 2, close).trim();
+        parts.push(`(${inner || "''"})`);
+        idx = close + 2;
+    }
+    return parts.length ? parts.join('+') : "''";
 }

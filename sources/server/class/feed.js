@@ -17,6 +17,8 @@ export const classFeedMethods = {
      * остальные → своя лента в личном кабинете.
      */
     async chatSource(params = {}) {
+        if (this.path && this.path.startsWith('/ORGANIZATIONS/'))
+            return this.path;
         const uid = this.constructor.resolveUid(params);
         const declared = await this.declared_roles;
         const own = params.session?.principal?.kind === 'node'

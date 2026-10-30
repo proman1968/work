@@ -1343,8 +1343,8 @@ describe('архитектура представлений формы (VIEW п�
                 .map(i => i.id);
             assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
 
-            assert.deepEqual(await viewsOf(sales, 'ADMIN'), ['builder', 'staff'], 'Подразделение: у ADMIN конструктор и настройка ролей/мест');
-            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'folder', 'search'], 'Подразделение: у BOSS лента, файлы и поиск');
+            assert.deepEqual(await viewsOf(sales, 'ADMIN'), ['builder', 'chat', 'staff'], 'Подразделение: у ADMIN конструктор, чат и настройка ролей/мест');
+            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'folder', 'search'], 'Подразделение: у BOSS чат, файлы и поиск');
             assert.deepEqual(await viewsOf(sales, 'USER'), ['calendar', 'chat', 'email'], 'Подразделение: у USER рабочие инструменты');
         }
         finally {
@@ -1381,9 +1381,16 @@ describe('архитектура представлений формы (VIEW п�
         assert.ok(formSrc.includes('vc !== this.view_control'), 'syncFromView игнорирует фоновые вызовы от неактивных вкладок');
         assert.deepEqual(objects.getFocusedServices(), [], 'в табличном представлении form/objects кнопки объекта внизу не застревают');
 
-        // Проводник: корень сервера виден администратору (hideTops: 0), вкладки Организации и Модули убраны из левой панели
+        // Проводник: корень сервера виден администратору (hideTops: 0), вкладки Организации и Модули убраны из левой панели,
+        // внизу есть панель закладок открытых форм (bookmarksBar) с сохранением в localStorage и раскрытием дерева (revealPath)
         assert.equal(baseExplorer.hideTops, 0, 'корневой элемент сервера WORK виден администратору в дереве');
         assert.deepEqual(structExplorer.list, ['/USERS', '/NODES'], 'вкладки /ORGANIZATIONS и /MODULES убраны из панели переключателей слева');
+        assert.ok(baseExplorer.template.includes('id="bookmarksBar"'), 'внизу проводника есть панель закладок открытых форм (#bookmarksBar)');
+        assert.equal(typeof baseExplorer._saveBookmarksState, 'function', 'закладки открытых форм сохраняются в localStorage');
+        assert.equal(typeof baseExplorer._restoreBookmarksState, 'function', 'закладки открытых форм восстанавливаются при входе');
+        assert.equal(typeof baseExplorer.syncTreeToPath, 'function', 'при открытии/активации закладки дерево раскрывается и фокусируется на элементе');
+        const treeSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/lib/tree/tree.js'), 'utf-8');
+        assert.ok(treeSrc.includes('async revealPath('), 'item-tree поддерживает revealPath для раскрытия цепочки предков и фокусировки');
 
         // Кликабельные ссылки и контекстное меню строки объекта
         const openedTabs = [];

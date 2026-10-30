@@ -140,6 +140,7 @@ ODA({
                 border-top: 1px solid var(--border-color);
                 background: var(--content-background);
                 color: var(--content-color);
+                font-weight: 400;
             }
             .af-cell {
                 display: flex;
@@ -155,15 +156,67 @@ ODA({
             .af-cell:last-child {
                 border-right: none;
             }
+            .af-badge {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 1px;
+                padding: 0 2px;
+                font-size: 9px;
+                font-weight: 700;
+                font-family: var(--font-mono, monospace);
+                color: var(--muted-color);
+                border-radius: 2px;
+                flex-shrink: 0;
+                user-select: none;
+            }
+            .af-badge b {
+                display: inline-block;
+                padding: 0 2px;
+                border: 1px solid var(--border-color);
+                border-radius: 2px;
+                background: var(--subtle-background);
+                line-height: 1.25;
+            }
+            .af-badge b.mid {
+                background: var(--success-soft);
+                color: var(--success-color);
+                border-color: var(--success-color);
+            }
+            .af-op {
+                font-size: 11px;
+                font-weight: 700;
+                color: var(--muted-color);
+                padding: 0 2px;
+                flex-shrink: 0;
+                user-select: none;
+            }
             .af-input {
                 flex: 1;
                 min-width: 0;
                 border: none;
                 outline: none;
                 background: transparent;
-                color: var(--content-color);
+                color: var(--accent-color);
                 font-size: 12px;
+                font-weight: 500;
                 padding: 1px 2px;
+            }
+            .af-input::placeholder {
+                color: var(--muted-color);
+                font-weight: 400;
+            }
+            .af-clear {
+                border: none;
+                background: transparent;
+                color: var(--muted-color);
+                font-size: 11px;
+                cursor: pointer;
+                padding: 0 2px;
+                flex-shrink: 0;
+            }
+            .af-clear:hover {
+                color: var(--error-color);
             }
         </style>
         <div class="hgrid">
@@ -181,7 +234,10 @@ ODA({
         </div>
         <div class="autofilter-grid" ~if="host?.showAutoFilterRow">
             <div class="af-cell" ~for="leaves">
-                <input class="af-input" type="search" placeholder="Фильтр…" :value="autoFilterValue($for.item)" @input="onAutoFilterInput($for.item, $event.target.value)">
+                <span class="af-badge" ~if="!isNumericOrDateCol($for.item)" title="Поиск вхождения подстроки (ABC)"><b>A</b><b class="mid">B</b><b>C</b></span>
+                <span class="af-op" ~if="isNumericOrDateCol($for.item)" title="Фильтр по значению">=</span>
+                <input class="af-input" type="search" :value="autoFilterValue($for.item)" @input="onAutoFilterInput($for.item, $event.target.value)">
+                <button type="button" class="af-clear" ~if="autoFilterValue($for.item)" title="Очистить фильтр колонки" @tap.stop="onAutoFilterInput($for.item, '')">✕</button>
             </div>
         </div>
     `,
@@ -302,6 +358,15 @@ ODA({
     },
     filterFill(node) {
         return this.host?.columnFilter?.[node?.key] ? 'var(--accent-color)' : '';
+    },
+    isNumericOrDateCol(node) {
+        if (!node)
+            return false;
+        if (isDateColumn(node))
+            return true;
+        const f = node.field || {};
+        const t = String(node.type || f.type || '').toLowerCase();
+        return Boolean(f.formatMoney || t === 'number' || t === 'money' || t === 'integer');
     },
     autoFilterValue(node) {
         const raw = this.host?.columnFilter?.[node?.key] ?? '';
@@ -1001,6 +1066,14 @@ ODA({
             <span>Подбор ширины</span>
         </div>
         <div class="menu-sep"></div>
+        <div class="menu-item" :disabled="!hasActiveFilter" @tap="clearFilters()">
+            <span class="menu-ico" style="color: var(--error-color);">✕</span>
+            <span>Очистить фильтр</span>
+        </div>
+        <div class="menu-item" :disabled="!columnNode" @tap="openColumnFilterPopup()">
+            <span class="menu-ico">▼</span>
+            <span>Конструктор фильтра…</span>
+        </div>
         <div class="menu-item" @tap="toggleSearchPanel()">
             <span class="menu-ico">🔍</span>
             <span>{{table?.showSearchPanel ? 'Скрыть панель поиска' : 'Показать панель поиска'}}</span>
@@ -1021,6 +1094,11 @@ ODA({
     },
     get canHideCol() {
         return Boolean(this.columnNode?.key && this.columnNode.key !== this.table?.treeColumn?.key);
+    },
+    get hasActiveFilter() {
+        const cf = this.table?.columnFilter;
+        const hasCol = cf && typeof cf === 'object' && Object.values(cf).some(v => v && String(v).trim() !== '');
+        return Boolean(hasCol || this.table?.filter);
     },
     _close() {
         this.parentElement?.close?.('ok');
@@ -1048,8 +1126,10 @@ ODA({
         this._close();
     },
     toggleGroupPanel() {
-        if (this.table)
+        if (this.table) {
             this.table.showGroupPanel = !this.table.showGroupPanel;
+            this.table._savePersistedColumnState?.();
+        }
         this._close();
     },
     hideCol() {
@@ -1063,14 +1143,35 @@ ODA({
             this.table?.autoFitColumn?.(this.columnNode.key);
         this._close();
     },
+    clearFilters() {
+        if (this.table) {
+            this.table.columnFilter = {};
+            this.table.filter = '';
+        }
+        this._close();
+    },
+    openColumnFilterPopup() {
+        const tbl = this.table;
+        const col = this.columnNode;
+        const ev = this.anchorEvent || tbl;
+        this._close();
+        if (tbl && col) {
+            const header = tbl.$?.('oda-table-header');
+            setTimeout(() => header?.openFilter?.(col, ev), 20);
+        }
+    },
     toggleSearchPanel() {
-        if (this.table)
+        if (this.table) {
             this.table.showSearchPanel = !this.table.showSearchPanel;
+            this.table._savePersistedColumnState?.();
+        }
         this._close();
     },
     toggleAutoFilterRow() {
-        if (this.table)
+        if (this.table) {
             this.table.showAutoFilterRow = !this.table.showAutoFilterRow;
+            this.table._savePersistedColumnState?.();
+        }
         this._close();
     },
     openColumnsDialog() {
