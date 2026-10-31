@@ -54,18 +54,21 @@ describe('oda-packets: период и маска', () => {
         assert.deepEqual(inst._resolvePeriod([leaf(inst, '2024-12-25')]), { start: '2024-12-25', end: '2024-12-25' });
     });
 
-    it('week: режим недели входит в список допустимых mode (с $save: true) и резолвит понедельник–воскресенье', () => {
+    it('week: режим недели входит в список допустимых mode (с $save: true) и резолвит понедельник–воскресенье на кнопке года', () => {
         const host = defs.find(d => d.is === 'oda-packets');
         assert.deepEqual(host.$public.mode.$list, ['day', 'week', 'month', 'quarter', 'year']);
         assert.equal(host.$public.mode.$save, true, 'mode сохраняется через $save');
-        const y = new Date().getFullYear();
+        const y = String(new Date().getFullYear());
         const { inst } = mount({ value: 'now:week' });
-        build(inst, `${y - 1}-01-01`, `${y}-12-31`, 'month');
+        build(inst, `${+y - 1}-01-01`, `${y}-12-31`, 'month');
         assert.equal(inst.mode, 'week');
-        assert.equal(inst.selected.is, 'oda-packets-now-selector');
+        assert.equal(inst._nowItem.label, 'Неделя', 'первая панель отображает только режим Неделя');
+        assert.equal(inst._nowItem.selected, false, 'первая панель не перетягивает выделение');
         assert.equal(inst.selected.type, 'week');
         assert.ok(inst.period.start <= inst.period.end);
-        assert.ok(inst.selected.label.length <= 22, `компактная подпись недели помещается в кнопку now: "${inst.selected.label}"`);
+        const yNode = yearNode(inst, y);
+        assert.equal(yNode.selected, true, 'текущая неделя выделена на кнопке года');
+        assert.equal(yNode.label, inst.selected.label, 'диапазон недели отображается на кнопке года');
     });
 
     it('мульти-выбор: объединение по маскам, период — охват', () => {
@@ -134,7 +137,8 @@ describe('oda-packets: гранулярность mode, структура по�
         const navGroup = defs.find(d => d.is === 'oda-packets-now-group');
         assert.ok(navGroup, 'компонент oda-packets-now-group объявлен');
         assert.ok(navGroup.template.includes('~for="navItems"'), 'рендерит элементы навигации через ~for="navItems"');
-        assert.ok(navGroup.template.includes('min-width: 174px'), 'фиксированная ширина кнопки now под "30 Сентябрь 11111 г."');
+        assert.ok(navGroup.template.includes('min-width: 76px'), 'компактная фиксированная ширина первой панели под режим пакетирования');
+        assert.ok(navGroup.template.includes('@dblclick="_onItemDblClick'), 'двойной клик по первой панели обрабатывается');
 
         const nowDef = defs.find(d => d.is === 'oda-packets-now-selector');
         assert.ok(!nowDef.template?.includes('now-dropdown-btn'), 'у кнопки now убрана отдельная кнопка dropdown');
@@ -165,7 +169,7 @@ describe('oda-packets: гранулярность mode, структура по�
         assert.ok(moreBtn, 'кнопка «Ещё» присутствует');
         assert.equal(moreBtn.label, 'Ещё (7)');
         assert.equal(moreBtn.fullLabel, 'Предыдущие года (2015 - 2021)');
-        assert.equal(inst12._nowItem.fullLabel, 'Выбор текущего периода');
+        assert.equal(inst12._nowItem.fullLabel, 'Режим пакетирования (двойной клик — текущий период)');
         assert.deepEqual(moreBtn.years.map(y => y.name), ['2021', '2020', '2019', '2018', '2017', '2016', '2015']);
 
         const idxLastYear = inst12.items.findIndex(i => i.name === '2022' && !i.is);
@@ -262,81 +266,84 @@ describe('oda-packets: маска произвольного периода', ()
     });
 });
 
-describe('oda-packets: стрелки < (Назад в прошлое) и > (Вперёд в будущее)', () => {
-    it('шаг по выбранному периоду: < сдвигает назад во времени, > сдвигает вперёд во времени в зависимости от mode', () => {
+describe('oda-packets: кнопки + (слева, Вперёд в будущее) и - (справа, Назад в прошлое)', () => {
+    it('шаг по выбранному периоду: - (справа) сдвигает назад во времени, + (слева) сдвигает вперёд во времени в зависимости от mode', () => {
         const { inst } = mount();
         build(inst, '2024-01-01', '2024-12-31', 'month');
         inst._applySelection([leaf(inst, '2024-06')]);
-        inst._onNavLeft(); // < — Назад (в прошлое, май)
+        inst._onNavRight(); // - (справа) — Назад (в прошлое, май)
         assert.equal(inst.selected.name, '2024-05');
-        inst._onNavLeft(); // < — Назад (апрель)
+        inst._onNavRight(); // - (справа) — Назад (апрель)
         assert.equal(inst.selected.name, '2024-04');
-        inst._onNavRight(); // > — Вперёд (в будущее, май)
+        inst._onNavLeft(); // + (слева) — Вперёд (в будущее, май)
         assert.equal(inst.selected.name, '2024-05');
-        inst._onNavRight(); // > — Вперёд (июнь)
+        inst._onNavLeft(); // + (слева) — Вперёд (июнь)
         assert.equal(inst.selected.name, '2024-06');
     });
 
-    it('без зацикливания: на границах диапазона стрелки не перескакивают по кругу', () => {
+    it('без зацикливания: на границах диапазона кнопки не перескакивают по кругу', () => {
         const { inst } = mount();
         build(inst, '2024-01-01', '2024-03-31', 'month');
-        inst._onNavLeft(); // < с пустого выбора '*' выбирает самый свежий (2024-03)
+        inst._onNavRight(); // - с пустого выбора '*' выбирает самый свежий (2024-03)
         assert.equal(inst.selected.name, '2024-03');
-        inst._onNavRight(); // > вперёд за пределы 2024-03 — ничего не происходит
+        inst._onNavLeft(); // + вперёд за пределы 2024-03 — ничего не происходит
         assert.equal(inst.selected.name, '2024-03', 'не перескакивает в начало');
-        inst._onNavLeft(); // < назад к 2024-02
+        inst._onNavRight(); // - назад к 2024-02
         assert.equal(inst.selected.name, '2024-02');
-        inst._onNavLeft(); // < назад к 2024-01
+        inst._onNavRight(); // - назад к 2024-01
         assert.equal(inst.selected.name, '2024-01');
-        inst._onNavLeft(); // < дальше назад данных нет — остаётся 2024-01
+        inst._onNavRight(); // - дальше назад данных нет — остаётся 2024-01
         assert.equal(inst.selected.name, '2024-01', 'не перескакивает в конец');
     });
 
-    it('при выбранной кнопке now: < шагает в прошлое на 1 единицу mode и выделяет кнопку года, а > шагает в будущее', () => {
+    it('при установленном текущем периоде (now): - шагает в прошлое на 1 единицу mode и выделяет кнопку года, а + шагает в будущее', () => {
         const y = new Date().getFullYear();
         const { inst } = mount({ value: 'now' });
         build(inst, `${y - 1}-01-01`, `${y + 1}-12-31`, 'month');
-        assert.equal(inst.selected.is, 'oda-packets-now-selector');
+        assert.equal(inst._nowItem.label, 'Месяц');
+        assert.equal(inst._nowItem.selected, false);
+        assert.equal(yearNode(inst, String(y)).selected, true);
 
-        // Клик < (Назад) — переходит на прошлый месяц на кнопке соответствующего года
-        inst._onNavLeft();
+        // Клик - (Назад, справа) — переходит на прошлый месяц на кнопке соответствующего года
+        inst._onNavRight();
         assert.equal(inst.selected.is, undefined, 'это узел дерева на кнопке года');
         const targetYear = yearNode(inst, inst.selected.name.slice(0, 4));
         assert.equal(targetYear.selected, true, 'выбрана кнопка года');
         assert.equal(targetYear.label, inst.selected.fullLabel, 'на кнопке года выведен текст периода');
 
-        // Клик > (Вперёд) — возвращается к текущему месяцу (на кнопке года) и ещё раз > — к следующему месяцу
-        inst._onNavRight();
+        // Клик + (Вперёд, слева) — возвращается к текущему месяцу (на кнопке года) и ещё раз + — к следующему месяцу
+        inst._onNavLeft();
         const curMonthName = inst.selected.name;
-        inst._onNavRight();
+        inst._onNavLeft();
         assert.notEqual(inst.selected.name, curMonthName, 'перешли на следующий месяц в будущее');
     });
 
-    it('шаг стрелками < и > в режиме week сдвигает период ровно на 7 дней', () => {
+    it('шаг кнопками + и - в режиме week сдвигает период ровно на 7 дней', () => {
         const { inst } = mount({ value: 'now:week' });
         const y = new Date().getFullYear();
         build(inst, `${y - 1}-01-01`, `${y + 1}-12-31`, 'week');
         const curStart = inst.period.start;
-        inst._onNavLeft(); // < — предыдущая неделя
+        inst._onNavRight(); // - (справа) — предыдущая неделя
         assert.ok(inst.period.end < curStart, 'предыдущая неделя раньше текущей');
         const prevStart = inst.period.start;
-        inst._onNavRight(); // > — обратно вперёд
+        inst._onNavLeft(); // + (слева) — обратно вперёд
         assert.equal(inst.period.start, curStart);
         assert.notEqual(inst.period.start, prevStart);
     });
 
-    it('если выбран now (Сегодня), а сам диапазон данных целиком в прошлом (например, 2001–2013), клик < (Назад) выбирает последний доступный день диапазона', () => {
+    it('если выбран now (Сегодня), а сам диапазон данных целиком в прошлом (например, 2001–2013), клик - (Назад) выбирает последний доступный день диапазона', () => {
         const { inst } = mount({ value: 'now' });
         build(inst, '2001-01-13', '2013-01-20', 'day');
-        assert.equal(inst.selected.is, 'oda-packets-now-selector');
-        inst._onNavLeft(); // < — Назад из Сегодня к самому свежему доступному дню в прошлом
+        assert.equal(inst._nowItem.label, 'День');
+        assert.equal(inst.selected._isNowTarget, true);
+        inst._onNavRight(); // - (Назад) из Сегодня к самому свежему доступному дню в прошлом
         assert.equal(inst.selected.name, '2013-01-20');
         assert.match(yearNode(inst, '2013').label, /20 января 2013/);
     });
 });
 
-describe('oda-packets: кнопка now, смена mode без перестроения и отображение периода на кнопках годов', () => {
-    it('текст невыбранной кнопки now зависит от mode панели (включая Неделя)', () => {
+describe('oda-packets: первая панель (режим пакетирования), DblClick и отображение периода на кнопках годов', () => {
+    it('текст первой панели всегда отображает только режим (День, Неделя, Месяц, Квартал, Год)', () => {
         const y = new Date().getFullYear();
         const cases = [
             { mode: 'day', nowIdle: 'День' },
@@ -348,11 +355,15 @@ describe('oda-packets: кнопка now, смена mode без перестро
         for (const c of cases) {
             const { inst } = mount();
             build(inst, `${y - 1}-01-01`, `${y}-12-31`, c.mode);
-            assert.equal(inst._nowItem.label, c.nowIdle, `now idle в режиме ${c.mode}`);
+            assert.equal(inst._nowItem.label, c.nowIdle, `первая панель в режиме ${c.mode}`);
+            inst._onSelectNow();
+            assert.equal(inst._nowItem.label, c.nowIdle, `после DblClick первая панель по-прежнему показывает только режим ${c.mode}`);
+            assert.equal(inst._nowItem.selected, false, 'первая панель не выделяется как период');
+            assert.equal(yearNode(inst, String(y)).selected, true, `период режима ${c.mode} отображается на кнопке года`);
         }
     });
 
-    it('выбор из выпадающего списка now (Сегодня, Текущая неделя, Текущий месяц, Текущий квартал, Текущий год) меняет mode без перестроения _build', async () => {
+    it('выбор из выпадающего списка первой панели (День, Неделя, Месяц, Квартал, Год) меняет mode без перестроения _build и ставит текущий период на кнопку года', async () => {
         const y = new Date().getFullYear();
         const { inst } = mount();
         build(inst, `${y - 1}-01-01`, `${y}-12-31`, 'month');
@@ -371,13 +382,14 @@ describe('oda-packets: кнопка now, смена mode без перестро
             inst._build = origBuild;
         }
         assert.equal(menuProps.id, 'oda-menu-list');
-        assert.deepEqual(menuProps.items.map(i => i.label), ['Сегодня', 'Текущая неделя', 'Текущий месяц', 'Текущий квартал', 'Текущий год']);
+        assert.deepEqual(menuProps.items.map(i => i.label), ['День', 'Неделя', 'Месяц', 'Квартал', 'Год']);
         assert.equal(inst.mode, 'quarter', 'mode изменился на quarter');
         assert.equal(buildCount, 0, '_build не вызывался при смене mode');
-        assert.equal(inst._nowItem.selected, true);
-        assert.equal(inst._nowItem.granularity, 'quarter');
-        assert.match(inst._nowItem.label, /кв\./);
-        assert.equal(inst.value, 'now');
+        assert.equal(inst._nowItem.selected, false, 'первая панель показывает только режим');
+        assert.equal(inst._nowItem.label, 'Квартал', 'на первой панели написано Квартал');
+        const yNode = yearNode(inst, String(y));
+        assert.equal(yNode.selected, true, 'выделена кнопка текущего года');
+        assert.match(yNode.label, /кв\./, 'на кнопке года отображён текущий квартал');
     });
 
     it('выбор дня, месяца, квартала, года меняет mode у packets (без перестроения) и меняет текст на кнопке года', () => {
@@ -558,15 +570,15 @@ describe('oda-packets: подписи без сдвига по таймзоне'
         assert.equal(inst._leaves[0].fullLabel, '1 кв. 2024 г.');
         assert.equal(inst.items.find(i => i.name === '*').label, 'Весь период');
         const leftBtn = inst.items.find(i => i.name === '<');
-        assert.equal(leftBtn.icon, 'icons:chevron-right:180');
-        assert.equal(leftBtn.fullLabel, 'Назад (4 кв. 2024 г.)');
+        assert.equal(leftBtn.icon, 'icons:add');
+        assert.equal(leftBtn.fullLabel, 'Вперёд (1 кв. 2024 г.)');
         const rightBtn = inst.items.find(i => i.name === '>');
-        assert.equal(rightBtn.icon, 'icons:chevron-right');
-        assert.equal(rightBtn.fullLabel, 'Вперёд (1 кв. 2024 г.)');
+        assert.equal(rightBtn.icon, 'icons:remove');
+        assert.equal(rightBtn.fullLabel, 'Назад (4 кв. 2024 г.)');
 
         inst._applySelection([leaf(inst, '2024-q4')]);
-        assert.equal(leftBtn.fullLabel, 'Назад (3 кв. 2024 г.)');
-        assert.equal(rightBtn.fullLabel, 'Вперёд');
+        assert.equal(leftBtn.fullLabel, 'Вперёд');
+        assert.equal(rightBtn.fullLabel, 'Назад (3 кв. 2024 г.)');
     });
 });
 
@@ -789,12 +801,13 @@ const _year = (y, from = 0, to = 11) => [_iso(new Date(y, from, 1)), _iso(new Da
 const _todayISO = _iso(new Date());
 
 describe('oda-packets: value (ключ выбора для $save)', () => {
-    it('«Сейчас» публикуется относительным ключом now', () => {
+    it('ключ now устанавливает текущий период на кнопке года, а на первой панели остаётся режим', () => {
         const y = new Date().getFullYear();
         const { inst } = mount({ value: 'now' });
         build(inst, ..._year(y), 'day');
-        assert.equal(inst.selected.is, 'oda-packets-now-selector');
-        assert.equal(inst.value, 'now');
+        assert.equal(inst._nowItem.label, 'День');
+        assert.equal(inst._nowItem.selected, false);
+        assert.equal(yearNode(inst, String(y)).selected, true);
         assert.equal(inst.mask, _todayISO + '*');
         assert.deepEqual(inst.period, { start: _todayISO, end: _todayISO });
     });
@@ -826,14 +839,14 @@ describe('oda-packets: value (ключ выбора для $save)', () => {
 
         const now = mount({ value: 'now' }).inst;
         build(now, ..._year(y), 'day');
-        assert.equal(now.selected.is, 'oda-packets-now-selector');
+        assert.equal(now._nowItem.label, 'День');
+        assert.equal(yearNode(now, String(y)).selected, true);
 
         const nowQ = mount({ value: 'now:quarter' }).inst;
         build(nowQ, `${y - 1}-01-01`, `${y}-12-31`, 'month');
-        assert.equal(nowQ.selected.is, 'oda-packets-now-selector');
-        assert.equal(nowQ.selected.granularity, 'quarter');
+        assert.equal(nowQ._nowItem.label, 'Квартал');
         assert.equal(nowQ.mode, 'quarter');
-        assert.equal(nowQ.value, 'now');
+        assert.equal(yearNode(nowQ, String(y)).selected, true);
     });
 
     it('произвольный период внутри года восстанавливается на кнопке года, а межгодовой — на кнопке custom-period', () => {
@@ -862,11 +875,12 @@ describe('oda-packets: value (ключ выбора для $save)', () => {
         build(unknown, '2024-01-01', '2024-12-31', 'month');
         assert.equal(unknown.selected.name, '*');
 
-        // «Сейчас» вне диапазона: остаётся выбранным и доступным, период — сегодня, строки могут быть пустыми
+        // «Сейчас» вне диапазона: период — сегодня, строки могут быть пустыми
         const stale = mount({ value: 'now' }).inst;
         build(stale, '2020-01-01', '2020-12-31', 'day');
         assert.equal(stale._nowItem.disabled, false);
-        assert.equal(stale.selected.is, 'oda-packets-now-selector');
+        assert.equal(stale._nowItem.label, 'День');
+        assert.equal(stale.selected._isNowTarget, true);
         assert.equal(stale.period.start, stale.period.end);
     });
 
@@ -926,14 +940,14 @@ describe('oda-packets: кварталы и месяцы выбираются в 
         assert.deepEqual(inst.period, { start: '2024-11-15', end: '2024-12-31' });
     });
 
-    it('стрелки от выбранного квартала в day-режиме идут от его краёв по дням (< назад, > вперёд)', () => {
+    it('кнопки + и - от выбранного квартала в day-режиме идут от его краёв по дням (- назад, + вперёд)', () => {
         const { inst } = mount();
         build(inst, '2024-01-01', '2024-12-31', 'day');
         inst._applySelection([inst._dateNodes['2024-q2']]);
-        inst._onNavLeft(); // < — Назад (в прошлое, последний день перед кварталом)
+        inst._onNavRight(); // - (справа) — Назад (в прошлое, последний день перед кварталом)
         assert.equal(inst.selected.name, '2024-03-31', 'назад — последний день перед кварталом');
         inst._applySelection([inst._dateNodes['2024-q2']]);
-        inst._onNavRight(); // > — Вперёд (в будущее, первый день после квартала)
+        inst._onNavLeft(); // + (слева) — Вперёд (в будущее, первый день после квартала)
         assert.equal(inst.selected.name, '2024-07-01', 'вперёд — первый день после квартала');
     });
 

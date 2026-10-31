@@ -188,12 +188,12 @@ export const classSecurityMethods = {
             || (role === this.constructor.ROLES.USER && await this._isPlaceMember(uid));
     },
 
-    /** Рабочая зона роли — папка в метапапке, куда save_file пишет файлы этой роли. */
+    /** Единое файловое хранилище точки — метапапка класса без деления на подпапки ролей. */
     async work_zone(params = {}) {
-        const role = params.role || 'GUEST';
-        if (!POLICY.isRoleId(role) || POLICY.RESERVED_ZONE_NAMES.includes(role))
+        const role = params.role;
+        if (role && (!POLICY.isRoleId(role) || POLICY.RESERVED_ZONE_NAMES.includes(role)))
             throw new Error('work_zone: недопустимое имя роли «' + role + '»');
-        return this.meta_folder._get_next_item(role, FS.$folder);
+        return this.storage_folder;
     },
 
     /** @deprecated используй work_zone */
@@ -467,8 +467,10 @@ export const classSecurityMethods = {
 
     /** Область элемента внутри этой точки (access/policy.js). */
     areaOf(item) {
-        if (!item || typeof item !== 'object' || item === this)
+        if (!item || typeof item !== 'object' || item === this || item.path === this.path)
             return { kind: POLICY.AREA.SYSTEM };
+        if (item.path && item.path === this.meta_folder?.path)
+            return { kind: POLICY.AREA.FILES };
         const itemClass = item.$class ?? item.$owner;
         if (itemClass && itemClass !== this && itemClass.path !== this.path)
             return { kind: POLICY.AREA.NESTED };
@@ -552,7 +554,9 @@ export const classSecurityMethods = {
         if (!uid) return false;
         const rel = [params.folder, params.filename].filter(Boolean).join('/');
         const target = rel && item.path ? item.path.replace(/\/+$/, '') + '/' + rel : item.path;
-        const protectedTarget = POLICY.isExecutablePath(target, this.path) || POLICY.isAgentControlPath(target, this.path);
+        const protectedTarget = POLICY.isSystemMetaPath(target, this.path)
+            || POLICY.isExecutablePath(target, this.path)
+            || POLICY.isAgentControlPath(target, this.path);
         if (this.id === uid && params.session?.principal?.kind !== 'node' && !protectedTarget)
             return true;
         if (globalThis.WORK && await this._isWorkAdmin(params))
@@ -565,12 +569,20 @@ export const classSecurityMethods = {
         if (!roles.includes(role))
             return false;
         const declared = this._declaredRolesSync();
-        const local = this._roleIds(role, declared).includes(uid);
-        if (POLICY.canWrite(declared[role], this.areaOf(item), {
+        if (role !== this.constructor.ROLES.ADMIN && protectedTarget)
+            return false;
+        const local = this._roleIds(role, declared).includes(uid)
+            || (role === this.constructor.ROLES.USER && await this._isPlaceMember(uid));
+        const targetArea = rel && item.path === this.meta_folder?.path
+            ? POLICY.areaOfPath(target, this.path, Object.keys(declared))
+            : this.areaOf(item);
+        if (POLICY.canWrite(declared[role], targetArea, {
             local,
-            executable: POLICY.isExecutablePath(item.path, this.path),
+            executable: protectedTarget,
         }))
             return true;
+        if (protectedTarget)
+            return false;
         return LINKS.grantsWrite(this, params);
     },
 

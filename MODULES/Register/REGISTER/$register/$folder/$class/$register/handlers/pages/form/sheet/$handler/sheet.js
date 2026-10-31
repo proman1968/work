@@ -298,7 +298,7 @@ export default {
             margin-left: 8px;
         }
     </style>
-    <oda-packets no-flex mode="month" ~if="packetsStart"
+    <oda-packets no-flex mode="month"
         :start="packetsStart" :end="packetsEnd" :days="packetDays"
         ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
     <div class="error" ~if="error">{{error}}</div>
@@ -344,8 +344,8 @@ export default {
     </div>
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
-    packetsStart: '',
-    packetsEnd: '',
+    packetsStart: _yearStart(),
+    packetsEnd: _yearEnd(),
     packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
@@ -607,14 +607,15 @@ export default {
         await this.reload();
     },
     async attached() {
+        if (this._attachedDone && !this._initialNav)
+            return;
         const initNav = this._initialNav;
         this._initialNav = null;
         if (initNav)
             this._applyNavFields(initNav);
         else
             this._restorePeriodState();
-        await Promise.all([this.loadSlots(), this.loadScope()]);
-        await this.reload();
+        await Promise.all([this.loadSlots(), this.loadScope(), this.reload()]);
         this._attachedDone = true;
     },
     async loadSlots() {
@@ -691,11 +692,12 @@ export default {
         return false;
     },
     async reload() {
-        this.rows = [];
-        this.total = null;
         this.error = '';
-        if (!this.$item)
+        if (!this.$item) {
+            this.rows = [];
+            this.total = null;
             return;
+        }
         try {
             const res = await this.$item.fetch('db_sheet', this.params());
             if (this._syncPacketRange(res))

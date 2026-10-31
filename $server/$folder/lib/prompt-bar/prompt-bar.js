@@ -18,7 +18,7 @@ const EFFORTS = [
 ];
 
 function capList(item) {
-    const c = item?.capabilities;
+    const c = item?.DATA?.capabilities ?? item?.capabilities;
     if (c && typeof c.then === 'function')
         return c;
     if (c == null || c === '')
@@ -29,16 +29,91 @@ function capList(item) {
     return list.length ? list : undefined;
 }
 
-/** Мозг задачи — chat. Нет caps или есть chat; image-only не выбирается. */
-function isChatCaps(caps) {
-    if (caps && typeof caps.then === 'function')
-        return true;
-    const list = Array.isArray(caps)
-        ? caps.map(String)
-        : String(caps || '').split(/[\s,]+/).filter(Boolean);
-    if (!list.length)
-        return true;
-    return list.includes('chat');
+/** Является ли узел $ai языковой моделью, подходящей для чата (не image/audio/embedding/asr/tts). */
+export function isChatModel(item) {
+    if (!item)
+        return false;
+    if (item.type && item.type !== '$ai')
+        return false;
+    const mod = String(item.DATA?.modality ?? (typeof item.modality === 'string' ? item.modality : '') ?? '').toLowerCase();
+    if (['image', 'audio', 'embedding', 'video', 'voice', 'asr', 'tts', 'stt'].includes(mod))
+        return false;
+    const name = String(item.id || item.label || item.DATA?.label || item.path || '').toLowerCase();
+    if (/(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i.test(name))
+        return false;
+    const caps = item.DATA?.capabilities ?? item.capabilities;
+    if (caps && typeof caps.then !== 'function') {
+        const list = Array.isArray(caps)
+            ? caps.map(String)
+            : String(caps || '').split(/[\s,]+/).filter(Boolean);
+        if (list.length)
+            return list.includes('chat');
+    }
+    return true;
+}
+
+/** Ключ пользовательских настроек модели ИИ (привязан к пользователю, а не к подразделению/точке). */
+function userAiStorageKey(suffix = 'model') {
+    const uid = globalThis.WORK?.uid
+        || globalThis.WORK?.USER?.id
+        || globalThis.WORK?.credentials?.uid
+        || 'default';
+    return `work.user.ai:${uid}:${suffix}`;
+}
+
+export function getUserPreferredModel() {
+    if (typeof localStorage === 'undefined')
+        return '';
+    try {
+        const val = localStorage.getItem(userAiStorageKey('model'))
+            || localStorage.getItem('work.user.ai:default:model')
+            || '';
+        if (val && /(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i.test(val))
+            return '';
+        return val;
+    }
+    catch {
+        return '';
+    }
+}
+
+export function setUserPreferredModel(modelPath) {
+    if (!modelPath || typeof localStorage === 'undefined')
+        return;
+    if (/(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i.test(modelPath))
+        return;
+    try {
+        localStorage.setItem(userAiStorageKey('model'), modelPath);
+        localStorage.setItem('work.user.ai:default:model', modelPath);
+        if (typeof BroadcastChannel !== 'undefined')
+            new BroadcastChannel('work-user-ai-model').postMessage({ model: modelPath });
+    }
+    catch { /* ignore */ }
+}
+
+export function getUserPreferredEfforts() {
+    if (typeof localStorage === 'undefined')
+        return {};
+    try {
+        const raw = localStorage.getItem(userAiStorageKey('efforts'))
+            || localStorage.getItem('work.user.ai:default:efforts');
+        const parsed = raw ? JSON.parse(raw) : null;
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+
+export function setUserPreferredEfforts(efforts) {
+    if (!efforts || typeof efforts !== 'object' || typeof localStorage === 'undefined')
+        return;
+    try {
+        const str = JSON.stringify(efforts);
+        localStorage.setItem(userAiStorageKey('efforts'), str);
+        localStorage.setItem('work.user.ai:default:efforts', str);
+    }
+    catch { /* ignore */ }
 }
 
 /** Выпадающий список для WORK.showDropdown: выбор закрывает дропдаун со значением id. */
@@ -60,6 +135,56 @@ ODA({ is: 'work-prompt-menu',
     options: [],
     value: '',
     pick(id) { this.parentElement?.close?.(id); },
+});
+
+/** Мультивыбор получателей подразделения для отправки сообщения. */
+ODA({ is: 'work-receivers-menu',
+    imports: 'oda//icon, ~/lib//user',
+    template: /*html*/`
+        <style>
+            :host { @apply --vertical; padding: 4px; min-width: 260px; max-width: 360px; font-size: small; }
+            .it { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 10px; border-radius: var(--radius-s, 6px); cursor: pointer; }
+            .it:hover { background: var(--accent-soft); }
+            .it[on] { font-weight: 600; background: var(--subtle-background); }
+            .hint { opacity: .65; font-size: x-small; font-weight: normal; }
+            .clear-row { border-bottom: 1px solid var(--subtle-border, var(--border-color)); margin-bottom: 4px; }
+        </style>
+        <div class="it clear-row" ~if="selectedIds.length" @tap="clearAll()">
+            <oda-icon no-flex icon="bootstrap:robot" :icon-size="16"></oda-icon>
+            <div vertical flex>
+                <span>Снять выбор (задача для ИИ)</span>
+                <span class="hint">Если получатели не выбраны, создаётся задача ИИ</span>
+            </div>
+        </div>
+        <div class="it" ~for="users" :on="isSelected($for.item)" @tap="toggle($for.item)">
+            <oda-icon no-flex :icon="isSelected($for.item) ? 'icons:check' : ''" :icon-size="16"></oda-icon>
+            <item-user no-flex border :$item="$for.item" :icon-size="24"></item-user>
+            <div vertical flex style="min-width: 0;">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{$for.item.label || $for.item.id}}</span>
+                <span class="hint" ~if="$for.item._placeLabel">{{$for.item._placeLabel}}</span>
+            </div>
+        </div>
+    `,
+    users: [],
+    selectedIds: [],
+    onToggle: null,
+    onClear: null,
+    isSelected(u) {
+        return Boolean(u?.id && (this.selectedIds || []).includes(u.id));
+    },
+    toggle(u) {
+        if (!u?.id) return;
+        const set = new Set(this.selectedIds || []);
+        if (set.has(u.id)) set.delete(u.id);
+        else set.add(u.id);
+        this.selectedIds = [...set];
+        this.onToggle?.(u);
+    },
+    clearAll() {
+        this.selectedIds = [];
+        this.onClear?.();
+        this.parentElement?.close?.(null);
+    },
 });
 
 /**
@@ -182,11 +307,12 @@ ODA({ is: 'work-prompt-bar',
             <textarea id="text" rows="1" :placeholder="recording ? 'Говорите…' : placeholder" :value="value" :readonly="recording"
                 @input="onInput" @keydown="_onKeydown" @paste="_onPaste"></textarea>
             <div class="row">
-                <oda-button class="icon-btn" icon="carbon:add" :icon-size="20" title="Прикрепить файлы (Ctrl+Enter)" @tap="getFile"></oda-button>
+                <oda-button class="icon-btn" icon="carbon:add" :icon-size="20" title="Действия: прикрепить файлы, выбрать получателей, создать операцию" @tap="onPlusTap($event)"></oda-button>
+                <oda-button class="icon-btn" ~if="deptUsers?.length" icon="icons:supervisor-account" :icon-size="18" title="Получатели подразделения (если не выбраны — создаётся задача ИИ)" @tap="chooseReceivers($event)"></oda-button>
                 <button class="pill" ~if="modes?.length" :plan="mode === 'plan'" :ask="mode === 'ask'" :title="modeMeta?.hint" @tap="chooseMode">
                     <oda-icon :icon="modeMeta?.icon" :icon-size="14"></oda-icon><span>{{modeMeta?.label}}</span><oda-icon icon="carbon:chevron-down" :icon-size="12"></oda-icon>
                 </button>
-                <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="22"></item-user>
+                <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="22" title="Снять получателя" @tap.stop="toggleReceiver($for.item)"></item-user>
                 <div flex></div>
                 <button class="pill" ~if="ai" :title="modelTitle" @pointerdown.stop="selectModel($event)">
                     <oda-icon :icon="modelIcon" :icon-size="16"></oda-icon><span>{{modelName}}</span><oda-icon icon="carbon:chevron-down" :icon-size="12"></oda-icon>
@@ -232,6 +358,8 @@ ODA({ is: 'work-prompt-bar',
     modes: null,
     mode: '',
     receivers: [],
+    deptUsers: [],
+    operationClasses: [],
     /** Совместимость со старыми хостами (TTS убран из бара). */
     ttsMode: 'off',
     showTts: false,
@@ -456,6 +584,83 @@ ODA({ is: 'work-prompt-bar',
             throw err;
         }
     },
+    async onPlusTap(e) {
+        const hasUsers = Array.isArray(this.deptUsers) && this.deptUsers.length > 0;
+        const hasOps = Array.isArray(this.operationClasses) && this.operationClasses.length > 0;
+        if (!hasUsers && !hasOps)
+            return this.getFile();
+        const anchor = e?.currentTarget || e?.target || this;
+        const options = [
+            { id: 'files', label: 'Изображения и файлы', icon: 'carbon:attachment', hint: 'Прикрепить файлы с диска (Ctrl+Enter)' },
+        ];
+        if (hasUsers) {
+            options.push({
+                id: 'receivers',
+                label: 'Получатели подразделения',
+                icon: 'icons:supervisor-account',
+                hint: this.receivers?.length
+                    ? 'Выбрано: ' + this.receivers.map(u => u.label || u.id).join(', ')
+                    : '@ — выбрать сотрудников (если не выбраны — задача ИИ)',
+            });
+        }
+        if (hasOps) {
+            options.push({
+                id: 'operations',
+                label: 'Создать операцию…',
+                icon: 'carbon:task-complete',
+                hint: '/ — новый документ в доступном классе операций',
+            });
+        }
+        const picked = await this._menu({ currentTarget: anchor }, options, '');
+        if (picked === 'files')
+            return this.getFile();
+        if (picked === 'receivers')
+            return this.chooseReceivers({ currentTarget: anchor });
+        if (picked === 'operations')
+            return this.chooseOperationClass({ currentTarget: anchor });
+    },
+    toggleReceiver(user) {
+        if (!user?.id) return;
+        const list = Array.isArray(this.receivers) ? [...this.receivers] : [];
+        const idx = list.findIndex(u => u?.id === user.id);
+        if (idx >= 0)
+            list.splice(idx, 1);
+        else
+            list.push(user);
+        this.receivers = list;
+        this.fire('receivers-changed', list);
+    },
+    async chooseReceivers(e) {
+        const users = Array.isArray(this.deptUsers) ? this.deptUsers : [];
+        if (!users.length) return;
+        const anchor = e?.currentTarget || e?.target || this;
+        const el = ODA.createComponent('work-receivers-menu', {
+            users,
+            selectedIds: (this.receivers || []).map(u => u?.id).filter(Boolean),
+            onToggle: (u) => this.toggleReceiver(u),
+            onClear: () => {
+                this.receivers = [];
+                this.fire('receivers-changed', []);
+            },
+        });
+        try {
+            await WORK.showDropdown(el, { TITLE: { label: 'Получатели подразделения' } }, anchor);
+        }
+        catch (err) {
+            if (!(err instanceof WORK.CancelError))
+                throw err;
+        }
+        this.focusInput();
+    },
+    async chooseOperationClass(e) {
+        const ops = Array.isArray(this.operationClasses) ? this.operationClasses : [];
+        if (!ops.length) return;
+        const anchor = e?.currentTarget || e?.target || this;
+        const id = await this._menu({ currentTarget: anchor }, ops, '');
+        if (id)
+            this.fire('create-operation', { path: id });
+        this.focusInput();
+    },
     async chooseMode(e) {
         const id = await this._menu(e, this.modes || [], this.mode);
         if (id)
@@ -479,11 +684,9 @@ ODA({ is: 'work-prompt-bar',
         }
         catch { /* ignore */ }
         const tree = ODA.createElement('item-tree', {
-            $item: modelsRoot, hideTops: 1, hideRoots: 2, allowCategories: false,
+            $item: modelsRoot, hideTops: 1, hideRoots: 2, allowCategories: false, onlyChatModels: true,
             execute(item) {
-                if (item?.type && item.type !== '$ai')
-                    return;
-                if (!isChatCaps(item?.capabilities))
+                if (!isChatModel(item))
                     return;
                 this.parentElement.close(item);
             },
@@ -499,6 +702,7 @@ ODA({ is: 'work-prompt-bar',
         }
         if (!item)
             return;
+        setUserPreferredModel(item.path);
         this.model = item.path;
         this.focusInput();
     },

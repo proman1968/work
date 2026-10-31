@@ -308,18 +308,19 @@ export default {
             padding-bottom: 4px;
         }
         .btn-action {
-            padding: 2px 8px;
-            font-size: 12px;
-            font-weight: 600;
-            border: 1px solid light-dark(#b8b7ae, #4a4c56);
-            border-radius: 3px;
-            background: light-dark(linear-gradient(180deg, #fafaf8 0%, #e8e7de 100%), linear-gradient(180deg, #32343a 0%, #26282d 100%));
-            color: inherit;
+            @apply --content;
+            @apply --border;
+            @apply --hoverable;
+            padding: 3px 8px;
+            font-size: small;
+            font-family: inherit;
+            font-weight: 500;
+            border-radius: 0;
             cursor: pointer;
         }
     </style>
 
-    <oda-packets no-flex mode="month" ~if="packetsStart"
+    <oda-packets no-flex mode="month"
         :start="packetsStart" :end="packetsEnd" :days="packetDays"
         ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
 
@@ -404,8 +405,8 @@ export default {
     </div>
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
-    packetsStart: '',
-    packetsEnd: '',
+    packetsStart: _yearStart(),
+    packetsEnd: _yearEnd(),
     packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
@@ -565,11 +566,12 @@ export default {
         this.entryCard = null;
     },
     async attached() {
+        if (this._attachedDone && !this._initialNav)
+            return;
         const initNav = this._initialNav;
         this._initialNav = null;
         this._restorePeriodState(initNav);
-        await this.loadScope();
-        await this.reload();
+        await Promise.all([this.loadScope(), this.reload()]);
         this._attachedDone = true;
     },
     /** Видимые подразделения для фильтра; без ответа — без фильтра. */
@@ -637,12 +639,13 @@ export default {
         return false;
     },
     async reload() {
-        this.items = [];
-        this.count = 0;
-        this.sum = { amount: 0, qty: 0 };
         this.error = '';
-        if (!this.$item)
+        if (!this.$item) {
+            this.items = [];
+            this.count = 0;
+            this.sum = { amount: 0, qty: 0 };
             return;
+        }
         try {
             const res = await this.$item.fetch('db_journal', this.params());
             if (this._syncPacketRange(res))
@@ -653,6 +656,9 @@ export default {
             this.sum = res?.sum || { amount: 0, qty: 0 };
         }
         catch (e) {
+            this.items = [];
+            this.count = 0;
+            this.sum = { amount: 0, qty: 0 };
             this.error = String(e?.message || e);
         }
     },

@@ -3,8 +3,8 @@ export default {
     imports: 'oda//app-layout.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js',
     extends: 'oda-app-layout',
     template: /*html*/`
-        <item-tree slot='left-panel' allow-search :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
-        <item-consultant slot='left-panel' id="consultant" label="ИИ" icon="bootstrap:robot" :$item hidden style="height: 0"></item-consultant>
+        <item-tree order="0" slot='left-panel' allow-search :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
+        <item-consultant order="3" slot='left-panel' id="consultant" label="ИИ" icon="bootstrap:robot" :$item hidden style="height: 0"></item-consultant>
         <div flex vertical slot='main' style="overflow: hidden; position: relative;">
             <call-form ~if="showCall" id="callForm"></call-form>
             <item-hexagon-layout ~show="showHexagon" flex id="hexagon"></item-hexagon-layout>
@@ -13,15 +13,15 @@ export default {
                 <iframe ~show="focusedPage === $for.item" style="border: none;" flex ~for="pages" :src="$for.item"></iframe>
             </div>
         </div>
-        <div id="bookmarksBar" slot="footer" class="pe-no-print" horizontal no-flex :hidden="!hasBookmarks" ~show="hasBookmarks" style="display: flex; flex-direction: row; align-items: center; gap: 4px; padding: 3px 6px; min-height: 44px; height: 44px; box-sizing: border-box; background: var(--header-background); color: var(--header-color); border-top: 1px solid var(--border-color); overflow-x: auto; overflow-y: hidden; user-select: none; z-index: 2;">
-            <div horizontal flex style="display: flex; flex-direction: row; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;">
-                <div ~for="bookmarks" :title="$for.item.title || $for.item.short" @tap="activateBookmark($for.item)" @auxclick="onBookmarkAuxClick($for.item, $event)" ~style="bookmarkItemStyle($for.item)">
-                    <oda-icon :icon="$for.item.icon || 'icons:dashboard'" icon-size="18"></oda-icon>
-                    <span style="max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; line-height: 1.15;">{{$for.item.label}}</span>
-                    <span title="Закрыть форму" @tap.stop="closeBookmark($for.item, $event)" style="position: absolute; top: 1px; right: 2px; width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; border-radius: 3px; font-size: 10px; font-weight: 700; line-height: 1; opacity: 0.65;">✕</span>
+        <div id="bookmarksBar" slot="footer" class="pe-no-print" footer border-top horizontal-center no-flex :hidden="!hasBookmarks" ~show="hasBookmarks" style="gap: 4px; padding: 2px 6px; overflow: hidden; z-index: 2;">
+            <div horizontal-center flex style="gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden;">
+                <div ~for="bookmarks" horizontal-center no-flex border hoverable :content="isActiveBookmark($for.item)" :light="!isActiveBookmark($for.item)" :raised="isActiveBookmark($for.item)" :focused="isActiveBookmark($for.item)" :bold="isActiveBookmark($for.item)" :title="$for.item.title || $for.item.short" @tap="activateBookmark($for.item)" @auxclick="onBookmarkAuxClick($for.item, $event)" style="gap: 6px; padding: 3px 6px; max-width: 220px; cursor: pointer;">
+                    <oda-icon no-flex :icon="$for.item.icon || 'icons:dashboard'" :icon-size="16"></oda-icon>
+                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{$for.item.label}}</span>
+                    <oda-icon no-flex icon="icons:close" :icon-size="14" title="Закрыть форму" @tap.stop="closeBookmark($for.item, $event)"></oda-icon>
                 </div>
             </div>
-            <button type="button" ~if="bookmarks.length > 1" title="Закрыть все открытые формы" @tap.stop="closeAllBookmarks($event)" style="display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-left: 4px; border: 1px solid var(--border-color); border-radius: 4px; background: var(--content-background); color: var(--content-color); font-size: 12px; font-weight: 700; cursor: pointer; flex-shrink: 0;">✕</button>
+            <oda-button ~if="bookmarks.length > 1" no-flex icon="icons:close" :icon-size="16" title="Закрыть все открытые формы" @tap.stop="closeAllBookmarks($event)"></oda-button>
         </div>
     `,
     visibleMode: 'main',
@@ -30,33 +30,10 @@ export default {
     bookmarks: [],
     focusedPage: '',
     get hasBookmarks() {
-        return Array.isArray(this.bookmarks) && this.bookmarks.length > 0 && this.visibleMode === 'main';
+        return !this.mobile && Array.isArray(this.bookmarks) && this.bookmarks.length > 0 && this.visibleMode === 'main';
     },
-    bookmarkItemStyle(bm) {
-        const isActive = Boolean(bm && this.focusedPage === bm.url && this.visibleMode === 'main');
-        return {
-            position: 'relative',
-            display: 'inline-flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '1px',
-            minWidth: '64px',
-            maxWidth: '200px',
-            height: '38px',
-            padding: '2px 18px 2px 10px',
-            boxSizing: 'border-box',
-            borderRadius: '3px',
-            cursor: 'pointer',
-            flexShrink: '0',
-            fontWeight: isActive ? '600' : '500',
-            border: isActive ? '1px solid var(--accent-color)' : '1px solid var(--border-color)',
-            background: isActive
-                ? 'color-mix(in oklch, var(--accent-color) 22%, var(--content-background))'
-                : 'var(--content-background)',
-            color: 'var(--content-color)',
-            fill: 'var(--content-color)',
-        };
+    isActiveBookmark(bm) {
+        return Boolean(bm && this.focusedPage === bm.url && this.visibleMode === 'main');
     },
     get showCall(){
         return this.visibleMode === 'call' && this.left_drawer.closed;
@@ -64,8 +41,11 @@ export default {
     set showCall(n){
         this.visibleMode = 'call';
         this.left_drawer.closed = n;
-        this.left_buttons = undefined;
+        this._refreshLeftButtons();
         if (!n) {
+            // RTCCaller.current_call обнуляется уже после закрытия формы звонка —
+            // повторяем пересборку кнопок, чтобы кнопка звонка снова спряталась.
+            this.async(() => this._refreshLeftButtons(), 400);
             this.load_page();
         }
     },
@@ -102,54 +82,64 @@ export default {
             return Promise.resolve(WORK.USER?.icon).then(i => i || 'icons:account-circle');
         }
     },
-    get left_buttons() {
-        let user_icon = this.user_icon;
-        if (user_icon && typeof user_icon.then === 'function')
-            user_icon = 'icons:account-circle'; // пока грузится
-        const user_color = WORK.USER?.iconColor || 'transparent';
-        let buttons = [
-            {
+    /**
+     * Кнопки в нижней части левой панели. Кнопка звонка показывается ТОЛЬКО во время
+     * звонка/видеоконференции: раньше у неё выставлялся `hidden: true`, но рендер кнопок
+     * через ~props логический `hidden` не применяет, поэтому кнопка висела всегда.
+     */
+    _buildLeftButtons() {
+        const user = WORK.USER;
+        const buttons = [];
+        if (top.RTCCaller?.current_call) {
+            buttons.push({
                 round: true,
                 icon: 'eva:o-phone-call-outline',
-                click: (e) => {
+                title: 'Вернуться к звонку',
+                rainbow: true,
+                click: () => {
                     this.showCall = true;
                 },
-                rainbow: true,
-                hidden:{
-                    $attr: true,
-                    get(){
-                        return !top.RTCCaller.current_call
-                    }
-                }
+            });
+        }
+        buttons.push({
+            round: true,
+            icon: user?.icon || 'icons:account-circle',
+            default: 'icons:account-circle',
+            style: `color: white; fill: white; background:${user?.iconColor || 'transparent'}`,
+            click: () => {
+                this.showUser = true;
             },
-            {
-                round: true,
-                icon: user_icon,
-                default: 'icons:account-circle',
-                style: `color: white; fill: white; background:${user_color}`,
-                click: (e) => {
-                    this.showUser = true;
-                },
-                get errorInvert(){
-                    return !WORK.uid;
-                }
-
-            },
-            {
-                round: true,
-                icon: 'icons:apps',
-                click: (e) => {
-                    e.stopPropagation();
-                    this.visibleMode = 'main';
-                    let url = window.location.origin + window.location.pathname + '#';
-                    window.open(url, '_self');
-                    this.left_drawer.closed = !this.left_drawer.closed;
-                }
+            errorInvert: !WORK.uid,
+        });
+        buttons.push({
+            round: true,
+            icon: 'icons:apps',
+            click: (e) => {
+                e.stopPropagation();
+                this.visibleMode = 'main';
+                let url = window.location.origin + window.location.pathname + '#';
+                window.open(url, '_self');
+                this.left_drawer.closed = !this.left_drawer.closed;
             }
-        ]
-
-        buttons[0].hidden = !top.RTCCaller.current_call
+        });
         return buttons;
+    },
+    /** Пересобрать кнопки (после входа/выхода и при старте/завершении звонка). */
+    _refreshLeftButtons() {
+        this.left_buttons = this._buildLeftButtons();
+        const icon = WORK.USER?.icon;
+        if (icon) {
+            Promise.resolve(icon).then(res => {
+                if (!res)
+                    return;
+                const btn = this.left_buttons?.find?.(b => b.icon === 'icons:account-circle' || b.default === 'icons:account-circle');
+                if (btn && btn.icon !== res) {
+                    btn.icon = res;
+                    this.left_buttons = [...this.left_buttons];
+                }
+            }).catch(() => { /* ignore */ });
+        }
+        return this.left_buttons;
     },
     _onFocusedIndexChanged(e) {
         this.visibleMode = 'main';
@@ -513,9 +503,10 @@ export default {
             }
         })
         window.explorer = this;
+        this._refreshLeftButtons();
         WORK.authEvents?.addEventListener('auth', () => {
             this.user_icon = undefined;
-            this.left_buttons = undefined;
+            this._refreshLeftButtons();
             this.render?.();
         });
         window.execute = async ($item, nav) => {

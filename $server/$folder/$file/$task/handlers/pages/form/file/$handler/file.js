@@ -124,6 +124,9 @@ export default {
             this.status = 'idle';
             this.extraFiles = [];
             this._docKeys = undefined;
+            this._docsList = undefined;
+            this._filesList = undefined;
+            this._resultsList = undefined;
             this.dockTab = 'context';
             this.dockFile = '';
             this.resultKey = '';
@@ -157,7 +160,12 @@ export default {
         this._h = null;
     },
     $listeners: {
-        resize() { this.mobile = undefined; },
+        resize() {
+            if (this._lastMobile !== ODA.states.mobileMode) {
+                this._lastMobile = ODA.states.mobileMode;
+                this.invalidate('mobile');
+            }
+        },
         keydown(e) {
             // композер сам обрабатывает Esc (стоп/очистка) и гасит событие: второй стоп не нужен
             if (e.key === 'Escape' && !e.defaultPrevented && this.status === 'running')
@@ -254,6 +262,21 @@ export default {
         // тот же набор — те же объекты: вкладки и iframe/video не пересоздаются и не моргают
         const { docs } = stableDocs(this._docsList, list);
         this._docsList = docs;
+        return docs;
+    },
+    /** Стабилизированный список опубликованных результатов (data.results) без пересоздания объектов при _reload. */
+    get results() {
+        const list = (this.data?.results || []).filter(r => r?.snapshot).map(r => ({
+            key: 'result:' + r.snapshot,
+            kind: 'file',
+            path: r.snapshot,
+            snapshot: r.snapshot,
+            title: r.title || (r.snapshot ? String(r.snapshot).split('/').pop() : 'Результат'),
+            time: r.time,
+            published: true,
+        }));
+        const { docs } = stableDocs(this._resultsList, list);
+        this._resultsList = docs;
         return docs;
     },
     /** Все файлы задачи: вложения человека, созданное агентом, опубликованное (+ открытые по ссылке из ответа). */
@@ -405,34 +428,50 @@ export default {
         })();
     },
     /**
-     * Новый файл или отчёт во время работы: док открыт — показать его (если человек не смотрит монитор/результаты),
-     * закрыт — точка на кольце. Свои вложения человека не в счёт. Первая загрузка — только база.
+     * Новый результат, отчёт или файл во время работы:
+     * - если размещён результат (publish / data.results или отчёт субагента) — сразу открываем правую панель
+     *   и переключаемся на вкладку «Результаты»;
+     * - если создан обычный файл: при открытом доке показываем его, при закрытом — индикатор на кольце.
      */
     _noticeDocs(before) {
-        const keys = [...this.files.map(f => f.key), ...this.docs.filter(d => d.kind === 'text').map(d => d.key)];
+        const resultKeys = (this.data?.results || []).filter(r => r?.snapshot).map(r => 'result:' + r.snapshot);
+        const reportKeys = this.docs.filter(d => d.kind === 'text').map(d => d.key);
+        const fileKeys = this.files.map(f => f.key);
+        const keys = [...resultKeys, ...reportKeys, ...fileKeys];
         this._docKeys = keys;
-        if (!before)
+        if (!before) {
+            if (resultKeys.length) {
+                this.dockOpen = true;
+                this.dockTab = 'results';
+                this.resultKey = resultKeys.at(-1);
+                this.resultKeyAt = Date.now();
+                this.freshDocs = 0;
+            }
             return;
+        }
         const added = keys.filter(k => !before.includes(k));
+        const newResultKeys = added.filter(k => k.startsWith('result:') || k.startsWith('agent:'));
         const files = added.map(k => this.files.find(f => f.key === k)).filter(f => f && f.source !== 'user');
-        const reports = added.map(k => this.docs.find(d => d.key === k)).filter(Boolean);
-        if (!files.length && !reports.length)
+        if (!newResultKeys.length && !files.length)
             return;
+        if (newResultKeys.length) {
+            this.dockOpen = true;
+            this.dockTab = 'results';
+            this.resultKey = newResultKeys.at(-1);
+            this.resultKeyAt = Date.now();
+            this.freshDocs = 0;
+            return;
+        }
         if (!this.dockOpen) {
-            this.freshDocs += files.length + reports.length;
+            this.freshDocs += files.length;
             return;
         }
         if (files.length && ['context', 'files'].includes(this.dockTab)) {
             this.dockTab = 'files';
             this.dockFile = files.at(-1).key;
         }
-        else if (reports.length && ['context', 'results'].includes(this.dockTab)) {
-            this.dockTab = 'results';
-            this.resultKey = reports.at(-1).key;
-            this.resultKeyAt = Date.now();
-        }
         else
-            this.freshDocs += files.length + reports.length;
+            this.freshDocs += files.length;
     },
     onScroll(e) {
         if (this._sticking)

@@ -6,10 +6,11 @@ export default {
             }
             iframe {
                 width: 100%;
-                height: 320px;
-                border: 1px solid var(--subtle-border);
-                border-radius: var(--radius-m, 8px);
+                height: 220px;
+                border: none;
+                border-radius: 0;
                 background: white;
+                display: block;
             }
         </style>
         <!-- sandbox: скрипты работают в изолированном источнике без доступа
@@ -17,6 +18,14 @@ export default {
         <iframe :src sandbox="allow-scripts" loading="lazy"></iframe>
     `,
     get src() {
-        return this.$item?.url;
+        const u = this.$item?.url;
+        if (!u)
+            return '';
+        try {
+            return new URL(u, globalThis.location?.origin || 'http://localhost').href;
+        }
+        catch {
+            return u;
+        }
     }
 }

@@ -95,10 +95,14 @@ ODA({
             if (this._prevElement) {
                 this.drag.initialPrevWidth = this._prevElement.offsetWidth;
                 this.drag.initialPrevHeight = this._prevElement.offsetHeight;
+                this.drag.prevPointerEvents = this._prevElement.style.pointerEvents || '';
+                this._prevElement.style.pointerEvents = 'none';
             }
             if (this._nextElement) {
                 this.drag.initialNextWidth = this._nextElement.offsetWidth;
                 this.drag.initialNextHeight = this._nextElement.offsetHeight;
+                this.drag.nextPointerEvents = this._nextElement.style.pointerEvents || '';
+                this._nextElement.style.pointerEvents = 'none';
             }
             if (this._prevElement && this._nextElement) {
                 const prevRect = this._prevElement.getBoundingClientRect();
@@ -122,12 +126,14 @@ ODA({
         if (this.vertical || this.right || this.left) {
             if (this.left && this._nextElement) {
                 const newWidth = this.drag.initialNextWidth - totalDeltaX * sign;
-                this.width = this._checkSize(newWidth);
-                this._nextElement.style.width = `${this.width}px`;
+                const w = this._checkSize(newWidth);
+                this.drag.pendingWidth = w;
+                this._nextElement.style.width = `${w}px`;
             } else if (this.right && this._prevElement) {
                 const newWidth = this.drag.initialPrevWidth + totalDeltaX * sign;
-                this.width = this._checkSize(newWidth);
-                this._prevElement.style.width = `${this.width}px`;
+                const w = this._checkSize(newWidth);
+                this.drag.pendingWidth = w;
+                this._prevElement.style.width = `${w}px`;
             } else if (this._prevElement && this._nextElement) {
                 const newPrevWidth = percent ? ((this.drag.prevSize + totalDeltaX) / this.drag.totalSize) * 100 : this.drag.prevSize + totalDeltaX * sign;
                 const newNextWidth = percent ? 100 - newPrevWidth : this.drag.nextSize - totalDeltaX * sign;
@@ -137,12 +143,14 @@ ODA({
         } else if (this.horizontal || this.bottom || this.top) {
             if (this.top && this._nextElement) {
                 const newHeight = this.drag.initialNextHeight - totalDeltaY * sign;
-                this.height = this._checkSize(newHeight);
-                this._nextElement.style.height = `${this.height}px`;
+                const h = this._checkSize(newHeight);
+                this.drag.pendingHeight = h;
+                this._nextElement.style.height = `${h}px`;
             } else if (this.bottom && this._prevElement) {
                 const newHeight = this.drag.initialPrevHeight + totalDeltaY * sign;
-                this.height = this._checkSize(newHeight);
-                this._prevElement.style.height = `${this.height}px`;
+                const h = this._checkSize(newHeight);
+                this.drag.pendingHeight = h;
+                this._prevElement.style.height = `${h}px`;
             } else if (this._prevElement && this._nextElement) {
                 const newPrevHeight = percent ? ((this.drag.prevSize + totalDeltaY) / this.drag.totalSize) * 100 : this.drag.prevSize + totalDeltaY * sign;
                 const newNextHeight = percent ? 100 - newPrevHeight : this.drag.nextSize - totalDeltaY * sign;
@@ -156,7 +164,16 @@ ODA({
             this.releasePointerCapture(this._pointerId);
             this._pointerId = null;
         }
+        const drag = this.drag;
         this.drag = undefined;
+        if (this._prevElement)
+            this._prevElement.style.pointerEvents = drag?.prevPointerEvents || '';
+        if (this._nextElement)
+            this._nextElement.style.pointerEvents = drag?.nextPointerEvents || '';
+        if (drag?.pendingWidth !== undefined)
+            this.width = drag.pendingWidth;
+        if (drag?.pendingHeight !== undefined)
+            this.height = drag.pendingHeight;
         this.removeEventListener('pointermove', this._handleDrag);
         this.removeEventListener('pointerup', this._stopDragging);
         this.removeEventListener('pointercancel', this._stopDragging);

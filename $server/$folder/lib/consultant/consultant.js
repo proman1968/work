@@ -38,6 +38,12 @@ function firstChatLeaf(node) {
     if (!node.items?.length) {
         if (node.type && node.type !== '$ai')
             return null;
+        const mod = String(node.modality || node.DATA?.modality || '').toLowerCase();
+        if (['image', 'audio', 'embedding', 'video', 'voice', 'asr', 'tts', 'stt'].includes(mod))
+            return null;
+        const name = String(node.id || node.label || node.DATA?.label || node.path || '').toLowerCase();
+        if (/(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i.test(name))
+            return null;
         const c = node.capabilities || node.DATA?.capabilities;
         const list = Array.isArray(c) ? c.map(String) : String(c || '').split(/[\s,]+/).filter(Boolean);
         if (list.length && !list.includes('chat'))
@@ -641,7 +647,18 @@ ODA({
     },
 
     async _hydrateModel() {
-        if (this.model)
+        try {
+            const uid = globalThis.WORK?.uid || globalThis.WORK?.USER?.id || globalThis.WORK?.credentials?.uid || 'default';
+            const userModel = localStorage.getItem(`work.user.ai:${uid}:model`)
+                || localStorage.getItem('work.user.ai:default:model')
+                || '';
+            if (userModel && !/(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i.test(userModel)) {
+                this.model = userModel;
+                return;
+            }
+        }
+        catch { /* ignore */ }
+        if (this.model && !/(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i.test(this.model))
             return;
         try {
             const aiRoot = await WORK.get_item('/MODELS', 'info', { deep: 2 });
@@ -697,6 +714,12 @@ ODA({
         if (!v)
             return;
         this.model = v;
+        try {
+            const uid = globalThis.WORK?.uid || globalThis.WORK?.USER?.id || globalThis.WORK?.credentials?.uid || 'default';
+            localStorage.setItem(`work.user.ai:${uid}:model`, v);
+            localStorage.setItem('work.user.ai:default:model', v);
+        }
+        catch { /* ignore */ }
         if (this.taskItem)
             this.taskItem.fetch('configure', { model: v }).catch(() => {});
     },

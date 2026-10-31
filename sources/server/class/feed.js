@@ -12,27 +12,23 @@ const ACCESS_DENIED = 'Доступ запрещён';
 export const classFeedMethods = {
     /**
      * Источник логов чата для текущей роли пользователя.
-     * Приоритет: params.role (выбранная в UI) → фактические роли.
-     * ADMIN, BOSS → лента текущего класса (следы всех пользователей точки);
-     * остальные → своя лента в личном кабинете.
+     * Независимо от того, где работает пользователь, он всегда видит записи только своего лога
+     * (/USERS/<uid>), кроме режима BOSS — в режиме BOSS пользователь видит логи подразделения (this.path).
      */
     async chatSource(params = {}) {
-        if (this.path && this.path.startsWith('/ORGANIZATIONS/'))
+        if (this.type === '$user')
             return this.path;
-        const uid = this.constructor.resolveUid(params);
-        const declared = await this.declared_roles;
+        const uid = this.constructor.resolveUid(params) || (typeof params.uid === 'string' && params.uid ? params.uid : null);
         const own = params.session?.principal?.kind === 'node'
             ? params.session.$user?.path
             : (uid ? '/USERS//' + uid : null);
-        const viaRole = role => {
-            if (POLICY.isSystemRole(role))
+        if (params.role) {
+            if (params.role === 'BOSS')
                 return this.path;
             return own || this.path;
-        };
-        if (params.role && declared[params.role])
-            return viaRole(params.role);
+        }
         const roles = await this.roles(params);
-        if (roles.some(r => POLICY.isSystemRole(r)))
+        if (roles.includes('BOSS'))
             return this.path;
         return own || this.path;
     },
@@ -42,7 +38,8 @@ export const classFeedMethods = {
         const path = await this.chatSource(params);
         if (path === this.path)
             return this;
-        return globalThis.WORK.get_item(path);
+        const target = await globalThis.WORK.get_item(path).catch(() => null);
+        return target || this;
     },
 
     /** @deprecated используй logs({ mode: 'dates' }) */
@@ -179,10 +176,13 @@ export const classFeedMethods = {
 
     /** uid, если вызывающему видна только своя часть ленты точки, иначе null. */
     async _feedOwnOnly(params = {}) {
-        if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
+        const uid = this.constructor.resolveUid(params) || (typeof params?.uid === 'string' && params.uid ? params.uid : null);
+        if (!uid || this.id === uid || this.type === '$user')
             return null;
-        const uid = this.constructor.resolveUid(params);
-        if (!uid || this.id === uid)
+        if (params?.role) {
+            return params.role === 'BOSS' ? null : uid;
+        }
+        if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
             return null;
         if (globalThis.WORK && await this._isWorkAdmin(params))
             return null;

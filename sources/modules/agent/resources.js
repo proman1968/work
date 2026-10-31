@@ -53,9 +53,11 @@ export async function aiDirs(place) {
         dirs.push({ dir: engine, scope: 'engine' });
     for (const cls of classChain(place)) {
         const meta = await safe(() => cls.meta_folder);
-        const dir = meta && await safe(() => meta.get_item('ai'));
-        if (dir && !Array.isArray(dir) && dir.path !== engine?.path)
+        const dir = meta && await safe(() => meta._get_next_item('ai', FS.$folder));
+        if (dir && !Array.isArray(dir) && dir.path !== engine?.path) {
+            dir.reset?.();
             dirs.push({ dir, scope: cls.path, owner: cls });
+        }
     }
     return dirs;
 }

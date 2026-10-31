@@ -434,8 +434,9 @@ async function logOperationFact(db, item, op, action, uid, p) {
     try {
         const LOGS = await import('../server/logs.js');
         let storage = item;
-        if (op.unit) {
-            let u = await globalThis.WORK.get_item(op.unit).catch(() => null);
+        const unitPath = op.unit || p?.unit;
+        if (unitPath) {
+            let u = await globalThis.WORK.get_item(unitPath).catch(() => null);
             if (Array.isArray(u))
                 u = u.at(-1);
             if (u?.save_file)
@@ -444,15 +445,19 @@ async function logOperationFact(db, item, op, action, uid, p) {
         if (!storage?.save_file)
             return;
         const cls = getClass(db, op.cid);
-        const title = op.title || cls?.label || op.id;
+        const title = op.title || op.name || cls?.label || op.id;
+        const senderUid = uid || op.author || p?.uid || 'system';
         const row = {
             time: Date.now(),
-            sender: uid || op.author || 'system',
-            ext: 'operation',
+            sender: senderUid,
+            ext: cls?.type === '$catalog' ? 'object' : 'operation',
             path: `${op.cid}/${op.id}`,
-            content: `${action}: ${title}`,
+            classPath: cls?.path || op.cid,
+            objectId: op.id,
+            unit: unitPath || '',
+            content: `${action}: ${cls?.label && cls.label !== title ? cls.label + ' — ' : ''}${title}`,
         };
-        await LOGS.appendRow(storage, row, p);
+        await LOGS.appendRow(storage, row, { ...p, uid: senderUid });
     }
     catch {
         /* логи не должны блокировать транзакцию БД */
@@ -811,8 +816,8 @@ export const DATA_METHODS = Object.freeze({
             cid: cls.cid, body: bodyOf(p) ?? {}, time: p.time, unit: at.unit, place: at.place,
             ext_of: p.ext_of, valid_from: p.valid_from, author: uid,
         });
-        if (obj?.status === 'registered')
-            await logOperationFact(db, item, obj, 'Проведено', uid, p);
+        if (obj)
+            await logOperationFact(db, item, obj, obj.status === 'registered' ? 'Проведено' : 'Создано', uid, p);
         return obj;
     }) },
 

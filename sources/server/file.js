@@ -320,6 +320,10 @@ export class $file extends $folder{
     get storage_folder(){ // папка - классе
         return FS.$folder.build(`.${this.id}`, this.parent);
     }
+    async save_file(params = {}) {
+        const folder = await this.storage_folder.getFolderToSaveFile(params);
+        return folder.save_file(params);
+    }
     get name(){
         let idx = this.id.lastIndexOf('.');
         if (idx>-1)

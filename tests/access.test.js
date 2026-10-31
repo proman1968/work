@@ -142,14 +142,20 @@ describe('ядро: canSee / canWrite по модели', () => {
         assert.equal(await dept.canSee(await dept.meta_folder.get_item('readme.md'), as('u2')), false);
     });
 
-    it('work_zone через шлюз: своя зона читается, чужая — нет', async () => {
+    it('work_zone через шлюз: возвращает единое хранилище точки, рабочие файлы доступны на запись, а системные метаданные защищены от не-админов', async () => {
         const { invoke, canRead } = await import('../sources/server/access/gateway.js');
         const dept = await WORK.get_item('/ORG/DEPT');
-        const own = await invoke(dept, 'work_zone', { role: 'USER', session: { uid: 'u1' } });
-        assert.ok(own.path.endsWith('/USER'));
-        assert.equal(await canRead(own, { session: { uid: 'u1' } }), true);
-        const alien = await invoke(dept, 'work_zone', { role: 'BOSS', session: { uid: 'u1' } });
-        assert.equal(await canRead(alien, { session: { uid: 'u1' } }), false, 'зона BOSS закрыта для USER');
+        const storage = await invoke(dept, 'work_zone', { role: 'USER', session: { uid: 'u1' } });
+        assert.equal(storage.path, dept.storage_folder.path, 'work_zone возвращает единое хранилище (meta_folder) без подпапки роли');
+        assert.equal(await canRead(storage, { session: { uid: 'u1' } }), true);
+        // Сотрудник USER может сохранять обычные файлы в общее хранилище подразделения
+        assert.equal(await dept.canWrite(storage, { ...as('u1', 'USER'), filename: 'contract.docx', folder: 'docx' }), true);
+        // Но НЕ может менять системные метаданные (class.js, readme.md, $folder/..., handlers/..., #secret/...)
+        assert.equal(await dept.canWrite(storage, { ...as('u1', 'USER'), filename: 'class.js' }), false, 'не-админ не может менять class.js');
+        assert.equal(await dept.canWrite(storage, { ...as('u1', 'USER'), filename: 'readme.md' }), false, 'не-админ не может менять системный readme.md');
+        assert.equal(await dept.canWrite(storage, { ...as('u1', 'USER'), folder: '$folder', filename: 'class.js' }), false, 'не-админ не может менять слои $folder');
+        assert.equal(await dept.canWrite(storage, { ...as('u1', 'USER'), folder: 'handlers', filename: 'hack.js' }), false, 'не-админ не может писать в handlers');
+        assert.equal(await dept.canWrite(storage, { ...as('u1', 'USER'), folder: '#secret', filename: 'k.json' }), false, 'не-админ не может писать в #secret');
     });
 
     it('прикладная роль CUSTOMER: назначение, зона, запись', async () => {
@@ -195,6 +201,29 @@ describe('ядро: canSee / canWrite по модели', () => {
             dept.save_message({ ...as('u1', 'USER'), message: 'смотри', includes: [secret] }),
             /Доступ запрещён/,
         );
+    });
+
+    it('документооборот подразделения: двойной лог (подразделение + личный кабинет + получатели) и chatSource (USER -> свой лог, BOSS -> лог подразделения)', async () => {
+        const dept = await WORK.get_item('/ORG/DEPT');
+        const u1Cab = await WORK.get_item('/USERS/u1');
+        const u2Cab = await WORK.get_item('/USERS/u2');
+
+        // 1. В режиме USER (или ADMIN) chatSource возвращает личный кабинет пользователя, а в режиме BOSS — само подразделение
+        assert.equal(await dept.chatSource(as('u1', 'USER')), '/USERS//u1', 'в режиме USER источник логов — личный кабинет');
+        assert.equal(await dept.chatSource(as('b1', 'ADMIN')), '/USERS//b1', 'вне режима BOSS источник логов — личный кабинет');
+        assert.equal(await dept.chatSource(as('b1', 'BOSS')), '/ORG/DEPT', 'в режиме BOSS источник логов — подразделение');
+
+        // 2. Отправка сообщения в подразделении с получателем u2 пишет в лог подразделения, в кабинет автора u1 и в кабинет получателя u2
+        const msg = 'Документ согласован #' + Date.now();
+        await dept.save_message({ ...as('u1', 'USER'), message: msg, receivers: ['u2'] });
+
+        const deptRows = await dept.read_log_bodies({ role: 'BOSS', session: { uid: 'b1' } });
+        const u1Rows = await u1Cab.read_log_bodies({ session: { uid: 'u1' } });
+        const u2Rows = await u2Cab.read_log_bodies({ session: { uid: 'u2' } });
+
+        assert.ok(deptRows.some(r => r.content === msg && r.sender === 'u1'), 'запись попала в лог подразделения');
+        assert.ok(u1Rows.some(r => r.content === msg && r.sender === 'u1'), 'запись попала в личный лог автора u1');
+        assert.ok(u2Rows.some(r => r.content === msg && r.sender === 'u1' && r.receivers?.includes('u2')), 'запись попала в личный лог получателя u2');
     });
 });
 

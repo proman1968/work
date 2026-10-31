@@ -138,6 +138,16 @@ export class $class extends $folder {
             get objectCount() {
                 return this.DATA?.objectCount;
             },
+            get capabilities() {
+                if (this.type !== '$ai')
+                    return undefined;
+                return this.DATA?.capabilities ?? this.DATA?.$public?.capabilities;
+            },
+            get modality() {
+                if (this.type !== '$ai')
+                    return undefined;
+                return this.DATA?.modality ?? this.DATA?.$public?.modality;
+            },
         };
     }
 

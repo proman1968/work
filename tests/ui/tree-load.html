@@ -260,7 +260,7 @@ await test('Консультант ИИ: переключатель ИИ в пр
     }
 });
 
-await test('Проводник: левая панель переключателей (app-tabs) видна и содержит кнопки WORK, ИИ, USERS, Сеть, а при открытии формы появляется iframe и закладка внизу', async () => {
+await test('Проводник: порядок вкладок [контекст, USERS, Сеть, ИИ], кнопка звонка только при звонке, размеры иконок ($server/$base/$user=48px, $structure=32px)', async () => {
     await import('/oda/components/layouts/app-layout/app-layout.js');
     await ODA.waitReg('oda-app-layout');
     await ODA.waitReg('app-layout-drawer');
@@ -268,16 +268,19 @@ await test('Проводник: левая панель переключател
 
     const layout = document.createElement('oda-app-layout');
     layout.style.cssText = 'position: fixed; inset: 0; width: 1200px; height: 800px;';
-    const pane1 = document.createElement('div');
-    pane1.setAttribute('slot', 'left-panel');
-    pane1.setAttribute('label', 'WORK');
-    pane1.setAttribute('icon', 'odant:structure');
-    const pane2 = document.createElement('div');
-    pane2.setAttribute('slot', 'left-panel');
-    pane2.setAttribute('label', 'ИИ');
-    pane2.setAttribute('icon', 'bootstrap:robot');
-    layout.appendChild(pane1);
-    layout.appendChild(pane2);
+    // Специально добавляем вразнобой (USERS, Сеть, WORK, ИИ), чтобы проверить сортировку по order
+    const mkPane = (label, icon, order) => {
+        const el = document.createElement('div');
+        el.setAttribute('slot', 'left-panel');
+        el.setAttribute('label', label);
+        el.setAttribute('icon', icon);
+        el.setAttribute('order', String(order));
+        return el;
+    };
+    layout.appendChild(mkPane('USERS', 'social:people', 1));
+    layout.appendChild(mkPane('Сеть', 'carbon:network-3', 2));
+    layout.appendChild(mkPane('WORK', 'odant:structure', 0));
+    layout.appendChild(mkPane('ИИ', 'bootstrap:robot', 3));
     document.body.appendChild(layout);
     await new Promise(r => setTimeout(r, 300));
 
@@ -286,12 +289,68 @@ await test('Проводник: левая панель переключател
     assert(!drawer.hidden, 'left_drawer НЕ скрыт (hidden=false)');
     const tabs = drawer.$('app-tabs');
     assert(!!tabs, 'app-tabs внутри left_drawer найден');
-    eq(tabs.items.length, 2, 'в app-tabs 2 вкладки');
-    eq(tabs.items[0].label, 'WORK');
-    eq(tabs.items[1].label, 'ИИ');
+    eq(tabs.items.map(i => i.label).join(','), 'WORK,USERS,Сеть,ИИ', 'порядок вкладок строго WORK,USERS,Сеть,ИИ');
     tabs.setIndex(1);
     eq(drawer.focusedIndex, 1, 'переключение вкладки в app-tabs');
     layout.remove();
+
+    const explorerProto = (await import('/$server/$folder/lib/explorer/explorer.js')).default;
+    top.RTCCaller = top.RTCCaller || {};
+    top.RTCCaller.current_call = null;
+    const btnsIdle = explorerProto._buildLeftButtons.call({ showUser: false, showCall: false });
+    eq(btnsIdle.length, 2, 'без звонка внизу ровно 2 кнопки');
+    top.RTCCaller.current_call = { active: true };
+    const btnsCall = explorerProto._buildLeftButtons.call({ showUser: false, showCall: false });
+    eq(btnsCall.length, 3, 'во время звонка внизу 3 кнопки');
+    eq(btnsCall[0].icon, 'eva:o-phone-call-outline', 'первая кнопка при звонке — телефон');
+    top.RTCCaller.current_call = null;
+
+    const nodeProto = (await import('/$server/$folder/lib/node/node.js')).default;
+    const sizeFor = (type, isUser = false, id = 'item') => Object.getOwnPropertyDescriptor(nodeProto, 'iconSize').get.call({
+        isLink: false,
+        isUser,
+        isStructureLike: type === '$base' || type === '$structure' || type === '$server' || (type === '$node' && id !== 'NODES'),
+        showStatus: true,
+        $item: { type, id },
+    });
+    eq(sizeFor('$server'), 48, '$server iconSize = 48');
+    eq(sizeFor('$base'), 48, '$base iconSize = 48');
+    eq(sizeFor('$user', true), 48, '$user iconSize = 48');
+    eq(sizeFor('$node', false, 'work.odant.org'), 48, 'сервер в Сети ($node) iconSize = 48');
+    eq(sizeFor('$node', false, 'NODES'), 24, 'корень NODES iconSize = 24');
+    eq(sizeFor('$structure'), 32, '$structure iconSize = 32');
+
+    const { isChatModel, setUserPreferredModel, getUserPreferredModel } = await import('/$server/$folder/lib/prompt-bar/prompt-bar.js');
+    eq(isChatModel({ type: '$ai', id: 'Qwen3-14B', DATA: { modality: 'llm', capabilities: ['chat'] } }), true, 'Qwen3-14B — языковая модель для чата');
+    eq(isChatModel({ type: '$ai', id: 'Qwen3.8 27b', DATA: { capabilities: ['chat', 'stream'] } }), true, 'Qwen3.8 27b — языковая модель для чата');
+    eq(isChatModel({ type: '$ai', id: 'Flux-Image', DATA: { modality: 'image', capabilities: ['image'] } }), false, 'Flux-Image скрыта из выбора в чате');
+    eq(isChatModel({ type: '$ai', id: 'Qwen3-Embedding', DATA: { modality: 'embedding', capabilities: ['embedding'] } }), false, 'Qwen3-Embedding скрыта из выбора в чате');
+    eq(isChatModel({ type: '$ai', id: 'Qwen3-Voice', DATA: { modality: 'audio', capabilities: ['asr', 'tts'] } }), false, 'Qwen3-Voice скрыта из выбора в чате');
+    eq(isChatModel({ type: '$ai', id: 'Qwen3-ASR', DATA: { capabilities: ['stt'] } }), false, 'Qwen3-ASR скрыта из выбора в чате');
+    eq(isChatModel({ type: '$ai', id: 'Qwen3-TTS', DATA: { capabilities: ['tts'] } }), false, 'Qwen3-TTS скрыта из выбора в чате');
+    eq(isChatModel({ type: '$ai', id: 'Z-Image-Turbo', DATA: { modality: 'image', capabilities: ['image'] } }), false, 'Z-Image-Turbo скрыта из выбора в чате');
+
+    setUserPreferredModel('/MODELS/Local/Qwen3-14B');
+    eq(getUserPreferredModel(), '/MODELS/Local/Qwen3-14B', 'предпочитаемая модель сохраняется для пользователя независимо от подразделения');
+
+    await import('/$server/$folder/lib/chat-item/chat-item.js');
+    await ODA.waitReg('chat-item');
+    const ci = document.createElement('chat-item');
+    WORK.uid = 'u1';
+    ci.senderId = 'u1';
+    ci.log = { ext: 'msg', content: 'исходящее' };
+    eq(ci.cardLayoutStyle.marginLeft, '0px', 'исходящее сообщение — слева (marginLeft=0px)');
+    eq(ci.cardLayoutStyle.marginRight, 'auto', 'исходящее сообщение — слева (marginRight=auto)');
+
+    ci.senderId = 'u2';
+    ci.log = { ext: 'msg', content: 'входящее' };
+    eq(ci.cardLayoutStyle.marginLeft, 'auto', 'входящее сообщение — справа (marginLeft=auto)');
+    eq(ci.cardLayoutStyle.marginRight, '0px', 'входящее сообщение — справа (marginRight=0px)');
+
+    ci.senderId = 'u1';
+    ci.log = { ext: 'task', path: '/ORG/1.u1.task' };
+    eq(ci.cardLayoutStyle.marginLeft, '48px', 'карточка таска — по центру с отступом слева 48px');
+    eq(ci.cardLayoutStyle.marginRight, '48px', 'карточка таска — по центру с отступом справа 48px');
 });
 
 window.__done = true;

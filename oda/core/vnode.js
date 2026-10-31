@@ -303,7 +303,9 @@ export class VNode{
                     }
                     return el;
                 }
-                this.#directives.if?.(element);
+                const next = this.#directives.if?.(element);
+                if (next?.nodeType === 1 && next.isConnected)
+                    return this.render(next);
                 break;
             }
             case 42: {

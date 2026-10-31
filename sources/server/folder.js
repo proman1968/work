@@ -1803,6 +1803,8 @@ export class $folder extends $item{
             throw new Error('save_file: файл данных без расширения');
         const body = await readDataPost(params.post);
         body.name ??= parsed.name;
+        if (params.role && !body.role)
+            body.role = params.role;
         const time = dataFileTime(body, params);
         body.time = time;
         params.time = time;

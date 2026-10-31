@@ -10,6 +10,7 @@ ODA({is: 'chat-item',
                 @apply --horizontal;
                 max-height: var(--chat-card-max, none);
                 min-height: 0;
+                flex-shrink: 0;
                 overflow: hidden;
                 border-radius: 4px;
                 opacity: 0;
@@ -49,8 +50,21 @@ ODA({is: 'chat-item',
                 overflow: auto;
                 width: stretch;
             }
-            :host([compact]) .card {
+            :host([compact]) {
+                width: 100%;
                 border-radius: 0;
+                box-sizing: border-box;
+            }
+            :host([compact]) .card {
+                width: 100%;
+                border-radius: 0;
+                border: 1px solid var(--border-color);
+                box-shadow: none;
+                box-sizing: border-box;
+            }
+            :host([compact]) .preview {
+                max-height: 220px;
+                border-top: 1px solid var(--border-color);
             }
             .card[raised] {
                 border-radius: 0px !important;
@@ -73,6 +87,8 @@ ODA({is: 'chat-item',
             }
             .title {
                 font-size: xx-small;
+                min-height: 26px;
+                flex-shrink: 0;
                 transition: background-color .5s;
             }
             item-node{
@@ -88,16 +104,16 @@ ODA({is: 'chat-item',
                 align-self: center;
             }
         </style>
-        <div vertical ~if="!compact && !hideAvatar && !expanded" style="padding: 0px 8px;">
+        <div vertical ~if="!compact && !hideAvatar && !expanded" ~style="{padding: '0px 8px', order: (!isTask && !isSender) ? 2 : 0}">
             <div flex></div>
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
-        <div class="card"  shadow :flex="expanded || compact" vertical ~style="{marginLeft: isSender?'auto':'0px'}">
-            <div class="title" light horizontal ~if="!(expanded && bodyHeader)" style="justify-content: space-between; align-items: center;">
+        <div class="card" shadow :flex="expanded || compact || isTask" vertical ~style="cardLayoutStyle" @tap="onCardTap($event)">
+            <div class="title" no-flex light horizontal ~if="!(expanded && bodyHeader)" style="justify-content: space-between; align-items: center;">
                 <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" hide-history-time>
                     <span class="file-time" ~if="fileTime">{{fileTime}}</span>
                 </item-node>
-                <oda-button ~if="!compact" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
+                <oda-button ~if="!compact && !isOperationLog" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>       
             <div class="preview" ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
             <div class="preview" ~if="!expanded && !$file && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
@@ -171,6 +187,69 @@ ODA({is: 'chat-item',
     },
     get isSender(){
         return this.senderId === WORK.uid;
+    },
+    get isTask() {
+        const ext = String(this.ext || this.log?.ext || this.$file?.ext || '').toLowerCase();
+        if (ext === 'task')
+            return true;
+        const p = String(this.log?.path || this.$item?.path || this.$item?.id || '');
+        return p.endsWith('.task');
+    },
+    get isOperationLog() {
+        const ext = String(this.log?.ext || '').toLowerCase();
+        return ext === 'operation' || ext === 'object';
+    },
+    /**
+     * Раскладка на ленте чата подразделения:
+     * - исходящие от текущего пользователя (isSender && !isTask) — слева;
+     * - входящие от других пользователей (!isSender && !isTask) — справа;
+     * - задачи ИИ (isTask) — по центру с отступом слева и справа.
+     */
+    get cardLayoutStyle() {
+        if (this.expanded || this.compact) {
+            return { order: 1 };
+        }
+        if (this.isTask) {
+            return {
+                order: 1,
+                marginLeft: '48px',
+                marginRight: '48px',
+                width: 'auto',
+                maxWidth: 'calc(100% - 96px)',
+            };
+        }
+        if (this.isSender) {
+            return {
+                order: 1,
+                marginLeft: '0px',
+                marginRight: 'auto',
+                maxWidth: '78%',
+            };
+        }
+        return {
+            order: 1,
+            marginLeft: 'auto',
+            marginRight: '0px',
+            maxWidth: '78%',
+        };
+    },
+    async onCardTap(e) {
+        if (!this.isOperationLog || !this.log)
+            return;
+        e?.stopPropagation?.();
+        const rawPath = String(this.log.path || '');
+        const classPath = this.log.classPath || rawPath.split('/').slice(0, -1).join('/');
+        const objectId = this.log.objectId || rawPath.split('/').pop();
+        if (!classPath || !objectId)
+            return;
+        const clsItem = await WORK.get_item(classPath).catch(() => null);
+        if (!clsItem)
+            return;
+        const wf = document.querySelector?.('pages-form')?.$?.('work-form') || this.domHost?.domHost;
+        if (wf && typeof wf.openFormTab === 'function')
+            await wf.openFormTab(clsItem, { view: 'object', objectId });
+        else if (typeof window.top?.execute === 'function')
+            window.top.execute(clsItem, { view: 'object', objectId });
     },
     colorMode: {
         $def: 'light',
@@ -416,8 +495,11 @@ ODA({is: 'chat-item',
             if (this.history || (!this.$item && !this.log?.path))
                 return null;
             return Promise.resolve(this.itemBody).then(async body => {
-                if (!body?.path)
+                if (!body?.path || body?.ext === 'operation' || body?.ext === 'object') {
+                    if (body?.ext === 'operation' || body?.ext === 'object')
+                        this.hasPreview = true;
                     return null;
+                }
                 let $file = await WORK.get_item(body.path, 'info');
                 if ($file && !$file.id && $file.path) {
                     $file.DATA ??= {};
@@ -540,7 +622,7 @@ ODA({is: 'chat-item',
         })
     },
     get hideAvatar() {
-        if (this.isSender)
+        if (this.isTask)
             return true;
         if (!this.nextElementSibling)
             return false;

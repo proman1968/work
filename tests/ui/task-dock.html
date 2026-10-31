@@ -101,6 +101,32 @@ await test('вкладки: Контекст, Монитор (компьютер
     finally { shell.remove(); WORK.get_item = realGetItem; }
 });
 
+await test('«Результаты» — последняя вкладка; при размещении результата панель сразу открывается и не перерисовывает документ при продолжении работы агента', async () => {
+    const currentData = body({ status: 'running' });
+    const shell = await mountShell(currentData);
+    try {
+        shell.dockOpen = false;
+        await sleep(50);
+        // Агент публикует результат во время работы
+        const pdfSnap = snap('/BASE/Отчёты/отчёт.pdf', 3);
+        currentData.results = [{ snapshot: pdfSnap, title: 'Обзор холдинга', time: Date.now() }];
+        shell.$item.dispatchEvent(new CustomEvent('changed'));
+        await waitFor(() => shell.dockOpen === true && shell.dockTab === 'results', 'панель открылась на Результатах');
+        eq(tabIds(shell).join(), 'context,monitor,files,results', 'Результаты — последняя вкладка');
+        const resView = await waitFor(() => inDock(shell, 'microchat-results'), 'microchat-results');
+        const docView = await waitFor(() => resView.$('microchat-doc'), 'microchat-doc');
+        const firstBust = docView.bust;
+        const firstDoc = resView.curDoc;
+        // Агент продолжает работать: новые шаги и перечитывание задачи не должны сбрасывать открытый результат
+        currentData.items.push({ id: 'a2', type: 'assistant', time: Date.now(), content: 'Продолжаю проверку…', tools: [] });
+        shell.$item.dispatchEvent(new CustomEvent('changed'));
+        await sleep(120);
+        eq(resView.curDoc, firstDoc, 'объект curDoc стабилен');
+        eq(docView.bust, firstBust, 'bust не сбросился — iframe не перезагружается');
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
 await test('«Файлы»: клик переключает и вкладка НЕ сбрасывается; плитки всех файлов; открыть файл и вернуться', async () => {
     const shell = await mountShell(body());
     try {

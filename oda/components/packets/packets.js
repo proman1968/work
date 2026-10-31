@@ -168,13 +168,13 @@ const NOW_IDLE_LABELS = {
     year: 'Год'
 };
 
-// Пункты выпадающего меню кнопки now
+// Пункты выпадающего меню первой панели (выбор режима пакетирования)
 const NOW_MENU_OPTIONS = [
-    { value: 'day', label: 'Сегодня' },
-    { value: 'week', label: 'Текущая неделя' },
-    { value: 'month', label: 'Текущий месяц' },
-    { value: 'quarter', label: 'Текущий квартал' },
-    { value: 'year', label: 'Текущий год' }
+    { value: 'day', label: 'День' },
+    { value: 'week', label: 'Неделя' },
+    { value: 'month', label: 'Месяц' },
+    { value: 'quarter', label: 'Квартал' },
+    { value: 'year', label: 'Год' }
 ];
 
 const VALID_MODES = ['day', 'week', 'month', 'quarter', 'year'];
@@ -322,6 +322,12 @@ ODA({
         <style>
             :host {
                 @apply --vertical;
+                @apply --light;
+                min-height: 30px;
+                height: 30px;
+                border-bottom: 1px solid var(--border-color);
+                box-sizing: border-box;
+                flex-shrink: 0;
             }
             .error {
                 padding: var(--space-s, 8px) var(--space-m, 12px);
@@ -330,7 +336,7 @@ ODA({
             }
         </style>
         <oda-packets-row ~if="items?.length" :items
-            @item-pick="_onItemPick($event)" @open-menu="_onOpenMenu($event)" @open-more-years="_onOpenMoreYears($event)" @open-now-menu="_onOpenNowMenu($event)"
+            @item-pick="_onItemPick($event)" @open-menu="_onOpenMenu($event)" @open-more-years="_onOpenMoreYears($event)" @open-now-menu="_onOpenNowMenu($event)" @select-now="_onSelectNow($event)"
             @nav-left="_onNavLeft($event)" @nav-right="_onNavRight($event)" @edit-period="_onEditPeriod($event)"></oda-packets-row>
         <div class="error" ~if="error">{{error}}</div>
     `,
@@ -403,10 +409,9 @@ ODA({
         },
         _onModeChanged(mode) {
             if (!this._nowItem) return;
-            if (!this._nowItem.selected) {
-                this._nowItem.idleLabel = NOW_IDLE_LABELS[mode] || 'Месяц';
-                this._nowItem.label = this._nowItem.idleLabel;
-            }
+            this._nowItem.idleLabel = NOW_IDLE_LABELS[mode] || 'Месяц';
+            this._nowItem.activeLabel = this._nowItem.idleLabel;
+            this._nowItem.label = this._nowItem.idleLabel;
             this._updateArrowTitles();
         }
     },
@@ -646,31 +651,109 @@ ODA({
         const [s, e] = _leafSpan(unitName, unitType);
         return e >= rangeStart && s <= rangeEnd;
     },
-    // Настройка параметров кнопки now под выбранную гранулярность (day | week | month | quarter | year)
+    // Настройка первой панели (индикатор/переключатель режима: День | Неделя | Месяц | Квартал | Год)
     _configureNowItem(nowItem, granularity, mode = this.mode) {
         const gran = VALID_MODES.includes(granularity) ? granularity : (VALID_MODES.includes(mode) ? mode : 'month');
         const unitName = _unitNameFromDate(new Date(), gran);
-        const activeText = _getFullLabel(unitName, gran);
         const idleText = NOW_IDLE_LABELS[mode] || NOW_IDLE_LABELS[gran] || 'Месяц';
         nowItem.name = unitName;
         nowItem.type = gran;
         nowItem.granularity = gran;
         nowItem.mask = _getMask(unitName);
         nowItem.idleLabel = idleText;
-        nowItem.activeLabel = activeText;
-        nowItem.label = nowItem.selected ? activeText : idleText;
-        nowItem.fullLabel = 'Выбор текущего периода';
+        nowItem.activeLabel = idleText;
+        nowItem.label = idleText;
+        nowItem.selected = false;
+        nowItem.fullLabel = 'Режим пакетирования (двойной клик — текущий период)';
         nowItem.disabled = false;
         return nowItem;
+    },
+    // Вычисление целевого элемента на панели годов для текущей даты в заданном режиме (day | week | month | quarter | year)
+    _resolveCurrentPeriodTarget(gran = this.mode) {
+        const mode = VALID_MODES.includes(gran) ? gran : (VALID_MODES.includes(this.mode) ? this.mode : 'month');
+        const nowDate = new Date();
+        const unitName = _unitNameFromDate(nowDate, mode);
+        const [s, e] = _leafSpan(unitName, mode);
+        const yStr = String(nowDate.getFullYear());
+        const yearNode = (this._years || []).find(y => y.name === yStr) || null;
+
+        if (mode === 'week') {
+            const lbl = _formatWeekLabel(s, e);
+            const mask = (this._isUnitInRange(unitName, 'week') && this._periodMask(s, e)) || _getMask(unitName);
+            if (yearNode) {
+                return {
+                    name: 'period',
+                    type: 'week',
+                    _unitName: unitName,
+                    _isCustomRange: true,
+                    _isNowTarget: true,
+                    _yearNode: yearNode,
+                    start: s,
+                    end: e,
+                    mask,
+                    label: lbl,
+                    fullLabel: lbl
+                };
+            }
+            const item = this._resolveUnitNode(unitName, 'week');
+            if (item) {
+                item.type = 'week';
+                item._unitName = unitName;
+                item._isNowTarget = true;
+                item.label = lbl;
+                item.fullLabel = lbl;
+                return item;
+            }
+            return {
+                name: unitName,
+                type: 'week',
+                _unitName: unitName,
+                _isNowTarget: true,
+                start: s,
+                end: e,
+                mask,
+                label: lbl,
+                fullLabel: lbl
+            };
+        }
+
+        const existing = this._dateNodes?.[unitName];
+        if (existing) {
+            existing._isNowTarget = true;
+            return existing;
+        }
+        const lbl = _getFullLabel(unitName, mode);
+        return {
+            name: unitName,
+            type: mode,
+            root: yearNode,
+            mask: _getMask(unitName),
+            label: lbl,
+            fullLabel: lbl,
+            _isNowTarget: true
+        };
+    },
+    // Установка текущего диапазона для режима gran с отображением на панельке соответствующего года
+    _selectCurrentPeriod(gran = this.mode) {
+        const mode = VALID_MODES.includes(gran) ? gran : (VALID_MODES.includes(this.mode) ? this.mode : 'month');
+        this._setModeSilently(mode);
+        if (this._nowItem) {
+            this._configureNowItem(this._nowItem, mode, mode);
+        }
+        const target = this._resolveCurrentPeriodTarget(mode);
+        if (target) {
+            this._applySelection([target]);
+        }
+        return target;
     },
     // Полоса: [<, now, >, ...до 5 кнопок лет, Ещё (<N>)?, custom-period?, Весь период]
     // (кнопка Период скрыта из полосы, но this._periodItem сохранён для обратной совместимости)
     _makeBar(years, mode, rangeStart, rangeEnd) {
         const leftArrow = this._makeItem({
-            name: '<', label: '', icon: 'icons:chevron-right:180', fullLabel: 'Назад', is: 'oda-packets-left-arrow', mask: ''
+            name: '<', label: '', icon: 'icons:add', fullLabel: 'Вперёд', is: 'oda-packets-left-arrow', mask: ''
         });
         const rightArrow = this._makeItem({
-            name: '>', label: '', icon: 'icons:chevron-right', fullLabel: 'Вперёд', is: 'oda-packets-right-arrow', mask: ''
+            name: '>', label: '', icon: 'icons:remove', fullLabel: 'Назад', is: 'oda-packets-right-arrow', mask: ''
         });
 
         const nowItem = this._makeItem({
@@ -802,15 +885,17 @@ ODA({
         this._updateArrowTitles();
         this.items = next;
     },
-    // Смена mode без перестроения дерева _build (обновляет только _units и подпись невыбранного now)
+    // Смена mode без перестроения дерева _build (обновляет только _units и подпись режима на первой панели)
     _setModeSilently(newMode) {
         if (!VALID_MODES.includes(newMode)) return;
         this.mode = newMode;
         this._units = this._buildUnits(this._dayNames || [], newMode);
         this._leaves = this._collectLeaves(this._years || [], newMode);
-        if (this._nowItem && !this._nowItem.selected) {
+        if (this._nowItem) {
             this._nowItem.idleLabel = NOW_IDLE_LABELS[newMode] || 'Месяц';
+            this._nowItem.activeLabel = this._nowItem.idleLabel;
             this._nowItem.label = this._nowItem.idleLabel;
+            this._nowItem.selected = false;
         }
         this._updateArrowTitles();
     },
@@ -870,7 +955,7 @@ ODA({
             const gran = key.startsWith('now:') ? key.slice(4) : this.mode;
             if (VALID_MODES.includes(gran)) this._setModeSilently(gran);
             this._configureNowItem(this._nowItem, gran, this.mode);
-            return this._nowItem;
+            return this._resolveCurrentPeriodTarget(gran);
         }
         if (key === '*') return this._allItem || null;
         if (key.startsWith('period:')) return this._restorePeriod(key.slice(7));
@@ -976,7 +1061,9 @@ ODA({
         for (const s of selection) {
             s.selected = true;
             if (s.is === 'oda-packets-now-selector') {
-                s.label = s.activeLabel || _getFullLabel(s.name, s.type);
+                // Первая панель всегда отображает только режим пакетирования (День/Неделя/Месяц/Квартал/Год)
+                s.selected = false;
+                s.label = s.idleLabel || NOW_IDLE_LABELS[this.mode] || 'Месяц';
             } else if (s.is === 'oda-packets-custom-period') {
                 showCustomPeriod = true;
             } else if (s._isCustomRange && s._yearNode) {
@@ -1046,7 +1133,7 @@ ODA({
             const clipped = this._clipRange(s, e);
             if (clipped) return { start: clipped[0], end: clipped[1] };
             // «Сейчас» вне диапазона журнала: выбор остаётся на своей дате, таблица пустая
-            if (only.is === 'oda-packets-now-selector') {
+            if (only.is === 'oda-packets-now-selector' || only._isNowTarget) {
                 return { start: s, end: e };
             }
             return null;
@@ -1060,20 +1147,16 @@ ODA({
         }
         return min === null ? null : { start: min, end: max };
     },
-    // --- выпадающее меню кнопки now (Сегодня, Эта неделя, Этот месяц, Этот квартал, Этот год) ---
+    // --- выпадающее меню первой панели (День, Неделя, Месяц, Квартал, Год) ---
     async _onOpenNowMenu(e) {
         const { anchor } = this._detail(e);
         if (!this._nowItem) return;
-        const currentVal = this._nowItem.selected ? (this._nowItem.granularity || this.mode) : '';
-        const menuItems = NOW_MENU_OPTIONS.map(opt => {
-            const unitName = _unitNameFromDate(new Date(), opt.value);
-            return {
-                label: opt.label,
-                hint: _getFullLabel(unitName, opt.value),
-                value: opt.value,
-                disabled: false
-            };
-        });
+        const currentVal = VALID_MODES.includes(this.mode) ? this.mode : 'month';
+        const menuItems = NOW_MENU_OPTIONS.map(opt => ({
+            label: opt.label,
+            value: opt.value,
+            disabled: false
+        }));
         const params = {
             menu: ODA.createComponent('oda-menu-list', { items: menuItems, value: currentVal })
         };
@@ -1083,10 +1166,13 @@ ODA({
         } catch { return; }
         const gran = picked?.value ?? picked;
         if (!gran || !VALID_MODES.includes(gran)) return;
-        // Выбор элемента из dropdown меняет mode у packets (без перестроения), выбирает кнопку now и меняет период
-        this._setModeSilently(gran);
-        this._configureNowItem(this._nowItem, gran, gran);
-        this._applySelection([this._nowItem]);
+        // Выбор режима из dropdown меняет mode у packets и устанавливает текущий диапазон на кнопке года
+        this._selectCurrentPeriod(gran);
+    },
+    // --- DblClick по первой панели: устанавливает текущий диапазон по активному mode на панельке года ---
+    _onSelectNow() {
+        const gran = VALID_MODES.includes(this.mode) ? this.mode : 'month';
+        this._selectCurrentPeriod(gran);
     },
     // --- выпадающие меню годов (всегда работают в режиме day и показывают все элементы, недоступные — disabled) ---
     _buildYearMenuItems(yearNode) {
@@ -1214,8 +1300,8 @@ ODA({
             return (delta < 0 ? leaves[leaves.length - 1] : leaves[0]) || null;
         }
 
-        // 2. Если выделена кнопка now: сдвигаем относительно текущей даты now по stepMode
-        if (cur.is === 'oda-packets-now-selector') {
+        // 2. Если выбран текущий период (или дата лежит за пределами диапазона данных): сдвигаем относительно текущей даты по stepMode
+        if (cur.is === 'oda-packets-now-selector' || (cur._isNowTarget && (cur.disabled || !this._dateNodes?.[cur.name]))) {
             const baseUnit = _unitNameFromDate(new Date(), stepMode);
             const nextName = _shiftUnitName(baseUnit, stepMode, delta);
             let target = this._resolveUnitNode(nextName, stepMode);
@@ -1300,14 +1386,14 @@ ODA({
     },
     _updateArrowTitles() {
         if (this._leftArrow) {
-            const prev = this._getStepTarget(-1);
-            const lbl = this._stepTargetLabel(prev);
-            this._leftArrow.fullLabel = lbl ? `Назад (${lbl})` : 'Назад';
-        }
-        if (this._rightArrow) {
             const next = this._getStepTarget(1);
             const lbl = this._stepTargetLabel(next);
-            this._rightArrow.fullLabel = lbl ? `Вперёд (${lbl})` : 'Вперёд';
+            this._leftArrow.fullLabel = lbl ? `Вперёд (${lbl})` : 'Вперёд';
+        }
+        if (this._rightArrow) {
+            const prev = this._getStepTarget(-1);
+            const lbl = this._stepTargetLabel(prev);
+            this._rightArrow.fullLabel = lbl ? `Назад (${lbl})` : 'Назад';
         }
     },
     // Перемещают период в зависимости от текущего mode у packets без зацикливания.
@@ -1315,10 +1401,10 @@ ODA({
         const target = this._getStepTarget(delta);
         if (target) this._applySelection([target]);
     },
-    // Стрелка '<' (левая) — Назад во времени (-1, в прошлое)
-    _onNavLeft() { this._step(-1); },
-    // Стрелка '>' (правая) — Вперёд во времени (+1, в будущее)
-    _onNavRight() { this._step(1); },
+    // Кнопка '+' (левая) — Вперёд во времени (+1, в будущее)
+    _onNavLeft() { this._step(1); },
+    // Кнопка '-' (правая) — Назад во времени (-1, в прошлое)
+    _onNavRight() { this._step(-1); },
     // Маска произвольного периода по единицам гранулярности mode, пересекающим [start, end].
     _periodMask(start, end) {
         const parts = [];
@@ -1351,8 +1437,7 @@ ODA({
     }
 });
 
-// Выделенный компонент фиксированного размера для блока [<, now, >]
-// Фиксированная ширина рассчитана с запасом под строку "30 Сентябрь 11111 г."
+// Выделенный компонент фиксированного размера для блока [<, режим, >]
 ODA({
     is: 'oda-packets-now-group',
     template: /*html*/`
@@ -1362,7 +1447,7 @@ ODA({
                 @apply --no-flex;
                 align-items: center;
                 gap: 2px;
-                width: 226px;
+                width: 128px;
             }
             oda-packets-left-arrow,
             oda-packets-right-arrow {
@@ -1370,14 +1455,15 @@ ODA({
                 padding: 2px 0;
             }
             oda-packets-now-selector {
-                width: 174px;
-                min-width: 174px;
+                width: 76px;
+                min-width: 76px;
             }
         </style>
         <div ~is="$for.item.is || 'oda-packets-selector'" ~for="navItems"
             :label="$for.item?.label" :icon="$for.item?.icon || ''" :title="$for.item?.fullLabel"
             :disabled="$for.item?.disabled" :error="$for.item?.selected"
-            @tap="_onItemTap($for.item, $event)"></div>
+            @tap="_onItemTap($for.item, $event)"
+            @dblclick="_onItemDblClick($for.item, $event)"></div>
     `,
     $public: {
         navItems: {
@@ -1398,8 +1484,30 @@ ODA({
         }
         if (item.is === 'oda-packets-now-selector') {
             const anchor = e?.currentTarget || this.$?.('oda-packets-now-selector') || this;
-            this.fire('open-now-dropdown', { anchor });
+            if (e?.detail >= 2 || this._nowTapTimer) {
+                clearTimeout(this._nowTapTimer);
+                this._nowTapTimer = 0;
+                this._lastDblClickTs = Date.now();
+                this.fire('select-now', { anchor });
+                return;
+            }
+            this._nowTapTimer = setTimeout(() => {
+                this._nowTapTimer = 0;
+                this.fire('open-now-dropdown', { anchor });
+            }, 180);
         }
+    },
+    _onItemDblClick(item, e) {
+        if (!item || item.disabled || item.is !== 'oda-packets-now-selector') return;
+        e?.stopPropagation?.();
+        if (this._nowTapTimer) {
+            clearTimeout(this._nowTapTimer);
+            this._nowTapTimer = 0;
+        }
+        if (this._lastDblClickTs && Date.now() - this._lastDblClickTs < 120) return;
+        this._lastDblClickTs = Date.now();
+        const anchor = e?.currentTarget || this.$?.('oda-packets-now-selector') || this;
+        this.fire('select-now', { anchor });
     }
 });
 
@@ -1434,7 +1542,8 @@ ODA({
         </style>
         <oda-packets-now-group ~if="navItems.length" :nav-items="navItems"
             @nav-left="onNavLeft($event)" @nav-right="onNavRight($event)"
-            @open-now-dropdown="_onOpenNowDropdown($event)"></oda-packets-now-group>
+            @open-now-dropdown="_onOpenNowDropdown($event)"
+            @select-now="_onSelectNow($event)"></oda-packets-now-group>
         <div class="years-group">
             <div ~is="$for.item.is || 'oda-packets-selector'" ~for="yearItems"
                 :label="$for.item?.label" :icon="$for.item?.icon || ''" :title="$for.item?.fullLabel"
@@ -1479,6 +1588,11 @@ ODA({
         e?.stopPropagation?.();
         const d = e?.detail?.value ?? e?.detail ?? {};
         this.fire('open-now-menu', { anchor: d.anchor || e?.target || this });
+    },
+    _onSelectNow(e) {
+        e?.stopPropagation?.();
+        const d = e?.detail?.value ?? e?.detail ?? {};
+        this.fire('select-now', { anchor: d.anchor || e?.target || this });
     },
     onNavLeft(e) {
         e?.stopPropagation?.();

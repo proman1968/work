@@ -215,7 +215,13 @@ export function stableDocs(prev, list) {
     const prevMap = new Map((prev || []).map(d => [d?.key, d]));
     const out = (list || []).map(d => {
         const cur = d?.key != null ? prevMap.get(d.key) : null;
-        return cur ? Object.assign(cur, d) : d;
+        if (!cur)
+            return d;
+        for (const [k, v] of Object.entries(d)) {
+            if (cur[k] !== v)
+                cur[k] = v;
+        }
+        return cur;
     });
     const same = Array.isArray(prev) && prev.length === out.length && prev.every((d, i) => d === out[i]);
     return { docs: same ? prev : out, changed: !same };

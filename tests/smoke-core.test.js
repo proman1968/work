@@ -379,23 +379,23 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.deepEqual(all.map(u => u.id).sort(), ['u1', 'u2'], 'members() — все назначенные с дедупликацией');
     });
 
-    it('work_zone({role}) даёт зону роли, get_storage — deprecated алиас', async () => {
+    it('work_zone({role}) даёт единое хранилище точки (meta_folder), get_storage — deprecated алиас', async () => {
         const mbox = await WORK.get_item('/MBOX');
         const slash = p => p.replaceAll('\\', '/');
         const metaPath = slash(mbox.meta_folder.path);
         const zone = await mbox.work_zone({ role: 'USER' });
-        assert.equal(slash(zone.path), metaPath + '/USER', 'USER-зона — папка USER в мета');
+        assert.equal(slash(zone.path), metaPath, 'единое хранилище — сама метапапка без подпапки роли');
         const legacy = await mbox.get_storage({ role: 'USER' });
         assert.equal(legacy.path, zone.path, 'алиас возвращает ту же папку');
         const def = await mbox.work_zone({});
-        assert.equal(slash(def.path), metaPath + '/GUEST', 'без роли — папка GUEST');
+        assert.equal(slash(def.path), metaPath, 'без роли — то же единое хранилище');
         for (const role of ['ADMIN', 'BOSS', 'GUEST']) {
             const z = await mbox.work_zone({ role });
-            assert.equal(slash(z.path), metaPath + '/' + role, role + '-зона — папка ' + role + ' в мета');
+            assert.equal(slash(z.path), metaPath, role + ' использует то же единое хранилище');
         }
     });
 
-    it('GUESTS: роль, зона guests, члены по #security.GUESTS', async () => {
+    it('GUESTS: роль, единое хранилище, члены по #security.GUESTS', async () => {
         write('USERS/u3/$user/class.js', `export default { label: 'U3' }`);
         write('GUESTBOX/$class/class.js',
             `export default { label: 'GUESTBOX', '#security': { GUEST: ['u3'] } }`);
@@ -410,7 +410,7 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         const roles = await gbox.roles({ session: { uid: 'u3' } });
         assert.deepEqual(roles, ['GUEST'], 'roles гостя — только GUEST');
         const zone = await gbox.work_zone({ role: 'GUEST' });
-        assert.ok(zone.path.replaceAll('\\', '/').endsWith('/GUEST'), 'GUEST-зона — папка GUEST');
+        assert.equal(zone.path.replaceAll('\\', '/'), gbox.meta_folder.path.replaceAll('\\', '/'), 'единое хранилище метапапки');
         const all = await gbox.assignedUsers;
         assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает гостей');
     });

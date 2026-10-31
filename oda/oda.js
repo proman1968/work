@@ -165,10 +165,10 @@ Node:{
         if (!this.__vnode__ || !this.isConnected)
             return;
         this.throttle('render', ()=>{
-            this.__vnode__.render(this);
-            if(!this[R].states.sleep || wake)
-                if(this.nodeType === 1)
-                    this.renderChildren(wake);
+            const el = this.__vnode__.render(this) || this;
+            if(!el[R].states.sleep || wake)
+                if(el.nodeType === 1)
+                    el.renderChildren(wake);
         })
     };
     Node.prototype.renderChildren = function (wake) {

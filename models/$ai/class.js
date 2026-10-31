@@ -1,10 +1,8 @@
 export default {
-    $public: {
-        maxTokens: 4096,
-        maxOutput: 4096,
-        capabilities: ["chat","stream"],
-        effort: ""
-    },
+    maxTokens: 4096,
+    maxOutput: 4096,
+    capabilities: ["chat","stream"],
+    effort: "",
     METADATA: {
         STATIC: [{
             id: "protocol",

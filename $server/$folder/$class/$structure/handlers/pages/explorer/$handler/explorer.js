@@ -3,7 +3,7 @@ export default{
     imports: '~/lib//explorer.js',
     extends: 'item-explorer',
     template: /* html */`
-        <item-tree ~for="available" header allow-search hidden slot='left-panel' show-status allow-focus hide-roots="2" hide-tops="0" :$item="$for.item" style="height: 0"></item-tree>
+        <item-tree ~for="available" order="{{$for.index + 1}}" allow-search hidden slot='left-panel' show-status allow-focus hide-roots="1" hide-tops="0" :$item="$for.item" style="height: 0"></item-tree>
         
     `,
     list:[

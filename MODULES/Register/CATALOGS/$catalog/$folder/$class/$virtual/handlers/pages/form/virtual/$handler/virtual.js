@@ -247,8 +247,10 @@ export default {
         });
     },
     async attached() {
-        await this.loadSlots();
-        await this.reload();
+        if (this._attachedDone)
+            return;
+        await Promise.all([this.loadSlots(), this.reload()]);
+        this._attachedDone = true;
     },
     /** Поля расширений из схемы ядра (с учётом наследования). */
     async loadSlots() {

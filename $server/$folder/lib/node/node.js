@@ -49,7 +49,8 @@ export default {
                 overflow: hidden;
             }
             .icon{
-                scale: {{isStructureLike ? 1 : .82}};
+                /* аватар пользователя показываем в полный размер (48px), остальные иконки — мельче */
+                scale: {{isStructureLike || isUser ? 1 : .82}};
                 transition: scale .2s;
             }
             .size{
@@ -105,7 +106,7 @@ export default {
         if (t === '$base' || t === '$structure' || t === '$server' || t === '$domain')
             return '';
         const c = isLinkNode(it) ? it.objectCount : it.DATA?.objectCount;
-        return (typeof c === 'number' && c > 0) ? String(c) : '';
+        return (typeof c === 'number' && c > 0) ? c.toLocaleString('ru-RU') : '';
     },
     get isVirtual() {
         return this.$item?.type === '$virtual';
@@ -115,7 +116,8 @@ export default {
         if (!it || this.isLink)
             return false;
         const t = it.type;
-        return t === '$base' || t === '$structure' || t === '$server' || it.id === 'ORGANIZATIONS';
+        const isNetServer = t === '$node' && it.id !== 'NODES';
+        return t === '$base' || t === '$structure' || t === '$server' || isNetServer || it.id === 'ORGANIZATIONS';
     },
     // пользователи в строке дерева не показываются (шум и запросы на каждую строку); свойство оставлено для совместимости биндов
     showUsers: false,
@@ -183,8 +185,14 @@ export default {
         }
     },
     get iconSize(){
-        if(this.isLink)
+        if(this.isLink || ('isPlace' in Object(this.$item) && this.$item.isPlace))
             return 24;
+        const t = this.$item?.type;
+        const isNetServer = t === '$node' && this.$item?.id !== 'NODES';
+        if(this.isUser || t === '$user' || t === '$base' || t === '$server' || isNetServer)
+            return 48;
+        if(t === '$structure')
+            return 32;
         if(this.isStructureLike)
             return 28;
         if(!this.showStatus)

@@ -326,6 +326,8 @@ Object.assign(proto, {
         this._notifyForm();
     },
     async attached() {
+        if (this._attachedDone && !this._initialNav && !this._pendingNav)
+            return;
         const initNav = this._initialNav || this._pendingNav;
         this._initialNav = null;
         this._pendingNav = null;

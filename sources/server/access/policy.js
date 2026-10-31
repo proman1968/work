@@ -19,6 +19,7 @@
 /** Области внутри точки. */
 export const AREA = Object.freeze({
     SYSTEM: 'system',
+    FILES: 'files',
     ZONE: 'zone',
     LOGS: 'logs',
     /** Объекты `.data`: читает видевший класс, пишет API класса или write=all. */
@@ -32,6 +33,20 @@ export const AREA = Object.freeze({
 
 /** Системные имена папок метапапки: ролью их объявить нельзя, зону не образуют. */
 export const RESERVED_ZONE_NAMES = Object.freeze(['DATA', 'INDEX', 'logs']);
+
+/** Системные папки и файлы внутри метапапки, изменять которые может только ADMIN. */
+export const SYSTEM_META_NAMES = Object.freeze([
+    'class.js',
+    'readme.md',
+    'handlers',
+    'methods',
+    'triggers',
+    'timers',
+    'hooks',
+    'logs',
+    'DATA',
+    'INDEX',
+]);
 
 /**
  * Системные роли: ADMIN и BOSS. Поведение зашито в коде (canRead/canWrite):
@@ -136,12 +151,21 @@ export function areaOfSegments(segments, roleIds) {
         return { kind: AREA.DATA };
     if (first === 'INDEX')
         return { kind: AREA.INDEX };
-    if (first === '#secret' || first === '#system')
+    if (first === '#secret' || first === '#system' || first[0] === '#')
         return { kind: AREA.SECRET };
     const ids = roleIds instanceof Set ? roleIds : new Set(roleIds || []);
     if (ids.has(first))
         return { kind: AREA.ZONE, role: first };
-    return { kind: AREA.SYSTEM };
+    if (first[0] === '$' || SYSTEM_META_NAMES.includes(first))
+        return { kind: AREA.SYSTEM };
+    if (first === 'ai') {
+        if (segments.length === 2 && segments[1] === 'memory.md')
+            return { kind: AREA.FILES };
+        return { kind: AREA.SYSTEM };
+    }
+    if (segments.at(-1) === 'class.js')
+        return { kind: AREA.SYSTEM };
+    return { kind: AREA.FILES };
 }
 
 /**
@@ -189,6 +213,7 @@ export function canRead(role, area, opts = {}) {
         return true;
     switch (area.kind) {
         case AREA.SYSTEM:
+        case AREA.FILES:
         case AREA.DATA:
         case AREA.INDEX:
             return true;
@@ -203,8 +228,8 @@ export function canRead(role, area, opts = {}) {
 
 /**
  * Право записи области ролью.
- * ADMIN — всё. Остальные — только своя зона и только там, где роль
- * назначена локально (в любом слое своей метапапки).
+ * ADMIN — всё. Остальные — общее хранилище файлов точки (AREA.FILES) и своя зона,
+ * только там, где роль назначена локально, и никогда — системные метаданные (opts.executable).
  * @param {object} role Нормализованное объявление роли
  * @param {{kind, role?}} area
  * @param {object} [opts]
@@ -217,18 +242,57 @@ export function canWrite(role, area, opts = {}) {
         return true;
     if (!opts.local || opts.executable)
         return false;
+    if (area.kind === AREA.FILES)
+        return true;
     return area.kind === AREA.ZONE && area.role === role.id;
 }
 
 /**
+ * Является ли путь системными метаданными точки (class.js, readme.md, $folder/$class/$handler/…,
+ * #system/#secret, handlers/methods/triggers/timers/hooks/ai кроме memory.md),
+ * которые не-админы менять не могут.
+ */
+export function isSystemMetaPath(path, pointPath = '') {
+    const p = String(path || '');
+    const base = String(pointPath || '');
+    const rest = base && (p === base || p.startsWith(base + '/')) ? p.slice(base.length) : p;
+    const rawSegs = rest.split('/').filter(Boolean);
+    if (!rawSegs.length)
+        return true;
+    // Вне метапапки точки ($…) — системное дерево точки
+    if (rawSegs[0][0] !== '$')
+        return true;
+    // Типизаторы хендлеров/методов/триггеров/таймеров/файлов внутри метапапки — всегда системные метаданные
+    if (rawSegs.slice(1).some(s => s[0] === '#' || ['$handler', '$method', '$trigger', '$timer', '$file'].includes(s)))
+        return true;
+    const segs = tildeSegments(path, pointPath);
+    if (!segs.length) {
+        // Если путь заканчивается на распределяемый системный слой ($folder / $class) — это системная папка
+        return rawSegs.length > 1;
+    }
+    if (segs.some(s => s[0] === '#'))
+        return true;
+    if (segs.at(-1) === 'class.js')
+        return true;
+    if (SYSTEM_META_NAMES.includes(segs[0]))
+        return true;
+    if (isAgentControlPath(path, pointPath))
+        return true;
+    return false;
+}
+
+/**
  * Путь исполняемый/системный: class.js (сервер импортирует его как модуль),
- * сегменты `#…` (секреты, настройки). Писать такие пути может только write=all.
- * Сегменты `$…` отдельно не нужны: после них область пересчитывается и становится системой.
+ * сегменты `#…` (секреты, настройки), системные метаданные. Писать такие пути может только ADMIN.
  */
 export function isExecutablePath(path, pointPath = '') {
     const segs = tildeSegments(path, pointPath);
     const name = String(path || '').split('/').pop();
-    return name === 'class.js' || segs.some(s => s[0] === '#');
+    if (name === 'class.js' || segs.some(s => s[0] === '#'))
+        return true;
+    if (pointPath && isSystemMetaPath(path, pointPath))
+        return true;
+    return false;
 }
 
 /**

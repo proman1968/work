@@ -310,7 +310,15 @@ export async function writeFile(path, content, ctx, extra = {}) {
         params.mainContext = ctx.task.path;
     if (folder)
         params.folder = folder;
-    // коррекция: если родитель — папка-тип рабочей зоны, а расширение файла относится к другому типу,
+    // Если файл создаётся ИИ внутри задачи (.task) в рабочей точке этой задачи —
+    // размещаем его в собственной папке этого таска (ctx.task.storage_folder)
+    if (ctx?.task instanceof FS.$file && ctx.task.ext === 'task' && parent === ctx?.place && !(await fileAt(path, ctx))) {
+        const taskFolder = ctx.task.storage_folder;
+        if (taskFolder) {
+            const targetFolder = await taskFolder.getFolderToSaveFile(params);
+            return callAs(targetFolder, 'save_file', params, ctx);
+        }
+    }
     // поднимаем к классу — пусть class.save_file + getFolderToSaveFile положат файл в правильную папку
     const corrected = correctTypeFolder(parent, filename);
     if (corrected) {

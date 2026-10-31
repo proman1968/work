@@ -26,7 +26,8 @@ const PAGE = ['html', 'htm', 'pdf'];
 const VIDEO = ['mp4', 'webm'];
 const VIDEO_EXT = new Set(['mp4', 'webm']);
 const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
-const BINARY = ['docx', 'xlsx', 'xls', 'pptx', 'ppt', 'zip', 'rar', '7z', 'tar', 'gz', 'exe', 'dll', 'so', 'bin'];
+const OFFICE = ['docx', 'doc', 'rtf', 'odt', 'xlsx', 'xls', 'csv', 'ods', 'pptx', 'ppt', 'odp'];
+const BINARY = ['zip', 'rar', '7z', 'tar', 'gz', 'exe', 'dll', 'so', 'bin'];
 
 /** Иконка по расширению файла. */
 function extIcon(snapshot) {
@@ -189,39 +190,44 @@ ODA({ is: 'microchat-dock',
     imports: 'oda//button, oda//icon',
     template: /*html*/`
         <style>
-            :host { @apply --vertical; overflow: hidden; min-width: 0; border-left: 1px solid var(--subtle-border); background: var(--subtle-background); }
-            .tabs { @apply --horizontal; align-items: center; gap: 2px; padding: 6px 8px; border-bottom: 1px solid var(--subtle-border); overflow-x: auto; min-height: 44px; box-sizing: border-box; }
+            :host { @apply --vertical; overflow: hidden; min-width: 0; border-left: 1px solid var(--border-color); background: var(--content-background); }
+            .tabs { @apply --horizontal-center; @apply --footer; @apply --border-bottom; gap: 4px; padding: 2px 6px; overflow-x: auto; overflow-y: hidden; box-sizing: border-box; }
             .tab {
-                @apply --horizontal; align-items: center; gap: 6px; flex-shrink: 0; max-width: 200px; height: 30px; padding: 0 10px;
-                border-radius: var(--radius-s); cursor: pointer; font-size: small; user-select: none; border: 1px solid transparent;
+                @apply --horizontal-center; @apply --no-flex; @apply --border; @apply --hoverable;
+                gap: 6px; max-width: 220px; padding: 3px 8px;
+                cursor: pointer; font-size: small; user-select: none; box-sizing: border-box;
             }
-            .tab:hover { background: var(--code-background); }
             .tab:focus-visible { @apply --focus-ring; }
-            .tab[on] { background: var(--content-background); border-color: var(--subtle-border); font-weight: 600; }
             .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            .tab i { font-style: normal; font-size: x-small; font-weight: 600; min-width: 16px; height: 16px; border-radius: 8px; padding: 0 4px; box-sizing: border-box; text-align: center; line-height: 16px; background: var(--accent-soft); }
-            .tabs oda-button { border-radius: var(--radius-s); padding: 2px; }
+            .tab i { font-style: normal; font-size: x-small; font-weight: 600; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; text-align: center; line-height: 16px; background: var(--accent-soft); }
             .sheet { overflow: hidden; min-height: 0; }
         </style>
         <div class="tabs" no-flex role="tablist">
-            <div class="tab" ~for="tabs" role="tab" tabindex="0" :aria-selected="tab === $for.item.id ? 'true' : 'false'" :on="tab === $for.item.id"
+            <div class="tab" ~for="tabs" role="tab" tabindex="0"
+                :aria-selected="tab === $for.item.id ? 'true' : 'false'"
+                :on="tab === $for.item.id"
+                :content="tab === $for.item.id"
+                :light="tab !== $for.item.id"
+                :raised="tab === $for.item.id"
+                :focused="tab === $for.item.id"
+                :bold="tab === $for.item.id"
                 :title="$for.item.title" @tap="select($for.item.id)" @keydown="tabKey($event, $for.item.id)">
-                <oda-icon :icon="$for.item.icon" :icon-size="14"></oda-icon><span>{{$for.item.label}}</span><i ~if="$for.item.count">{{$for.item.count}}</i>
+                <oda-icon no-flex :icon="$for.item.icon" :icon-size="16"></oda-icon><span>{{$for.item.label}}</span><i ~if="$for.item.count">{{$for.item.count}}</i>
             </div>
             <div flex></div>
-            <oda-button no-flex icon="carbon:close" :icon-size="16" title="Скрыть доки" @tap="hide"></oda-button>
+            <oda-button no-flex icon="icons:close" :icon-size="16" title="Скрыть доки" @tap="hide"></oda-button>
         </div>
         <div class="sheet" flex vertical>
             <div flex vertical ~if="tab === 'context'" style="min-height:0"><microchat-context flex></microchat-context></div>
             <div flex vertical ~if="tab === 'monitor'" style="min-height:0"><microchat-monitor flex></microchat-monitor></div>
-            <div flex vertical ~if="tab === 'results'" style="min-height:0"><microchat-results flex></microchat-results></div>
             <div flex vertical ~if="tab === 'files'" style="min-height:0"><microchat-files flex></microchat-files></div>
+            <div flex vertical ~if="tab === 'results'" style="min-height:0"><microchat-results flex></microchat-results></div>
         </div>
     `,
     get shell() { return findShell(this); },
     get docs() { return this.shell?.docs || []; },
-    /** Опубликованные результаты (из data.results) и отчёты субагентов. */
-    get results() { return this.shell?.data?.results || []; },
+    /** Опубликованные результаты (из shell.results / data.results) и отчёты субагентов. */
+    get results() { return this.shell?.results || this.shell?.data?.results || []; },
     get reports() { return this.docs.filter(d => d.kind === 'text'); },
     /** Вкладка живёт в шелле (dockTab): openDoc и новые файлы переключают её оттуда. */
     get tab() { return this.shell?.dockTab || 'context'; },
@@ -233,10 +239,10 @@ ODA({ is: 'microchat-dock',
         const list = [{ id: 'context', label: 'Контекст', icon: 'carbon:chart-pie', title: 'Статистика сессии' }];
         if (this.hasComputer)
             list.push({ id: 'monitor', label: 'Монитор', icon: 'carbon:screen', title: 'Компьютер агента' });
-        if (this.hasResults)
-            list.push({ id: 'results', label: 'Результаты', icon: 'carbon:report', title: 'Результаты работы', count: this.results.length + this.reports.length });
         if (this.fileCount)
             list.push({ id: 'files', label: 'Файлы', icon: 'carbon:folder', title: 'Файлы задачи: ваши вложения и созданное агентом', count: this.fileCount });
+        if (this.hasResults)
+            list.push({ id: 'results', label: 'Результаты', icon: 'carbon:report', title: 'Результаты работы', count: this.results.length + this.reports.length });
         return list;
     },
     select(key) { this.shell?.selectTab(key); },
@@ -340,7 +346,7 @@ ODA({ is: 'microchat-monitor',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; }
-            .bar { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--subtle-border); min-height: 38px; box-sizing: border-box; }
+            .bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 8px; padding: 3px 8px; box-sizing: border-box; }
             .bar b { font-size: small; font-weight: 600; }
             .bar oda-button { border-radius: var(--radius-s); padding: 2px; }
             .state { @apply --chip; font-size: x-small; }
@@ -358,8 +364,8 @@ ODA({ is: 'microchat-monitor',
             .thumbs { @apply --horizontal; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
             .thumb { flex: none; width: 96px; height: 60px; object-fit: cover; border-radius: var(--radius-xs); border: 2px solid transparent; cursor: pointer; background: #111; opacity: .7; }
             .thumb[on] { border-color: var(--accent-color); opacity: 1; }
-            .cmds { @apply --vertical; border: 1px solid var(--subtle-border); border-radius: var(--radius-m); overflow: hidden; display: none; }
-            .cmd { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--subtle-border); min-width: 0; }
+            .cmds { @apply --vertical; border: 1px solid var(--border-color); overflow: hidden; }
+            .cmd { @apply --horizontal; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border-color); min-width: 0; }
             .cmd:last-child { border-bottom: none; }
             .cmd b { font-weight: 600; white-space: nowrap; }
             .cmd span { @apply --muted; font-family: var(--font-mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -424,13 +430,12 @@ ODA({ is: 'microchat-results',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; }
-            .sel-bar { @apply --horizontal; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--subtle-border); min-height: 36px; box-sizing: border-box; }
-            .sel { @apply --horizontal; align-items: center; gap: 6px; font-size: small; user-select: none; flex: 1; min-width: 0; }
+            .sel-bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 4px; padding: 3px 8px; box-sizing: border-box; }
+            .sel { @apply --horizontal-center; gap: 6px; font-size: small; user-select: none; flex: 1; min-width: 0; }
             .sel .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
             .sel .cnt { @apply --muted; font-size: x-small; white-space: nowrap; }
-            .arr { background: none; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); cursor: pointer; padding: 2px 6px; color: inherit; line-height: 1.2; }
-            .arr:hover { background: var(--code-background); }
-            .arr:disabled { opacity: .3; cursor: default; }
+            .arr { @apply --content; @apply --border; @apply --hoverable; cursor: pointer; padding: 2px 8px; color: inherit; line-height: 1.2; border-radius: 0; }
+            .arr:disabled { opacity: .35; cursor: default; }
             .body { overflow: auto; min-height: 0; flex: 1; }
             .empty { @apply --muted; text-align: center; padding: 40px 20px; }
         </style>
@@ -450,12 +455,10 @@ ODA({ is: 'microchat-results',
     pickedKey: '',
     pickedAt: 0,
     get shell() { return findShell(this); },
-    /** Опубликованные результаты (data.results) и отчёты субагентов. */
+    /** Опубликованные результаты (shell.results / data.results) и отчёты субагентов (стабилизированные без моргания). */
     get items() {
         const shell = this.shell;
-        const results = shell?.data?.results || [];
-        const reports = (shell?.docs || []).filter(d => d.kind === 'text');
-        const mapped = results.map(r => ({
+        const mapped = shell?.results || (shell?.data?.results || []).map(r => ({
             key: 'result:' + r.snapshot,
             kind: 'file',
             path: r.snapshot,
@@ -463,7 +466,13 @@ ODA({ is: 'microchat-results',
             time: r.time,
             published: true,
         }));
-        return [...mapped, ...reports];
+        const reports = (shell?.docs || []).filter(d => d.kind === 'text');
+        const next = [...mapped, ...reports];
+        const prev = this._itemsList;
+        if (Array.isArray(prev) && prev.length === next.length && prev.every((d, i) => d === next[i]))
+            return prev;
+        this._itemsList = next;
+        return next;
     },
     /** Выбор: последний сделанный человеком; запрос шелла (новый отчёт, ссылка из ответа) новее — он главнее; иначе — самый новый результат. */
     get selectedKey() {
@@ -504,19 +513,18 @@ ODA({ is: 'microchat-files',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; }
-            .list { overflow-y: auto; flex: 1; min-height: 0; padding: 4px 12px 16px; }
-            .head { @apply --muted; font-size: x-small; text-transform: uppercase; letter-spacing: .05em; padding: 10px 2px 6px; }
-            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; align-items: start; }
-            .tile { @apply --vertical; gap: 4px; cursor: pointer; border-radius: var(--radius-m); padding: 4px; min-width: 0; }
-            .tile:hover { background: var(--code-background); }
+            .list { overflow-y: auto; flex: 1; min-height: 0; padding: 8px 12px 16px; }
+            .head { @apply --muted; font-size: x-small; text-transform: uppercase; letter-spacing: .05em; padding: 4px 2px 6px; }
+            .grid { @apply --vertical; gap: 8px; }
+            .tile { @apply --vertical; gap: 3px; cursor: pointer; padding: 2px; min-width: 0; flex-shrink: 0; }
+            .tile:hover { background: var(--accent-soft); }
             .tile:focus-visible { @apply --focus-ring; }
-            .tile chat-item { pointer-events: none; }
-            .meta { @apply --horizontal; @apply --muted; align-items: center; gap: 4px; font-size: x-small; padding: 0 6px 2px; }
-            .meta .pub { color: var(--accent-color); }
+            .tile chat-item { pointer-events: none; width: 100%; }
+            .meta { @apply --horizontal; @apply --muted; align-items: center; gap: 4px; font-size: x-small; padding: 0 4px 2px; }
+            .meta .pub { color: var(--accent-color); font-weight: 600; }
             .view { @apply --vertical; flex: 1; min-height: 0; overflow: hidden; }
-            .back-bar { @apply --horizontal; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid var(--subtle-border); min-height: 34px; box-sizing: border-box; }
-            .back { background: none; border: 1px solid var(--subtle-border); border-radius: var(--radius-s); cursor: pointer; padding: 2px 10px; color: inherit; font-size: small; }
-            .back:hover { background: var(--code-background); }
+            .back-bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 8px; padding: 3px 8px; box-sizing: border-box; }
+            .back { @apply --content; @apply --border; @apply --hoverable; cursor: pointer; padding: 3px 10px; color: inherit; font-size: small; border-radius: 0; }
             .back-bar span { @apply --muted; font-size: x-small; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
             .empty { @apply --muted; text-align: center; padding: 40px 20px; }
         </style>
@@ -574,17 +582,17 @@ ODA({ is: 'microchat-doc',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; }
-            .bar { @apply --horizontal; align-items: center; gap: 4px; padding: 6px 10px; border-bottom: 1px solid var(--subtle-border); min-width: 0; }
+            .bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 4px; padding: 3px 8px; min-width: 0; box-sizing: border-box; }
             .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: small; }
             .sub { @apply --muted; font-size: x-small; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
             .sub[mono] { font-family: var(--font-mono); }
             .sub[link] { cursor: pointer; text-decoration: underline dotted; }
-            .bar oda-button { border-radius: var(--radius-s); padding: 2px; }
+            .bar oda-button { padding: 2px; }
             .body { overflow: auto; min-height: 0; }
-            iframe { border: none; width: 100%; height: 100%; background: white; }
+            iframe { border: none; width: 100%; height: 100%; background: white; display: block; }
             .img { @apply --vertical; align-items: center; justify-content: center; padding: 16px; }
-            .img img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-s); }
-            video { width: 100%; max-height: 100%; background: #000; border-radius: var(--radius-s); }
+            .img img { max-width: 100%; max-height: 100%; object-fit: contain; }
+            video { width: 100%; max-height: 100%; background: #000; }
             .md { padding: 14px 20px; user-select: text; line-height: 1.6; }
             pre { margin: 0; padding: 12px 16px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; }
             .empty { @apply --muted; padding: 24px; text-align: center; }
@@ -595,43 +603,75 @@ ODA({ is: 'microchat-doc',
                 <span class="sub" :mono="isFile" :link="isFile" :title="isFile ? 'Открыть форму ' + path : subtitle" @tap="openForm">{{subtitle}}</span>
             </div>
             <oda-button no-flex ~if="isFile" icon="carbon:renew" :icon-size="16" title="Обновить" @tap="reload"></oda-button>
-            <oda-button no-flex ~if="!isImage" icon="carbon:copy" :icon-size="16" title="Копировать" @tap="copy"></oda-button>
+            <oda-button no-flex ~if="!isImage && !isOffice" icon="carbon:copy" :icon-size="16" title="Копировать" @tap="copy"></oda-button>
             <oda-button no-flex ~if="!isFile" icon="carbon:save" :icon-size="16" :title="saved ? 'Сохранено: ' + saved : 'Сохранить файлом .md в класс задачи'" :success="!!saved" @tap="save"></oda-button>
             <oda-button no-flex icon="carbon:download" :icon-size="16" title="Скачать" @tap="download"></oda-button>
             <oda-button no-flex ~if="isFile" icon="carbon:launch" :icon-size="16" title="Открыть в новой вкладке" @tap="launch"></oda-button>
         </div>
         <div class="body" flex vertical>
             <iframe flex ~if="isPage" :src="url"></iframe>
+            <oda-office-editor flex ~if="isOffice && officeReady" :$item="officeItem"></oda-office-editor>
             <div class="img" flex ~if="isImage"><img :src="url"></div>
             <video flex controls preload="metadata" ~if="isVideo" :src="url"></video>
             <div class="md" ~if="isMarkdown && text"><oda-markdown-viewer vertical :value="md"></oda-markdown-viewer></div>
-            <pre ~if="!isPage && !isImage && !isVideo && !isMarkdown && !isBinary && text">{{text}}</pre>
+            <pre ~if="!isPage && !isOffice && !isImage && !isVideo && !isMarkdown && !isBinary && text">{{text}}</pre>
             <div class="empty" ~if="isBinary">Двоичный файл — скачайте или откройте в приложении</div>
-            <div class="empty" ~if="!isPage && !isImage && !isVideo && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
+            <div class="empty" ~if="!isPage && !isOffice && !isImage && !isVideo && !isBinary && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
         </div>
     `,
     doc: {
         $def: null,
-        set(n) {
+        set(n, old) {
+            const sameDoc = n && old && n.kind === old.kind && (
+                (n.kind === 'file' && n.path && n.path === old.path) ||
+                (n.kind === 'text' && n.key && n.key === old.key && n.text === old.text)
+            );
+            if (sameDoc)
+                return;
             this.fileText = '';
             this.bust = Date.now();
             this.saved = '';
-            this.loadText();
+            if (this.isOffice)
+                this.ensureOfficeEditor();
+            else
+                this.loadText();
         },
     },
     fileText: '',
     loading: false,
     bust: 0,
     saved: '',
+    officeReady: false,
+    async ensureOfficeEditor() {
+        if (!customElements.get('oda-office-editor')) {
+            try {
+                await import('/$server/$folder/$file/$office/handlers/pages/form/file/$handler/file.js');
+            }
+            catch (e) {
+                console.warn('[microchat-doc] office import:', e);
+            }
+        }
+        this.officeReady = !!customElements.get('oda-office-editor');
+    },
     get isFile() { return this.doc?.kind === 'file'; },
     get path() { return this.isFile ? this.doc.path : ''; },
     get ext() { return this.isFile ? extOf(this.path) : 'md'; },
+    get isOffice() { return OFFICE.includes(this.ext); },
+    get officeItem() { return this.isOffice && this.path ? fileItemOf(this.path) : null; },
     get isBinary() { return BINARY.includes(this.ext); },
     get isImage() { return IMAGE.includes(this.ext); },
     get isPage() { return PAGE.includes(this.ext); },
     get isVideo() { return VIDEO.includes(this.ext); },
     get isMarkdown() { return this.ext === 'md'; },
-    get url() { return fileUrl(this.path) + '?_=' + this.bust; },
+    get url() {
+        const rel = fileUrl(this.path) + '?_=' + this.bust;
+        try {
+            return new URL(rel, globalThis.location?.origin || 'http://localhost').href;
+        }
+        catch {
+            return rel;
+        }
+    },
     get text() { return this.isFile ? this.fileText : String(this.doc?.text || ''); },
     get md() { return linkifyWork(this.text, this.doc?.artifacts || new Map()); },
     get subtitle() {
@@ -640,7 +680,7 @@ ODA({ is: 'microchat-doc',
         return [this.doc?.subtitle, fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
     },
     async loadText() {
-        if (!this.isFile || this.isImage || this.isPage || this.isVideo || this.isBinary)
+        if (!this.isFile || this.isImage || this.isPage || this.isVideo || this.isOffice || this.isBinary)
             return;
         this.loading = true;
         try {
@@ -657,7 +697,10 @@ ODA({ is: 'microchat-doc',
     },
     reload() {
         this.bust = Date.now();
-        this.loadText();
+        if (this.isOffice)
+            this.$?.('oda-office-editor')?.loadOfficeItem?.(this.officeItem);
+        else
+            this.loadText();
     },
     copy() { copyText(this.text); },
     fileName() {
@@ -665,7 +708,7 @@ ODA({ is: 'microchat-doc',
         return this.isFile ? base : base + '.md';
     },
     download() {
-        if (this.isFile && (this.isImage || this.isPage || this.isVideo || !this.text)) {
+        if (this.isFile && (this.isImage || this.isPage || this.isVideo || this.isOffice || !this.text)) {
             const a = document.createElement('a');
             a.href = fileUrl(this.path);
             a.download = this.fileName();

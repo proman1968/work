@@ -942,6 +942,10 @@ export default {
             this.schedulePreview();
     },
     async attached() {
+        if (this._attachedDone && !this._initialNav && !this._pendingNavId) {
+            this.mountToolbarSlots();
+            return;
+        }
         const initNav = this._initialNav;
         this._initialNav = null;
         if (initNav?.id)
@@ -2189,19 +2193,15 @@ ODA({
             gap: 8px;
         }
         button.dlg-btn {
+            @apply --content;
+            @apply --border;
+            @apply --hoverable;
             min-width: 78px;
-            min-height: 28px;
-            padding: 4px 14px;
-            font-size: 13px;
-            border: 1px solid light-dark(#b8b8b0, #4a4b52);
-            border-radius: 3px;
-            background: light-dark(linear-gradient(180deg, #fafaf8 0%, #e8e7de 100%), linear-gradient(180deg, #32343a 0%, #26282d 100%));
-            color: light-dark(#222, #e2e8f0);
+            padding: 3px 12px;
+            font-size: small;
+            font-family: inherit;
+            border-radius: 0;
             cursor: pointer;
-        }
-        button.dlg-btn:hover:not(:disabled) {
-            border-color: light-dark(#7c8ea6, #60a5fa);
-            background: light-dark(linear-gradient(180deg, #ffffff 0%, #dfe8f6 100%), linear-gradient(180deg, #3b4252 0%, #2e3440 100%));
         }
         button.dlg-btn:disabled {
             opacity: 0.45;

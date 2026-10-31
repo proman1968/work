@@ -546,7 +546,16 @@ export async function appendRow(storage, row, params = {}) {
     if (primaryRes?.logsFilePath)
         row.logsFilePath = primaryRes.logsFilePath;
 
-    const authorCabinet = params.logAuthor?.$user ?? params.session?.$user;
+    let authorCabinet = params.logAuthor?.$user ?? params.session?.$user;
+    const senderUid = row.sender || params.session?.uid || params.uid;
+    if ((!authorCabinet || authorCabinet === globalThis.WORK) && senderUid && senderUid !== 'system' && senderUid !== 'WORK' && senderUid !== globalThis.WORK?.id) {
+        try {
+            const usersList = await globalThis.WORK?.$users;
+            if (usersList)
+                authorCabinet = await usersList.get_item('//' + senderUid);
+        }
+        catch { /* ignore */ }
+    }
     if (authorCabinet && authorCabinet !== globalThis.WORK
         && logClassKey(authorCabinet) !== logClassKey(storage))
         await writeLogTo(authorCabinet, log_param, written, row);

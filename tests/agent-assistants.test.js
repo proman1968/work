@@ -147,11 +147,11 @@ describe('отчёты и права', () => {
         }, as(IVAN));
         assert.match(res, /сохранено/);
         const XLSX = await import('xlsx');
-        const zone = path.join(tmp, 'ORG/$class/USER');
+        const zone = path.join(tmp, 'ORG/$class');
         const file = fs.readdirSync(zone, { recursive: true })
             .find(f => path.basename(String(f)) === 'итоги.xlsx' && fs.statSync(path.join(zone, f)).isFile());
-        assert.ok(file, 'файл в зоне USER');
-        const wb = XLSX.read(fs.readFileSync(path.join(tmp, 'ORG/$class/USER', file)));
+        assert.ok(file, 'файл в едином хранилище точки');
+        const wb = XLSX.read(fs.readFileSync(path.join(tmp, 'ORG/$class', file)));
         assert.deepEqual(wb.SheetNames, ['Данные', 'Итоги']);
         await assert.rejects(tool('write_table').run({ path: '/ORG/x.txt', rows: [[1]] }, as(IVAN)), /xlsx или .csv/);
     });
@@ -188,9 +188,9 @@ describe('документы и таблицы', () => {
             { 'Наименование': 'Хлеб', 'Код': 'A2', 'Цена': '45', 'Активен': 'нет' },
             { 'Наименование': 'Хлеб', 'Код': 'A3', 'Цена': '47', 'Активен': 'да' },
         ] }, as(PETR));
-        const csv = fs.readdirSync(path.join(tmp, 'ORG/$class/USER'), { recursive: true })
-            .find(f => path.basename(String(f)) === 'товары.csv' && fs.statSync(path.join(tmp, 'ORG/$class/USER', f)).isFile());
-        const src = '/ORG/$class/USER/' + String(csv).replace(/\\/g, '/');
+        const csv = fs.readdirSync(path.join(tmp, 'ORG/$class'), { recursive: true })
+            .find(f => path.basename(String(f)) === 'товары.csv' && fs.statSync(path.join(tmp, 'ORG/$class', f)).isFile());
+        const src = '/ORG/$class/' + String(csv).replace(/\\/g, '/');
         const table = JSON.parse(await tool('read_table').run({ path: src }, as(PETR)));
         assert.equal(table.total, 3);
         assert.deepEqual(table.columns, ['Наименование', 'Код', 'Цена', 'Активен']);
@@ -238,9 +238,9 @@ describe('документы и таблицы', () => {
             data: { client: { name: 'ООО «Ромашка»' }, number: 17 },
         }, as(PETR));
         assert.match(res, /не заполнены поля: sum/);
-        const out = fs.readdirSync(path.join(tmp, 'ORG/$class/USER'), { recursive: true })
-            .find(f => path.basename(String(f)) === 'письмо.md' && fs.statSync(path.join(tmp, 'ORG/$class/USER', f)).isFile());
-        assert.equal(fs.readFileSync(path.join(tmp, 'ORG/$class/USER', out), 'utf-8'), 'Уважаемый ООО «Ромашка»! Счёт №17 на  руб.');
+        const out = fs.readdirSync(path.join(tmp, 'ORG/$class'), { recursive: true })
+            .find(f => path.basename(String(f)) === 'письмо.md' && fs.statSync(path.join(tmp, 'ORG/$class', f)).isFile());
+        assert.equal(fs.readFileSync(path.join(tmp, 'ORG/$class', out), 'utf-8'), 'Уважаемый ООО «Ромашка»! Счёт №17 на  руб.');
 
         const zip = new AdmZip();
         zip.addFile('word/document.xml', Buffer.from('<w:document><w:body><w:p><w:r><w:t>Клиент: {{cli</w:t></w:r><w:r><w:t>ent}}</w:t></w:r><w:r><w:t> {{ sum }}</w:t></w:r></w:p></w:body></w:document>'));
@@ -289,10 +289,10 @@ describe('память, эскалация, триггеры', () => {
             /инструментом memory/);
         // удаление файла памяти через call — отказ даже админу (шлюз пускает ADMIN — ядро отказывает)
         await assert.rejects(
-            tool('call').run({ path: '/ORG/$class/USER/ai/memory.md', method: 'delete', args: {} }, { ...as(ADMIN), place: org }),
+            tool('call').run({ path: '/ORG/$class/ai/memory.md', method: 'delete', args: {} }, { ...as(ADMIN), place: org }),
             /инструментом memory/,
             'call.delete удалил файл памяти');
-        assert.ok(fs.existsSync(path.join(tmp, 'ORG', '$class', 'USER', 'ai', 'memory.md')), 'файл памяти удалён');
+        assert.ok(fs.existsSync(path.join(tmp, 'ORG', '$class', 'ai', 'memory.md')), 'файл памяти удалён');
         // память не создана обходом: в блоке памяти чужого факта нет
         const { memoryBlock } = await import('../sources/modules/agent/tools/memory.js');
         const block = await memoryBlock(org, petrPlace.session);
@@ -321,7 +321,7 @@ it('memory: память места видна только своей роли;
         assert.match(block, /Память места \(роль USER\)[\s\S]*xlsx/);
         assert.match(block, /Личная память[\s\S]*краткие/);
         const bossBlock = await memoryBlock(org, boss.session);
-        assert.doesNotMatch(bossBlock, /xlsx/, 'память роли USER — в её зоне, у BOSS своя');
+        assert.match(bossBlock, /xlsx/, 'память места в едином хранилище доступна участникам точки');
         assert.doesNotMatch(bossBlock, /краткие/, 'личная память — только владельцу');
         assert.match(await tool('memory').run({ action: 'forget', text: 'xlsx' }, petr), /забыто строк: 1/);
         assert.doesNotMatch(await memoryBlock(org, petr.session), /xlsx/);
@@ -383,15 +383,15 @@ describe('роль задачи', () => {
         (await WORK.get_item('/ORG')).reset();
         const ctx = { ...as(ADMIN), role: 'USER' };
         const cab = await tool('write').run({ path: '/USERS/' + ADMIN + '/work/презентация.html', content: '<p>x</p>' }, ctx);
-        assert.match(cab, new RegExp('/USERS/' + ADMIN + '/\\$user/USER/'), 'кабинет — зона USER, а не ADMIN');
+        assert.match(cab, new RegExp('/USERS/' + ADMIN + '/\\$user/text/work/'), 'кабинет — единое хранилище $user без подпапок ролей');
         const org = await tool('write').run({ path: '/ORG/итог.md', content: 'x' }, ctx);
-        assert.match(org, /\/ORG\/\$class\/USER\//, 'точка — зона USER');
-        // в ADMIN-задаче — как раньше, зона ADMIN
+        assert.match(org, /\/ORG\/\$class\/text\//, 'точка — единое хранилище $class без подпапок ролей');
+        // в ADMIN-задаче — то же единое хранилище
         const adm = await tool('write').run({ path: '/USERS/' + ADMIN + '/work/a.md', content: 'x' }, { ...as(ADMIN), role: 'ADMIN' });
-        assert.match(adm, /\/\$user\/ADMIN\//);
+        assert.match(adm, /\/\$user\/text\//);
         // действия администратора в роли USER — отказ с объяснением
         await assert.rejects(tool('assign').run({ path: '/ORG', role: 'USER', add: [IVAN] }, ctx), /роли USER/);
-        // роль задачи — по зоне, где лежит .task
+        // роль задачи — в едином хранилище по умолчанию USER
         const cabinet = await WORK.get_item('/USERS/' + ADMIN);
         const zone = await cabinet.work_zone({ role: 'USER' });
         const taskFile = FS.$file.build('x.task', await zone._get_next_item('task', FS.$folder));

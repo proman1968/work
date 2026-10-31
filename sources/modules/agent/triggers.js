@@ -85,7 +85,7 @@ export async function matchTriggers(file) {
             continue;
         if (m.zone) {
             const area = point.areaOf(file);
-            if (area.kind !== 'zone' || area.role !== String(m.zone))
+            if (area.kind !== 'files' && (area.kind !== 'zone' || area.role !== String(m.zone)))
                 continue;
         }
         if (!m.as)

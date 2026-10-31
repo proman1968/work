@@ -33,6 +33,30 @@ function nodeStateKey(it) {
     return String(it.short || it.path || '');
 }
 
+function isChatModelNode(f) {
+    if (!f)
+        return false;
+    if (f.type === '$provider' || f.id === 'MODELS')
+        return true;
+    if (f.type && f.type !== '$ai')
+        return true;
+    const mod = String(f.DATA?.modality || '').toLowerCase();
+    if (['image', 'audio', 'embedding', 'video', 'voice', 'asr', 'tts', 'stt'].includes(mod))
+        return false;
+    const name = String(f.id || f.label || f.DATA?.label || '').toLowerCase();
+    if (/(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i.test(name))
+        return false;
+    const rawCaps = f.DATA?.capabilities;
+    if (rawCaps != null) {
+        const list = Array.isArray(rawCaps)
+            ? rawCaps.map(String)
+            : String(rawCaps || '').split(/[\s,]+/).filter(Boolean);
+        if (list.length > 0 && !list.includes('chat'))
+            return false;
+    }
+    return true;
+}
+
 function applyTreeFilters(items, host) {
     items = items || [];
     if (host.hideSystem)
@@ -41,6 +65,8 @@ function applyTreeFilters(items, host) {
         items = items.filter(f => !(f instanceof CORE.$file));
     if (host.onlyClasses)
         items = items.filter(f => f instanceof CORE.$class);
+    if (host.onlyChatModels)
+        items = items.filter(f => isChatModelNode(f));
     return items;
 }
 
@@ -72,6 +98,7 @@ export default {
         hideSystem: false,
         hideFiles: false,
         onlyClasses: false, // только CORE.$class (site)
+        onlyChatModels: false, // только языковые модели ($ai с поддержкой chat)
     },
     showUsers: false,
     showSize: false,
@@ -380,7 +407,7 @@ export default {
         if (!scrollerRect.height)
             return;
         const lvl = Math.max(0, Number(comp.stickyLevel) || 0);
-        const stickyTopOffset = lvl * 30;
+        const stickyTopOffset = Number(comp.stickyTop) || (lvl * 30);
         const visibleTop = scrollerRect.top + stickyTopOffset;
         const visibleBottom = scrollerRect.bottom;
 
@@ -508,6 +535,14 @@ ODA({is: 'oda-tree-node',
                 background: var(--content-background);
                 color: var(--content-color);
             }
+            .node.large-icon-node {
+                height: 52px;
+                min-height: 52px;
+            }
+            .node.structure-only-node {
+                height: 36px;
+                min-height: 36px;
+            }
             .node.is-stuck {
                 position: sticky !important;
                 background: light-dark(#f6f6f8, color-mix(in oklch, var(--content-color) 10%, var(--content-background)));
@@ -536,11 +571,9 @@ ODA({is: 'oda-tree-node',
             oda-icon {
                 cursor: pointer;
             }
-            /* экспандер — по верху первой строки: иначе при раскрытой панели
-               он съезжает к центру выросшего узла */
             .node > oda-icon {
-                align-self: flex-start;
-                margin-top: 3px;
+                align-self: center;
+                margin-top: 0;
             }
             /* пользователи места — компактно в правом краю строки, название не сжимают */
             item-node item-users {
@@ -576,7 +609,7 @@ ODA({is: 'oda-tree-node',
                 padding: 0px;
             }
         </style>
-        <div draggable="true" ~if="hideTops<1" class='node' ~class="{'node-focused': isFocused, 'is-stuck': isStuck, 'module-blocked': isModuleBlocked}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
+        <div draggable="true" ~if="hideTops<1" class='node' ~class="{'node-focused': isFocused, 'is-stuck': isStuck, 'module-blocked': isModuleBlocked, 'large-icon-node': isLargeIconNode, 'structure-only-node': isDepartmentNode}" :style="nodeStickyStyle" :category="isCategory"  @tap="isCategory?$pdp.focusedItem=$pdp.focusedItem:$pdp.focusedItem = $item" @dragstart>
             <oda-icon ~if="hideRoots<1" ~show="showExpander" :disabled="!expanderIcon" :icon="expanderIcon" :icon-size="expanderIconSize" @tap.stop="expanded = !expanded"></oda-icon>
             <div vertical flex style="min-width: 0; overflow: hidden;">
                 <div horizontal flex style="min-width: 0; overflow: hidden; align-items: center;">
@@ -590,14 +623,15 @@ ODA({is: 'oda-tree-node',
                 </div>
             </div>
         </div>
-        <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px; overflow: visible;">
+        <div horizontal flex ~if="expanded || $pdp.filter" style="overflow: visible;">
             <div class='step' ~if="hideRoots<1"></div>
             <div class='sub-nodes'>
-                <oda-tree-node :show-status :show-users ~is="nodeTemplate" :sticky-level="hideTops > 0 || hideRoots > 0 ? stickyLevel : stickyLevel + 1" :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :$item="$for?.item" :menu-mode></oda-tree-node>
+                <oda-tree-node :show-status :show-users ~is="nodeTemplate" :sticky-level="hideTops > 0 || hideRoots > 0 ? stickyLevel : stickyLevel + 1" :sticky-top="hideTops > 0 || hideRoots > 0 ? stickyTop : stickyTop + rowHeight" :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :$item="$for?.item" :menu-mode></oda-tree-node>
             </div>
         </div>
     `,
     stickyLevel: 0,
+    stickyTop: 0,
     isStuck: false,
     attached() {
         const tree = this.$pdp?.tree;
@@ -622,20 +656,44 @@ ODA({is: 'oda-tree-node',
             return;
         }
         const lvl = Number(this.stickyLevel) || 0;
-        const targetTop = scrollTop + lvl * 30;
+        const topPx = Number(this.stickyTop) || (lvl * 30);
+        const rh = this.rowHeight || 30;
+        const targetTop = scrollTop + topPx;
         const hRect = this.getBoundingClientRect();
-        const stuck = hRect.height > 34 && hRect.top <= targetTop + 1 && hRect.bottom > targetTop + 32;
+        const stuck = hRect.height > rh + 4 && hRect.top <= targetTop + 1 && hRect.bottom > targetTop + rh + 2;
         if (this.isStuck !== stuck)
             this.isStuck = stuck;
     },
     get nodeStickyStyle() {
         const lvl = Number(this.stickyLevel) || 0;
+        const topPx = Number(this.stickyTop) || (lvl * 30);
         const step = Number(this.$pdp?.step) || 12;
         const indent = lvl > 0 ? lvl * step : 0;
         const padStyle = indent > 0 ? `margin-left: -${indent}px; padding-left: ${2 + indent}px;` : '';
         if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon)
             return padStyle;
-        return `${padStyle} position: sticky !important; top: ${lvl * 30}px; z-index: ${30 - lvl};`;
+        return `${padStyle} position: sticky !important; top: ${topPx}px; z-index: ${30 - lvl};`;
+    },
+    get isLargeIconNode() {
+        const it = this.$item;
+        if (!it || isLinkNode(it) || ('isPlace' in Object(it) && it.isPlace))
+            return false;
+        const t = it.type;
+        const isNetServer = t === '$node' && it.id !== 'NODES';
+        return it instanceof CORE.$user || t === '$user' || t === '$base' || t === '$server' || isNetServer;
+    },
+    get isDepartmentNode() {
+        const it = this.$item;
+        if (!it || isLinkNode(it) || ('isPlace' in Object(it) && it.isPlace))
+            return false;
+        return it.type === '$structure';
+    },
+    get rowHeight() {
+        if (this.isLargeIconNode)
+            return 52;
+        if (this.isDepartmentNode)
+            return 36;
+        return 30;
     },
     get isStructureNode() {
         const it = this.$item;

@@ -393,7 +393,13 @@ export function taskRole(file) {
     try {
         const point = file.$owner || file.$class;
         const area = point?.areaOf?.(file);
-        return area?.kind === 'zone' ? area.role : null;
+        if (area?.kind === 'zone')
+            return area.role;
+        if (file?._taskRole)
+            return file._taskRole;
+        if (area?.kind === 'files')
+            return 'USER';
+        return null;
     }
     catch {
         return null;
@@ -436,8 +442,8 @@ function start(s, session, file) {
         let aborted;
         try {
             const place = file.$class || file.$owner || null;
-            // роль задачи — зона, в которой лежит .task (её создали, работая в этой роли; клиент подменить не может)
-            body.role = taskRole(file) || body.role;
+            // роль задачи — из тела .task (записана при сохранении) или по области файла
+            body.role = body.role || taskRole(file);
             const env = await createEnv({ place, session, host, tz: body.tz, location: body.location, role: body.role, voice: !!body.voice });
             const def = body.childAgent ? env.agents.get(body.childAgent) : null;
             if (body.childAgent && !def)

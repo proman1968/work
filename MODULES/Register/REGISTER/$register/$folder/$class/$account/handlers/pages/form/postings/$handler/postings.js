@@ -629,18 +629,19 @@ export default {
             padding-bottom: 4px;
         }
         .btn-action {
-            padding: 3px 10px;
-            font-size: 12px;
-            font-weight: 600;
-            border: 1px solid light-dark(#b8b7ae, #4a4c56);
-            border-radius: 3px;
-            background: light-dark(linear-gradient(180deg, #fafaf8 0%, #e8e7de 100%), linear-gradient(180deg, #32343a 0%, #26282d 100%));
-            color: inherit;
+            @apply --content;
+            @apply --border;
+            @apply --hoverable;
+            padding: 3px 8px;
+            font-size: small;
+            font-family: inherit;
+            font-weight: 500;
+            border-radius: 0;
             cursor: pointer;
         }
     </style>
 
-    <oda-packets no-flex mode="month" ~if="packetsStart"
+    <oda-packets no-flex mode="month"
         :start="packetsStart" :end="packetsEnd" :days="packetDays"
         ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
 
@@ -882,8 +883,8 @@ export default {
     </div>
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
-    packetsStart: '',
-    packetsEnd: '',
+    packetsStart: _yearStart(),
+    packetsEnd: _yearEnd(),
     packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
@@ -1238,6 +1239,7 @@ export default {
             return;
         this.mode = next;
         await this.reload();
+        this.async(() => this.render());
     },
     async setGroupBy(g) {
         this.groupBy = g || 'quarter';
@@ -1396,6 +1398,8 @@ export default {
         _writeSavedPeriod(this.packetsKey, this.from, this.to);
     },
     async attached() {
+        if (this._attachedDone && !this._initialNav)
+            return;
         const initNav = this._initialNav;
         this._initialNav = null;
         if (initNav)
@@ -1453,46 +1457,54 @@ export default {
         }
     },
     /** Слоты аналитик счёта из схемы ядра (с учётом наследования) и поля прилинкованных справочников. */
-    async loadSlots() {
-        try {
-            const res = await this.$item?.fetch('db_schema');
-            const s = res?.schema;
-            const fields = Array.isArray(s?.fields) ? s.fields : [];
-            this.slots = fields.filter(f => f?.analytic && f.type === 'link')
-                .map(f => ({ id: f.id, label: f.label || f.id, type: 'Link', catalog: f.targetPath || f.target, placeholder: f.label || f.id }));
-            this.activeSlots = this.slots.map(f => f.id);
-            const serverSlots = Array.isArray(res?.slots) ? res.slots : [];
-            const features = [];
-            for (const slot of this.slots) {
-                const srv = serverSlots.find(x => x.id === slot.id);
-                if (Array.isArray(srv?.fields) && srv.fields.length) {
-                    features.push(...srv.fields);
+    loadSlots() {
+        const p = (async () => {
+            try {
+                const res = await this.$item?.fetch('db_schema');
+                const s = res?.schema;
+                const fields = Array.isArray(s?.fields) ? s.fields : [];
+                this.slots = fields.filter(f => f?.analytic && f.type === 'link')
+                    .map(f => ({ id: f.id, label: f.label || f.id, type: 'Link', catalog: f.targetPath || f.target, placeholder: f.label || f.id }));
+                this.activeSlots = this.slots.map(f => f.id);
+                const serverSlots = Array.isArray(res?.slots) ? res.slots : [];
+                const features = [];
+                for (const slot of this.slots) {
+                    const srv = serverSlots.find(x => x.id === slot.id);
+                    if (Array.isArray(srv?.fields) && srv.fields.length) {
+                        features.push(...srv.fields);
+                    }
+                    else {
+                        features.push({
+                            id: slot.id,
+                            spec: slot.id,
+                            slotId: slot.id,
+                            fieldId: 'name',
+                            label: 'Наименование',
+                            slotLabel: slot.label,
+                            isObject: true,
+                            type: 'link',
+                            catalog: slot.catalog,
+                            options: [],
+                        });
+                    }
                 }
-                else {
-                    features.push({
-                        id: slot.id,
-                        spec: slot.id,
-                        slotId: slot.id,
-                        fieldId: 'name',
-                        label: 'Наименование',
-                        slotLabel: slot.label,
-                        isObject: true,
-                        type: 'link',
-                        catalog: slot.catalog,
-                        options: [],
-                    });
-                }
+                this.analyticFeatures = features;
+                this.selectedFeatureId = features[0]?.id || '';
             }
-            this.analyticFeatures = features;
-            this.selectedFeatureId = features[0]?.id || '';
-        }
-        catch (e) {
-            this.slots = [];
-            this.activeSlots = [];
-            this.analyticFeatures = [];
-            this.selectedFeatureId = '';
-            this.error = String(e?.message || e);
-        }
+            catch (e) {
+                this.slots = [];
+                this.activeSlots = [];
+                this.analyticFeatures = [];
+                this.selectedFeatureId = '';
+                this.error = String(e?.message || e);
+            }
+            finally {
+                if (this._slotsPromise === p)
+                    this._slotsPromise = null;
+            }
+        })();
+        this._slotsPromise = p;
+        return p;
     },
     /** Заданные фильтры аналитик. */
     analytics() {
@@ -1577,17 +1589,20 @@ export default {
         return false;
     },
     async reload() {
-        this.items = [];
-        this.groups = [];
-        this.sheetRows = [];
-        this.sheetTotal = null;
-        this.count = 0;
-        this.opening = this.turnover = this.closing = { debit: 0, credit: 0 };
         this.error = '';
-        if (!this.$item)
+        if (!this.$item) {
+            this.items = [];
+            this.groups = [];
+            this.sheetRows = [];
+            this.sheetTotal = null;
+            this.count = 0;
+            this.opening = this.turnover = this.closing = { debit: 0, credit: 0 };
             return;
+        }
         this._lastFilterSig = JSON.stringify(this.analytics());
         try {
+            if (this._slotsPromise)
+                await this._slotsPromise;
             if (this.mode === 'analysis') {
                 const p = this.params();
                 delete p.limit;

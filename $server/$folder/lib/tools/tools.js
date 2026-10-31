@@ -16,34 +16,26 @@ export default {
                 border-radius: 4px;
             }
             .service-wrap {
-                @apply --horizontal;
+                @apply --horizontal-center;
                 @apply --no-flex;
-                align-items: center;
-                gap: 6px;
+                gap: 4px;
             }
             button.service-btn {
-                @apply --horizontal;
+                @apply --horizontal-center;
                 @apply --no-flex;
                 @apply --content;
-                align-items: center;
+                @apply --border;
+                @apply --hoverable;
                 gap: 6px;
-                padding: 3px 12px;
-                min-height: 24px;
-                font-size: 12.5px;
-                font-weight: 600;
-                border: 1px solid var(--border-color);
-                border-radius: 3px;
+                padding: 3px 8px;
+                font-size: small;
+                font-family: inherit;
+                font-weight: 500;
+                border-radius: 0;
                 cursor: pointer;
                 user-select: none;
-                box-shadow: 0 1px 1px rgba(0, 0, 0, 0.06);
-                transition: background 0.12s ease, border-color 0.12s ease;
-            }
-            button.service-btn:hover:not(:disabled) {
-                border-color: var(--accent-color);
-                background: var(--accent-soft);
-            }
-            button.service-btn:active:not(:disabled) {
-                transform: translateY(0.5px);
+                box-shadow: none;
+                box-sizing: border-box;
             }
             button.service-btn:disabled {
                 opacity: 0.45;

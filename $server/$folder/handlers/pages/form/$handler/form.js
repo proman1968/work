@@ -50,138 +50,60 @@ export default {
                 min-width: 0;
             }
             .form-tabs-bar {
-                display: flex;
-                flex-direction: row !important;
-                flex-wrap: nowrap !important;
-                align-items: flex-end !important;
-                justify-content: flex-start !important;
-                gap: 3px;
+                @apply --horizontal-center;
+                @apply --footer;
+                @apply --border-bottom;
+                gap: 4px;
                 width: 100%;
                 overflow-x: auto;
                 overflow-y: hidden;
                 scrollbar-width: thin;
-                padding: 4px 8px 0 8px;
-                background: var(--light-background);
-                color: var(--content-color);
-                border-bottom: 1px solid var(--border-color);
+                padding: 2px 6px;
                 box-sizing: border-box;
             }
             .form-tabs-bar[hidden],
+            #formTabsBar[hidden],
             #formToolbar[hidden],
-            #formFooter[hidden] {
+            #formFooter[hidden],
+            [slot="main"][hidden] {
                 display: none !important;
             }
-            .tabs-close-all {
-                display: inline-flex !important;
-                align-items: center;
-                justify-content: center;
-                width: 22px;
-                height: 22px;
-                margin: 0 0 3px 6px;
-                padding: 0;
-                border: 1px solid var(--border-color);
-                border-radius: var(--radius-xs, 3px);
-                background: var(--content-background);
-                color: var(--content-color);
-                font-size: 13px;
-                font-weight: 700;
-                line-height: 1;
-                cursor: pointer;
-                flex-shrink: 0;
-                user-select: none;
-            }
-            .tabs-close-all:hover {
-                background: var(--error-color);
-                border-color: var(--error-color);
-                color: var(--error-background);
-            }
             .form-tab {
-                display: inline-flex !important;
-                flex-direction: row !important;
-                flex-wrap: nowrap !important;
-                align-items: center !important;
-                flex-shrink: 0;
+                @apply --horizontal-center;
+                @apply --no-flex;
+                @apply --border;
+                @apply --hoverable;
                 gap: 6px;
-                max-width: 260px;
-                height: 27px;
-                padding: 0 9px 0 10px;
-                margin-bottom: -1px;
-                font-size: 12.5px;
-                font-weight: 500;
-                line-height: 1;
+                max-width: 240px;
+                padding: 3px 8px;
+                font-size: small;
                 white-space: nowrap !important;
-                border: 1px solid var(--border-color);
-                border-radius: 6px 10px 0 0;
-                background: var(--subtle-background);
-                color: var(--content-color);
                 cursor: pointer;
                 user-select: none;
                 box-sizing: border-box;
-                transition: background 0.12s ease, color 0.12s ease;
-            }
-            .form-tab:hover:not(.active) {
-                background: var(--accent-soft);
-                color: var(--accent-color);
-            }
-            .form-tab.active {
-                height: 28px;
-                background: var(--content-background);
-                color: var(--content-color);
-                border-color: var(--border-color);
-                border-bottom-color: var(--content-background);
-                font-weight: 700;
-                box-shadow: inset 0 2px 0 var(--accent-color);
-                z-index: 2;
             }
             .form-tab .tab-label {
-                display: inline-block;
-                max-width: 205px;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap !important;
             }
-            .form-tab .tab-close {
-                display: inline-flex !important;
-                align-items: center;
-                justify-content: center;
-                width: 15px;
-                height: 15px;
-                margin-left: 3px;
-                border: 1px solid var(--border-color);
-                border-radius: var(--radius-xs, 3px);
-                background: var(--content-background);
-                color: var(--content-color);
-                font-size: 10.5px;
-                font-weight: 700;
-                line-height: 1;
-                flex-shrink: 0;
-            }
-            .form-tab .tab-close:hover {
-                background: var(--error-color);
-                border-color: var(--error-color);
-                color: var(--error-background);
-            }
             .obj-footer-actions {
-                display: inline-flex !important;
-                flex-direction: row !important;
-                align-items: center !important;
-                gap: 6px;
-                flex-shrink: 0;
+                @apply --horizontal-center;
+                @apply --no-flex;
+                gap: 4px;
             }
             button.obj-footer-btn {
-                display: inline-flex !important;
-                flex-direction: row !important;
-                align-items: center;
-                justify-content: center;
-                gap: 5px;
-                min-height: 24px;
-                padding: 3px 12px;
-                font-size: 12.5px;
-                font-weight: 600;
-                border: 1px solid var(--border-color);
-                border-radius: var(--radius-xs, 3px);
-                background: var(--content-background);
-                color: var(--content-color);
+                @apply --horizontal-center;
+                @apply --no-flex;
+                @apply --content;
+                @apply --border;
+                @apply --hoverable;
+                gap: 6px;
+                padding: 3px 10px;
+                font-size: small;
+                font-family: inherit;
+                font-weight: 500;
+                border-radius: 0;
                 cursor: pointer;
                 user-select: none;
             }
@@ -191,11 +113,6 @@ export default {
             }
             button.obj-footer-btn.icon-only {
                 padding: 3px 7px;
-            }
-            button.obj-footer-btn:hover:not(:disabled) {
-                border-color: var(--accent-color);
-                background: var(--accent-soft);
-                color: var(--accent-color);
             }
             button.obj-footer-btn:disabled {
                 opacity: 0.45;
@@ -220,6 +137,75 @@ ODA({is: 'work-form',
             @keyframes view-fade-in {
                 from { opacity: 0; }
                 to { opacity: 1; }
+            }
+            .form-tabs-bar {
+                @apply --horizontal-center;
+                @apply --footer;
+                @apply --border-bottom;
+                gap: 4px;
+                width: 100%;
+                overflow-x: auto;
+                overflow-y: hidden;
+                scrollbar-width: thin;
+                padding: 2px 6px;
+                box-sizing: border-box;
+            }
+            .form-tabs-bar[hidden],
+            #formTabsBar[hidden],
+            #formToolbar[hidden],
+            #formFooter[hidden],
+            [slot="main"][hidden] {
+                display: none !important;
+            }
+            .form-tab {
+                @apply --horizontal-center;
+                @apply --no-flex;
+                @apply --border;
+                @apply --hoverable;
+                gap: 6px;
+                max-width: 240px;
+                padding: 3px 8px;
+                font-size: small;
+                white-space: nowrap !important;
+                cursor: pointer;
+                user-select: none;
+                box-sizing: border-box;
+            }
+            .form-tab .tab-label {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap !important;
+            }
+            .obj-footer-actions {
+                @apply --horizontal-center;
+                @apply --no-flex;
+                gap: 4px;
+            }
+            button.obj-footer-btn {
+                @apply --horizontal-center;
+                @apply --no-flex;
+                @apply --content;
+                @apply --border;
+                @apply --hoverable;
+                gap: 6px;
+                padding: 3px 10px;
+                font-size: small;
+                font-family: inherit;
+                font-weight: 500;
+                border-radius: 0;
+                cursor: pointer;
+                user-select: none;
+            }
+            button.obj-footer-btn.primary {
+                font-weight: 700;
+                min-width: 62px;
+            }
+            button.obj-footer-btn.icon-only {
+                padding: 3px 7px;
+            }
+            button.obj-footer-btn:disabled {
+                opacity: 0.45;
+                cursor: default;
             }
         </style>
         <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
@@ -281,37 +267,45 @@ ODA({is: 'work-form',
             <oda-button @tap="toggleFullscreen" ~if="currentItem?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div id="formTabsBar" slot="top" class="form-tabs-bar" horizontal no-flex :hidden="!(formTabs?.length > 1)" ~show="formTabs?.length > 1">
-            <div class="form-tab" horizontal no-flex ~for="formTabs" ~class="{active: activeTabKey === $for.item.key}" :title="$for.item.label" @tap="activateTab($for.item)" style="display: inline-flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px; white-space: nowrap;">
-                <oda-icon no-flex ~if="$for.item.icon" :icon="$for.item.icon" icon-size="16" style="flex-shrink: 0;"></oda-icon>
-                <span class="tab-label" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{$for.item.label}}</span>
-                <span class="tab-close" ~if="$for.item.closable" title="Закрыть вкладку" @tap.stop="closeTab($for.item, $event)">✕</span>
+        <div id="formTabsBar" slot="top" class="form-tabs-bar" footer border-bottom horizontal-center no-flex :hidden="!(formTabs?.length > 1)" ~show="formTabs?.length > 1">
+            <div horizontal-center flex style="gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden;">
+                <div class="form-tab" horizontal-center no-flex border hoverable ~for="formTabs"
+                    ~class="{active: activeTabKey === $for.item.key}"
+                    :content="activeTabKey === $for.item.key"
+                    :light="activeTabKey !== $for.item.key"
+                    :raised="activeTabKey === $for.item.key"
+                    :focused="activeTabKey === $for.item.key"
+                    :bold="activeTabKey === $for.item.key"
+                    :title="$for.item.label" @tap="activateTab($for.item)">
+                    <oda-icon no-flex ~if="$for.item.icon" :icon="$for.item.icon" :icon-size="16"></oda-icon>
+                    <span class="tab-label">{{$for.item.label}}</span>
+                    <oda-icon class="tab-close" no-flex ~if="$for.item.closable" icon="icons:close" :icon-size="14" title="Закрыть вкладку" @tap.stop="closeTab($for.item, $event)"></oda-icon>
+                </div>
             </div>
-            <div style="flex: 1;"></div>
-            <button type="button" class="tabs-close-all" title="Закрыть все дополнительные вкладки" @tap.stop="closeAllTabs($event)">✕</button>
+            <oda-button class="tabs-close-all" no-flex icon="icons:close" :icon-size="16" title="Закрыть все дополнительные вкладки" @tap.stop="closeAllTabs($event)"></oda-button>
         </div>
-        <div id="formToolbar" slot="top" :hidden="!hasToolbar" ~show="hasToolbar" light horizontal no-flex style="align-items: center; padding: 3px 8px; min-height: 32px; gap: 8px; box-sizing: border-box; color: var(--content-color); border-bottom: 1px solid var(--border-color);">
-            <div class="toolbar-zone left" horizontal no-flex style="align-items: center; gap: 6px;">
+        <div id="formToolbar" slot="top" :hidden="!hasToolbar" ~show="hasToolbar" footer border-bottom horizontal-center no-flex style="padding: 2px 6px; gap: 6px; box-sizing: border-box;">
+            <div class="toolbar-zone left" horizontal-center no-flex style="gap: 4px;">
                 <item-tools id="topMainTools" :$item="currentItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topMainToolItems" @tools-changed="onToolsListChanged('topMainToolItems', $event)" show-labels></item-tools>
                 <item-tools id="topFocusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topFocusedToolItems" @tools-changed="onToolsListChanged('topFocusedToolItems', $event)" show-labels></item-tools>
                 <slot name="tool-left" @slotchange="_checkToolbarSlots()"></slot>
             </div>
-            <div class="toolbar-zone center" horizontal flex style="align-items: center; justify-content: center; gap: 6px; min-width: 0;">
+            <div class="toolbar-zone center" horizontal-center flex style="justify-content: center; gap: 4px; min-width: 0;">
                 <slot name="tool-center" @slotchange="_checkToolbarSlots()"></slot>
             </div>
-            <div class="toolbar-zone right" horizontal no-flex style="align-items: center; gap: 6px; margin-left: auto;">
+            <div class="toolbar-zone right" horizontal-center no-flex style="gap: 4px; margin-left: auto;">
                 <slot name="tool-right" @slotchange="_checkToolbarSlots()"></slot>
             </div>
         </div>
-        <div id="formFooter" slot="footer" :hidden="!hasFooter" ~show="hasFooter" light horizontal no-flex style="justify-items: space-between; align-items: center; padding: 4px 8px; min-height: 34px; gap: 6px; box-sizing: border-box; color: var(--content-color); border-top: 1px solid var(--border-color);">
+        <div id="formFooter" slot="footer" :hidden="!hasFooter" ~show="hasFooter" footer border-top horizontal-center no-flex style="justify-items: space-between; padding: 2px 6px; gap: 4px; box-sizing: border-box;">
             <item-tools id="focusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="service" ::tool-items="focusedToolItems" @tools-changed="onToolsListChanged('focusedToolItems', $event)" show-labels></item-tools>
             <slot name="footer-left"></slot>
             <div flex></div>
-            <div class="obj-footer-actions" horizontal no-flex ~if="isObjectViewActive" style="display: inline-flex; flex-direction: row; align-items: center; gap: 6px;">
+            <div class="obj-footer-actions" horizontal-center no-flex ~if="isObjectViewActive">
                 <button type="button" class="obj-footer-btn primary" ~if="view_control?.canSave" :disabled="view_control?.busy" @tap="onObjectOk()">OK</button>
                 <button type="button" class="obj-footer-btn" :disabled="view_control?.busy" @tap="onObjectClose()">Закрыть</button>
             </div>
-            <div no-flex horizontal ~show="dialog" style="gap: 6px;">
+            <div no-flex horizontal-center ~show="dialog" style="gap: 4px;">
                 <oda-button info-invert icon="icons:check" :icon-size @tap="ok" label="OK"></oda-button>
                 <oda-button icon="icons:close" :icon-size @tap="cancel" label="Отмена"></oda-button>
             </div>
@@ -1150,14 +1144,17 @@ ODA({is: 'work-form',
         const cacheKey = `${curTab?.key || (tabItem?.short || '')}::${n.id}`;
         let el = this.controls[cacheKey];
 
-        const removeOtherMainChildren = (keepEl) => {
+        const showOnlyMainChild = (keepEl) => {
             for (const ch of [...this.children]) {
-                if (ch !== keepEl && ch.getAttribute?.('slot') === 'main')
-                    this.removeChild(ch);
+                if (ch.getAttribute?.('slot') === 'main') {
+                    const isActive = ch === keepEl;
+                    ch.hidden = !isActive;
+                    ch.style.display = isActive ? '' : 'none';
+                }
             }
         };
 
-        removeOtherMainChildren(el);
+        let isNewEl = false;
         if (!el) {
             const ext = String(tabItem?.ext || '').toLowerCase();
             const is = (n.id === 'file' && ext) ? `item-file-${ext}` : `item-${n.id}`;
@@ -1170,6 +1167,7 @@ ODA({is: 'work-form',
             }
             el = this.controls[cacheKey];
             if (!el) {
+                isNewEl = true;
                 el = ODA.createComponent(is, { $item: tabItem, $context: tabItem, slot: 'main', $handler: n });
                 el.setAttribute('slot', 'main');
                 el.$form = this;
@@ -1179,14 +1177,14 @@ ODA({is: 'work-form',
                 }
                 this.controls[cacheKey] = el;
             }
-            removeOtherMainChildren(el);
             if (!el.isConnected)
                 this.appendChild(el);
+            showOnlyMainChild(el);
         }
         else {
-            removeOtherMainChildren(el);
             if (!el.isConnected)
                 this.appendChild(el);
+            showOnlyMainChild(el);
         }
         el.$form = this;
         if (curTab) {
@@ -1209,7 +1207,8 @@ ODA({is: 'work-form',
         this.view_control = el;
         if (el[R]?.states)
             el[R].states.sleep = false;
-        el.render?.(true);
+        if (isNewEl)
+            el.render?.(true);
         if (n.allowTools !== false && n.DATA?.allowTools !== false)
             el.mountToolbarSlots?.(this);
         this._checkToolbarSlots();

@@ -60,9 +60,9 @@ export default {
             .act[main] { background: var(--accent-color); color: var(--accent-back); border-color: transparent; }
             .body { font-size: small; max-height: 240px; overflow: hidden; -webkit-mask-image: linear-gradient(black 75%, transparent); mask-image: linear-gradient(black 75%, transparent); }
             .muted { @apply --muted; font-size: small; }
-            .files { @apply --vertical; gap: 4px; }
+            .files { @apply --vertical; gap: 4px; flex-shrink: 0; }
             .files-head { @apply --muted; font-size: x-small; text-transform: uppercase; letter-spacing: .05em; }
-            .files-list { @apply --vertical; gap: 6px; max-height: 260px; overflow-y: auto; }
+            .files-list { @apply --vertical; gap: 6px; }
         </style>
         <div class="bar" ~if="meta" :kind="meta.kind" :title="what">
             <work-dot no-flex :size="24" :state="dotState" :title="meta.label"></work-dot>

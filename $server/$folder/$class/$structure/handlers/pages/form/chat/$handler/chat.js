@@ -1,4 +1,11 @@
 import { taskKeyOf, taskDayOf, isCreatedTask, pathOfLog } from './chat-task.js';
+import {
+    isChatModel,
+    getUserPreferredModel,
+    setUserPreferredModel,
+    getUserPreferredEfforts,
+    setUserPreferredEfforts,
+} from '/$server/$folder/lib/prompt-bar/prompt-bar.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 /** localStorage.workChatDebug = 1 — журнал времён создания задачи в консоли. */
@@ -10,19 +17,19 @@ function chatDebug(...a) {
     catch { /* нет localStorage */ }
 }
 
-/** Первый лист $ai с chat (или без caps). image-only не мозг задачи. */
+/** Первый лист $ai с chat. Неязыковые модели (image/audio/embedding/asr/tts) отсекаются. */
 async function firstChatLeaf(node) {
     if (!node)
         return null;
     if (!node.items?.length) {
+        if (!isChatModel(node))
+            return null;
         try {
             const item = node.path ? await WORK.get_item(node.path) : null;
-            const c = item?.capabilities;
-            const list = Array.isArray(c) ? c.map(String) : String(c || '').split(/[\s,]+/).filter(Boolean);
-            if (list.length && !list.includes('chat'))
+            if (item && !isChatModel(item))
                 return null;
         }
-        catch { /* лист без caps — годится */ }
+        catch { /* лист без доп. данных — проверен по node */ }
         return node;
     }
     for (const child of node.items) {
@@ -60,40 +67,52 @@ ODA({is: 'form-chat',
         <oda-chat id="chat" :$item ::model ::efforts></oda-chat>
     `,
     async attached(){
+        if (typeof BroadcastChannel !== 'undefined' && !this._modelBc) {
+            try {
+                this._modelBc = new BroadcastChannel('work-user-ai-model');
+                this._modelBc.onmessage = (ev) => {
+                    const m = ev?.data?.model;
+                    if (m && m !== this.model)
+                        this.model = m;
+                };
+            }
+            catch { /* ignore */ }
+        }
         await this._hydrateModel();
+    },
+    detached(){
+        try {
+            this._modelBc?.close?.();
+            this._modelBc = null;
+        }
+        catch { /* ignore */ }
     },
     last:{
         $def: 0,
         $save: true
     },
-    model: { $def: '', $save: true },
-    efforts: { $def: {}, $save: true },
-    effort: { $def: '', $save: true },
+    model: {
+        $def: '',
+        set(n) {
+            if (n)
+                setUserPreferredModel(n);
+        }
+    },
+    efforts: { $def: {} },
+    effort: { $def: '' },
     get $saveKey(){
         return this.$item?.short;
     },
     async _hydrateModel(){
-        if (!this.$item?.short) return;
-        if (!this.model) {
-            try {
-                const saved = ODA.LocalStorage.create(this._savePath).getItem('model');
-                if (saved) this.model = saved;
-            } catch {}
-        }
-        if (!Object.keys(this.efforts || {}).length) {
-            try {
-                const saved = ODA.LocalStorage.create(this._savePath).getItem('efforts');
-                if (saved && typeof saved === 'object') this.efforts = saved;
-            } catch {}
-        }
+        const userModel = getUserPreferredModel();
+        if (userModel && this.model !== userModel)
+            this.model = userModel;
+        const userEfforts = getUserPreferredEfforts();
+        if (Object.keys(userEfforts).length)
+            this.efforts = userEfforts;
         if (this.effort && this.model && !this.efforts?.[this.model]) {
             this.efforts = { ...this.efforts, [this.model]: this.effort };
-        } else if (!this.effort) {
-            try {
-                const saved = ODA.LocalStorage.create(this._savePath).getItem('effort');
-                if (saved && this.model)
-                    this.efforts = { ...this.efforts, [this.model]: saved };
-            } catch {}
+            setUserPreferredEfforts(this.efforts);
         }
         if (!this.model) {
             try {
@@ -105,7 +124,7 @@ ODA({is: 'form-chat',
                 const path = leaf?.path;
                 if (path) {
                     this.model = path;
-                    try { ODA.LocalStorage.create(this._savePath).setItem('model', path); } catch {}
+                    setUserPreferredModel(path);
                 }
             } catch {}
         }
@@ -125,12 +144,123 @@ ODA({is: 'form-chat',
         })
     },
     receivers: [],
+    deptUsers: [],
+    operationClasses: [],
+    async _loadDepartmentContext($item = this.$item) {
+        if (!$item || this.isPrivate) {
+            this.deptUsers = [];
+            this.operationClasses = [];
+            return;
+        }
+        try {
+            const d = await $item.fetch('places').catch(() => null);
+            const placeLabels = new Map();
+            const uidSet = new Set();
+            const opMap = new Map();
+
+            const collectTreeOps = (nodes) => {
+                for (const n of nodes || []) {
+                    if (!n) continue;
+                    if (n.type === '$operation' && n.access !== 'read' && n.path) {
+                        if (!Array.isArray(n.children) || !n.children.length) {
+                            opMap.set(n.path, {
+                                id: n.path,
+                                label: n.label || n.id || n.path.split('/').pop(),
+                                icon: n.icon || 'carbon:task-complete',
+                                hint: n.path,
+                            });
+                        }
+                    }
+                    if (Array.isArray(n.children) && n.children.length)
+                        collectTreeOps(n.children);
+                }
+            };
+
+            const walkPlaces = (places) => {
+                for (const p of places || []) {
+                    if (!p) continue;
+                    const pLabel = p.label || p.id || '';
+                    for (const u of p.users || []) {
+                        if (u && u !== 'GUEST') {
+                            uidSet.add(u);
+                            if (pLabel && !placeLabels.has(u))
+                                placeLabels.set(u, pLabel);
+                        }
+                    }
+                    if (Array.isArray(p.tree))
+                        collectTreeOps(p.tree);
+                    if (Array.isArray(p.roles))
+                        walkPlaces(p.roles);
+                }
+            };
+
+            if (d) {
+                if (Array.isArray(d.commonTree))
+                    collectTreeOps(d.commonTree);
+                walkPlaces(d.places);
+            }
+
+            const roleIds = $item.DATA?.roleIds || {};
+            for (const [roleKey, list] of Object.entries(roleIds)) {
+                for (const u of list || []) {
+                    if (u && u !== 'GUEST') {
+                        uidSet.add(u);
+                        if (!placeLabels.has(u))
+                            placeLabels.set(u, roleKey === 'BOSS' ? 'Руководитель (BOSS)' : (roleKey === 'ADMIN' ? 'Администратор' : 'Сотрудник'));
+                    }
+                }
+            }
+
+            // Если в подразделении ещё не распределены места — подгружаем список пользователей из /USERS
+            if (!uidSet.size && WORK.DEV_MODE) {
+                const uRoot = await WORK.get_item('/USERS').catch(() => null);
+                const all = (await uRoot?.items) || [];
+                for (const u of all) {
+                    if (u?.id && u.id[0] !== '$')
+                        uidSet.add(u.id);
+                }
+            }
+
+            // Если по дереву ссылок не нашлось листовых $operation, добираем из db_workspace
+            if (!opMap.size) {
+                const ws = await $item.fetch('db_workspace').catch(() => null);
+                for (const [cid, cls] of Object.entries(ws?.classes || {})) {
+                    if (cls?.type === '$operation' && cls?.leaf) {
+                        const p = cls.path || cid;
+                        opMap.set(p, {
+                            id: p,
+                            label: cls.label || p.split('/').pop(),
+                            icon: cls.icon || 'carbon:task-complete',
+                            hint: p,
+                        });
+                    }
+                }
+            }
+
+            const users = uidSet.size && typeof WORK.usersByIds === 'function'
+                ? ((await WORK.usersByIds([...uidSet])) || []).filter(Boolean)
+                : [];
+            for (const u of users) {
+                if (u?.id && placeLabels.has(u.id))
+                    u._placeLabel = placeLabels.get(u.id);
+            }
+            this.deptUsers = users;
+            this.operationClasses = [...opMap.values()];
+        }
+        catch (err) {
+            console.warn('[chat] _loadDepartmentContext:', err);
+        }
+    },
     // $item: null
     $item: {
         $def: null,
         set($item) {
             if($item && this.isPrivate && this.$item.id !== WORK.uid) this.receivers = [$item];
-            if ($item) this._hydrateModel();
+            else this.receivers = [];
+            if ($item) {
+                this._hydrateModel();
+                this._loadDepartmentContext($item);
+            }
         }
     }
 })
@@ -201,7 +331,8 @@ ODA({is: 'oda-chat',
             <microchat-voice ~if="voiceOn"></microchat-voice>
             <work-prompt-bar style="margin: 8px;" @tap="focusedItem = null"
                 ::value ::files :ai="isAIMode" :placeholder :pending="awaitTask"
-                ::model ::effort ::tts-mode :receivers :show-tts="true"
+                ::model ::effort ::tts-mode ::receivers :dept-users="deptUsers" :operation-classes="operationClasses" :show-tts="true"
+                @receivers-changed="onReceiversChanged($event)" @create-operation="onCreateOperation($event)"
                 @send="onBarSend" @stop="onBarStop" @clear="clear" @prompt-key="_onPromptKey"></work-prompt-bar>
         </div>
     `,
@@ -232,15 +363,41 @@ ODA({is: 'oda-chat',
     get receivers(){
         return this.$pdp.receivers;
     },
+    set receivers(v) {
+        if (this.$pdp)
+            this.$pdp.receivers = Array.isArray(v) ? v : [];
+    },
+    get deptUsers() {
+        return this.$pdp?.deptUsers || [];
+    },
+    get operationClasses() {
+        return this.$pdp?.operationClasses || [];
+    },
+    onReceiversChanged(e) {
+        const list = e?.detail?.value ?? e?.detail ?? [];
+        if (this.$pdp)
+            this.$pdp.receivers = Array.isArray(list) ? list : [];
+    },
+    async onCreateOperation(e) {
+        const d = e?.detail?.value ?? e?.detail ?? {};
+        const path = d.path || d;
+        if (!path || typeof path !== 'string') return;
+        const clsItem = await WORK.get_item(path).catch(() => null);
+        if (!clsItem) return;
+        const unit = this.$pdp?.$item?.short || this.$pdp?.$item?.path || '';
+        const wf = document.querySelector?.('pages-form')?.$?.('work-form') || this.domHost?.domHost;
+        if (wf && typeof wf.openFormTab === 'function') {
+            await wf.openFormTab(clsItem, { view: 'object', createNewObject: true, unit });
+        }
+        else if (typeof window.top?.execute === 'function') {
+            window.top.execute(clsItem, { view: 'object', createNewObject: true, unit });
+        }
+    },
     model: {
         $def: '',
         set(n) {
             if (!n) return;
-            try {
-                const host = this.host || this.$pdp;
-                if (host?._savePath)
-                    ODA.LocalStorage.create(host._savePath).setItem('model', n);
-            } catch {}
+            setUserPreferredModel(n);
         },
     },
     efforts: {},
@@ -256,11 +413,7 @@ ODA({is: 'oda-chat',
     set effort(n) {
         if (!this.model || !n) return;
         this.efforts = { ...this.efforts, [this.model]: n };
-        try {
-            const host = this.host || this.$pdp;
-            if (host?._savePath)
-                ODA.LocalStorage.create(host._savePath).setItem('efforts', this.efforts);
-        } catch {}
+        setUserPreferredEfforts(this.efforts);
     },
     clear(e){
         this.value = '';
@@ -410,27 +563,40 @@ ODA({is: 'oda-chat',
         this._sending = true;
 
         try {
-            if (this.isAIMode) {
+            if (this.isAIMode && text) {
                 // экран «создаю задачу» — сразу, до любых запросов: человек видит, что процесс пошёл
                 this.clear();
                 await this._createTask({ text, files: list, draft });
             } else {
                 const params = { encoding: 'utf-8' };
+                if (WORK.uid)
+                    params.sender = WORK.uid;
                 if (this.$pdp.isPrivate && this.$pdp.$item.id !== WORK.uid)
                     params.receivers = [this.$pdp.$item.id];
                 else if (this.$pdp.receivers.length)
                     params.receivers = this.$pdp.receivers.map(u => u.id);
+                const uploadedPaths = [];
                 if (list.length) {
                     const formData = new FormData();
                     for (const file of list)
                         formData.append('file', file, file.name);
-                    await this.$pdp.$item.save_files(formData, params);
+                    const fileParams = text ? { ...params, ignore_save_logs: true } : params;
+                    const savedLogs = await this.$pdp.$item.save_files(formData, fileParams);
+                    const arr = Array.isArray(savedLogs) ? savedLogs : (savedLogs ? [savedLogs] : []);
+                    for (const l of arr) {
+                        const p = await pathOfLog(l);
+                        if (p)
+                            uploadedPaths.push(p.startsWith('/') ? p : '/' + p);
+                    }
                 }
                 if (text) {
                     params.message = text;
+                    if (uploadedPaths.length)
+                        params.includes = JSON.stringify(uploadedPaths);
                     await this.$pdp.$item.fetch('save_message', params);
                 }
                 this.clear();
+                this.$('#ribbon')?.refreshFeed?.();
             }
         } catch (err) {
             console.warn('[chat] send', err);
@@ -454,13 +620,6 @@ ODA({is: 'oda-chat',
         this.awaitTask = true;
         const item = this.$pdp.$item;
         try {
-            const attachments = [];
-            await Promise.all(files.map(async file => {
-                const log = await item.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
-                const path = await pathOfLog(log);
-                if (path)
-                    attachments.push({ path: path.startsWith('/') ? path : '/' + path, name: file.name });
-            }));
             const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
             const useVoice = voice || !!this.voiceOn;
             const body = { name, created: Date.now(), items: [], ...(useVoice ? { voice: true } : {}) };
@@ -468,12 +627,29 @@ ODA({is: 'oda-chat',
                 body.model = this.model;
             body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
             const params = { encoding: 'utf-8', ...(useVoice ? { voice: true } : {}) };
-            if (attachments.length) {
-                params.includes = JSON.stringify(attachments.map(a => a.path));
-                params.attachments = JSON.stringify(attachments);
-            }
+            if (WORK.uid)
+                params.sender = WORK.uid;
+            // Сначала создаём саму задачу, чтобы прикреплённые и создаваемые файлы размещались в папке этого таска
+            if (files.length)
+                params.skip_file_handler = true;
             const log = await item.save_file(new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' }), params);
             const path = await pathOfLog(log);
+            if (path && files.length) {
+                const createdTask = await WORK.get_item(path).catch(() => null);
+                const targetHolder = createdTask || item;
+                const attachments = [];
+                await Promise.all(files.map(async file => {
+                    const fLog = await targetHolder.save_file(file, { encoding: 'utf-8', ignore_save_logs: true, mainContext: path });
+                    const fPath = await pathOfLog(fLog);
+                    if (fPath)
+                        attachments.push({ path: fPath.startsWith('/') ? fPath : '/' + fPath, name: file.name });
+                }));
+                if (attachments.length && createdTask) {
+                    const includePaths = attachments.map(a => a.path);
+                    await item.fetch('append_log_includes', { entryPath: path, includePaths }).catch(() => {});
+                    await createdTask.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments })).catch(() => {});
+                }
+            }
             this.awaitTask = false;
             if (path) {
                 await this._openCreated(path);
@@ -742,9 +918,37 @@ ODA({is: 'chat-ribbon',
     },
     dateList: [],
     _datesWatch: null,
+    _lastRole: '',
+    get activeRole() {
+        return this.$item?.role || 'USER';
+    },
+    async _resolveLogsSource() {
+        if (!this.$item)
+            return null;
+        try {
+            const path = await this.$item.fetch('chatSource', { role: this.activeRole, uid: WORK.uid || '' });
+            if (path && typeof path === 'string')
+                return (await WORK.get_item(path)) || this.$item;
+        }
+        catch { /* fallback */ }
+        return this.$item;
+    },
+    async refreshFeed() {
+        this.dateList = [];
+        await this.refreshDates();
+        for (const dayEl of this.$$('chat-day') || []) {
+            dayEl._logsInit = false;
+            dayEl._ensureLogsInit?.();
+        }
+    },
     async refreshDates(){
         if (!this.$item)
             return false;
+        const curRole = this.activeRole;
+        if (this._lastRole && this._lastRole !== curRole) {
+            this.dateList = [];
+        }
+        this._lastRole = curRole;
         // «сегодня» — по местному времени (папки журнала на сервере — по местной дате, не UTC)
         const today = new Date().toLocalDay();
         let dates;
@@ -753,8 +957,9 @@ ODA({is: 'chat-ribbon',
                 return false;
             dates = [...this.dateList];
         } else {
-            this.$item.invalidate?.('logs_dates');
-            dates = await this.$item.fetch('logs', { mode: 'dates' });
+            const source = (await this._resolveLogsSource()) || this.$item;
+            source.invalidate?.('logs_dates');
+            dates = await source.fetch('logs', { mode: 'dates', role: curRole, uid: WORK.uid || '' });
             // dates на сервере — по убыванию; в ленте дни — от старых к новым.
             // Дни с сервера не отбрасываем: папка дня есть — есть записи (пояса браузера и сервера могут различаться)
             dates = (Array.isArray(dates) ? dates : []).slice().reverse();
@@ -771,10 +976,15 @@ ODA({is: 'chat-ribbon',
     _ensureDatesWatch(){
         if (this._datesWatch) return this._datesWatch;
         this._datesWatch = this.refreshDates().then(()=>{
-            // const onChanged = () => this.debounce('chat-dates', () => this.refreshDates(), 150);
             this.$item?.listen?.('changed', this.onChanged);
-            // this.$pdp.$item?.listen?.('changed', this.onChanged);
         });
+        if (!this._rolePollTimer) {
+            this._rolePollTimer = setInterval(() => {
+                if (this.$item && this._lastRole && this.activeRole !== this._lastRole) {
+                    this.refreshFeed();
+                }
+            }, 400);
+        }
         return this._datesWatch;
     },
     get dates(){
@@ -783,6 +993,10 @@ ODA({is: 'chat-ribbon',
     },
     detached() {
         this.$item?.unlisten?.('changed', this.onChanged);
+        if (this._rolePollTimer) {
+            clearInterval(this._rolePollTimer);
+            this._rolePollTimer = 0;
+        }
         this._datesWatch = null;
     }
 })
@@ -957,12 +1171,14 @@ ODA({is: 'chat-day',
         const source = await Promise.resolve(this.logsSource);
         if (!source)
             return [];
+        const role = this.$pdp?.$item?.role || 'USER';
+        const uid = WORK.uid || '';
         let rows = [];
         try {
             if (typeof source.fetch === 'function')
-                rows = await source.fetch('logs', { mode: 'bodies', day: this.day });
+                rows = await source.fetch('logs', { mode: 'bodies', day: this.day, role, uid });
             else if (typeof source.logs === 'function')
-                rows = await source.logs({ mode: 'bodies', day: this.day });
+                rows = await source.logs({ mode: 'bodies', day: this.day, role, uid });
         }
         catch {
             rows = [];
@@ -1091,8 +1307,10 @@ ODA({is: 'chat-day',
     },
     get logsSource(){
         // Источник логов определяется сервером по роли:
-        // USER → личный кабинет, ADMIN/BOSS → текущий класс
-        return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource')).then(path => {
+        // USER → личный кабинет (/USERS/<uid>), BOSS → подразделение (this.$pdp.$item)
+        const role = this.$pdp?.$item?.role || 'USER';
+        const uid = WORK.uid || '';
+        return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource', { role, uid })).then(path => {
             if (path && typeof path === 'string')
                 return WORK.get_item(path);
             return this.$pdp.$item;

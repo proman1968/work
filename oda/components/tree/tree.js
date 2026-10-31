@@ -439,7 +439,7 @@ ODA({is: 'oda-tree-item',
                 <oda-tree-cell ~for="$pdp.cells"  ~is="$for?.item?.template || 'oda-tree-cell'" :part="'cell-' + $for?.index" :row :col="$for?.item"></oda-tree-cell>
             </div>
         </div>
-        <div horizontal flex ~if="expanded || $pdp.filter" style="min-height: 1px;">
+        <div horizontal flex ~if="expanded || $pdp.filter">
             <div class='step' ~if="hideRoots<1"></div>
             <div class='sub-nodes'>
                 <oda-tree-item  :show-tools :show-users :show-size :show-status :hide-roots="hideRoots-1" :hide-tops="hideTops-1" ~for='items' :row="$for?.item" :menu-mode></oda-tree-item>

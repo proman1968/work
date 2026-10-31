@@ -322,11 +322,25 @@ ODA({is: 'app-layout-drawer',
             }
         }
     },
+    /**
+     * Порядок панелей (вкладок) в колонке задаётся атрибутом `order`.
+     * Раньше он совпадал с порядком в slot, а тот зависит от того, что успело
+     * отрендериться раньше (синхронный шаблон или асинхронный ~for) — вкладки
+     * «прыгали» между запусками. Сортировка стабильная: элементы без order
+     * остаются в исходном порядке.
+     */
+    _sorted_controls(list) {
+        const rank = (el) => {
+            const n = Number(el?.getAttribute?.('order'));
+            return Number.isFinite(n) ? n : 0;
+        };
+        return [...(list || [])].sort((a, b) => rank(a) - rank(b));
+    },
     _onSlotchange(e) {
-        if (e.target.host === this)
-            this.controls = e.target.assignedNodes()[0].assignedNodes();
-        else
-            this.controls = e.target.assignedNodes();
+        const assigned = e.target.host === this
+            ? (e.target.assignedNodes()[0]?.assignedNodes?.() || [])
+            : e.target.assignedNodes();
+        this.controls = this._sorted_controls(assigned);
         if (this.controls.length) {
             const idx = this._restoreActiveTab();
             this._restoredTab = true;
