@@ -75,6 +75,11 @@ const STATIC_CACHE = 'must-revalidate, public, max-age=3600';
 /** В dev — всегда ревалидация (304 по ETag дешёв), правки видны сразу. */
 const DEV_CACHE = 'no-cache';
 const STATIC_PATH = /\.(m?js|css|svg|png|jpe?g|gif|webp|ico|wasm|map|woff2?|ttf|mp3)$/i;
+/**
+ * Медиа-статика, которую браузер запрашивает сам (иконки push-уведомлений, badge, favicon, манифест,
+ * шрифты). Её отсутствие — не ошибка сервера и не повод писать в лог: отвечаем тихим 404.
+ */
+const MISSING_ASSET_PATH = /\.(png|jpe?g|gif|webp|avif|svg|ico|webmanifest|woff2?|ttf|otf|mp3|wav|mp4)$/i;
 
 /** ETag тела файла: собранная строка — хеш содержимого, файл на диске — размер+mtime. */
 function etagOf(item, result) {
@@ -383,6 +388,13 @@ export function createRequestHandler() {
                         //     : `/PAAS/~/handlers//landing/`),
                     });
                     response.end();
+                    return;
+                }
+                // Браузер сам тянет иконки уведомлений/manifest по ссылкам из sw.js — отсутствие
+                // такой статики не ошибка: отдаём тихий 404, не засоряя лог «[WORK] Error».
+                if (MISSING_ASSET_PATH.test(path)) {
+                    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+                    response.end('Not found');
                     return;
                 }
                 throw new Error(`item${path.includes('*') ? 's' : ''} "${path}" not found`);

@@ -183,8 +183,8 @@ const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"
 
                                 await self.registration.showNotification('Входящий звонок', {
                                     tag,
-                                    icon: '/icon-192.png',
-                                    badge: '/badge-72.png',
+                                    icon: '/oda/tools/icons/lib/png/favicon.png',
+                                    badge: '/oda/tools/icons/lib/png/favicon.png',
                                     vibrate: [300, 300, 300, 100, 100, 300, 300, 300, 100],
                                     actions: pushHandler.actions
                                 });
@@ -234,8 +234,8 @@ const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"
                         pushHandlers[tag] = pushHandler;
                         await self.registration.showNotification(data.title || 'Задача ждёт вас', {
                             tag,
-                            icon: '/icon-192.png',
-                            badge: '/badge-72.png',
+                            icon: '/oda/tools/icons/lib/png/favicon.png',
+                            badge: '/oda/tools/icons/lib/png/favicon.png',
                             vibrate: [200, 100, 200],
                             requireInteraction: true,
                             renotify: true,
@@ -246,8 +246,8 @@ const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"
                 }
                 await self.registration.showNotification(data.title || 'Внимание!', {
                     tag,
-                    icon: '/icon-192.png',
-                    badge: '/badge-72.png',
+                    icon: '/oda/tools/icons/lib/png/favicon.png',
+                    badge: '/oda/tools/icons/lib/png/favicon.png',
                     vibrate: [200, 100, 200],
                     ...data
                 });

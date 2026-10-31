@@ -11,25 +11,30 @@ const __dirname = dirname(__filename);
 
 const currentDirectory = import.meta?.dirname || __dirname;
 
-function isPackageActual() {
+function readVersion(file) {
     try {
-        const nodeModules = path.join(currentDirectory, 'node_modules');
-        if (!fs.existsSync(nodeModules))
-            return false;
-        const packageLockJson = path.join(currentDirectory, 'package-lock.json');
-        if (!fs.existsSync(packageLockJson))
-            return false;
-        const packageLockJsonStat = fs.statSync(packageLockJson)
-        const packageJson = path.join(currentDirectory, 'package.json');
-        if (!fs.existsSync(packageJson))
-            return false;
-        const packageJsonStat = fs.statSync(packageJson);
-        const isActual = packageJsonStat.isFile() && packageLockJsonStat.isFile() && packageJsonStat.mtimeMs <= packageLockJsonStat.mtimeMs;
-        return isActual;
+        return JSON.parse(fs.readFileSync(file, 'utf8'))?.version ?? null;
     }
-    catch(err) {
+    catch (err) {
+        return null;
+    }
+}
+
+/**
+ * Нужна ли установка зависимостей.
+ * Сравниваем ВЕРСИИ, а не mtime файлов: git checkout/revert/reset (и svn update) переписывают
+ * package.json и package-lock.json, из-за чего прежняя проверка по времени считала пакет
+ * «устаревшим» на каждом старте, запускала `npm i --production` и завершала процесс кодом 1.
+ */
+function isPackageActual() {
+    const nodeModules = path.join(currentDirectory, 'node_modules');
+    if (!fs.existsSync(nodeModules))
         return false;
-    }
+    const packageVersion = readVersion(path.join(currentDirectory, 'package.json'));
+    const lockVersion = readVersion(path.join(currentDirectory, 'package-lock.json'));
+    if (!packageVersion || !lockVersion)
+        return false;
+    return packageVersion === lockVersion;
 }
 
 if (!isPackageActual()) {
