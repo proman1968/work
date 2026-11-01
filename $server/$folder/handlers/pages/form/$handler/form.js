@@ -58,7 +58,7 @@ export default {
                 overflow-x: auto;
                 overflow-y: hidden;
                 scrollbar-width: thin;
-                padding: 2px 6px;
+                padding: 2px 6px 0 6px;
                 box-sizing: border-box;
             }
             .form-tabs-bar[hidden],
@@ -72,15 +72,18 @@ export default {
                 @apply --horizontal-center;
                 @apply --no-flex;
                 @apply --border;
-                @apply --hoverable;
                 gap: 6px;
                 max-width: 240px;
                 padding: 3px 8px;
+                border-radius: 8px 8px 0 0;
                 font-size: small;
                 white-space: nowrap !important;
                 cursor: pointer;
                 user-select: none;
                 box-sizing: border-box;
+            }
+            .form-tab:hover {
+                @apply --hover;
             }
             .form-tab .tab-label {
                 overflow: hidden;
@@ -97,7 +100,6 @@ export default {
                 @apply --no-flex;
                 @apply --content;
                 @apply --border;
-                @apply --hoverable;
                 gap: 6px;
                 padding: 3px 10px;
                 font-size: small;
@@ -106,6 +108,9 @@ export default {
                 border-radius: 0;
                 cursor: pointer;
                 user-select: none;
+            }
+            button.obj-footer-btn:hover:not(:disabled) {
+                @apply --hover;
             }
             button.obj-footer-btn.primary {
                 font-weight: 700;
@@ -127,7 +132,7 @@ export default {
     }
 }
 ODA({is: 'work-form',
-    imports: 'oda//icon, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree, ~/lib//tools',
+    imports: 'oda//icon, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree, ~/lib//tools, ~/lib//class-picker',
     extends: 'oda-app-layout',
     template: /* html */`
         <style>
@@ -147,7 +152,7 @@ ODA({is: 'work-form',
                 overflow-x: auto;
                 overflow-y: hidden;
                 scrollbar-width: thin;
-                padding: 2px 6px;
+                padding: 2px 6px 0 6px;
                 box-sizing: border-box;
             }
             .form-tabs-bar[hidden],
@@ -161,15 +166,18 @@ ODA({is: 'work-form',
                 @apply --horizontal-center;
                 @apply --no-flex;
                 @apply --border;
-                @apply --hoverable;
                 gap: 6px;
                 max-width: 240px;
                 padding: 3px 8px;
+                border-radius: 8px 8px 0 0;
                 font-size: small;
                 white-space: nowrap !important;
                 cursor: pointer;
                 user-select: none;
                 box-sizing: border-box;
+            }
+            .form-tab:hover {
+                @apply --hover;
             }
             .form-tab .tab-label {
                 overflow: hidden;
@@ -186,7 +194,6 @@ ODA({is: 'work-form',
                 @apply --no-flex;
                 @apply --content;
                 @apply --border;
-                @apply --hoverable;
                 gap: 6px;
                 padding: 3px 10px;
                 font-size: small;
@@ -195,6 +202,9 @@ ODA({is: 'work-form',
                 border-radius: 0;
                 cursor: pointer;
                 user-select: none;
+            }
+            button.obj-footer-btn:hover:not(:disabled) {
+                @apply --hover;
             }
             button.obj-footer-btn.primary {
                 font-weight: 700;
@@ -267,7 +277,7 @@ ODA({is: 'work-form',
             <oda-button @tap="toggleFullscreen" ~if="currentItem?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div id="formTabsBar" slot="top" class="form-tabs-bar" footer border-bottom horizontal-center no-flex :hidden="!(formTabs?.length > 1)" ~show="formTabs?.length > 1">
+        <div id="formTabsBar" slot="top" class="form-tabs-bar" footer border-bottom horizontal-center no-flex :hidden="!showTabsBar" ~show="showTabsBar">
             <div horizontal-center flex style="gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden;">
                 <div class="form-tab" horizontal-center no-flex border hoverable ~for="formTabs"
                     ~class="{active: activeTabKey === $for.item.key}"
@@ -279,10 +289,10 @@ ODA({is: 'work-form',
                     :title="$for.item.label" @tap="activateTab($for.item)">
                     <oda-icon no-flex ~if="$for.item.icon" :icon="$for.item.icon" :icon-size="16"></oda-icon>
                     <span class="tab-label">{{$for.item.label}}</span>
-                    <oda-icon class="tab-close" no-flex ~if="$for.item.closable" icon="icons:close" :icon-size="14" title="Закрыть вкладку" @tap.stop="closeTab($for.item, $event)"></oda-icon>
+                    <oda-icon class="tab-close" no-flex ~if="(formTabs?.length > 1) || $for.item.closable" icon="icons:close" :icon-size="14" title="Закрыть вкладку" @tap.stop="closeTab($for.item, $event)"></oda-icon>
                 </div>
             </div>
-            <oda-button class="tabs-close-all" no-flex icon="icons:close" :icon-size="16" title="Закрыть все дополнительные вкладки" @tap.stop="closeAllTabs($event)"></oda-button>
+            <oda-button class="tabs-close-all" no-flex ~if="formTabs?.length > 1" icon="icons:close" :icon-size="16" title="Закрыть все дополнительные вкладки" @tap.stop="closeAllTabs($event)"></oda-button>
         </div>
         <div id="formToolbar" slot="top" :hidden="!hasToolbar" ~show="hasToolbar" footer border-bottom horizontal-center no-flex style="padding: 2px 6px; gap: 6px; box-sizing: border-box;">
             <div class="toolbar-zone left" horizontal-center no-flex style="gap: 4px;">
@@ -476,8 +486,10 @@ ODA({is: 'work-form',
         if (typeof BroadcastChannel === 'function') {
             this._navChannel = new BroadcastChannel('work-form-nav');
             this._navChannel.onmessage = (ev) => {
+                if (this._initializingItem || !this._rootItem)
+                    return;
                 const d = ev?.data;
-                const myShort = this.$item?.short || this.$item?.path || '';
+                const myShort = this._rootItem?.short || this._rootItem?.path || this.$item?.short || this.$item?.path || '';
                 if (d?.short && d.short === myShort) {
                     const nav = this._takeNav(myShort) || d.nav;
                     if (nav)
@@ -514,6 +526,14 @@ ODA({is: 'work-form',
     async applyNav(nav) {
         if (!nav || typeof nav !== 'object')
             return;
+        if (this._initializingItem || !this._rootItem) {
+            this._pendingInitialNav = nav;
+            return;
+        }
+        if (nav.targetClassPath || nav.create || nav.copyFrom || (nav.id && this.hasClassTree)) {
+            await this._handleNavigationTarget(nav, { isInitial: false });
+            return;
+        }
         this._pendingNav = nav;
         if (nav.view && this.view?.id !== nav.view) {
             const v = await this.resolveView(nav.view);
@@ -584,7 +604,7 @@ ODA({is: 'work-form',
             const inList = (views || []).find(v => v.id === name);
             if (inList)
                 return inList;
-            if ($item) {
+            if ($item && name === 'object') {
                 const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role, contextPath: $item.short });
                 if (view)
                     return view;
@@ -611,12 +631,20 @@ ODA({is: 'work-form',
                     this._initializingItem = false;
                 }
                 this._applyRoleColor(n, this._appliedRole);
-                const nav = this._takeNav(n.short || n.path);
+                this._initClassTreeDrawer();
+                const nav = this._takeNav(n.short || n.path) || this._pendingInitialNav;
+                this._pendingInitialNav = null;
                 if (nav) {
                     if (nav.view === 'objects' && nav.id)
                         nav.view = 'object';
+                    if (nav.targetClassPath || nav.create || nav.copyFrom || (nav.id && this.hasClassTree)) {
+                        await this._handleNavigationTarget(nav, { isInitial: true });
+                        return;
+                    }
                     this._pendingNav = nav;
                 }
+                if (this.hasClassTree)
+                    this.syncClassTreeToPath(n.short || n.path);
                 const view_name = nav?.view || this.host?.default_view || n?.form || this.host?.view_name;
                 const resolvedView = await this.resolveView(view_name, n);
                 if (this.view === resolvedView)
@@ -630,7 +658,217 @@ ODA({is: 'work-form',
     _rootItem: null,
     _appliedRoleItem: null,
     _appliedRole: '',
+    _syncingClassTreeFocus: false,
     view_control: null,
+    get hasClassTree() {
+        const root = this._rootItem || this.$item;
+        if (!root)
+            return false;
+        const t = root.type;
+        if (t === '$file' || t === '$handler' || t === '$structure' || t === '$base' || t === '$server' || t === '$user')
+            return false;
+        if (['$operation', '$catalog', '$register', '$account', '$struct', '$virtual'].includes(t))
+            return true;
+        const short = root.short || root.path || '';
+        const fn = globalThis.__workClassPicker?.resolveDataRootPath || globalThis.WORK?.resolveDataRootPath;
+        return Boolean(typeof fn === 'function' ? fn(short, root) : /^(.*?\/(?:MODULES\/[^/]+\/[^/]+|OPERATIONS|CATALOGS|REGISTER|STRUCTS))(?:\/|$)/.test(short));
+    },
+    get rootItemIcon() {
+        const root = this._rootItem || this.$item;
+        return root?.DATA?.icon || (typeof root?.icon === 'string' ? root.icon : '') || 'odant:structure';
+    },
+    get rootItemLabel() {
+        const root = this._rootItem || this.$item;
+        return root?.DATA?.label || root?.label || root?.id || 'Классы';
+    },
+    get showTabsBar() {
+        return this.hasClassTree ? Boolean(this.formTabs?.length >= 1) : Boolean(this.formTabs?.length > 1);
+    },
+    _initClassTreeDrawer() {
+        const root = this._rootItem || this.$item;
+        if (!this.hasClassTree || !root) {
+            const old = this.querySelector?.('item-tree#formClassTree');
+            if (old)
+                old.remove();
+            return;
+        }
+        let tree = this.querySelector?.('item-tree#formClassTree');
+        if (!tree) {
+            tree = ODA.createComponent('item-tree', {
+                slot: 'left-panel',
+                id: 'formClassTree',
+                order: 0,
+                allowSearch: true,
+                onlyClasses: true,
+                hideFiles: true,
+                hideSystem: true,
+                showSize: true,
+                allowFocus: true,
+                hideRoots: 0,
+                hideTops: 0,
+                $item: root,
+                icon: this.rootItemIcon,
+                label: this.rootItemLabel,
+                execute: (item) => this.onClassTreeSelect(item),
+            });
+            tree.setAttribute('slot', 'left-panel');
+            tree.setAttribute('id', 'formClassTree');
+            tree.setAttribute('order', '0');
+            tree.setAttribute('icon', this.rootItemIcon);
+            tree.setAttribute('label', this.rootItemLabel);
+            tree.style.height = '0';
+            tree.addEventListener('focused-item-changed', (ev) => this.onClassTreeFocusChanged(ev));
+            this.appendChild(tree);
+        }
+        else {
+            tree.$item = root;
+            tree.icon = this.rootItemIcon;
+            tree.label = this.rootItemLabel;
+            tree.execute = (item) => this.onClassTreeSelect(item);
+        }
+        this.async(() => {
+            if (!this.mobile && this.left_drawer) {
+                this.left_drawer.closed = false;
+                if (typeof tree?.onShow === 'function')
+                    tree.onShow();
+            }
+        }, 50);
+    },
+    async syncClassTreeToPath(targetPath) {
+        if (!targetPath || !this.hasClassTree)
+            return;
+        const clean = String(targetPath).replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '');
+        if (!clean)
+            return;
+        const attempt = async (tries = 0) => {
+            const tree = this.querySelector?.('item-tree#formClassTree') || this.$?.('#formClassTree');
+            if (!tree || typeof tree.revealPath !== 'function') {
+                if (tries < 15)
+                    setTimeout(() => attempt(tries + 1), 60);
+                return;
+            }
+            if (tree.hidden && typeof tree.onShow === 'function') {
+                tree.hidden = false;
+                await tree.onShow();
+            }
+            tree.execute = (item) => this.onClassTreeSelect(item);
+            this._syncingClassTreeFocus = true;
+            try {
+                const found = await tree.revealPath(clean);
+                if (!found && tries < 12) {
+                    setTimeout(() => attempt(tries + 1), 80);
+                }
+            }
+            finally {
+                setTimeout(() => { this._syncingClassTreeFocus = false; }, 60);
+            }
+        };
+        attempt(0);
+    },
+    async onClassTreeFocusChanged(e) {
+        if (this._syncingClassTreeFocus || this._initializingItem)
+            return;
+        const item = e?.detail?.value;
+        if (!item || item.type === '$handler' || item.type === '$file')
+            return;
+        await this.onClassTreeSelect(item);
+    },
+    async onClassTreeSelect(item) {
+        if (!item || this._syncingClassTreeFocus || this._initializingItem)
+            return;
+        const targetShort = item.short || item.path || '';
+        const curShort = this.currentItem?.short || this.currentItem?.path || '';
+        if (targetShort && targetShort === curShort && !this.isObjectViewActive) {
+            const existing = (this.formTabs || []).find(t => t.key === targetShort);
+            if (existing && this.activeTabKey === existing.key)
+                return;
+        }
+        if (this._appliedRole && !item.role)
+            item.role = this._appliedRole;
+        await this.openInForm(item, null);
+    },
+    async ensureClassTab(targetItem) {
+        if (!targetItem)
+            return null;
+        if (this._appliedRole && !targetItem.role)
+            targetItem.role = this._appliedRole;
+        await targetItem.ensureRole?.();
+        const viewHandler = await this.resolveView(targetItem.form || '', targetItem);
+        if (!viewHandler)
+            return null;
+        const viewId = viewHandler.id;
+        const key = this._computeTabKey(targetItem, viewId, null);
+        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
+        let tab = list.find(t => t.key === key);
+        if (!tab) {
+            tab = {
+                key,
+                $item: targetItem,
+                viewId,
+                view: viewHandler,
+                nav: null,
+                label: this._computeTabLabel(targetItem, viewHandler, null),
+                icon: this._viewIconOf(viewHandler, targetItem),
+                closable: list.length > 0,
+            };
+            list.push(tab);
+            this.formTabs = list;
+            if (!this.activeTabKey)
+                this.activeTabKey = key;
+        }
+        return tab;
+    },
+    async _handleNavigationTarget(nav = {}, { isInitial = false } = {}) {
+        const root = this._rootItem || this.$item;
+        if (!root)
+            return;
+        const rootShort = root.short || root.path || '';
+        const targetPath = String(nav?.targetClassPath || rootShort).replace(/\/+$/, '');
+        let targetItem = root;
+        if (targetPath && targetPath !== rootShort && typeof WORK?.get_item === 'function') {
+            const loaded = await WORK.get_item(targetPath).catch(() => null);
+            if (loaded)
+                targetItem = loaded;
+        }
+        const isObjectAction = Boolean(nav?.view === 'object' || nav?.create || nav?.id || nav?.copyFrom);
+        if ((isObjectAction || nav?.view === 'objects') && this._appliedRole === 'ADMIN') {
+            this._initializingItem = true;
+            try {
+                this._appliedRole = 'USER';
+                this._appliedRoleItem = root;
+                root.role = 'USER';
+                this._applyRoleColor(root, 'USER');
+            }
+            finally {
+                this._initializingItem = false;
+            }
+        }
+        if (this._appliedRole)
+            targetItem.role = this._appliedRole;
+        else
+            await targetItem.ensureRole?.();
+
+        if (this.hasClassTree)
+            this.syncClassTreeToPath(targetItem.short || targetItem.path || targetPath);
+
+        if (isObjectAction) {
+            await this.ensureClassTab(targetItem);
+            const clsLabel = targetItem.DATA?.label || targetItem.label || targetItem.id || targetPath.split('/').pop() || 'Объект';
+            const fmtNew = globalThis.__workClassPicker?.formatNewObjectLabel || globalThis.WORK?.formatNewObjectLabel;
+            const objLabel = nav.label || (nav.create ? (typeof fmtNew === 'function' ? fmtNew(clsLabel) : `Новый ${clsLabel.toLowerCase()}`) : '');
+            const objNav = { ...nav, view: 'object' };
+            if (objLabel)
+                objNav.label = objLabel;
+            delete objNav.targetClassPath;
+            await this.openInForm(targetItem, objNav, { skipEnsureCurrent: true });
+        }
+        else {
+            const clsNav = nav?.view ? { ...nav } : null;
+            if (clsNav)
+                delete clsNav.targetClassPath;
+            await this.openInForm(targetItem, clsNav, { skipEnsureCurrent: isInitial });
+        }
+    },
     async _applyRoleColor(item, role) {
         if (!item || !role)
             return;
@@ -680,7 +918,7 @@ ODA({is: 'work-form',
         return Boolean(this.topMainToolItems?.length || this.topFocusedToolItems?.length || this.hasSlottedToolbar);
     },
     get hasTopArea() {
-        return Boolean((this.formTabs?.length > 1) || this.hasToolbar);
+        return Boolean(this.showTabsBar || this.hasToolbar);
     },
     get hasFooter() {
         return Boolean(this.dialog || this.isObjectViewActive || this.focusedToolItems?.length);
@@ -872,6 +1110,9 @@ ODA({is: 'work-form',
             email: 'communication:email',
         };
         const id = viewHandler?.id || '';
+        const itemIcon = $item?.DATA?.icon || (typeof $item?.icon === 'string' ? $item.icon : '');
+        if ((id === 'objects' || id === 'virtual') && itemIcon)
+            return itemIcon;
         const dataIcon = viewHandler?.DATA?.icon;
         if (typeof dataIcon === 'string' && dataIcon)
             return dataIcon;
@@ -880,7 +1121,7 @@ ODA({is: 'work-form',
         const rawIcon = viewHandler?.icon;
         if (typeof rawIcon === 'string' && rawIcon && !rawIcon.includes('folder'))
             return rawIcon;
-        return $item?.DATA?.icon || 'icons:dashboard';
+        return itemIcon || 'icons:dashboard';
     },
     _computeTabKey($item, viewId, nav = null) {
         const short = $item?.short || $item?.path || '';
@@ -944,16 +1185,19 @@ ODA({is: 'work-form',
             this.formTabs = list;
         }
     },
-    async openInForm(targetItem, rawNav = null) {
+    async openInForm(targetItem, rawNav = null, opts = {}) {
         if (!targetItem)
             return;
+        if (this._appliedRole && !targetItem.role)
+            targetItem.role = this._appliedRole;
         await targetItem.ensureRole?.();
         const nav = rawNav && typeof rawNav === 'object' ? { ...rawNav } : {};
         if (nav.view === 'objects' && nav.id) {
             nav.view = 'object';
         }
         // Зафиксируем текущую (начальную) вкладку перед открытием дочерней
-        this._ensureCurrentTab(this.view);
+        if (!opts?.skipEnsureCurrent && this.view)
+            this._ensureCurrentTab(this.view);
 
         const targetViewName = nav.view || targetItem.form || '';
         const viewHandler = await this.resolveView(targetViewName, targetItem);
@@ -986,13 +1230,18 @@ ODA({is: 'work-form',
                 tab.label = String(nav.label);
             this.formTabs = list;
         }
-        await this.activateTab(tab, nav);
+        await this.activateTab(tab, Object.keys(nav).length ? nav : null);
     },
     async activateTab(tab, explicitNav = null) {
         if (!tab || !tab.$item)
             return;
         this.activeTabKey = tab.key;
         this.activeItem = tab.$item;
+        if (this.hasClassTree) {
+            const tabShort = tab.$item?.short || tab.$item?.path || '';
+            if (tabShort)
+                this.syncClassTreeToPath(tabShort);
+        }
         const viewHandler = tab.view || await this.resolveView(tab.viewId, tab.$item);
         if (!viewHandler)
             return;
@@ -1012,7 +1261,7 @@ ODA({is: 'work-form',
         e?.stopPropagation?.();
         const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
         const idx = list.findIndex(t => t.key === tab?.key);
-        if (idx <= 0)
+        if (idx < 0 || list.length <= 1)
             return;
         const targetTab = list[idx];
         const ctrl = targetTab.control || this.controls[`${targetTab.key}::${targetTab.viewId}`];

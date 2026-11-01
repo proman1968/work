@@ -162,10 +162,10 @@ ODA({is: 'oda-link-input',
             return this.search(this.text, { all: true });
         if (item?.create)
             return this.createAndPick(item.create, item.title);
-        this.value = item?.id || '';
         // выбрали из списка — значение уже разрешено, поле запирается сразу, не дожидаясь db_read
-        this.resolved = this.value;
         this.text = item?.name || item?.id || '';
+        this.resolved = item?.id || '';
+        this.value = item?.id || '';
         this.variants = [];
     },
     /** значение и описание приходят биндингами, часто уже после attached — имя пересчитываем при каждом изменении */

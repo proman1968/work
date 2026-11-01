@@ -310,13 +310,15 @@ export default {
         .btn-action {
             @apply --content;
             @apply --border;
-            @apply --hoverable;
             padding: 3px 8px;
             font-size: small;
             font-family: inherit;
             font-weight: 500;
             border-radius: 0;
             cursor: pointer;
+        }
+        .btn-action:hover:not(:disabled) {
+            @apply --hover;
         }
     </style>
 

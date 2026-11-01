@@ -191,12 +191,14 @@ ODA({ is: 'microchat-dock',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; border-left: 1px solid var(--border-color); background: var(--content-background); }
-            .tabs { @apply --horizontal-center; @apply --footer; @apply --border-bottom; gap: 4px; padding: 2px 6px; overflow-x: auto; overflow-y: hidden; box-sizing: border-box; }
+            .tabs { @apply --horizontal-center; @apply --footer; @apply --border-bottom; gap: 4px; padding: 2px 6px 0 6px; overflow-x: auto; overflow-y: hidden; box-sizing: border-box; }
             .tab {
-                @apply --horizontal-center; @apply --no-flex; @apply --border; @apply --hoverable;
+                @apply --horizontal-center; @apply --no-flex; @apply --border;
                 gap: 6px; max-width: 220px; padding: 3px 8px;
+                border-radius: 8px 8px 0 0;
                 cursor: pointer; font-size: small; user-select: none; box-sizing: border-box;
             }
+            .tab:hover { @apply --hover; }
             .tab:focus-visible { @apply --focus-ring; }
             .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .tab i { font-style: normal; font-size: x-small; font-weight: 600; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; text-align: center; line-height: 16px; background: var(--accent-soft); }
@@ -215,7 +217,7 @@ ODA({ is: 'microchat-dock',
                 <oda-icon no-flex :icon="$for.item.icon" :icon-size="16"></oda-icon><span>{{$for.item.label}}</span><i ~if="$for.item.count">{{$for.item.count}}</i>
             </div>
             <div flex></div>
-            <oda-button no-flex icon="icons:close" :icon-size="16" title="Скрыть доки" @tap="hide"></oda-button>
+            <oda-button no-flex icon="icons:close" :icon-size="16" title="Скрыть доки" @tap="hide" style="align-self: center;"></oda-button>
         </div>
         <div class="sheet" flex vertical>
             <div flex vertical ~if="tab === 'context'" style="min-height:0"><microchat-context flex></microchat-context></div>
@@ -434,7 +436,8 @@ ODA({ is: 'microchat-results',
             .sel { @apply --horizontal-center; gap: 6px; font-size: small; user-select: none; flex: 1; min-width: 0; }
             .sel .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
             .sel .cnt { @apply --muted; font-size: x-small; white-space: nowrap; }
-            .arr { @apply --content; @apply --border; @apply --hoverable; cursor: pointer; padding: 2px 8px; color: inherit; line-height: 1.2; border-radius: 0; }
+            .arr { @apply --content; @apply --border; cursor: pointer; padding: 2px 8px; color: inherit; line-height: 1.2; border-radius: 0; }
+            .arr:hover:not(:disabled) { @apply --hover; }
             .arr:disabled { opacity: .35; cursor: default; }
             .body { overflow: auto; min-height: 0; flex: 1; }
             .empty { @apply --muted; text-align: center; padding: 40px 20px; }
@@ -524,7 +527,8 @@ ODA({ is: 'microchat-files',
             .meta .pub { color: var(--accent-color); font-weight: 600; }
             .view { @apply --vertical; flex: 1; min-height: 0; overflow: hidden; }
             .back-bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 8px; padding: 3px 8px; box-sizing: border-box; }
-            .back { @apply --content; @apply --border; @apply --hoverable; cursor: pointer; padding: 3px 10px; color: inherit; font-size: small; border-radius: 0; }
+            .back { @apply --content; @apply --border; cursor: pointer; padding: 3px 10px; color: inherit; font-size: small; border-radius: 0; }
+            .back:hover { @apply --hover; }
             .back-bar span { @apply --muted; font-size: x-small; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
             .empty { @apply --muted; text-align: center; padding: 40px 20px; }
         </style>

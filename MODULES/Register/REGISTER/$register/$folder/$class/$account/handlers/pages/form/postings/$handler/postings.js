@@ -631,13 +631,15 @@ export default {
         .btn-action {
             @apply --content;
             @apply --border;
-            @apply --hoverable;
             padding: 3px 8px;
             font-size: small;
             font-family: inherit;
             font-weight: 500;
             border-radius: 0;
             cursor: pointer;
+        }
+        .btn-action:hover:not(:disabled) {
+            @apply --hover;
         }
     </style>
 
@@ -1239,7 +1241,7 @@ export default {
             return;
         this.mode = next;
         await this.reload();
-        this.async(() => this.render());
+        this.async?.(() => this.render?.());
     },
     async setGroupBy(g) {
         this.groupBy = g || 'quarter';

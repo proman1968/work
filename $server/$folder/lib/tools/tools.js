@@ -25,7 +25,6 @@ export default {
                 @apply --no-flex;
                 @apply --content;
                 @apply --border;
-                @apply --hoverable;
                 gap: 6px;
                 padding: 3px 8px;
                 font-size: small;
@@ -36,6 +35,9 @@ export default {
                 user-select: none;
                 box-shadow: none;
                 box-sizing: border-box;
+            }
+            button.service-btn:hover:not(:disabled) {
+                @apply --hover;
             }
             button.service-btn:disabled {
                 opacity: 0.45;

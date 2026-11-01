@@ -80,7 +80,7 @@ const CAT_STATUSES = [
 ];
 
 export default {
-    imports: 'oda//button, oda//packets, oda//table, ~/lib//editor-form, ~/lib//menu, ~/lib//popover',
+    imports: 'oda//button, oda//packets, oda//table, ~/lib//editor-form, ~/lib//menu, ~/lib//popover, ~/lib//class-picker',
     template: /*html*/`
     <style>
         :host {
@@ -235,10 +235,10 @@ export default {
     page: 1,
     pageSize: 200,
     _findFormHost() {
-        if (this.$form && ('focusedItem' in this.$form || typeof this.$form.syncFromView === 'function' || typeof this.$form.openInForm === 'function'))
+        if (this.$form && ('focusedItem' in this.$form || typeof this.$form.syncFromView === 'function' || typeof this.$form.openInForm === 'function' || typeof this.$form.updateActiveTabLabel === 'function'))
             return this.$form;
         for (let p = this.parentElement || this.domHost; p; p = p.parentElement || p.domHost) {
-            if (p.localName === 'work-form' || typeof p.syncFromView === 'function' || 'focusedItem' in p)
+            if (p.localName === 'work-form' || typeof p.syncFromView === 'function' || typeof p.openInForm === 'function' || 'focusedItem' in p)
                 return p;
         }
         return null;
@@ -1240,6 +1240,10 @@ export default {
             const p = await target.fetch('db_preview', params, this.postData());
             this.entryNames = p?.names || { objects: {}, classes: {} };
             this.entries = [...(p?.entries || []), ...(p?.errors || []).map(e => ({ error: (e.field ? e.field + ': ' : '') + e.message }))];
+            if (this.isObjectView) {
+                this._dirtyTick = (this._dirtyTick || 0) + 1;
+                this._findFormHost()?.updateActiveTabLabel?.(this.documentTitle);
+            }
         }
         catch (e) {
             this.entries = [{ error: String(e?.message || e) }];
@@ -1301,124 +1305,19 @@ export default {
      * а выбрать можно только конечный класс-лист (`leaf: true`).
      */
     buildClassTree() {
-        const rawMap = new Map();
-        const rootCid = this.schema?.cid || '';
-        const rootPath = this.schema?.path || this.$item?.path || this.$item?.short || '';
-        const defaultIcon = this.isOperation ? 'carbon:task-complete' : 'carbon:catalog';
-
-        const rowCounts = new Map();
-        for (const r of this.rows || []) {
-            if (r?.cid)
-                rowCounts.set(r.cid, (rowCounts.get(r.cid) || 0) + 1);
-        }
-
-        for (const c of Object.values(this.classes || {})) {
-            if (!c?.cid)
-                continue;
-            rawMap.set(c.cid, {
-                cid: c.cid,
-                path: c.path || c.cid,
-                parent: c.parent || '',
-                label: c.label || c.cid.split('/').pop(),
-                type: c.type || '',
-                icon: c.icon || defaultIcon,
-                leaf: !!c.leaf,
-                count: Number(c.count) || rowCounts.get(c.cid) || 0,
-                children: [],
-                expanded: true,
+        const fn = globalThis.__workClassPicker?.buildClassTree || globalThis.WORK?.buildClassTree;
+        if (typeof fn === 'function') {
+            return fn({
+                classes: this.classes,
+                leaves: this.leaves,
+                rows: this.rows,
+                rootCid: this.schema?.cid || '',
+                rootPath: this.schema?.path || this.$item?.path || this.$item?.short || '',
+                defaultIcon: this.isOperation ? 'carbon:task-complete' : 'carbon:catalog',
+                defaultType: this.schema?.type || '$catalog',
             });
         }
-        for (const l of this.leaves || []) {
-            if (!l?.cid || rawMap.has(l.cid))
-                continue;
-            rawMap.set(l.cid, {
-                cid: l.cid,
-                path: l.path || l.cid,
-                parent: l.parent || '',
-                label: l.label || l.cid.split('/').pop(),
-                type: this.schema?.type || '$catalog',
-                icon: l.icon || defaultIcon,
-                leaf: true,
-                count: Number(l.count) || 0,
-                children: [],
-                expanded: true,
-            });
-        }
-
-        // Определим корневой узел открытого промежуточного класса
-        let rootNode = (rootCid && rawMap.get(rootCid))
-            || (rootPath && [...rawMap.values()].find(n => n.path === rootPath))
-            || [...rawMap.values()].find(n => !n.leaf && (!n.parent || !rawMap.has(n.parent)))
-            || null;
-        const effectiveRootCid = rootNode?.cid || rootCid;
-        const effectiveRootPath = rootNode?.path || rootPath;
-
-        const byPath = new Map();
-        for (const n of rawMap.values()) {
-            if (n.path)
-                byPath.set(n.path, n);
-        }
-
-        // Привяжем каждого потомка к ближайшему родителю (или синтезируем промежуточные папки по пути)
-        const roots = [];
-        for (const node of [...rawMap.values()]) {
-            if (node.cid === effectiveRootCid || (effectiveRootPath && node.path === effectiveRootPath))
-                continue;
-            if (node.type === '$virtual')
-                continue;
-            let parentNode = node.parent && node.parent !== effectiveRootCid ? rawMap.get(node.parent) : null;
-            if (!parentNode && effectiveRootPath && node.path && node.path.startsWith(effectiveRootPath + '/')) {
-                const rel = node.path.slice(effectiveRootPath.length + 1).split('/').filter(Boolean);
-                let curPath = effectiveRootPath;
-                let curParent = null;
-                for (let i = 0; i < rel.length - 1; i++) {
-                    curPath += '/' + rel[i];
-                    let mid = byPath.get(curPath);
-                    if (!mid) {
-                        mid = {
-                            cid: curPath,
-                            path: curPath,
-                            parent: curParent?.cid || effectiveRootCid,
-                            label: rel[i],
-                            type: this.schema?.type || '$catalog',
-                            icon: defaultIcon,
-                            leaf: false,
-                            count: 0,
-                            children: [],
-                            expanded: true,
-                        };
-                        rawMap.set(mid.cid, mid);
-                        byPath.set(curPath, mid);
-                        if (curParent)
-                            curParent.children.push(mid);
-                        else
-                            roots.push(mid);
-                    }
-                    curParent = mid;
-                }
-                parentNode = curParent;
-            }
-            if (parentNode && parentNode !== node) {
-                if (!parentNode.children.includes(node))
-                    parentNode.children.push(node);
-            }
-            else if (!roots.includes(node)) {
-                roots.push(node);
-            }
-        }
-
-        // Оставляем только ветки, ведущие хотя бы к одному конечному листу хранения, и сортируем
-        const pruneAndSort = (list) => {
-            const kept = [];
-            for (const n of list) {
-                n.children = pruneAndSort(n.children || []);
-                if (n.leaf || n.children.length > 0)
-                    kept.push(n);
-            }
-            kept.sort((a, b) => String(a.label || '').localeCompare(String(b.label || ''), 'ru', { numeric: true }));
-            return kept;
-        };
-        return pruneAndSort(roots);
+        return [];
     },
     /** Открыть модальное окно выбора конечного класса хранения перед созданием объекта из промежуточного класса. */
     async pickTargetLeafClass() {
@@ -1427,6 +1326,9 @@ export default {
             return '';
         const classTitle = this.schema?.title || this.$item?.DATA?.label || this.$item?.label || this.$item?.id || '';
         const dialogTitle = `Выберите класс для создания объекта '${classTitle}'`;
+        const pickFn = globalThis.__workClassPicker?.pickClassFromTree || globalThis.WORK?.pickClassFromTree;
+        if (typeof pickFn === 'function')
+            return pickFn(tree, { title: dialogTitle });
         const picker = ODA.createComponent('item-class-picker', {
             treeNodes: tree,
             selectedCid: '',
@@ -1467,11 +1369,16 @@ export default {
             const target = chosenCid ? await this.targetItem(chosenCid) : this.$item;
             const leafLabel = chosenCid ? (this.classes?.[chosenCid]?.label || this.leaves?.find(l => l.cid === chosenCid)?.label || '') : '';
             const title = leafLabel || this.schema?.title || 'Объект';
+            const fmtNew = globalThis.__workClassPicker?.formatNewObjectLabel || globalThis.WORK?.formatNewObjectLabel;
+            const tabLabel = typeof fmtNew === 'function' ? fmtNew(title) : `${title} · новый объект`;
+            if (target && chosenCid && typeof formHost.ensureClassTab === 'function') {
+                await formHost.ensureClassTab(target);
+            }
             await formHost.openInForm(target || this.$item, {
                 view: 'object',
                 create: true,
                 leafCid: chosenCid || '',
-                label: `${title} · новый объект`,
+                label: tabLabel,
             });
             return;
         }
@@ -2086,202 +1993,5 @@ ODA({
     },
     close() {
         this.parentElement?.close?.();
-    },
-});
-
-/**
- * item-class-picker — диалог выбора конечного класса хранения при вызове «Новый» на промежуточном классе.
- * Промежуточные классы в дереве отображаются приглушёнными (в них объекты храниться не могут),
- * а выбрать и подтвердить кнопкой «OK» (или двойным кликом) можно только конечный класс-лист.
- */
-ODA({
-    is: 'item-class-picker',
-    imports: '/oda/components/button/button.js, /oda/components/icon/icon.js',
-    template: /*html*/`
-    <style>
-        :host {
-            @apply --vertical;
-            padding: 12px 14px;
-            gap: 12px;
-            box-sizing: border-box;
-            background: light-dark(#ffffff, #1e1f24);
-            color: light-dark(#1f2937, #e5e7eb);
-        }
-        .tree-box {
-            @apply --vertical;
-            min-height: 320px;
-            max-height: 62vh;
-            overflow: auto;
-            border: 1px solid light-dark(#cbd5e1, #3a3b42);
-            background: light-dark(#ffffff, #18191d);
-            padding: 8px 10px;
-            box-sizing: border-box;
-        }
-        .tree-row {
-            @apply --horizontal;
-            align-items: center;
-            min-height: 28px;
-            padding: 2px 6px;
-            border-radius: 3px;
-            user-select: none;
-            gap: 6px;
-            white-space: nowrap;
-        }
-        .tree-row.leaf {
-            cursor: pointer;
-        }
-        .tree-row.leaf:hover:not([selected]) {
-            background: light-dark(#f1f5f9, #272930);
-        }
-        .tree-row[selected] {
-            background: var(--selected-background, #3b82f6);
-            color: var(--selected-color, #ffffff);
-        }
-        .indent-guide {
-            display: inline-block;
-            width: 18px;
-            height: 26px;
-            border-left: 1px dotted light-dark(#94a3b8, #4b5563);
-            flex-shrink: 0;
-        }
-        .expander {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 13px;
-            height: 13px;
-            border: 1px solid light-dark(#94a3b8, #64748b);
-            background: light-dark(#f8fafc, #272930);
-            color: light-dark(#334155, #cbd5e1);
-            font-size: 11px;
-            line-height: 1;
-            cursor: pointer;
-            flex-shrink: 0;
-            margin-right: 2px;
-        }
-        .expander-spacer {
-            display: inline-block;
-            width: 15px;
-            flex-shrink: 0;
-        }
-        .node-icon {
-            flex-shrink: 0;
-            color: light-dark(#d97706, #fbbf24);
-        }
-        .tree-row[selected] .node-icon {
-            color: inherit;
-        }
-        .node-label {
-            font-size: 13px;
-        }
-        .tree-row.group .node-label {
-            color: light-dark(#8a8a8a, #787c88);
-        }
-        .node-count {
-            font-size: 12.5px;
-            color: light-dark(#8a8a8a, #94a3b8);
-            margin-left: 4px;
-        }
-        .tree-row[selected] .node-count {
-            color: inherit;
-            opacity: 0.9;
-        }
-        .footer-bar {
-            @apply --horizontal;
-            justify-content: flex-end;
-            align-items: center;
-            gap: 8px;
-        }
-        button.dlg-btn {
-            @apply --content;
-            @apply --border;
-            @apply --hoverable;
-            min-width: 78px;
-            padding: 3px 12px;
-            font-size: small;
-            font-family: inherit;
-            border-radius: 0;
-            cursor: pointer;
-        }
-        button.dlg-btn:disabled {
-            opacity: 0.45;
-            cursor: default;
-        }
-    </style>
-    <div class="tree-box">
-        <div ~for="flatRows"
-            :class="'tree-row ' + ($for.item.node.leaf ? 'leaf' : 'group')"
-            :selected="$for.item.node.leaf && selectedCid === $for.item.node.cid"
-            @tap="onRowTap($for.item.node, $event)"
-            @dblclick="onRowDblClick($for.item.node, $event)">
-            <span class="indent-guide" ~for="$for.item.guides"></span>
-            <span class="expander" ~if="$for.item.node.children?.length" @tap.stop="toggleNode($for.item.node)">{{$for.item.node.expanded ? '−' : '+'}}</span>
-            <span class="expander-spacer" ~if="!$for.item.node.children?.length"></span>
-            <oda-icon class="node-icon" :icon="$for.item.node.icon || 'carbon:catalog'" icon-size="20"></oda-icon>
-            <span class="node-label">{{$for.item.node.label}}</span>
-            <span class="node-count" ~if="$for.item.node.leaf && $for.item.node.count > 0">({{$for.item.node.count}})</span>
-        </div>
-    </div>
-    <div class="footer-bar">
-        <button type="button" class="dlg-btn" :disabled="!selectedCid" @tap="confirmPick">OK</button>
-        <button type="button" class="dlg-btn" @tap="cancelPick">Отмена</button>
-    </div>
-    `,
-    treeNodes: [],
-    selectedCid: '',
-    confirmedCid: '',
-    treeVersion: 0,
-    get flatRows() {
-        void this.treeVersion;
-        const out = [];
-        const walk = (list, level) => {
-            for (const node of list || []) {
-                const guides = Array.from({ length: level }, (_, i) => i);
-                out.push({ node, level, guides });
-                if (node.expanded && node.children?.length)
-                    walk(node.children, level + 1);
-            }
-        };
-        walk(this.treeNodes, 0);
-        return out;
-    },
-    toggleNode(node) {
-        if (!node)
-            return;
-        node.expanded = !node.expanded;
-        this.treeVersion++;
-        this.render?.(true);
-    },
-    onRowTap(node) {
-        if (!node)
-            return;
-        if (node.leaf) {
-            this.selectedCid = node.cid;
-        }
-        else {
-            this.selectedCid = '';
-        }
-        this.render?.(true);
-    },
-    onRowDblClick(node) {
-        if (!node)
-            return;
-        if (node.leaf) {
-            this.selectedCid = node.cid;
-            this.confirmPick();
-        }
-        else if (node.children?.length) {
-            this.toggleNode(node);
-        }
-    },
-    confirmPick() {
-        if (!this.selectedCid)
-            return;
-        this.confirmedCid = this.selectedCid;
-        this.parentElement?.close?.('ok');
-    },
-    cancelPick() {
-        this.confirmedCid = '';
-        this.parentElement?.close?.('');
     },
 });

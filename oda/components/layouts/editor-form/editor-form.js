@@ -662,7 +662,7 @@ ODA({is: 'oda-editor-form-field',
         <legend>{{label}}<span class="req" ~if="required"> *</span></legend>
         <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="24" @click="expanded = !expanded"></oda-icon>
         <div class="editor-box">
-            <div ~if="field?.type !== 'Struct'" ~is="editor" ::value="data[field.id]" :field :meta="field" :at="data?.time || ''" :allow-other="!!field.other" :borderless="field?.type !== 'Table'" :dense="field?.type !== 'Table'" no-header :disabled="!!field.disabled"></div>
+            <div ~if="field?.type !== 'Struct'" ~is="editor" :value="data?.[field.id]" @value-changed="onFieldValueChanged($event)" :field :meta="field" :at="data?.time || ''" :allow-other="!!field.other" :borderless="field?.type !== 'Table'" :dense="field?.type !== 'Table'" no-header :disabled="!!field.disabled"></div>
             <div ~if="children?.length && expanded" class="children-box">
                 <oda-editor-form-field ~for="children" :field="$for.item" :data="subData" :field-errors="fieldErrors" :path-prefix="fullPath"></oda-editor-form-field>
             </div>
@@ -725,5 +725,18 @@ ODA({is: 'oda-editor-form-field',
     },
     get hasError() {
         return !!this.serverError || (this.required && isEmpty(this.data?.[this.field?.id]));
+    },
+    onFieldValueChanged(e) {
+        if (!this.isConnected)
+            return;
+        e.stopPropagation();
+        const ctrl = e.currentTarget;
+        const val = e.detail ? e.detail.value : (ctrl?.type === 'checkbox' ? ctrl.checked : ctrl?.value);
+        if (this.data && this.field?.id) {
+            if (this.data[this.field.id] === val)
+                return;
+            this.data[this.field.id] = val;
+            this.fire('change', { id: this.field.id, value: val, label: ctrl?.text || '' });
+        }
     },
 });

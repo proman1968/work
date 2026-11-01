@@ -13,8 +13,8 @@ const _today = () => _day(new Date());
 
 const proto = Object.defineProperties({}, Object.getOwnPropertyDescriptors(objectsProto));
 
-Object.assign(proto, {
-    imports: 'oda//button, oda//icon, ~/lib//editor-form',
+Object.defineProperties(proto, Object.getOwnPropertyDescriptors({
+    imports: 'oda//button, oda//icon, ~/lib//editor-form, ~/lib//class-picker',
     isObjectView: true,
     allowSave: true,
     hasSettings: true,
@@ -22,7 +22,7 @@ Object.assign(proto, {
     _dirtyTick: 0,
     get isChanged() {
         void this._dirtyTick;
-        return Boolean(this.canSave && this.isDirty());
+        return Boolean(this.canSave && (!this.editing?.id || this.isDirty()));
     },
     snapshot() {
         objectsProto.snapshot.call(this);
@@ -33,22 +33,64 @@ Object.assign(proto, {
         return this.activeSchema?.path || this.schema?.path || this.$item?.short || this.$item?.path || this.activeSchema?.cid || '';
     },
     get documentTitle() {
-        const base = this.editorTitle;
-        const clsTitle = this.activeSchema?.title || this.schema?.title || '';
-        if (this.editing?.id && base === clsTitle) {
-            const num = String(this.editing?.num ?? this.editing?.number ?? '').trim();
+        void this._dirtyTick;
+        const clsTitle = this.activeSchema?.title || this.schema?.title || this.$item?.DATA?.label || this.$item?.label || '';
+        const fields = typeof this.fieldList === 'function' ? this.fieldList() : [];
+        const nameField = fields.find(f => ['name', 'label', 'title'].includes(f.id));
+        const explicitName = nameField ? String(this.editing?.[nameField.id] ?? '').trim() : '';
+        if (explicitName) {
+            if (!clsTitle || explicitName === clsTitle || explicitName.startsWith(clsTitle))
+                return explicitName;
+            return `${clsTitle} · ${explicitName}`;
+        }
+        if (this.isOperation && this.editing) {
+            const num = String(this.editing?.num ?? this.editing?.number ?? this.editing?.doc_num ?? '').trim();
             const rawTime = String(this.editing?.time ?? '').trim();
             let dateStr = rawTime;
             if (/^\d{4}-\d{2}-\d{2}$/.test(rawTime)) {
                 const [y, m, d] = rawTime.split('-');
                 dateStr = `${d}.${m}.${y}`;
             }
-            const numPart = num ? ` № ${num}` : '';
-            const datePart = dateStr ? ` от ${dateStr}` : '';
-            if (numPart || datePart)
-                return `${clsTitle}${numPart}${datePart}`;
+            let partyName = '';
+            const partyKeys = ['recipient_name', 'payer_name', 'counterparty_name', 'recipient', 'payer', 'counterparty', 'client', 'supplier', 'customer', 'employee', 'person', 'agent'];
+            for (const pk of partyKeys) {
+                const val = String(this.editing?.[pk] ?? '').trim();
+                if (!val)
+                    continue;
+                const resolved = this.names?.[val] || this.entryNames?.objects?.[val] || (!/^\d+\.[A-Za-z0-9]+$/.test(val) ? val : '');
+                if (resolved) {
+                    partyName = resolved;
+                    break;
+                }
+            }
+            if (!partyName) {
+                for (const f of fields) {
+                    if (f.type === 'Link') {
+                        const val = String(this.editing?.[f.id] ?? '').trim();
+                        if (!val)
+                            continue;
+                        const resolved = this.names?.[val] || this.entryNames?.objects?.[val];
+                        if (resolved) {
+                            partyName = resolved;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (this.editing?.id || num || partyName || (rawTime && rawTime !== _today())) {
+                const numPart = num ? ` №${num}` : '';
+                const datePart = dateStr ? ` от ${dateStr}` : '';
+                const partyPart = partyName ? ` - ${partyName}` : '';
+                if (numPart || datePart || partyPart)
+                    return `${clsTitle}${numPart}${datePart}${partyPart}`;
+            }
         }
-        return base;
+        if (!this.editing?.id) {
+            const fmtNew = globalThis.__workClassPicker?.formatNewObjectLabel || globalThis.WORK?.formatNewObjectLabel;
+            if (typeof fmtNew === 'function' && clsTitle)
+                return fmtNew(clsTitle);
+        }
+        return this.editorTitle;
     },
     toggleDesignMode() {
         this.designMode = !this.designMode;
@@ -316,7 +358,12 @@ Object.assign(proto, {
         }
         return list;
     },
-    onFormInput() {
+    onFormInput(e) {
+        const rawDetail = e?.detail;
+        const d = (rawDetail && typeof rawDetail.value === 'object' && rawDetail.value !== null) ? rawDetail.value : rawDetail;
+        if (d && typeof d === 'object' && d.value && d.label && d.label !== d.value) {
+            this.names = { ...(this.names || {}), [d.value]: d.label };
+        }
         if (this.fieldErrors && Object.keys(this.fieldErrors).length)
             this.fieldErrors = {};
         this._dirtyTick++;
@@ -384,6 +431,11 @@ Object.assign(proto, {
                 this.schedulePreview();
         }
         else {
+            if (nav.unit && Array.isArray(this.contexts) && this.contexts.length) {
+                const match = this.contexts.find(c => c.unit === nav.unit);
+                if (match)
+                    this.contextKey = `${match.unit}|${match.place ?? ''}`;
+            }
             this.editing = this.isOperation ? { time: _today(), ...(nav.initialData || {}) } : { ...(nav.initialData || {}) };
             this.entries = [];
             this.entryNames = { objects: {}, classes: {} };
@@ -395,7 +447,7 @@ Object.assign(proto, {
         }
         this.focusedItem = this.editing || { id: nav.id || 'new' };
         this.snapshot();
-        this.async(() => {
+        this.async?.(() => {
             if (this.isConnected)
                 this.snapshot();
         });
@@ -432,6 +484,6 @@ Object.assign(proto, {
         this._findFormHost()?.closeActiveTab?.(true);
         return true;
     },
-});
+}));
 
 export default proto;

@@ -11,6 +11,7 @@ const defs = [];
 globalThis.ODA = (def) => { defs.push(def); return def; };
 globalThis.WORK = {};
 
+await import('../$server/$folder/lib/class-picker/class-picker.js');
 const objects = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js')).default;
 const objectsMeta = (await import('../$server/$folder/$class/handlers/pages/form/objects/$handler/class.js')).default;
 const postings = (await import('../MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js')).default;
@@ -1437,5 +1438,78 @@ describe('архитектура представлений формы (VIEW п�
             delete globalThis.WORK.get_item;
             delete globalThis.WORK.showMenu;
         }
+
+        // Единый системный контрол дерева выбора класса (class-picker.js) используется и в objects.js («+ Новый»), и в prompt-bar.js («Создать операцию»)
+        const { buildClassTree, resolveDataRootPath, formatNewObjectLabel } = await import('../$server/$folder/lib/class-picker/class-picker.js');
+        const promptBarSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/lib/prompt-bar/prompt-bar.js'), 'utf-8');
+        assert.ok(promptBarSrc.includes('pickClassFromTree'), 'prompt-bar использует единый pickClassFromTree (item-class-picker)');
+        assert.ok(promptBarSrc.includes("title: 'Создать операцию'"), 'при создании операции из чата заголовок окна — «Создать операцию»');
+
+        assert.equal(resolveDataRootPath('/ORGANIZATIONS/Деловая сфера/MODULES/Register/OPERATIONS/Платёжное поручение'), '/ORGANIZATIONS/Деловая сфера/MODULES/Register/OPERATIONS');
+        assert.equal(resolveDataRootPath('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Реализация/Покупателю'), '/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS');
+        assert.equal(resolveDataRootPath('/ORGANIZATIONS/Деловая сфера/MODULES/Register/CATALOGS/Субъекты'), '/ORGANIZATIONS/Деловая сфера/MODULES/Register/CATALOGS');
+        assert.equal(formatNewObjectLabel('Платёжное поручение'), 'Новое платёжное поручение');
+        assert.equal(formatNewObjectLabel('Доверенность'), 'Новая доверенность');
+        assert.equal(formatNewObjectLabel('Авансовый отчёт'), 'Новый авансовый отчёт');
+
+        const opTree = buildClassTree({
+            classes: [
+                { path: '/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Реализация/Покупателю', label: 'Покупателю', count: 7 },
+                { path: '/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Реализация/Возврат от покупателя', label: 'Возврат от покупателя', count: 1 },
+                { path: '/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Платежи/Покупателю', label: 'Покупателю', count: 3 },
+            ],
+            defaultIcon: 'carbon:task-complete',
+            defaultType: '$operation',
+        });
+        assert.equal(opTree.length, 2, 'операции сгруппированы в дерево по веткам внутри OPERATIONS');
+        assert.equal(opTree[0].label, 'Платежи');
+        assert.equal(opTree[0].leaf, false);
+        assert.equal(opTree[0].children[0].label, 'Покупателю');
+        assert.equal(opTree[1].label, 'Реализация');
+        assert.equal(opTree[1].leaf, false);
+        assert.deepEqual(opTree[1].children.map(c => c.label), ['Возврат от покупателя', 'Покупателю']);
+
+        // Проверка активности Save на новом объекте и динамического изменения заголовка вкладки по мере редактирования
+        const objectView = (await import('../$server/$folder/$class/handlers/pages/form/object/$handler/object.js')).default;
+        let lastTabLabel = '';
+        const objHost = host(objectView, [], {
+            self: {
+                $form: {
+                    updateActiveTabLabel: (lbl) => { lastTabLabel = lbl; },
+                },
+            },
+            fetch: (m) => {
+                if (m === 'db_schema') {
+                    return {
+                        schema: {
+                            cid: '/ORGANIZATIONS/Деловая сфера/MODULES/Register/OPERATIONS/Платёжное поручение',
+                            path: '/ORGANIZATIONS/Деловая сфера/MODULES/Register/OPERATIONS/Платёжное поручение',
+                            label: 'Платёжное поручение',
+                            title: 'Платёжное поручение',
+                            type: '$operation',
+                            family: 'operation',
+                            leaf: true,
+                            fields: [
+                                { id: 'num', label: 'Номер', type: 'string' },
+                                { id: 'recipient', label: 'Получатель', type: 'link', targetPath: '/ORGANIZATIONS/Деловая сфера/MODULES/Register/CATALOGS/Субъекты' },
+                                { id: 'sum', label: 'Сумма', type: 'money' },
+                            ],
+                        },
+                    };
+                }
+                return null;
+            },
+        });
+        await objHost.loadSchema();
+        await objHost.initFromNav({ create: true });
+        assert.equal(objHost.isChanged, true, 'на форме нового объекта сразу активна кнопка Save');
+        assert.equal(objHost.documentTitle, 'Новое платёжное поручение', 'начальный заголовок вкладки нового объекта');
+
+        objHost.editing.num = '34';
+        objHost.editing.time = '2060-03-22';
+        objHost.editing.recipient = '1.SUBJ';
+        objHost.onFormInput({ detail: { value: { id: 'recipient', value: '1.SUBJ', label: 'Пенсионный фонд' } } });
+        assert.equal(objHost.documentTitle, 'Платёжное поручение №34 от 22.03.2060 - Пенсионный фонд');
+        assert.equal(lastTabLabel, 'Платёжное поручение №34 от 22.03.2060 - Пенсионный фонд');
     });
 });

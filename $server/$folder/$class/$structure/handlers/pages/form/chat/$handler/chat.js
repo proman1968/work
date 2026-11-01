@@ -158,21 +158,35 @@ ODA({is: 'form-chat',
             const uidSet = new Set();
             const opMap = new Map();
 
-            const collectTreeOps = (nodes) => {
+            const collectTreeOps = (nodes, parentOpPath = '') => {
                 for (const n of nodes || []) {
                     if (!n) continue;
-                    if (n.type === '$operation' && n.access !== 'read' && n.path) {
-                        if (!Array.isArray(n.children) || !n.children.length) {
+                    const isOp = n.type === '$operation';
+                    const hasKids = Array.isArray(n.children) && n.children.length > 0;
+                    const isOpsRoot = isOp && /(?:^|\/)OPERATIONS$/i.test(n.path || '');
+                    if (isOp && n.path && !isOpsRoot) {
+                        const leaf = !hasKids;
+                        if (!leaf || n.access !== 'read') {
+                            const prev = opMap.get(n.path);
+                            const count = Number(n.objectCount ?? n.count) || prev?.count || 0;
                             opMap.set(n.path, {
                                 id: n.path,
+                                cid: n.path,
+                                path: n.path,
+                                parent: parentOpPath || prev?.parent || '',
                                 label: n.label || n.id || n.path.split('/').pop(),
-                                icon: n.icon || 'carbon:task-complete',
+                                type: '$operation',
+                                icon: n.icon || prev?.icon || 'carbon:task-complete',
+                                leaf: prev ? (prev.leaf && leaf) : leaf,
+                                count,
                                 hint: n.path,
                             });
                         }
                     }
-                    if (Array.isArray(n.children) && n.children.length)
-                        collectTreeOps(n.children);
+                    if (hasKids) {
+                        const nextParent = (isOp && n.path && !isOpsRoot) ? n.path : parentOpPath;
+                        collectTreeOps(n.children, nextParent);
+                    }
                 }
             };
 
@@ -222,15 +236,22 @@ ODA({is: 'form-chat',
             }
 
             // Если по дереву ссылок не нашлось листовых $operation, добираем из db_workspace
-            if (!opMap.size) {
+            if (![...opMap.values()].some(x => x.leaf)) {
                 const ws = await $item.fetch('db_workspace').catch(() => null);
                 for (const [cid, cls] of Object.entries(ws?.classes || {})) {
-                    if (cls?.type === '$operation' && cls?.leaf) {
-                        const p = cls.path || cid;
+                    const p = cls?.path || cid;
+                    if (cls?.type === '$operation' && p && !/(?:^|\/)OPERATIONS$/i.test(p)) {
+                        const parentPath = /(?:^|\/)OPERATIONS$/i.test(cls.parent || '') ? '' : (cls.parent || '');
                         opMap.set(p, {
                             id: p,
+                            cid: p,
+                            path: p,
+                            parent: parentPath,
                             label: cls.label || p.split('/').pop(),
+                            type: '$operation',
                             icon: cls.icon || 'carbon:task-complete',
+                            leaf: !!cls.leaf,
+                            count: Number(cls.count ?? cls.objectCount) || 0,
                             hint: p,
                         });
                     }
@@ -385,12 +406,35 @@ ODA({is: 'oda-chat',
         const clsItem = await WORK.get_item(path).catch(() => null);
         if (!clsItem) return;
         const unit = this.$pdp?.$item?.short || this.$pdp?.$item?.path || '';
-        const wf = document.querySelector?.('pages-form')?.$?.('work-form') || this.domHost?.domHost;
-        if (wf && typeof wf.openFormTab === 'function') {
-            await wf.openFormTab(clsItem, { view: 'object', createNewObject: true, unit });
+        const title = clsItem.DATA?.label || clsItem.label || clsItem.id || path.split('/').pop() || 'Операция';
+        const fmtNew = globalThis.__workClassPicker?.formatNewObjectLabel || globalThis.WORK?.formatNewObjectLabel;
+        const newLabel = typeof fmtNew === 'function' ? fmtNew(title) : `Новое ${title.toLowerCase()}`;
+        const nav = {
+            view: 'object',
+            create: true,
+            unit,
+            label: newLabel,
+        };
+        if (window.top && window.top !== window && typeof window.top.execute === 'function') {
+            await window.top.execute(clsItem, nav);
+            return;
+        }
+        let formHost = null;
+        for (let p = this; p; p = p.parentElement || p.domHost || p.getRootNode?.()?.host) {
+            if (typeof p.openInForm === 'function') {
+                formHost = p;
+                break;
+            }
+        }
+        if (!formHost) {
+            const pf = document.querySelector?.('pages-form');
+            formHost = pf?.$?.('work-form') || pf || document.querySelector?.('work-form');
+        }
+        if (formHost && typeof formHost.openInForm === 'function') {
+            await formHost.openInForm(clsItem, nav);
         }
         else if (typeof window.top?.execute === 'function') {
-            window.top.execute(clsItem, { view: 'object', createNewObject: true, unit });
+            window.top.execute(clsItem, nav);
         }
     },
     model: {

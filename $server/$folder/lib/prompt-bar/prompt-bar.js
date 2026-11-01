@@ -1,5 +1,5 @@
 export default {
-    imports: 'oda//button, oda//icon, ~/lib//tree, ~/lib//user',
+    imports: 'oda//button, oda//icon, ~/lib//tree, ~/lib//user, ~/lib//class-picker',
 }
 
 /**
@@ -246,7 +246,7 @@ ODA({ is: 'work-voice-bars',
 });
 
 ODA({ is: 'work-prompt-bar',
-    imports: 'oda//button, oda//icon, ~/lib//tree, ~/lib//user',
+    imports: 'oda//button, oda//icon, ~/lib//tree, ~/lib//user, ~/lib//class-picker',
     template: /* html */`
         <style>
             :host { @apply --vertical; }
@@ -652,11 +652,21 @@ ODA({ is: 'work-prompt-bar',
         }
         this.focusInput();
     },
-    async chooseOperationClass(e) {
+    async chooseOperationClass() {
         const ops = Array.isArray(this.operationClasses) ? this.operationClasses : [];
         if (!ops.length) return;
-        const anchor = e?.currentTarget || e?.target || this;
-        const id = await this._menu({ currentTarget: anchor }, ops, '');
+        const buildFn = globalThis.__workClassPicker?.buildClassTree || globalThis.WORK?.buildClassTree;
+        const pickFn = globalThis.__workClassPicker?.pickClassFromTree || globalThis.WORK?.pickClassFromTree;
+        if (typeof buildFn !== 'function' || typeof pickFn !== 'function') return;
+        const tree = buildFn({
+            classes: ops,
+            defaultIcon: 'carbon:task-complete',
+            defaultType: '$operation',
+        });
+        if (!tree.length) return;
+        const id = await pickFn(tree, {
+            title: 'Создать операцию',
+        });
         if (id)
             this.fire('create-operation', { path: id });
         this.focusInput();

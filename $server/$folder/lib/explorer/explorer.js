@@ -1,6 +1,6 @@
 export default {
     icon: 'odant:structure',
-    imports: 'oda//app-layout.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js',
+    imports: 'oda//app-layout.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js, ~/lib//class-picker.js',
     extends: 'oda-app-layout',
     template: /*html*/`
         <item-tree order="0" slot='left-panel' allow-search :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
@@ -13,9 +13,9 @@ export default {
                 <iframe ~show="focusedPage === $for.item" style="border: none;" flex ~for="pages" :src="$for.item"></iframe>
             </div>
         </div>
-        <div id="bookmarksBar" slot="footer" class="pe-no-print" footer border-top horizontal-center no-flex :hidden="!hasBookmarks" ~show="hasBookmarks" style="gap: 4px; padding: 2px 6px; overflow: hidden; z-index: 2;">
+        <div id="bookmarksBar" slot="footer" class="pe-no-print" footer border-top horizontal-center no-flex :hidden="!hasBookmarks" ~show="hasBookmarks" style="gap: 4px; padding: 0 6px 2px 6px; overflow: hidden; z-index: 2;">
             <div horizontal-center flex style="gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden;">
-                <div ~for="bookmarks" horizontal-center no-flex border hoverable :content="isActiveBookmark($for.item)" :light="!isActiveBookmark($for.item)" :raised="isActiveBookmark($for.item)" :focused="isActiveBookmark($for.item)" :bold="isActiveBookmark($for.item)" :title="$for.item.title || $for.item.short" @tap="activateBookmark($for.item)" @auxclick="onBookmarkAuxClick($for.item, $event)" style="gap: 6px; padding: 3px 6px; max-width: 220px; cursor: pointer;">
+                <div ~for="bookmarks" horizontal-center no-flex border hoverable :content="isActiveBookmark($for.item)" :light="!isActiveBookmark($for.item)" :raised="isActiveBookmark($for.item)" :focused="isActiveBookmark($for.item)" :bold="isActiveBookmark($for.item)" :title="$for.item.title || $for.item.short" @tap="activateBookmark($for.item)" @auxclick="onBookmarkAuxClick($for.item, $event)" style="gap: 6px; padding: 3px 8px; max-width: 220px; border-radius: 0 0 8px 8px; cursor: pointer;">
                     <oda-icon no-flex :icon="$for.item.icon || 'icons:dashboard'" :icon-size="16"></oda-icon>
                     <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{$for.item.label}}</span>
                     <oda-icon no-flex icon="icons:close" :icon-size="14" title="Закрыть форму" @tap.stop="closeBookmark($for.item, $event)"></oda-icon>
@@ -191,6 +191,23 @@ export default {
     _bookmarksStorageKey() {
         const root = this.$item?.short || this.$item?.path || '/';
         return 'work.explorer.bookmarks:' + root;
+    },
+    _resolveDataRootPath(rawPath, $item = null) {
+        const fn = globalThis.__workClassPicker?.resolveDataRootPath || globalThis.WORK?.resolveDataRootPath;
+        if (typeof fn === 'function')
+            return fn(rawPath, $item);
+        if (!rawPath || typeof rawPath !== 'string')
+            return '';
+        if ($item && ($item.type === '$file' || $item.type === '$handler' || (globalThis.CORE?.$file && $item instanceof globalThis.CORE.$file)))
+            return '';
+        const clean = rawPath.replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '');
+        const m = /^(.*?\/MODULES\/[^/]+\/[^/]+)(?:\/(.+))?$/.exec(clean);
+        if (m)
+            return m[1];
+        const m2 = /^(.*?\/(?:OPERATIONS|CATALOGS|REGISTER|STRUCTS))(?:\/(.+))?$/.exec(clean);
+        if (m2)
+            return m2[1];
+        return '';
     },
     _extractShortFromUrl(pageUrl = '') {
         if (!pageUrl)
@@ -510,21 +527,40 @@ export default {
             this.render?.();
         });
         window.execute = async ($item, nav) => {
+            if (!$item)
+                return;
             const short = $item?.short ?? $item?.path ?? '';
-            if (nav && typeof nav === 'object') {
+            const dataRoot = ($item?.type !== '$handler') ? this._resolveDataRootPath(short, $item) : '';
+            const openShort = dataRoot || short;
+            const effectiveNav = dataRoot
+                ? { ...(nav && typeof nav === 'object' ? nav : {}), targetClassPath: nav?.targetClassPath || short }
+                : nav;
+            if (effectiveNav && typeof effectiveNav === 'object') {
                 try {
-                    sessionStorage.setItem('work.form.nav:' + short, JSON.stringify(nav));
-                    new BroadcastChannel('work-form-nav').postMessage({ short, nav });
+                    sessionStorage.setItem('work.form.nav:' + openShort, JSON.stringify(effectiveNav));
+                    new BroadcastChannel('work-form-nav').postMessage({ short: openShort, nav: effectiveNav });
                 }
                 catch { /* ignore */ }
             }
-            let hash = '#' + short;
+            let hash = '#' + openShort;
             if ($item.type !== '$handler')
                 hash += '/~/handlers/pages/' + ($item.page || 'form');
             history.replaceState(null, '', window.location.pathname + hash);
-            const fullUrl = encodeURI(window.location.origin + short + ($item.type !== '$handler' ? '/~/handlers/pages/' + ($item.page || 'form') : '') + '/index.html');
-            this._upsertBookmarkForUrl(fullUrl, $item);
+            const fullUrl = encodeURI(window.location.origin + openShort + ($item.type !== '$handler' ? '/~/handlers/pages/' + ($item.page || 'form') : '') + '/index.html');
+            const bm = this._upsertBookmarkForUrl(fullUrl, openShort === short ? $item : null);
+            if (openShort !== short && bm) {
+                const itemStateKey = ($item && ('_stateKey' in Object($item)) && $item._stateKey) ? String($item._stateKey) : short;
+                bm.stateKey = itemStateKey;
+                this._hydrateBookmarkMeta(bm, { cachedOnly: false });
+            }
             this.load_page(fullUrl);
+            if (effectiveNav && typeof effectiveNav === 'object') {
+                const existingFrame = (this.$$?.('iframe') || []).find(f => f.src === fullUrl);
+                const wf = existingFrame?.contentDocument?.querySelector?.('pages-form')?.$?.('work-form');
+                if (wf && wf._rootItem && typeof wf.applyNav === 'function') {
+                    wf.applyNav(effectiveNav);
+                }
+            }
         }
         window.addEventListener('hashchange', ()=>{
             this.load_page();
