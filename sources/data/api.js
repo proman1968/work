@@ -26,7 +26,8 @@ import { dataDb, baseDbFile, dataGeneration } from './db.js';
 import { refreshClasses, getClass, descendants, isLeaf, classesOfType, classesGeneration, DEFAULT_ROOTS, STRUCTURE_TYPES, clearScanCache } from './classes.js';
 import { classSchema, checkSchema, analyticSlots, FAMILY } from './schema.js';
 import {
-    createObject, readObject, objectVersions, updateObject, deleteObject, restoreObject, queryObjects, linkCids,
+    createObject, readObject, objectVersions, updateObject, deleteObject, restoreObject, queryObjects, linkCids, nextOperationNumber,
+    getDocumentBinder, linkDocuments, unlinkDocuments, candidateBinderOperations,
 } from './objects.js';
 import {
     registerOperation, correctOperation, cancelOperation, previewEntries, operationEntries, closePeriod, closedUntil,
@@ -35,7 +36,7 @@ import {
     journal, trialBalance, accountCard, accountTurnovers, readEntry, objectState, objectTrajectory, virtualMembers, countVirtualMembers, isVirtualMember, namesOf,
 } from './reports.js';
 import { linkChoices } from './choices.js';
-import { printTemplates, renderPrint } from './print.js';
+import { printTemplates, renderPrint, savePrintTemplate, deletePrintTemplate } from './print.js';
 import {
     scopeGrants, entryGrants, withoutBranches, objectCond, visibleUnits, writeContexts, resolvePlace,
 } from './scope.js';
@@ -770,6 +771,18 @@ export const DATA_METHODS = Object.freeze({
         ...(flag(p?.withScope) ? { scope: buildScopeInfo(db, cls, scope) } : {}),
     })) },
 
+    /** Вычислить следующий номер операции по нумератору класса и дате: { time? } → { number, field, reset, numerator }. */
+    db_next_number: { level: 'read', fn: method('read', ({ db, cls, p }) => {
+        const schema = classSchema(db, cls.cid);
+        const number = nextOperationNumber(db, schema, p?.time);
+        return {
+            number,
+            field: schema?.numerator?.field || 'num',
+            reset: schema?.numerator?.reset || 'year',
+            numerator: schema?.numerator || null,
+        };
+    }) },
+
     /**
      * Видимость и места записи пользователя в классе: { all, units, contexts }.
      * all — видны все данные; units — подразделения для фильтра отчётов и выборок
@@ -814,7 +827,7 @@ export const DATA_METHODS = Object.freeze({
         const at = await writePlace(db, cls, p, scope);
         const obj = createObject(db, {
             cid: cls.cid, body: bodyOf(p) ?? {}, time: p.time, unit: at.unit, place: at.place,
-            ext_of: p.ext_of, valid_from: p.valid_from, author: uid,
+            ext_of: p.ext_of, valid_from: p.valid_from, basis_id: p.basis_id, basis_note: p.basis_note, author: uid,
         });
         if (obj)
             await logOperationFact(db, item, obj, obj.status === 'registered' ? 'Проведено' : 'Создано', uid, p);
@@ -920,10 +933,60 @@ export const DATA_METHODS = Object.freeze({
         return (await printTemplates(db, process.cwd(), cid)).map(({ name, label, source }) => ({ name, label, source }));
     }) },
 
-    /** Печатная форма объекта: { id, name? } → { name, label, source, html } (name не нужен, если форма одна). */
+    /** Печатная форма объекта: { id, name?, fallback?, customHtml? } → { name, label, source, html, templateHtml } (name не нужен, если форма одна). */
     db_print: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => renderPrint(db, {
-        id: ownObject(db, cls, p.id, vis), name: p.name, root: process.cwd(),
+        id: ownObject(db, cls, p.id, vis),
+        name: p.name,
+        root: process.cwd(),
+        fallback: flag(p.fallback),
+        customHtml: p.customHtml || (bodyOf(p)?.customHtml ?? ''),
     })) },
+
+    /** Сохранить HTML-шаблон печатной формы в класс операции: { name, html } (или в post body). */
+    db_print_save: { level: 'write', fn: method('write', async ({ db, cls, p }) => {
+        const b = bodyOf(p) || {};
+        return savePrintTemplate(db, {
+            ref: cls.cid,
+            name: p.name || b.name,
+            html: p.html || b.html,
+            root: process.cwd(),
+        });
+    }) },
+
+    /** Удалить собственный HTML-шаблон печатной формы из класса операции: { name }. */
+    db_print_delete: { level: 'write', fn: method('write', async ({ db, cls, p }) => deletePrintTemplate(db, {
+        ref: cls.cid,
+        name: p.name,
+        root: process.cwd(),
+    })) },
+
+    /** Подшивка операции: документы-основания (`parents`) и документы-следствия (`children`). */
+    db_binder: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => getDocumentBinder(db, ownObject(db, cls, p.id, vis))) },
+
+    /** Кандидаты операций для подшивки к документу `id`: { id?, search?, samePartyOnly?, limit? }. */
+    db_binder_candidates: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => candidateBinderOperations(db, p.id ? ownObject(db, cls, p.id, vis) : '', {
+        search: p.search,
+        samePartyOnly: flag(p.samePartyOnly),
+        limit: p.limit,
+    })) },
+
+    /** Связать две операции в подшивке: { id, targetId, direction?: 'parent'|'child', note? }. */
+    db_binder_link: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => {
+        const curId = ownObject(db, cls, p.id, vis);
+        const otherId = String(p.targetId ?? '').trim();
+        const dir = String(p.direction || 'parent').trim();
+        const sourceId = dir === 'child' ? curId : otherId;
+        const targetId = dir === 'child' ? otherId : curId;
+        linkDocuments(db, { sourceId, targetId, note: p.note || '', author: uid });
+        return getDocumentBinder(db, curId);
+    }) },
+
+    /** Открепить связь между двумя операциями в подшивке: { id, targetId }. */
+    db_binder_unlink: { level: 'write', fn: method('write', ({ db, cls, p, vis }) => {
+        const curId = ownObject(db, cls, p.id, vis);
+        unlinkDocuments(db, { id: curId, targetId: p.targetId });
+        return getDocumentBinder(db, curId);
+    }) },
 
     /**
      * Журнал проводок. На счёте (журнале) — проводки его счетов, на классе операций —

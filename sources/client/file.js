@@ -93,8 +93,8 @@ export class $file extends $folder{
                     module = await import(n.short + '/~/handlers/preview/~/class.js');
                 }
                 let def = module?.default;
-                def.is ??= n.ext + '-preview';
-                WORK(def);
+                const proto = def && typeof def === 'object' ? { ...def, is: n.ext + '-preview' } : def;
+                WORK(proto);
                 return true;
             }
             catch(e){

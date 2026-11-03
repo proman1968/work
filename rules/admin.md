@@ -6,9 +6,9 @@
 
 ## Зона
 
-- Чат (work): `meta_folder/$folder/work`.
-- Системные файлы: метапапка класса, **кроме** `$work`.
-- Чат / логи: текущий `$class`.
+- Хранилище: `meta_folder` (`storage_folder`) класса.
+- Системные файлы: `class.js`, `handlers/`, `methods/`, `triggers/`, `timers/`, `hooks/`, `#system/`, `#secret/`.
+- Чат / логи: текущий `$class` (таблица `logs` в SQLite).
 - Tools с `role=ADMIN`.
 
 ## Можно

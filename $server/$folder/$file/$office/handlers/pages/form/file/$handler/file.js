@@ -254,6 +254,39 @@ ODA({
                 color: var(--accent-color);
                 font-weight: 600;
             }
+            .tb-btn.save-btn {
+                background: var(--accent-color, #2563eb);
+                color: #ffffff;
+                border-color: var(--accent-color, #2563eb);
+                font-weight: 600;
+            }
+            .tb-btn.save-btn:hover {
+                opacity: 0.92;
+                background: var(--accent-color, #2563eb);
+            }
+            .office-view-wrap {
+                @apply --flex;
+                @apply --vertical;
+                min-height: 0;
+                overflow: hidden;
+            }
+            .tb-group {
+                display: inline-flex;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 4px;
+            }
+            :host([inline]) .docx-workspace {
+                padding: 12px;
+            }
+            :host([inline]) .docx-page {
+                width: 100%;
+                min-height: 260px;
+                padding: 20px 24px;
+            }
+            :host([inline]) .pptx-stage-wrap {
+                padding: 10px;
+            }
 
             /* --- ТАБЛИЦА (.xlsx) --- */
             .formula-bar {
@@ -560,7 +593,7 @@ ODA({
             <span class="kind-badge" :data-kind="kind">{{kindLabel}}</span>
 
             <!-- Инструменты документа Word -->
-            <template ~if="kind === 'document'">
+            <div class="tb-group" ~if="kind === 'document'">
                 <select class="tb-select" @change="execDocFormatBlock($event.target.value); $event.target.value = ''">
                     <option value="">Стиль абзаца…</option>
                     <option value="P">Обычный текст</option>
@@ -590,10 +623,10 @@ ODA({
                 <button class="tb-btn" title="Нумерованный список" @click="execDocCmd('insertOrderedList')">1. Список</button>
                 <button class="tb-btn" title="Вставить таблицу 3×3" @click="insertDocTable()">⊞ Таблица</button>
                 <button class="tb-btn" title="Разрыв страницы" @click="insertDocPageBreak()">⎯ Страница</button>
-            </template>
+            </div>
 
             <!-- Инструменты таблицы Excel -->
-            <template ~if="kind === 'spreadsheet'">
+            <div class="tb-group" ~if="kind === 'spreadsheet'">
                 <button class="tb-btn" :active="activeCellObj?.bold" title="Жирный" @click="toggleCellStyle('bold')"><b>Ж</b></button>
                 <button class="tb-btn" :active="activeCellObj?.italic" title="Курсив" @click="toggleCellStyle('italic')"><i>К</i></button>
                 <div class="tb-sep"></div>
@@ -616,17 +649,17 @@ ODA({
                 <button class="tb-btn" title="Вставить строку ниже" @click="insertSheetRow()">+ Строка</button>
                 <button class="tb-btn" title="Удалить текущую строку" @click="deleteSheetRow()">− Строка</button>
                 <button class="tb-btn" title="Вставить колонку справа" @click="insertSheetCol()">+ Колонка</button>
-            </template>
+            </div>
 
             <!-- Инструменты презентации PowerPoint -->
-            <template ~if="kind === 'presentation'">
+            <div class="tb-group" ~if="kind === 'presentation'">
                 <button class="tb-btn" @click="addSlide()">+ Слайд</button>
                 <button class="tb-btn" @click="duplicateSlide()">⧉ Дублировать</button>
                 <button class="tb-btn" @click="deleteSlide()">✕ Удалить слайд</button>
                 <div class="tb-sep"></div>
                 <button class="tb-btn" @click="addSlideTextElement()">+ Текстовый блок</button>
                 <button class="tb-btn" ~if="selectedSlideEl" @click="deleteSlideElement()">− Удалить блок</button>
-                <template ~if="selectedSlideEl">
+                <div class="tb-group" ~if="selectedSlideEl">
                     <div class="tb-sep"></div>
                     <button class="tb-btn" :active="selectedSlideEl.bold" @click="toggleSlideElProp('bold')"><b>Ж</b></button>
                     <button class="tb-btn" :active="selectedSlideEl.italic" @click="toggleSlideElProp('italic')"><i>К</i></button>
@@ -643,21 +676,22 @@ ODA({
                     <button class="tb-btn" :active="selectedSlideEl.align === 'right'" @click="setSlideElProp('align', 'right')">⇥</button>
                     <input type="color" class="tb-color" title="Цвет текста" :value="selectedSlideEl.color || '#1e293b'" @input="setSlideElProp('color', $event.target.value)">
                     <input type="color" class="tb-color" title="Заливка блока" :value="selectedSlideEl.fill && selectedSlideEl.fill !== 'transparent' ? selectedSlideEl.fill : '#ffffff'" @input="setSlideElProp('fill', $event.target.value)">
-                </template>
+                </div>
                 <div class="tb-sep"></div>
                 <button class="tb-btn" @click="startSlideShow()">▶ Показ слайдов</button>
-            </template>
+            </div>
 
             <div flex></div>
 
             <span class="status-pill" :dirty="isChanged">{{statusText}}</span>
+            <button class="tb-btn save-btn" ~if="isChanged" :disabled="saving" title="Сохранить изменения (Ctrl+S)" @click="save()">💾 Сохранить</button>
             <button class="tb-btn" title="Открыть напрямую в установленном на ПК Office (Word / Excel / PowerPoint / LibreOffice)" @click="openInDesktopOffice()">↗ В системном Office</button>
             <button class="tb-btn" title="Печать документа" @click="printDocument()">🖨 Печать</button>
             <button class="tb-btn" title="Скачать файл" @click="downloadDocument()">⬇ Скачать</button>
         </div>
 
         <!-- 1. РЕЖИМ ТАБЛИЦЫ (.xlsx / .xls / .csv) -->
-        <template ~if="kind === 'spreadsheet'">
+        <div class="office-view-wrap" ~if="kind === 'spreadsheet'">
             <div class="formula-bar">
                 <div class="cell-addr-box">{{activeCellAddr}}</div>
                 <span class="fx-label">fx</span>
@@ -685,12 +719,8 @@ ODA({
                                 @mousedown="onCellMouseDown($for.item, $event)"
                                 @mouseenter="onCellMouseEnter($for.item, $event)"
                                 @dblclick="startInlineEdit($for.item)">
-                                <template ~if="editingCoord === $for.item.coord">
-                                    <input class="cell-inline-editor" type="text" :value="formulaInputValue" @input="onFormulaInput($event)" @blur="commitInlineEdit()" @keydown="onInlineEditorKeyDown($event)">
-                                </template>
-                                <template ~if="editingCoord !== $for.item.coord">
-                                    <span>{{$for.item.display}}</span>
-                                </template>
+                                <input ~if="editingCoord === $for.item.coord" class="cell-inline-editor" type="text" :value="formulaInputValue" @input="onFormulaInput($event)" @blur="commitInlineEdit()" @keydown="onInlineEditorKeyDown($event)">
+                                <span ~if="editingCoord !== $for.item.coord">{{$for.item.display}}</span>
                             </td>
                         </tr>
                     </tbody>
@@ -709,17 +739,17 @@ ODA({
                     <span ~if="selectionStats.numCount">Сумма: <b>{{selectionStats.sum}}</b></span>
                 </div>
             </div>
-        </template>
+        </div>
 
         <!-- 2. РЕЖИМ ДОКУМЕНТА (.docx / .rtf) -->
-        <template ~if="kind === 'document'">
+        <div class="office-view-wrap" ~if="kind === 'document'">
             <div class="docx-workspace">
                 <div id="docxPage" class="docx-page" contenteditable="true" spellcheck="true" @input="onDocxInput($event)"></div>
             </div>
-        </template>
+        </div>
 
         <!-- 3. РЕЖИМ ПРЕЗЕНТАЦИИ (.pptx) -->
-        <template ~if="kind === 'presentation'">
+        <div class="office-view-wrap" ~if="kind === 'presentation'">
             <div class="pptx-workspace">
                 <div class="pptx-sidebar">
                     <div class="slide-thumb" ~for="slides" :active="$for.index === activeSlideIdx" @click="selectSlide($for.index)">
@@ -745,9 +775,10 @@ ODA({
                     <div class="pptx-el" ~for="currentSlideElements" ~style="slideElStyle($for.item)" style="cursor:default;">{{$for.item.text}}</div>
                 </div>
             </div>
-        </template>
+        </div>
     `,
     hostView: null,
+    inline: { $attr: true, $def: false, $type: Boolean },
     kind: 'document',
     ext: 'docx',
     isChanged: false,

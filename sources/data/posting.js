@@ -533,7 +533,7 @@ export function registerOperation(db, { id, author, version } = {}) {
     const { op, schema } = mustOperation(db, id);
     if (op.status === 'registered')
         return op;
-    if (op.status !== 'draft')
+    if (op.status !== 'draft' && op.status !== 'cancelled')
         throw new DataError(`операция ${opName(op)} в статусе ${op.status} — регистрируется только черновик`);
     if (isClosed(db, op.time))
         throw closedError(db, `регистрировать операцию от ${localDay(op.time)} нельзя`);

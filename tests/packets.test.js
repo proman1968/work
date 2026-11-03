@@ -503,10 +503,14 @@ describe('oda-packets: состояние и обратная связь', () =>
         assert.equal(inst.selected.name, '2024-02');
     });
 
-    it('Now всегда доступен независимо от диапазона', () => {
+    it('Now всегда доступен независимо от диапазона, а внешняя смена value обновляет выбор (_onValueChanged)', () => {
         const { inst } = mount();
-        build(inst, '2024-01-01', '2024-12-31', 'month');
+        build(inst, '2024-01-01', '2025-12-31', 'month');
         assert.equal(inst._nowItem.disabled, false, 'кнопка now доступна даже если текущая дата вне диапазона');
+        inst.value = '2024*';
+        inst.$observers._onValueChanged.call(inst, '2024*');
+        assert.equal(inst.selected?.name, '2024', 'внешняя установка value = 2024* переключила выбор на 2024 год');
+        assert.deepEqual(inst.period, { start: '2024-01-01', end: '2024-12-31' });
         const year = new Date().getFullYear();
         build(inst, `${year}-01-01`, `${year}-12-31`, 'month');
         assert.equal(inst._nowItem.disabled, false);

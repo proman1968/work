@@ -36,16 +36,16 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
         <div class="print-flow" vertical flex style="overflow: hidden;" ~style="styleZoom">
             <slot name="top" class="pe-no-print vertical no-flex"></slot>
             <div class="print-flow" horizontal flex style="overflow: hidden;">
-                <app-layout-drawer id="left-drawer" class="pe-no-print" align="left" :buttons="left_buttons" @focused-index-changed="_onFocusedIndexChanged">
+                <app-layout-drawer id="left-drawer" class="pe-no-print" align="left" :hide-tabs="hideLeftTabs" :buttons="left_buttons" @focused-index-changed="_onFocusedIndexChanged">
                     <slot name="left-title" class="pe-no-print" slot="title"></slot>
                     <slot name="left-panel" class="pe-no-print"></slot>
                 </app-layout-drawer>
                 <div class="main vertical flex" @mousewheel>
-
+                    <slot name="main-top" class="pe-no-print vertical no-flex"></slot>
                     <slot name="main" class="print-flow vertical flex" style="overflow: hidden; z-index: 0"></slot>
 
                 </div>
-                <app-layout-drawer id="right-drawer" class="pe-no-print" align="right" :buttons="right_buttons" @focused-index-changed="_onFocusedIndexChanged">
+                <app-layout-drawer id="right-drawer" class="pe-no-print" align="right" :hide-tabs="hideRightTabs" :buttons="right_buttons" @focused-index-changed="_onFocusedIndexChanged">
                     <slot name="right-title" class="pe-no-print" slot="title"></slot>
                     <slot name="right-panel" class="pe-no-print"></slot>
                 </app-layout-drawer>
@@ -113,6 +113,8 @@ ODA({is: 'oda-app-layout', imports: 'oda//splitter, oda//button',
     },
     left_buttons: [],
     right_buttons: [],
+    hideLeftTabs: false,
+    hideRightTabs: false,
     $listeners: {
         resize() {
             this.mobile = undefined;
@@ -193,8 +195,8 @@ ODA({is: 'app-layout-drawer',
             }
         </style>
 
-        <div :vertical="mobile" :horizontal="!mobile" ~show="!mobile || !closed" class="drawer" flex>
-            <app-tabs accent-invert no-flex :buttons :items :horizontal="mobile" ::focused-index></app-tabs>
+        <div :vertical="mobile" :horizontal="!mobile" ~show="(!mobile && showTabs) || !closed" class="drawer" flex>
+            <app-tabs ~if="showTabs" accent-invert no-flex :buttons :items :horizontal="mobile" ::focused-index></app-tabs>
             <div horizontal header flex style="overflow: hidden; min-height: 0;">
                 <div flex vertical style="overflow: auto; min-height: 0;" ~show="!closed">
                     <slot name="title" horizontal></slot>
@@ -203,10 +205,13 @@ ODA({is: 'app-layout-drawer',
             </div>
         </div>
         <oda-splitter ~if="!mobile && !closed" ::width right :reverse @touchstart.stop></oda-splitter>
-        <oda-button info round shadow class='back' ~if="mobile && closed" @tap="closed = false" :rotate="align === 'right'? 180: 0" icon="icons:arrow-back"></oda-button>
+        <oda-button info round shadow class='back' ~if="mobile && closed && showTabs" @tap="closed = false" :rotate="align === 'right'? 180: 0" icon="icons:arrow-back"></oda-button>
     `,
     get mobile() {
         return this.host.mobile;
+    },
+    get showTabs() {
+        return !this.hideTabs || (this.items?.length > 1);
     },
     closed: {
         $def: false,
@@ -310,6 +315,10 @@ ODA({is: 'app-layout-drawer',
         align: {
             $def: 'left',
             $list: ['left', 'right'],
+        },
+        hideTabs: {
+            $def: false,
+            $type: Boolean,
         },
         width: {
             $def: 340,

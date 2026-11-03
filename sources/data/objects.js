@@ -300,6 +300,70 @@ function checkUnit(db, unit) {
 }
 
 /**
+ * Вычислить следующий номер операции по настройке нумератора класса (schema.numerator).
+ * По умолчанию счётчик обнуляется в начале каждого календарного года (reset: 'year').
+ */
+export function nextOperationNumber(db, schemaOrCid, time) {
+    const schema = (schemaOrCid && typeof schemaOrCid === 'object') ? schemaOrCid : classSchema(db, schemaOrCid);
+    if (!schema || schema.family !== 'operation' || !schema.numerator?.enabled || !schema.numerator?.field)
+        return '';
+    const numCfg = schema.numerator;
+    const fieldId = numCfg.field;
+    const ms = isEmpty(time) ? Date.now() : parseTime(time, 'дата объекта');
+    const d = new Date(ms);
+    const y = d.getFullYear();
+    const m = d.getMonth();
+    const day = d.getDate();
+
+    let fromMs = null;
+    let toMs = null;
+    const reset = numCfg.reset || 'year';
+    if (reset === 'year') {
+        fromMs = new Date(y, 0, 1, 0, 0, 0, 0).getTime();
+        toMs = new Date(y, 11, 31, 23, 59, 59, 999).getTime();
+    }
+    else if (reset === 'quarter') {
+        const qStart = Math.floor(m / 3) * 3;
+        fromMs = new Date(y, qStart, 1, 0, 0, 0, 0).getTime();
+        toMs = new Date(y, qStart + 3, 0, 23, 59, 59, 999).getTime();
+    }
+    else if (reset === 'month') {
+        fromMs = new Date(y, m, 1, 0, 0, 0, 0).getTime();
+        toMs = new Date(y, m + 1, 0, 23, 59, 59, 999).getTime();
+    }
+    else if (reset === 'day') {
+        fromMs = new Date(y, m, day, 0, 0, 0, 0).getTime();
+        toMs = new Date(y, m, day, 23, 59, 59, 999).getTime();
+    }
+
+    const jsonPath = `$."${String(fieldId).replace(/"/g, '""')}"`;
+    const rows = fromMs != null
+        ? db.prepare(`SELECT json_extract(body, ?) AS val FROM objects WHERE cid = ? AND status <> 'deleted' AND ext_of IS NULL AND time >= ? AND time <= ?`).all(jsonPath, schema.cid, fromMs, toMs)
+        : db.prepare(`SELECT json_extract(body, ?) AS val FROM objects WHERE cid = ? AND status <> 'deleted' AND ext_of IS NULL`).all(jsonPath, schema.cid);
+
+    let maxNum = 0;
+    for (const r of rows) {
+        if (r?.val == null || r.val === '')
+            continue;
+        const s = String(r.val).trim();
+        const match = /(\d+)\s*$/.exec(s);
+        if (match) {
+            const n = parseInt(match[1], 10);
+            if (Number.isFinite(n) && n > maxNum)
+                maxNum = n;
+        }
+    }
+    const nextInt = maxNum + 1;
+    const pad = Math.max(0, Number(numCfg.pad) || 0);
+    const numStr = pad > 0 ? String(nextInt).padStart(pad, '0') : String(nextInt);
+    const prefix = String(numCfg.prefix || '')
+        .replace(/\{YYYY\}/g, String(y))
+        .replace(/\{YY\}/g, String(y).slice(-2))
+        .replace(/\{MM\}/g, String(m + 1).padStart(2, '0'));
+    return prefix + numStr;
+}
+
+/**
  * Создать объект.
  * @param {object} p
  * @param {string} p.cid Класс-лист (cid или путь)
@@ -329,7 +393,16 @@ export function createObject(db, p) {
     }
     else if (!isEmpty(p.ext_of))
         throw new DataError(`${schema.label}: ext_of допустим только в виртуальном справочнике`);
-    const body = validateBody(db, schema, p.body);
+    let rawBody = p.body ?? {};
+    if (schema.family === 'operation' && schema.numerator?.enabled && schema.numerator?.field && rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)) {
+        const nf = schema.numerator.field;
+        if (isEmpty(rawBody[nf])) {
+            const autoNum = nextOperationNumber(db, schema, time);
+            if (autoNum)
+                rawBody = { ...rawBody, [nf]: autoNum };
+        }
+    }
+    const body = validateBody(db, schema, rawBody);
     const validFrom = isEmpty(p.valid_from) ? (schema.family === 'catalog' ? 0 : now) : parseTime(p.valid_from, 'начало действия');
     const id = newId(now);
     tx(db, () => {
@@ -339,6 +412,15 @@ export function createObject(db, p) {
         db.prepare('INSERT INTO object_versions (id, version, valid_from, author, status, body) VALUES (?, 1, ?, ?, ?, ?)')
             .run(id, validFrom, p.author ?? null, status, JSON.stringify(body));
         writeDerived(db, schema, id, body);
+        if (!isEmpty(p.basis_id)) {
+            const srcId = String(p.basis_id).trim();
+            if (srcId && srcId !== id) {
+                db.prepare(`INSERT INTO doc_links (source_id, target_id, kind, note, author, created)
+                    VALUES (?, ?, 'basis', ?, ?, ?)
+                    ON CONFLICT(source_id, target_id) DO UPDATE SET note = excluded.note`)
+                    .run(srcId, id, String(p.basis_note || ''), p.author ?? null, now);
+            }
+        }
         // кто бы ни создавал (человек, ИИ, триггер): ошибка проведения отменяет и создание
         if (schema.family === 'operation' && schema.autoRegister)
             registerOperation(db, { id, author: p.author });
@@ -358,9 +440,9 @@ export function writeVersion(db, id, { body, status, time, author, valid_from, v
     const schema = classSchema(db, cur.cid);
     if (version !== undefined && version !== null && Number(version) !== cur.version)
         throw new DataError(`объект ${cur.title || id} уже изменён (версия ${cur.version}, а не ${version}) — обновите и повторите`);
-    if (!system && schema.family === 'operation' && cur.status !== 'draft')
+    if (!system && schema.family === 'operation' && cur.status !== 'draft' && cur.status !== 'cancelled')
         throw new DataError(`операция «${cur.title || id}» зарегистрирована — изменить её можно только исправлением`);
-    const nextStatus = status ?? cur.status;
+    const nextStatus = status ?? (schema.family === 'operation' && cur.status === 'cancelled' ? 'draft' : cur.status);
     if (!STATUSES[schema.family].includes(nextStatus))
         throw new DataError(`статус «${nextStatus}» недопустим для ${schema.label}`);
     const nextBody = body === undefined ? cur.body : validateBody(db, schema, body);
@@ -421,8 +503,8 @@ export function deleteObject(db, { id, author, version } = {}) {
     if (cur.status === 'deleted')
         return cur;
     const schema = classSchema(db, cur.cid);
-    if (schema.family === 'operation' && cur.status !== 'draft')
-        throw new DataError(`операция «${cur.title || id}» зарегистрирована — удалить можно только черновик, иначе — отмена`);
+    if (schema.family === 'operation' && cur.status !== 'draft' && cur.status !== 'cancelled')
+        throw new DataError(`операция «${cur.title || id}» зарегистрирована — удалить можно только черновик или отменённую операцию`);
     const refs = referencedBy(db, cur.id);
     if (refs.objects.length || refs.entries)
         throw new DataError(`«${cur.title || id}» используется: объектов — ${refs.objects.length}, проводок — ${refs.entries}`);
@@ -623,4 +705,246 @@ export function queryObjects(db, q) {
         ORDER BY ${orderCol} ${desc ? 'DESC' : 'ASC'}, o.id ${desc ? 'DESC' : 'ASC'} LIMIT ? OFFSET ?`)
         .all(...args, ...orderArgs, limit, offset);
     return { total, items: rows.map(r => toObject(r, classSchema(db, r.cid))) };
+}
+
+/* ---------- подшивка документов (связи «Основание → Следствие» между операциями) ---------- */
+
+function formatBinderItem(db, obj, direction, { note = '', viaRef = false } = {}) {
+    if (!obj)
+        return null;
+    const cls = getClass(db, obj.cid);
+    const b = obj.body || {};
+    const num = String(b.num ?? b.doc_number ?? b.order_number ?? b.number ?? b.doc_num ?? '').trim();
+    const sum = Number(b.sum ?? b.amount ?? b.total ?? 0) || 0;
+    let party = String(b.recipient_name ?? b.payer_name ?? b.counterparty_name ?? '').trim();
+    if (!party) {
+        for (const k of ['recipient', 'payer', 'counterparty', 'client', 'supplier', 'customer', 'employee', 'person']) {
+            if (b[k]) {
+                const refObj = readObject(db, b[k]);
+                if (refObj?.title) {
+                    party = refObj.title;
+                    break;
+                }
+            }
+        }
+    }
+    return {
+        id: obj.id,
+        cid: obj.cid,
+        path: cls?.path || obj.cid,
+        classLabel: cls?.label || obj.cid,
+        title: obj.title || cls?.label || obj.id,
+        number: num,
+        time: obj.time,
+        date: localDay(obj.time),
+        status: obj.status,
+        sum,
+        party,
+        note: String(note || ''),
+        viaRef: Boolean(viaRef),
+        direction,
+    };
+}
+
+/**
+ * Получить подшивку операции `id`:
+ * - `parents` — документы-основания (от которых произошла операция `id`),
+ * - `children` — документы-следствия (созданные на основании операции `id`).
+ */
+export function getDocumentBinder(db, id) {
+    const docId = String(id ?? '').trim();
+    if (!docId)
+        return { parents: [], children: [], total: 0 };
+    const cur = readObject(db, docId);
+    if (!cur)
+        throw new DataError(`объект ${docId} не найден`);
+
+    const parentMap = new Map();
+    const childMap = new Map();
+
+    // 1. Явные связи из таблицы doc_links
+    const parentLinks = db.prepare('SELECT source_id, kind, note, created FROM doc_links WHERE target_id = ? ORDER BY created ASC').all(docId);
+    for (const row of parentLinks) {
+        const src = readObject(db, row.source_id);
+        if (src && src.status !== 'deleted')
+            parentMap.set(src.id, formatBinderItem(db, src, 'parent', { note: row.note, viaRef: false }));
+    }
+
+    const childLinks = db.prepare('SELECT target_id, kind, note, created FROM doc_links WHERE source_id = ? ORDER BY created ASC').all(docId);
+    for (const row of childLinks) {
+        const tgt = readObject(db, row.target_id);
+        if (tgt && tgt.status !== 'deleted')
+            childMap.set(tgt.id, formatBinderItem(db, tgt, 'child', { note: row.note, viaRef: false }));
+    }
+
+    // 2. Прямые ссылки между операциями через поля типа Link (таблица refs)
+    const outRefs = db.prepare(`SELECT DISTINCT r.ref_id, r.field FROM refs r JOIN objects o ON o.id = r.ref_id
+        WHERE r.obj_id = ? AND o.status <> 'deleted'`).all(docId);
+    for (const r of outRefs) {
+        if (parentMap.has(r.ref_id))
+            continue;
+        const refObj = readObject(db, r.ref_id);
+        if (!refObj)
+            continue;
+        const refSchema = classSchema(db, refObj.cid);
+        if (refSchema?.family === 'operation')
+            parentMap.set(refObj.id, formatBinderItem(db, refObj, 'parent', { note: r.field, viaRef: true }));
+    }
+
+    const inRefs = db.prepare(`SELECT DISTINCT r.obj_id, r.field FROM refs r JOIN objects o ON o.id = r.obj_id
+        WHERE r.ref_id = ? AND o.status <> 'deleted'`).all(docId);
+    for (const r of inRefs) {
+        if (childMap.has(r.obj_id))
+            continue;
+        const refObj = readObject(db, r.obj_id);
+        if (!refObj)
+            continue;
+        const refSchema = classSchema(db, refObj.cid);
+        if (refSchema?.family === 'operation')
+            childMap.set(refObj.id, formatBinderItem(db, refObj, 'child', { note: r.field, viaRef: true }));
+    }
+
+    const parents = [...parentMap.values()].filter(Boolean).sort((a, b) => (a.time || 0) - (b.time || 0));
+    const children = [...childMap.values()].filter(Boolean).sort((a, b) => (a.time || 0) - (b.time || 0));
+    return {
+        parents,
+        children,
+        total: parents.length + children.length,
+    };
+}
+
+/** Связать две операции в подшивке (`sourceId` — основание, `targetId` — следствие). */
+export function linkDocuments(db, { sourceId, targetId, kind = 'basis', note = '', author = null } = {}) {
+    const srcId = String(sourceId ?? '').trim();
+    const tgtId = String(targetId ?? '').trim();
+    if (!srcId || !tgtId)
+        throw new DataError('не указаны связываемые документы');
+    if (srcId === tgtId)
+        throw new DataError('нельзя подшить документ к самому себе');
+    const src = readObject(db, srcId);
+    const tgt = readObject(db, tgtId);
+    if (!src || src.status === 'deleted')
+        throw new DataError(`документ-основание ${srcId} не найден`);
+    if (!tgt || tgt.status === 'deleted')
+        throw new DataError(`документ-следствие ${tgtId} не найден`);
+    tx(db, () => {
+        // Если была обратная связь — удалим её, чтобы не образовывать петлю из 2 документов
+        db.prepare('DELETE FROM doc_links WHERE source_id = ? AND target_id = ?').run(tgtId, srcId);
+        db.prepare(`INSERT INTO doc_links (source_id, target_id, kind, note, author, created)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_id, target_id) DO UPDATE SET kind = excluded.kind, note = excluded.note`)
+            .run(srcId, tgtId, String(kind || 'basis'), String(note || ''), author ?? null, Date.now());
+    });
+    return { ok: true };
+}
+
+/** Разорвать связь между двумя операциями в подшивке. */
+export function unlinkDocuments(db, { id, targetId } = {}) {
+    const a = String(id ?? '').trim();
+    const b = String(targetId ?? '').trim();
+    if (!a || !b)
+        throw new DataError('не указаны документы для открепления');
+    db.prepare('DELETE FROM doc_links WHERE (source_id = ? AND target_id = ?) OR (source_id = ? AND target_id = ?)').run(a, b, b, a);
+    return { ok: true };
+}
+
+/**
+ * Подобрать кандидатов-операций для подшивки к документу `id`:
+ * в первую очередь показывает документы по тому же контрагенту/сотруднику, затем по поиску и дате.
+ */
+export function candidateBinderOperations(db, id, { search = '', samePartyOnly = false, limit = 50 } = {}) {
+    const docId = String(id ?? '').trim();
+    const cur = docId ? readObject(db, docId) : null;
+    const opClasses = db.prepare("SELECT cid FROM classes WHERE type = '$operation'").all().map(r => r.cid);
+    if (!opClasses.length)
+        return { items: [], partyIds: [], partyName: '' };
+
+    const existingIds = new Set([docId]);
+    if (docId) {
+        const binder = getDocumentBinder(db, docId);
+        for (const p of binder.parents)
+            existingIds.add(p.id);
+        for (const c of binder.children)
+            existingIds.add(c.id);
+    }
+
+    const partyIds = [];
+    let partyName = '';
+    if (cur) {
+        const refs = db.prepare('SELECT DISTINCT ref_id FROM refs WHERE obj_id = ?').all(docId).map(r => r.ref_id);
+        for (const rid of refs) {
+            const ro = readObject(db, rid);
+            if (ro && classSchema(db, ro.cid)?.family === 'catalog') {
+                partyIds.push(rid);
+                if (!partyName && ro.title)
+                    partyName = ro.title;
+            }
+        }
+        if (!partyName) {
+            const b = cur.body || {};
+            partyName = String(b.recipient_name ?? b.payer_name ?? b.counterparty_name ?? '').trim();
+        }
+    }
+
+    const where = [
+        `o.cid IN (${opClasses.map(() => '?').join(',')})`,
+        `o.status <> 'deleted'`,
+    ];
+    const args = [...opClasses];
+    if (docId) {
+        where.push('o.id <> ?');
+        args.push(docId);
+    }
+
+    if (samePartyOnly && partyIds.length) {
+        where.push(`EXISTS (SELECT 1 FROM refs rf WHERE rf.obj_id = o.id AND rf.ref_id IN (${partyIds.map(() => '?').join(',')}))`);
+        args.push(...partyIds);
+    }
+
+    const q = String(search ?? '').trim();
+    if (q) {
+        const tokens = q.split(/\s+/).filter(Boolean).slice(0, 6);
+        for (const tok of tokens) {
+            const variants = sqlLowerCaseVariants(tok);
+            const sub = [];
+            for (const v of variants) {
+                const pat = '%' + v.replace(/[\\%_]/g, m => '\\' + m) + '%';
+                sub.push(`o.body LIKE ? ESCAPE '\\'`);
+                args.push(pat);
+                sub.push(`EXISTS (SELECT 1 FROM refs rf JOIN objects ro ON ro.id = rf.ref_id WHERE rf.obj_id = o.id AND ro.body LIKE ? ESCAPE '\\')`);
+                args.push(pat);
+                sub.push(`EXISTS (SELECT 1 FROM classes cl WHERE cl.cid = o.cid AND cl.label LIKE ? ESCAPE '\\')`);
+                args.push(pat);
+            }
+            where.push(`(${sub.join(' OR ')})`);
+        }
+    }
+
+    const maxRows = Math.max(10, Math.min(200, Number(limit) || 50));
+    let orderSql = 'o.time DESC, o.id DESC';
+    const orderArgs = [];
+    if (partyIds.length) {
+        orderSql = `CASE WHEN EXISTS (SELECT 1 FROM refs rf WHERE rf.obj_id = o.id AND rf.ref_id IN (${partyIds.map(() => '?').join(',')})) THEN 0 ELSE 1 END ASC, ABS(o.time - ?) ASC, o.time DESC`;
+        orderArgs.push(...partyIds, cur?.time || Date.now());
+    }
+    else if (cur?.time) {
+        orderSql = `ABS(o.time - ?) ASC, o.time DESC`;
+        orderArgs.push(cur.time);
+    }
+
+    const rows = db.prepare(`${SELECT.replace('FROM objects', 'FROM objects o')} WHERE ${where.join(' AND ')} ORDER BY ${orderSql} LIMIT ?`)
+        .all(...args, ...orderArgs, maxRows);
+
+    const items = [];
+    for (const r of rows) {
+        if (existingIds.has(r.id))
+            continue;
+        const obj = toObject(r, classSchema(db, r.cid));
+        const formatted = formatBinderItem(db, obj, 'candidate');
+        if (formatted) {
+            formatted.sameParty = partyIds.length > 0 && db.prepare(`SELECT 1 FROM refs WHERE obj_id = ? AND ref_id IN (${partyIds.map(() => '?').join(',')}) LIMIT 1`).get(r.id, ...partyIds) != null;
+            items.push(formatted);
+        }
+    }
+    return { items, partyIds, partyName };
 }

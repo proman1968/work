@@ -57,10 +57,12 @@ function isChatModelNode(f) {
     return true;
 }
 
+const SYSTEM_META_IDS = new Set(['class.js', 'readme.md', 'handlers', 'methods', 'triggers', 'timers', 'hooks', 'logs', 'DATA', 'INDEX']);
+
 function applyTreeFilters(items, host) {
     items = items || [];
     if (host.hideSystem)
-        items = items.filter(f => !f.isType);
+        items = items.filter(f => !f.isType && !(f.parent?.isType && SYSTEM_META_IDS.has(f.id)));
     if (host.hideFiles)
         items = items.filter(f => !(f instanceof CORE.$file));
     if (host.onlyClasses)

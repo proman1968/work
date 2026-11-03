@@ -301,6 +301,39 @@ export async function resolveParent(path, ctx) {    const p = absPath(path, ctx)
     return { parent, filename, folder: missing.join('/') || undefined, path: p };
 }
 
+const SYSTEM_META_FOLDERS = new Set(['handlers', 'methods', 'triggers', 'timers', 'hooks', 'ai', 'logs', 'DATA', 'INDEX']);
+const STANDARD_TYPE_OR_ROLE_FOLDERS = new Set([
+    'USER', 'ADMIN', 'BOSS', 'GUEST', '$work', 'work',
+    'text', 'image', 'video', 'audio', 'pdf', 'xlsx', 'xls', 'csv', 'docx', 'doc', 'pptx', 'ppt', 'html', 'md', 'json', 'etc',
+]);
+
+function isTaskArtifactTarget(parent, filename, folder, ctx) {
+    if (!(ctx?.task instanceof FS.$file) || ctx.task.ext !== 'task')
+        return false;
+    if (!filename || filename === 'class.js' || filename === 'readme.md' || /^[$#.]/.test(filename))
+        return false;
+    const rootSeg = String(parent?.path || '').split('/').filter(Boolean)[0] || '';
+    if (['sources', 'oda', '$server', 'MODELS', 'SERVICES', 'MODULES', 'tests', 'scripts'].includes(rootSeg)) {
+        if (parent !== ctx?.place)
+            return false;
+    }
+    if (folder) {
+        const firstSeg = String(folder).split('/').filter(Boolean)[0] || '';
+        if (SYSTEM_META_FOLDERS.has(firstSeg) || firstSeg.startsWith('$') || firstSeg.startsWith('#'))
+            return false;
+    }
+    const taskStoragePath = ctx.task.storage_folder?.path || '';
+    if (taskStoragePath && (parent?.path === taskStoragePath || String(parent?.path || '').startsWith(taskStoragePath + '/')))
+        return true;
+    if (parent instanceof FS.$class)
+        return true;
+    if (parent?.isMetaFolder)
+        return true;
+    if (parent?.parent?.isMetaFolder && !SYSTEM_META_FOLDERS.has(parent.id) && !['USER', 'ADMIN', 'BOSS', 'GUEST'].includes(parent.id))
+        return true;
+    return false;
+}
+
 export async function writeFile(path, content, ctx, extra = {}) {
     const { parent, filename, folder } = await resolveParent(path, ctx);
     const params = { ...extra, filename, post: Buffer.isBuffer(content) ? content : String(content ?? '') };
@@ -310,13 +343,14 @@ export async function writeFile(path, content, ctx, extra = {}) {
         params.mainContext = ctx.task.path;
     if (folder)
         params.folder = folder;
-    // Если файл создаётся ИИ внутри задачи (.task) в рабочей точке этой задачи —
-    // размещаем его в собственной папке этого таска (ctx.task.storage_folder)
-    if (ctx?.task instanceof FS.$file && ctx.task.ext === 'task' && parent === ctx?.place && !(await fileAt(path, ctx))) {
+    // Если файл создаётся ИИ внутри задачи (.task) — размещаем его в собственной папке этого таска (ctx.task.storage_folder)
+    if (isTaskArtifactTarget(parent, filename, folder, ctx) && !(await fileAt(path, ctx))) {
         const taskFolder = ctx.task.storage_folder;
         if (taskFolder) {
-            const targetFolder = await taskFolder.getFolderToSaveFile(params);
-            return callAs(targetFolder, 'save_file', params, ctx);
+            const cleanParams = { ...params };
+            delete cleanParams.folder;
+            const targetFolder = await taskFolder.getFolderToSaveFile(cleanParams);
+            return callAs(targetFolder, 'save_file', cleanParams, ctx);
         }
     }
     // поднимаем к классу — пусть class.save_file + getFolderToSaveFile положат файл в правильную папку
@@ -339,7 +373,10 @@ export async function writeFile(path, content, ctx, extra = {}) {
             if (last)
                 throw last;
         }
-        return callAs(corrected.parent, 'save_file', { ...params, folder: corrected.folder }, ctx);
+        const targetHolder = (!(corrected.parent instanceof FS.$class) && typeof corrected.parent?.getFolderToSaveFile === 'function')
+            ? await corrected.parent.getFolderToSaveFile({ ...params, folder: corrected.folder })
+            : corrected.parent;
+        return callAs(targetHolder, 'save_file', { ...params, folder: corrected.folder }, ctx);
     }
     // класс пишет в рабочую зону роли: роль задачи первой, затем другие роли пользователя здесь
     // (не в ADMIN-задаче — без ADMIN: иначе файлы уходят в зону администратора)

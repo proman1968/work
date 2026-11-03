@@ -820,19 +820,19 @@ ODA({
             await this._hydrateModel();
             const cabinet = await this._getPersonalCabinet();
             const attachments = [];
-            if (files.length && cabinet?.save_file) {
-                for (const file of files) {
-                    if (!(file instanceof File))
-                        continue;
-                    const up = await cabinet.save_file(file, { encoding: 'utf-8', role: 'USER', ignore_save_logs: true });
-                    const p = up?.logFullPath || up?.path;
-                    if (p)
-                        attachments.push({ path: p.startsWith('/') ? p : '/' + p, name: file.name });
-                }
-            }
 
-            // Если в текущем диалоге уже есть открытая задача .task — отправляем реплику в неё (с поддержкой перебивания)
+            // Если в текущем диалоге уже есть открытая задача .task — сохраняем вложения в папку этого таска и отправляем реплику
             if (this.taskItem) {
+                if (files.length && typeof this.taskItem.save_file === 'function') {
+                    for (const file of files) {
+                        if (!(file instanceof File))
+                            continue;
+                        const up = await this.taskItem.save_file(file, { encoding: 'utf-8', role: 'USER', ignore_save_logs: true, mainContext: this.taskItem.path });
+                        const p = up?.logFullPath || up?.path;
+                        if (p)
+                            attachments.push({ path: p.startsWith('/') ? p : '/' + p, name: file.name });
+                    }
+                }
                 this.optimisticUser(text, attachments, voice);
                 const payload = JSON.stringify({
                     prompt: text,
@@ -875,10 +875,8 @@ ODA({
                 prompt: text,
                 ...(voice ? { voice: true } : {}),
             };
-            if (attachments.length) {
-                saveParams.includes = JSON.stringify(attachments.map(a => a.path));
-                saveParams.attachments = JSON.stringify(attachments);
-            }
+            if (files.length)
+                saveParams.skip_file_handler = true;
 
             const taskFileObj = new File([JSON.stringify(body, null, 2)], safeName + '.task', { type: 'application/json' });
             const log = await cabinet.save_file(taskFileObj, saveParams);
@@ -890,6 +888,22 @@ ODA({
                 throw new Error('Сервер не вернул путь созданной задачи');
 
             const createdTask = await WORK.get_item(path);
+            if (createdTask && files.length) {
+                const targetHolder = typeof createdTask.save_file === 'function' ? createdTask : cabinet;
+                for (const file of files) {
+                    if (!(file instanceof File))
+                        continue;
+                    const up = await targetHolder.save_file(file, { encoding: 'utf-8', role, ignore_save_logs: true, mainContext: path });
+                    const p = up?.logFullPath || up?.path;
+                    if (p)
+                        attachments.push({ path: p.startsWith('/') ? p : '/' + p, name: file.name });
+                }
+                if (attachments.length) {
+                    const includePaths = attachments.map(a => a.path);
+                    await cabinet.fetch('append_log_includes', { entryPath: path, includePaths }).catch(() => {});
+                }
+                await createdTask.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments, ...(voice ? { voice: true } : {}) })).catch(() => {});
+            }
             if (createdTask)
                 this._bindTask(createdTask);
             return createdTask;

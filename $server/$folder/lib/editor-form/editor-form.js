@@ -66,37 +66,40 @@ ODA({
     template: /*html*/`
     <style>
         :host {
-            fieldset {
-                @apply --horizontal;
-                flex: auto;
-                font-size: inherit;
-                border-radius: 8px;
-
-                .editor-box {
-                    @apply --vertical;
-                    @apply --flex;
-
-                    .children-box {
-                        @apply --horizontal;
-                        @apply --flex;
-                        flex-wrap: wrap;
-                        margin: 4px -8px -4px -16px;
-                        gap: 8px;
-                    }
-                }
-            }
+            display: flex;
+            flex-direction: row;
+            align-items: center;
+            gap: 8px;
+            width: 100%;
+            font-size: inherit;
+        }
+        .field-label {
+            flex: 0 0 auto;
+            min-width: 96px;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+        .editor-box {
+            @apply --vertical;
+            @apply --flex;
+            min-width: 0;
+        }
+        .children-box {
+            @apply --horizontal;
+            @apply --flex;
+            flex-wrap: wrap;
+            margin-top: 4px;
+            gap: 8px;
         }
     </style>
-    <fieldset>
-        <legend>{{label}}</legend>
-        <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="32" @click="expanded = !expanded"></oda-icon>
-        <div class="editor-box" border>
-            <div ~is="editorTag" :data-access-node></div>
-            <div ~if="children?.length && expanded" class="children-box">
-                <item-editor-form-field-container ~for="children" :data-access-node="$for?.item"></item-editor-form-field-container>
-            </div>
+    <span class="field-label">{{label}}:</span>
+    <oda-icon ~if="children?.length" :icon="expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" fill="var(--light-color)" icon-size="24" @click="expanded = !expanded"></oda-icon>
+    <div class="editor-box" border>
+        <div ~is="editorTag" :data-access-node></div>
+        <div ~if="children?.length && expanded" class="children-box">
+            <item-editor-form-field-container ~for="children" :data-access-node="$for?.item"></item-editor-form-field-container>
         </div>
-    </fieldset>
+    </div>
     `,
     get editorTag() {
         switch (this.dataAccessNode.field.type) {

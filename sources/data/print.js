@@ -32,6 +32,15 @@ const num = v => toNumber(v, msg => { throw new DataError(msg); });
 
 /* ---------- шаблоны класса ---------- */
 
+const SEMANTIC_PRINT_ANCESTORS = {
+    'Платёжное поручение': '/MODULES/Register/OPERATIONS/Платежи с расчётного счёта',
+    'Списание со счёта': '/MODULES/Register/OPERATIONS/Платежи с расчётного счёта',
+    'Банковский ордер': '/MODULES/Register/OPERATIONS/Платежи с расчётного счёта',
+    'Инкассовые поручения': '/MODULES/Register/OPERATIONS/Платежи с расчётного счёта',
+    'Счета': '/MODULES/Register/OPERATIONS/Реализация/Покупателю',
+    'Расходные накладные': '/MODULES/Register/OPERATIONS/Реализация/Покупателю',
+};
+
 /** Файлы шаблонов класса по цепочке предков: имя → { name, file, source (путь класса), label }. */
 export async function printTemplates(db, root, ref) {
     const cls = getClass(db, ref);
@@ -46,6 +55,13 @@ export async function printTemplates(db, root, ref) {
                 if (!layers.some(x => x.cid === ac.cid))
                     layers.push(ac);
             }
+        }
+        const leafName = String(c.path || '').split('/').filter(Boolean).pop() || '';
+        const semPath = SEMANTIC_PRINT_ANCESTORS[leafName];
+        if (semPath) {
+            const semCls = getClass(db, semPath) || { cid: semPath, path: semPath, type: '$operation' };
+            if (!layers.some(x => x.path === semCls.path))
+                layers.push(semCls);
         }
     }
     for (const c of chain) {
@@ -213,14 +229,21 @@ function titleOf(db, cache, id, at) {
     return cache.get(key);
 }
 
-/** Тело для показа: ссылки — названиями, id ссылок — в `ids` (у строк — `<поле>_id`). */
+/** Тело для показа: ссылки — названиями, id ссылок — в `ids` (у строк — `<поле>_id`), полные объекты ссылок — в `<поле>_obj`. */
 function displayBody(db, fields, body, at, cache) {
     const out = { ...body };
     const ids = {};
+    const objs = {};
     for (const f of fields) {
         if (f.type === 'link' && !isEmpty(body[f.id])) {
             ids[f.id] = body[f.id];
             out[f.id] = titleOf(db, cache, body[f.id], at);
+            const refObj = readObject(db, body[f.id], { at }) ?? readObject(db, body[f.id]);
+            if (refObj) {
+                const full = { id: refObj.id, title: refObj.title || '', name: refObj.body?.name || refObj.title || '', ...(refObj.body || {}) };
+                out[`${f.id}_obj`] = full;
+                objs[f.id] = full;
+            }
         }
         else if (f.type === 'table' && Array.isArray(body[f.id])) {
             out[f.id] = body[f.id].map(row => {
@@ -235,11 +258,40 @@ function displayBody(db, fields, body, at, cache) {
             });
         }
     }
-    return { out, ids };
+    return { out, ids, objs };
+}
+
+/** Извлечь реквизиты контрагента/получателя/плательщика для унифицированных печатных бланков (`party.*`). */
+function partyOf(body, out, objs) {
+    const partyKeys = ['recipient', 'counterparty', 'payer', 'client', 'supplier', 'customer', 'employee', 'person'];
+    let ref = null;
+    for (const k of partyKeys) {
+        if (objs?.[k]) {
+            ref = objs[k];
+            break;
+        }
+    }
+    const firstAcc = Array.isArray(ref?.accounts) && ref.accounts.length ? ref.accounts[0] : null;
+    const rawReq = String(body?.acct_r || '').trim();
+    const accMatch = rawReq.match(/\b(40\d{18}|301\d{17})\b/);
+    const bikMatch = rawReq.match(/\b(04\d{7})\b/);
+    const innMatch = rawReq.match(/ИНН\s*(\d{10,12})/i);
+    const kppMatch = rawReq.match(/КПП\s*(\d{9})/i);
+    return {
+        name: String(ref?.full_name || body?.recipient_name || body?.payer_name || body?.counterparty_name || ref?.title || ref?.name || out?.recipient || out?.counterparty || out?.payer || out?.client || out?.employee || ''),
+        inn: String(ref?.inn || innMatch?.[1] || ''),
+        kpp: String(ref?.kpp || kppMatch?.[1] || ''),
+        ogrn: String(ref?.ogrn || ''),
+        bank: String(ref?.bank || firstAcc?.bank || ''),
+        bik: String(ref?.bik || firstAcc?.bik || bikMatch?.[1] || ''),
+        account: String(ref?.account || firstAcc?.account || firstAcc?.num || accMatch?.[1] || (!bikMatch && !innMatch ? rawReq : '') || ''),
+        corr: String(ref?.corr || firstAcc?.corr || ''),
+        address: String(ref?.address || ''),
+    };
 }
 
 /** Реквизиты организации: название и значения из class.js корня `$base` (ИНН, КПП, адрес, банк …). */
-const ORG_FIELDS = ['inn', 'kpp', 'ogrn', 'address', 'phone', 'email', 'bank', 'bik', 'account', 'corr'];
+const ORG_FIELDS = ['full_name', 'inn', 'kpp', 'ogrn', 'okpo', 'okato', 'address', 'phone', 'email', 'director', 'chief_accountant', 'bank', 'bik', 'account', 'corr'];
 
 function orgOf(db, op = null) {
     const bp = (op?.cid && classBasePath(db, op.cid)) || (op?.unit && classBasePath(db, op.unit)) || '';
@@ -310,12 +362,77 @@ function render(nodes, base, vars, what, fns) {
     return out;
 }
 
+function buildStarterTemplateForSchema(schema) {
+    const scalarRows = (schema.fields || [])
+        .filter(f => f.type !== 'table' && f.type !== 'struct')
+        .map(f => {
+            const valExpr = f.type === 'money' ? `{{money(${f.id})}} ₽` : f.type === 'date' ? `{{date(${f.id})}}` : `{{${f.id}}}`;
+            return `        {{#if ${f.id}}}<tr><td class="k">${esc(f.label || f.id)}</td><td>${valExpr}</td></tr>{{/if}}`;
+        })
+        .join('\n');
+
+    const tableBlocks = (schema.fields || [])
+        .filter(f => f.type === 'table' && Array.isArray(f.fields) && f.fields.length)
+        .map(f => {
+            const ths = ['<th>№</th>', ...f.fields.map(c => `<th>${esc(c.label || c.id)}</th>`)].join('');
+            const tds = ['<td class="c">{{i}}</td>', ...f.fields.map(c => c.type === 'money' ? `<td class="r">{{money(row.${c.id})}}</td>` : `<td${c.type === 'number' || c.type === 'integer' ? ' class="r"' : ''}>{{row.${c.id}}}</td>`)].join('');
+            return `
+    <h3>${esc(f.label || f.id)}</h3>
+    <table>
+        <thead><tr>${ths}</tr></thead>
+        <tbody>
+        {{#${f.id}}}
+            <tr>${tds}</tr>
+        {{/${f.id}}}
+        </tbody>
+    </table>`;
+        })
+        .join('\n');
+
+    return `<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>${esc(schema.label || 'Документ')}</title>
+<style>
+    @page { size: A4 portrait; margin: 15mm; }
+    body { font: 13px/1.4 Arial, sans-serif; margin: 0; padding: 15mm; color: #000; background: #fff; }
+    @media print { body { padding: 0; } }
+    .org-line { font-size: 12px; color: #333; border-bottom: 2px solid #000; padding-bottom: 6px; margin-bottom: 14px; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    h3 { font-size: 14px; margin: 14px 0 6px; }
+    .sub { color: #444; margin-bottom: 14px; font-size: 12.5px; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+    th, td { border: 1px solid #000; padding: 5px 8px; vertical-align: top; text-align: left; }
+    th { background: #f3f4f6; font-weight: bold; }
+    td.k { width: 32%; background: #f9fafb; font-weight: 600; }
+    td.r { text-align: right; }
+    td.c { text-align: center; width: 36px; }
+    .sign { margin-top: 32px; display: flex; gap: 48px; }
+    .sign div { border-top: 1px solid #000; min-width: 180px; padding-top: 4px; font-size: 11px; }
+</style>
+</head>
+<body>
+    <div class="org-line"><b>{{coalesce(org.full_name, org.name)}}</b>{{#if org.inn}} · ИНН {{org.inn}}{{/if}}{{#if org.kpp}} · КПП {{org.kpp}}{{/if}}</div>
+    <h1>{{doc.label}} № {{doc.number}}</h1>
+    <div class="sub">Дата: <b>{{doc.date}}</b> · Статус: {{doc.status}}</div>
+    <table>
+${scalarRows}
+    </table>${tableBlocks}
+    <div class="sign">
+        <div>Руководитель {{org.director}}</div>
+        <div>Главный бухгалтер {{org.chief_accountant}}</div>
+    </div>
+</body>
+</html>`;
+}
+
 /**
  * Печатная форма объекта.
- * @param {object} p { id, name — имя шаблона, root — корень WORK на диске }
- * @returns {Promise<{ name, label, html, source }>}
+ * @param {object} p { id, name — имя шаблона, root — корень WORK на диске, fallback? — автошаблон при отсутствии файла, customHtml? — предпросмотр произвольного шаблона }
+ * @returns {Promise<{ name, label, html, source, templateHtml }>}
  */
-export async function renderPrint(db, { id, name, root }) {
+export async function renderPrint(db, { id, name, root, fallback = false, customHtml = '' }) {
     const o = readObject(db, id);
     if (!o)
         throw new DataError(`объект ${id} не найден`);
@@ -323,21 +440,36 @@ export async function renderPrint(db, { id, name, root }) {
     if (schema.family !== 'operation')
         throw new DataError(`«${schema.label}» — печатные формы есть только у операций`);
     const list = await printTemplates(db, root, o.cid);
-    const t = isEmpty(name) ? (list.length === 1 ? list[0] : null) : list.find(x => x.name === String(name));
+    let t = isEmpty(name) ? (list.length === 1 ? list[0] : (fallback && list.length ? list[0] : null)) : list.find(x => x.name === String(name));
+    let templateHtml = '';
+    if (typeof customHtml === 'string' && customHtml.trim()) {
+        templateHtml = customHtml;
+        if (!t)
+            t = { name: String(name || schema.label || 'Документ'), label: String(name || schema.label || 'Документ'), source: schema.path };
+    }
+    else if (t) {
+        templateHtml = await fsp.readFile(t.file, 'utf-8');
+    }
+    else if (fallback || name === '__default__') {
+        const defName = schema.label || 'Документ';
+        templateHtml = buildStarterTemplateForSchema(schema);
+        t = { name: defName, label: defName, source: schema.path, isDefault: true };
+    }
     if (!t)
         throw new DataError(isEmpty(name) && list.length
             ? `у «${schema.label}» несколько форм — укажите name (${list.map(x => x.name).join(', ')})`
             : `печатная форма «${name ?? ''}» у «${schema.label}» не найдена`);
     const what = `форма «${t.label}»`;
-    const nodes = parseTemplate(await fsp.readFile(t.file, 'utf-8'), what);
+    const nodes = parseTemplate(templateHtml, what);
     const cache = new Map();
-    const { out, ids } = displayBody(db, schema.fields, o.body, o.time, cache);
+    const { out, ids, objs } = displayBody(db, schema.fields, o.body, o.time, cache);
     const base = {
         ...out,
         ids,
+        party: partyOf(o.body, out, objs),
         doc: {
             id: o.id,
-            number: o.body.doc_number || o.id.slice(-6),
+            number: o.body.num || o.body.doc_number || o.body.order_number || o.body.number || o.id.slice(-6),
             date: fmtDate(o.time),
             status: STATUS[o.status] || o.status,
             label: schema.label,
@@ -346,5 +478,47 @@ export async function renderPrint(db, { id, name, root }) {
         },
         org: orgOf(db, o),
     };
-    return { name: t.name, label: t.label, source: t.source, html: render(nodes, base, {}, what, { ...FUNCTIONS, norm: (kind, object) => normValue(db, kind, object, o.time) }) };
+    const html = render(nodes, base, {}, what, { ...FUNCTIONS, norm: (kind, object) => normValue(db, kind, object, o.time) });
+    return { name: t.name, label: t.label, source: t.source, isDefault: Boolean(t.isDefault), templateHtml, html };
+}
+
+/** Сохранить (или обновить) HTML-шаблон печатной формы в `<класс>/$operation/print/<name>.html`. */
+export async function savePrintTemplate(db, { ref, name, html, root }) {
+    const cls = getClass(db, ref);
+    if (!cls)
+        throw new DataError(`класс ${ref} не найден`);
+    if (cls.type !== '$operation')
+        throw new DataError(`«${cls.label}» — шаблоны печати поддерживаются только для классов операций ($operation)`);
+    const safeName = String(name || cls.label || 'Документ').trim().replace(/[\\/:*?"<>|]/g, '_');
+    if (!safeName)
+        throw new DataError('укажите название печатной формы');
+    const content = String(html ?? '').trim();
+    if (!content)
+        throw new DataError('текст шаблона печатной формы пуст');
+    // Проверим синтаксис шаблона перед сохранением
+    parseTemplate(content, `форма «${safeName}»`);
+    const dir = path.join(root, ...cls.path.split('/').filter(Boolean), cls.type, 'print');
+    await fsp.mkdir(dir, { recursive: true });
+    const file = path.join(dir, safeName + EXT);
+    await fsp.writeFile(file, content, 'utf-8');
+    return { ok: true, name: safeName, file, source: cls.path };
+}
+
+/** Удалить собственный HTML-шаблон печатной формы из `<класс>/$operation/print/<name>.html`. */
+export async function deletePrintTemplate(db, { ref, name, root }) {
+    const cls = getClass(db, ref);
+    if (!cls)
+        throw new DataError(`класс ${ref} не найден`);
+    const safeName = String(name ?? '').trim().replace(/[\\/:*?"<>|]/g, '_');
+    if (!safeName)
+        throw new DataError('укажите название печатной формы');
+    const file = path.join(root, ...cls.path.split('/').filter(Boolean), cls.type, 'print', safeName + EXT);
+    try {
+        await fsp.unlink(file);
+    }
+    catch (e) {
+        if (e.code !== 'ENOENT')
+            throw e;
+    }
+    return { ok: true, name: safeName };
 }

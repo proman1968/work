@@ -18,39 +18,31 @@ export default {
             .service-wrap {
                 @apply --horizontal-center;
                 @apply --no-flex;
-                gap: 4px;
-            }
-            button.service-btn {
-                @apply --horizontal-center;
-                @apply --no-flex;
-                @apply --content;
-                @apply --border;
                 gap: 6px;
-                padding: 3px 8px;
-                font-size: small;
-                font-family: inherit;
+            }
+            oda-button.service-btn {
+                min-height: 28px;
+                padding: 4px 12px;
+                gap: 6px;
+                font-size: 13px;
                 font-weight: 500;
-                border-radius: 0;
-                cursor: pointer;
-                user-select: none;
-                box-shadow: none;
+                border-radius: var(--radius-xs, 4px);
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
                 box-sizing: border-box;
             }
-            button.service-btn:hover:not(:disabled) {
-                @apply --hover;
-            }
-            button.service-btn:disabled {
-                opacity: 0.45;
-                cursor: default;
-                box-shadow: none;
-                filter: grayscale(0.4);
+            oda-button.service-btn:hover:not([disabled]) {
+                border-color: var(--accent-color);
             }
         </style>
         <div class="service-wrap" ~show="showLabels && toolItems?.length">
-            <button type="button" class="service-btn" ~for="toolItems" :disabled="Boolean($for.item?.disabled)" :title="$for.item?.label || $for.item?.id" @tap.stop="runTool($for.item, $event)">
-                <oda-icon ~if="$for.item?.icon" :icon="$for.item.icon" icon-size="16"></oda-icon>
-                <span>{{$for.item?.label || $for.item?.id}}</span>
-            </button>
+            <oda-button class="service-btn" content border hoverable ~for="toolItems"
+                :icon="$for.item?.icon || ''"
+                :icon-size="18"
+                :label="$for.item?.label || $for.item?.id"
+                :disabled="Boolean($for.item?.disabled)"
+                :title="$for.item?.label || $for.item?.id"
+                @tap.stop="runTool($for.item, $event)">
+            </oda-button>
         </div>
         <div class="service-wrap" ~show="!showLabels && toolItems?.length">
             <item-icon auto-run class="item" light raised ~for="toolItems" raised border :show-labels :$item="$for?.item" :hide-toolbar="!showLabels"></item-icon>

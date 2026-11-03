@@ -643,7 +643,7 @@ export default {
         }
     </style>
 
-    <oda-packets no-flex mode="month"
+    <oda-packets no-flex mode="month" ~if="packetsStart"
         :start="packetsStart" :end="packetsEnd" :days="packetDays"
         ::value="packetsKey" @selection-changed="onPackets($event)"></oda-packets>
 
@@ -885,8 +885,8 @@ export default {
     </div>
     `,
     packetsKey: { $def: '*', $type: String, $save: true },
-    packetsStart: _yearStart(),
-    packetsEnd: _yearEnd(),
+    packetsStart: '',
+    packetsEnd: '',
     packetDays: null,
     _packetFiltered: false,
     _initializingPackets: false,
@@ -1321,14 +1321,26 @@ export default {
             return;
         return this.openCorr({ corr_cid: s.path || s.account });
     },
+    _findFormHost() {
+        if (this.$form && ('focusedItem' in this.$form || typeof this.$form.syncFromView === 'function' || typeof this.$form.setFormPeriod === 'function'))
+            return this.$form;
+        for (let p = this.parentElement || this.domHost; p; p = p.parentElement || p.domHost) {
+            if (p.localName === 'work-form' || typeof p.syncFromView === 'function' || typeof p.setFormPeriod === 'function' || 'focusedItem' in p)
+                return p;
+        }
+        return null;
+    },
     async onPackets(e) {
         const d = e?.detail?.value ?? e?.detail ?? {};
         if (Array.isArray(d))
             return;
         if (this._initializingPackets)
             return;
+        const nextKey = d.value || (d.selected?.name === '*' ? '*' : (d.selected?.mask || this.packetsKey || '*'));
         if (d.selected?.name === '*') {
+            this.packetsKey = '*';
             _writeSavedPeriod('*', '', '');
+            this._findFormHost()?.setFormPeriod?.({ packetsKey: '*', from: '', to: '' });
             if (this._packetFiltered || this.from || this.to) {
                 this._packetFiltered = false;
                 this.from = '';
@@ -1342,7 +1354,9 @@ export default {
             this._packetFiltered = true;
             this.from = d.period.start;
             this.to = d.period.end;
+            this.packetsKey = _derivePacketsKey(this.from, this.to, nextKey);
             _writeSavedPeriod(this.packetsKey, this.from, this.to);
+            this._findFormHost()?.setFormPeriod?.({ packetsKey: this.packetsKey, from: this.from, to: this.to });
             if (changed)
                 await this.reload();
         }
@@ -1351,12 +1365,13 @@ export default {
         const hasNavPeriod = nav && (nav.from !== undefined || nav.to !== undefined || nav.packetsKey);
         if (!hasNavPeriod && (this.from || this.to))
             return;
+        const formPeriod = this._findFormHost()?.formPeriod || null;
         const saved = _readSavedPeriod();
         const localSavedKey = typeof this.loadFromLocalStorage === 'function' ? this.loadFromLocalStorage('packetsKey') : undefined;
-        if (typeof localSavedKey === 'string' && localSavedKey && (typeof this.packetsKey !== 'string' || this.packetsKey === '*'))
+        if (!hasNavPeriod && !formPeriod && !saved && typeof localSavedKey === 'string' && localSavedKey && (typeof this.packetsKey !== 'string' || this.packetsKey === '*'))
             this.packetsKey = localSavedKey;
         const pk = typeof this.packetsKey === 'string' ? this.packetsKey : '';
-        const src = hasNavPeriod ? nav : (saved || (pk && pk !== '*' ? { packetsKey: pk } : null));
+        const src = hasNavPeriod ? nav : (formPeriod || saved || (pk && pk !== '*' ? { packetsKey: pk } : null));
         if (!src)
             return;
         this._initializingPackets = true;
@@ -1376,10 +1391,22 @@ export default {
             this.to = to;
             this._packetFiltered = !!(from || to);
             this.packetsKey = key;
+            this._findFormHost()?.setFormPeriod?.({ packetsKey: this.packetsKey, from: this.from, to: this.to });
         }
         finally {
             this._initializingPackets = false;
         }
+    },
+    async syncFormPeriod(fp) {
+        if (!fp || typeof fp !== 'object')
+            return;
+        const nextFrom = String(fp.from || '');
+        const nextTo = String(fp.to || '');
+        const nextKey = String(fp.packetsKey || '*');
+        if (this.from === nextFrom && this.to === nextTo && this.packetsKey === nextKey)
+            return;
+        this._restorePeriodState(fp);
+        await this.reload();
     },
     _applyNavFields(nav) {
         if (!nav || typeof nav !== 'object')
@@ -1398,6 +1425,7 @@ export default {
         if (nav.filters && typeof nav.filters === 'object')
             this.filters = { ...nav.filters };
         _writeSavedPeriod(this.packetsKey, this.from, this.to);
+        this._findFormHost()?.setFormPeriod?.({ packetsKey: this.packetsKey, from: this.from, to: this.to });
     },
     async attached() {
         if (this._attachedDone && !this._initialNav)

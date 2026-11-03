@@ -180,6 +180,20 @@ export const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS objects_cid_status_ext     ON objects(cid, status, ext_of);
     CREATE INDEX IF NOT EXISTS account_entries_acc_storno ON account_entries(account_cid, storno);
     `,
+    // 5 — подшивка операций (связи «Основание → Следствие» между документами, например Счёт → Платёжное поручение)
+    `
+    CREATE TABLE IF NOT EXISTS doc_links (
+        source_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        kind      TEXT NOT NULL DEFAULT 'basis',
+        note      TEXT NOT NULL DEFAULT '',
+        author    TEXT,
+        created   INTEGER NOT NULL,
+        PRIMARY KEY (source_id, target_id)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS doc_links_source ON doc_links(source_id);
+    CREATE INDEX IF NOT EXISTS doc_links_target ON doc_links(target_id);
+    `,
 ];
 
 /** Применить недостающие миграции. @returns {number} версия схемы после миграции */

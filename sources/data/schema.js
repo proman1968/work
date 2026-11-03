@@ -341,8 +341,9 @@ export function classSchema(db, ref, seenStructs = new Set()) {
     });
     sequence.push({ layer: cls, inherited: false });
 
+    const NUM_FIELD_CANDIDATES = ['num', 'doc_number', 'order_number', 'number', 'doc_num'];
     let fields = [], postings = [], overlay = [], staticFields = [];
-    let autoRegister = false, source = null, norms = null;
+    let autoRegister = false, source = null, norms = null, numerator = null;
     for (const { layer, inherited } of sequence) {
         const own = layer.own || {};
         const meta = own.METADATA || {};
@@ -357,6 +358,40 @@ export function classSchema(db, ref, seenStructs = new Set()) {
             source = { ...(source || {}), ...clone(own.SOURCE) };
         if (own.NORMS !== undefined)
             norms = clone(own.NORMS);
+        const rawNum = own.NUMERATOR ?? meta.NUMERATOR;
+        if (rawNum === false)
+            numerator = { enabled: false };
+        else if (rawNum && typeof rawNum === 'object')
+            numerator = { ...(numerator || {}), ...clone(rawNum) };
+    }
+
+    let resolvedNumerator = null;
+    if (family === 'operation') {
+        const baseNum = numerator || { enabled: true, reset: 'year', pad: 0, prefix: '' };
+        if (baseNum.enabled !== false) {
+            let numFieldId = baseNum.field || '';
+            if (!numFieldId || !fields.some(f => f.id === numFieldId)) {
+                const existing = fields.find(f => NUM_FIELD_CANDIDATES.includes(f.id));
+                numFieldId = existing ? existing.id : '';
+            }
+            if (!numFieldId && numerator && baseNum.autoField !== false) {
+                numFieldId = baseNum.field || 'num';
+                fields.unshift({ id: numFieldId, label: baseNum.label || 'Номер', type: 'string' });
+            }
+            if (numFieldId) {
+                resolvedNumerator = {
+                    enabled: true,
+                    field: numFieldId,
+                    reset: ['year', 'quarter', 'month', 'day', 'never'].includes(baseNum.reset) ? baseNum.reset : 'year',
+                    pad: Math.max(0, Number(baseNum.pad) || 0),
+                    prefix: String(baseNum.prefix || ''),
+                    scope: baseNum.scope === 'root' ? 'root' : 'class',
+                };
+            }
+        }
+        else {
+            resolvedNumerator = { enabled: false };
+        }
     }
 
     // Если виртуальный справочник вложен в реальный справочник ($catalog) и не задал SOURCE.registry явно —
@@ -402,6 +437,7 @@ export function classSchema(db, ref, seenStructs = new Set()) {
         postings,
         overlay: overlay.map(f => normalizeField(db, f, basePath, seenStructs)),
         autoRegister,
+        numerator: resolvedNumerator,
         source,
         norms,
         static: staticFields,

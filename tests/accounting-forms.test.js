@@ -1143,7 +1143,9 @@ describe('архитектура представлений формы (VIEW п�
         const svgSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/tools/icons/lib/svg/odant.svg'), 'utf-8');
         assert.match(formSrc, /id="consultantBtn"[^>]*icon="icons:help"/, 'кнопка Консультант с иконкой ?');
         assert.ok(!/id="consultantBtn"[^>]*label="Консультант"/.test(formSrc), 'без громоздкой текстовой метки Консультант');
-        assert.match(formSrc, /id="formToolbar"[^>]*slot="top"[^>]*~show="hasToolbar"/, 'верхний тулбар формы с 3 зонами');
+        assert.match(formSrc, /id="classTreeToggleBtn"[^>]*icon="icons:tree-structure"/, 'кнопка-тогл дерева классов перед вкладками формы');
+        assert.match(formSrc, /hideLeftTabs:\s*true/, 'левая полоса селектора с одной вкладкой скрыта в work-form');
+        assert.match(formSrc, /id="formToolbar"[^>]*slot="main-top"[^>]*~show="hasToolbar"/, 'верхний тулбар представления в slot="main-top" по ширине представления');
         assert.match(formSrc, /slot name="tool-left"/, 'левая зона тулбара');
         assert.match(formSrc, /slot name="tool-center"/, 'центральная зона тулбара');
         assert.match(formSrc, /slot name="tool-right"/, 'правая зона тулбара');
@@ -1511,5 +1513,201 @@ describe('архитектура представлений формы (VIEW п�
         objHost.onFormInput({ detail: { value: { id: 'recipient', value: '1.SUBJ', label: 'Пенсионный фонд' } } });
         assert.equal(objHost.documentTitle, 'Платёжное поручение №34 от 22.03.2060 - Пенсионный фонд');
         assert.equal(lastTabLabel, 'Платёжное поручение №34 от 22.03.2060 - Пенсионный фонд');
+
+        // Синхронизация периода пакетировщика между представлениями одной формы (Оборотка → Анализ счёта)
+        const fakeForm = {
+            formPeriod: null,
+            setFormPeriod(p) {
+                this.formPeriod = { ...p };
+            },
+        };
+        const sheetCalls = [];
+        const sheetHost = host(sheet, sheetCalls, {
+            self: { $form: fakeForm },
+            fetch: (m) => (m === 'db_sheet' ? {
+                rows: [{ account: '/MODULES/Register/REGISTER/62', label: '62 Покупатели', level: 0, leaf: true, hasAnalytics: true, opening: { debit: 0, credit: 0 }, turnover: { debit: 500, credit: 0 }, closing: { debit: 500, credit: 0 } }],
+                total: { opening: { debit: 0, credit: 0 }, turnover: { debit: 500, credit: 0 }, closing: { debit: 500, credit: 0 } },
+                range: { start: '2024-01-10', end: '2026-10-20', days: ['2024-01-10', '2025-05-15', '2026-10-20'] },
+                names: {},
+            } : null),
+        });
+        await sheetHost.attached();
+        await sheetHost.onPackets({
+            detail: {
+                value: {
+                    selected: { name: '2025', mask: '2025*' },
+                    period: { start: '2025-01-01', end: '2025-12-31' },
+                    value: '2025*',
+                },
+            },
+        });
+        assert.equal(sheetHost.packetsKey, '2025*');
+        assert.deepEqual(fakeForm.formPeriod, { packetsKey: '2025*', from: '2025-01-01', to: '2025-12-31' });
+
+        const analysisCalls = [];
+        const analysisHost = host(postings, analysisCalls, {
+            self: { mode: 'analysis', $form: fakeForm },
+            fetch: (m) => {
+                if (m === 'db_schema')
+                    return { schema: { family: 'account', fields: [{ id: 'counterparty', label: 'Контрагент', type: 'link', target: '/MODULES/Register/CATALOGS/Субъекты', analytic: true }] }, slots: [] };
+                if (m === 'db_sheet')
+                    return {
+                        rows: [],
+                        total: { opening: { debit: 0, credit: 0 }, turnover: { debit: 0, credit: 0 }, closing: { debit: 0, credit: 0 } },
+                        range: { start: '2024-01-10', end: '2026-10-20', days: ['2024-01-10', '2026-10-20'] },
+                        names: {},
+                    };
+                return null;
+            },
+        });
+        await analysisHost.attached();
+        assert.equal(analysisHost.packetsKey, '2025*', 'открытый в той же форме Анализ счёта унаследовал выбранный год 2025* из Оборотки');
+        assert.equal(analysisHost.from, '2025-01-01');
+        assert.equal(analysisHost.to, '2025-12-31');
+        const sheetReq = analysisCalls.find(c => c.method === 'db_sheet');
+        assert.equal(sheetReq?.params?.from, '2025-01-01', 'запрос db_sheet в Анализе сразу ушёл за выбранный период 2025 г.');
+        assert.equal(sheetReq?.params?.to, '2025-12-31');
+
+        // Сохранение и восстановление состояния тогла показа дерева классов в форме для каждого корневого класса
+        assert.ok(formSrc.includes('_classTreeStorageKey('), 'work-form формирует ключ сохранения дерева классов по корневому классу');
+        assert.ok(formSrc.includes('_loadSavedClassTreeClosed('), 'work-form восстанавливает состояние дерева классов из localStorage');
+        assert.ok(formSrc.includes('_saveClassTreeClosed('), 'work-form сохраняет состояние дерева классов в localStorage при переключении');
+
+        // Архитектура файлового хранилища: артефакты задач .task сохраняются в папку задачи (.<id>.task/), без ролевых подпапок и $work
+        const commonSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../sources/modules/agent/tools/work/common.js'), 'utf-8');
+        assert.ok(commonSrc.includes('function isTaskArtifactTarget('), 'writeFile определяет рабочие артефакты задачи и направляет их в ctx.task.storage_folder');
+        const panelSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/panel.js'), 'utf-8');
+        assert.ok(panelSrc.includes("typeof this.$item?.save_file === 'function'"), 'вложения, прикреплённые в диалоге задачи, сохраняются в папку самой задачи .task');
+
+        // 1. Строчный стиль полей «Заголовок: Значение» в oda-editor-form-field без fieldset
+        const editorFormSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/components/layouts/editor-form/editor-form.js'), 'utf-8');
+        assert.ok(!editorFormSrc.includes('<fieldset'), 'в oda-editor-form-field убрана обёртка <fieldset>');
+        assert.ok(editorFormSrc.includes('class="field-row"'), 'строчные поля оформлены в строку .field-row (Заголовок: Значение)');
+        assert.ok(editorFormSrc.includes('class="field-block"'), 'табличные и структурные поля оформлены блоком .field-block с заголовком над таблицей');
+
+        // 2. Автонумератор операций с обнулением по году (nextOperationNumber / db_next_number) и порядок полей [Дата, Номер, ...реквизиты, Комментарий, ...Таблицы]
+        const numCalls = [];
+        const numHost = host(objectView, numCalls, {
+            fetch: (m, p) => {
+                if (m === 'db_schema') {
+                    return {
+                        schema: {
+                            cid: '/MODULES/Register/OPERATIONS/Реализация/Покупателю',
+                            path: '/MODULES/Register/OPERATIONS/Реализация/Покупателю',
+                            label: 'Покупателю',
+                            family: 'operation',
+                            type: '$operation',
+                            leaf: true,
+                            numerator: { enabled: true, field: 'doc_number', reset: 'year', pad: 0, prefix: '' },
+                            fields: [
+                                { id: 'comment', label: 'Комментарий', type: 'text' },
+                                { id: 'client', label: 'Покупатель', type: 'link', target: '/MODULES/Register/CATALOGS/Клиенты', required: true },
+                                { id: 'doc_number', label: 'Номер документа', type: 'string' },
+                                { id: 'lines', label: 'Товары', type: 'table', fields: [{ id: 'item', label: 'Номенклатура', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура' }] },
+                            ],
+                        },
+                    };
+                }
+                if (m === 'db_next_number') {
+                    const yr = String(p?.time || '').slice(0, 4);
+                    return { number: yr === '2025' ? '15' : '1', field: 'doc_number', reset: 'year' };
+                }
+                return null;
+            },
+        });
+        await numHost.loadSchema();
+        assert.deepEqual(
+            numHost.schema.FIELDS.map(f => f.id),
+            ['time', 'doc_number', 'client', 'comment', 'lines'],
+            'в форме операции Дата и Номер стоят первыми на одной строке, Комментарий — после реквизитов, Таблица — внизу'
+        );
+        await numHost.initFromNav({ create: true, initialData: { time: '2025-05-20' } });
+        assert.equal(numHost.editing.doc_number, '15', 'при создании операции автоматически подставлен следующий номер за 2025 год');
+        // При смене даты на новый 2026 год номер автоматически обнуляется (пересчитывается на 1)
+        numHost.editing.time = '2026-01-10';
+        numHost.onFormInput({ detail: { value: { id: 'time', value: '2026-01-10' } } });
+        await new Promise(r => setTimeout(r, 10));
+        assert.equal(numHost.editing.doc_number, '1', 'при смене года в дате операции нумератор обнулился с началом нового года');
+
+        // 3. Модальный подбор одного или нескольких объектов при нажатии «+ Новый» в табличном поле (oda-table-input)
+        const tableInputSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/components/inputs/table-input/table-input.js'), 'utf-8');
+        assert.ok(tableInputSrc.includes('openCatalogPickerDialog'), 'oda-table-input вызывает модальное окно подбора объектов при нажатии + Новый');
+        const pickerDef = defs.find(d => d.is === 'oda-table-link-picker');
+        assert.ok(pickerDef, 'модальный компонент подбора oda-table-link-picker зарегистрирован');
+        const buildRows = globalThis.__workCatalogPicker?.buildTableRowsFromPicked;
+        assert.equal(typeof buildRows, 'function');
+        const cols = [
+            { id: 'item', label: 'Номенклатура', type: 'link', catalog: '/MODULES/Register/CATALOGS/Номенклатура' },
+            { id: 'unit', label: 'Единица', type: 'string' },
+            { id: 'qty', label: 'Количество', type: 'number' },
+            { id: 'price', label: 'Цена', type: 'number' },
+        ];
+        const createdRows = buildRows(cols, cols[0], [
+            { id: 'i1', name: 'Масло 10W-40', body: { base_unit: 'канистра', price: 3200 } },
+            { id: 'i2', name: 'Масло 5W-30', body: { base_unit: 'бочка', price: 45000 } },
+        ]);
+        assert.equal(createdRows.length, 2, 'множественный подбор в модальном окне сразу создаёт 2 строки в таблице');
+        assert.deepEqual(createdRows[0], { item: 'i1', unit: 'канистра', price: 3200 });
+        assert.deepEqual(createdRows[1], { item: 'i2', unit: 'бочка', price: 45000 });
+
+        // 4. Автоподстройка полей при сжатии (horizontal с flex-wrap, min-width по типам, единый отступ слева --form-label-width, выключенный draggable вне designMode и изоляция структурных групп по layer)
+        assert.ok(editorFormSrc.includes('export function fieldSizingStyle('), 'fieldSizingStyle задаёт минимальные ограничения по каждому типу поля');
+        assert.ok(editorFormSrc.includes('class="fields-grid" horizontal'), 'корневой контейнер полей использует horizontal с flex-wrap');
+        assert.ok(editorFormSrc.includes('class="children-box" horizontal'), 'структурные поля используют собственный групповой контейнер horizontal');
+        assert.ok(editorFormSrc.includes('this.dragSourceLayer !== layer'), 'перемещение полей разрешено только внутри своей структурной группы (layer)');
+        assert.ok(editorFormSrc.includes('--form-label-width'), 'поля у левого края выравниваются по единой ширине колонки подписей без лесенки');
+        assert.ok(editorFormSrc.includes(':draggable="Boolean(designMode)"'), 'draggable передаётся булевым значением и выключен вне режима дизайна');
+
+        // 5. Проведённая операция на форме объекта — только для чтения (isReadonly: true), а отмена проводки возвращает редактирование
+        numHost.editing = { id: 'op_reg', status: 'registered', version: 2, time: '2026-01-10', doc_number: '1' };
+        numHost.binderParents = [{ id: 'inv_1', title: 'Счёт №10 от 09.01.2026', date: '2026-01-09', sum: 50000 }];
+        numHost.binderChildren = [];
+        assert.equal(numHost.isReadonly, true, 'проведённая операция открыта в режиме только для чтения');
+        assert.equal(numHost.canSave, false, 'проведённая операция не редактируется напрямую без отмены проводки');
+        assert.equal(numHost.canCancel, true, 'у проведённой операции доступна отмена проводки');
+
+        // 6. Сервисы в подвале операции (Проведен, Подшивка, Печать) и кликабельные ссылки в режиме readonly
+        const services = numHost.getFocusedServices();
+        assert.deepEqual(services.map(s => s.id), ['cancel', 'binder', 'print'], 'в подвале операции отображаются сервисы Проведен, Подшивка и Печать');
+        assert.equal(services.find(s => s.id === 'binder')?.label, 'Подшивка (1)');
+        assert.equal(services.find(s => s.id === 'print')?.label, 'Печать');
+        assert.ok(defs.some(d => d.is === 'oda-doc-binder'), 'модальный компонент подшивки oda-doc-binder зарегистрирован');
+        assert.ok(defs.some(d => d.is === 'oda-print-dialog'), 'модальный компонент печати и настройки шаблона oda-print-dialog зарегистрирован');
+
+        const linkInputDef = defs.find(d => d.is === 'oda-link-input');
+        assert.ok(linkInputDef, 'oda-link-input зарегистрирован');
+        const linkInst = Object.create(linkInputDef);
+        linkInst.readonly = true;
+        linkInst.disabled = false;
+        linkInst.resolved = 'subj_1';
+        linkInst.value = 'subj_1';
+        linkInst.text = 'Скоморохов Д.С.';
+        linkInst.field = { id: 'recipient', type: 'Link', catalog: '/ORGANIZATIONS/Бизнес Интер Софт/MODULES/Register/CATALOGS/Субъекты' };
+        assert.equal(linkInst.inputDisabled, false, 'при наличии разрешённой ссылки в режиме readonly инпут не заблокирован, чтобы принимать клик');
+        assert.equal(linkInst.locked, true, 'в режиме readonly поле заперто от ввода текста');
+        let openedLinkNav = null;
+        linkInst.domHost = {
+            localName: 'work-form',
+            async openInForm(target, nav) {
+                openedLinkNav = { path: target.path, nav };
+            },
+        };
+        const prevGetItem = WORK.get_item;
+        WORK.get_item = async p => ({ path: p });
+        try {
+            await linkInst.openLinkedObject();
+            assert.deepEqual(openedLinkNav, {
+                path: '/ORGANIZATIONS/Бизнес Интер Софт/MODULES/Register/CATALOGS/Субъекты',
+                nav: { view: 'object', id: 'subj_1', label: 'Скоморохов Д.С.' },
+            }, 'клик по ссылке в режиме readonly открывает карточку связанного объекта во вкладке формы');
+        }
+        finally {
+            WORK.get_item = prevGetItem;
+        }
+
+        numHost.editing = { id: 'op_reg', status: 'cancelled', version: 3, time: '2026-01-10', doc_number: '1' };
+        assert.equal(numHost.isReadonly, false, 'после отмены проводки операция снова доступна для редактирования');
+        assert.equal(numHost.canSave, true, 'после отмены проводки операцию можно редактировать и сохранять');
+        assert.equal(numHost.canRegister, true, 'после отмены проводки операцию можно снова провести');
     });
 });

@@ -23,6 +23,10 @@ ODA({
                 overflow-wrap: anywhere;
                 line-height: inherit;
             }
+            :host([dense]) .control {
+                min-height: calc(2lh + 6px);
+                padding: 4px 6px;
+            }
         </style>
         <div class="body">
             <textarea class="control" part="control" rows="3"

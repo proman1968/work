@@ -202,9 +202,10 @@ ODA({
      * в ячейке не выводится). Редактор по имени (`editorTag`) приоритетнее.
      */
     get fieldTag() {
-        if (this.readonly)
-            return undefined;
         const field = this.column?.field;
+        const isCatalogLink = Boolean(field?.catalog && String(field.type || '').toLowerCase() === 'link');
+        if (this.readonly && !isCatalogLink)
+            return undefined;
         if (!field || (!field.type && !field.control) || field.type === 'Table')
             return undefined;
         if (String(field.type).toLowerCase() === 'text' && !field.control)

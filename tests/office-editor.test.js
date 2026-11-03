@@ -256,4 +256,14 @@ describe('локальный офисный пакет WORK (xlsx / docx / pptx 
         assert.equal(parsedPptx.slides[0].title, 'ИИ-агент WORK');
         assert.equal(parsedPptx.slides[1].title, 'Кто я');
     });
+
+    it('oda-office-editor и инлайн-превью $office: шаблон без <template ~if>, кнопка сохранения в тулбаре и хендлер preview', async () => {
+        const editorSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/$file/$office/handlers/pages/form/file/$handler/file.js'), 'utf-8');
+        assert.ok(!/<template\s+~if=/.test(editorSrc), 'в шаблоне oda-office-editor нет <template ~if=...>, скрывавшего сетку в VNode');
+        assert.ok(editorSrc.includes('class="office-view-wrap" ~if="kind === \'spreadsheet\'"'), 'режим таблицы обёрнут в flex-контейнер .office-view-wrap');
+        assert.ok(editorSrc.includes('class="tb-btn save-btn" ~if="isChanged"'), 'в тулбаре редактора есть инлайн-кнопка Сохранить');
+
+        const previewMod = (await import('../$server/$folder/$file/$office/handlers/preview/$handler/preview.js')).default;
+        assert.ok(previewMod.template.includes('<oda-office-editor inline flex :$item></oda-office-editor>'), 'инлайн-превью $office монтирует oda-office-editor в режиме inline');
+    });
 });

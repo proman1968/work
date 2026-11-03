@@ -93,35 +93,24 @@ export default {
             .obj-footer-actions {
                 @apply --horizontal-center;
                 @apply --no-flex;
-                gap: 4px;
-            }
-            button.obj-footer-btn {
-                @apply --horizontal-center;
-                @apply --no-flex;
-                @apply --content;
-                @apply --border;
                 gap: 6px;
-                padding: 3px 10px;
-                font-size: small;
-                font-family: inherit;
+            }
+            oda-button.obj-footer-btn {
+                min-height: 28px;
+                padding: 4px 12px;
+                gap: 6px;
+                font-size: 13px;
                 font-weight: 500;
-                border-radius: 0;
-                cursor: pointer;
-                user-select: none;
+                border-radius: var(--radius-xs, 4px);
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                box-sizing: border-box;
             }
-            button.obj-footer-btn:hover:not(:disabled) {
-                @apply --hover;
+            oda-button.obj-footer-btn:hover:not([disabled]) {
+                border-color: var(--accent-color);
             }
-            button.obj-footer-btn.primary {
+            oda-button.obj-footer-btn.primary {
                 font-weight: 700;
-                min-width: 62px;
-            }
-            button.obj-footer-btn.icon-only {
-                padding: 3px 7px;
-            }
-            button.obj-footer-btn:disabled {
-                opacity: 0.45;
-                cursor: default;
+                min-width: 72px;
             }
         </style>
         <work-form :$item flex :view_name></work-form>
@@ -132,7 +121,7 @@ export default {
     }
 }
 ODA({is: 'work-form',
-    imports: 'oda//icon, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree, ~/lib//tools, ~/lib//class-picker',
+    imports: 'oda//icon, oda//button, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree, ~/lib//tools, ~/lib//class-picker',
     extends: 'oda-app-layout',
     template: /* html */`
         <style>
@@ -187,35 +176,24 @@ ODA({is: 'work-form',
             .obj-footer-actions {
                 @apply --horizontal-center;
                 @apply --no-flex;
-                gap: 4px;
-            }
-            button.obj-footer-btn {
-                @apply --horizontal-center;
-                @apply --no-flex;
-                @apply --content;
-                @apply --border;
                 gap: 6px;
-                padding: 3px 10px;
-                font-size: small;
-                font-family: inherit;
+            }
+            oda-button.obj-footer-btn {
+                min-height: 28px;
+                padding: 4px 12px;
+                gap: 6px;
+                font-size: 13px;
                 font-weight: 500;
-                border-radius: 0;
-                cursor: pointer;
-                user-select: none;
+                border-radius: var(--radius-xs, 4px);
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                box-sizing: border-box;
             }
-            button.obj-footer-btn:hover:not(:disabled) {
-                @apply --hover;
+            oda-button.obj-footer-btn:hover:not([disabled]) {
+                border-color: var(--accent-color);
             }
-            button.obj-footer-btn.primary {
+            oda-button.obj-footer-btn.primary {
                 font-weight: 700;
-                min-width: 62px;
-            }
-            button.obj-footer-btn.icon-only {
-                padding: 3px 7px;
-            }
-            button.obj-footer-btn:disabled {
-                opacity: 0.45;
-                cursor: default;
+                min-width: 72px;
             }
         </style>
         <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
@@ -278,6 +256,7 @@ ODA({is: 'work-form',
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
         <div id="formTabsBar" slot="top" class="form-tabs-bar" footer border-bottom horizontal-center no-flex :hidden="!showTabsBar" ~show="showTabsBar">
+            <oda-button id="classTreeToggleBtn" ~if="hasClassTree" no-flex allow-toggle :toggled="!classTreeClosed" icon="icons:tree-structure" :icon-size="18" :title="classTreeClosed ? 'Показать дерево классов' : 'Скрыть дерево классов'" @tap.stop="toggleClassTree($event)" style="border-radius: 4px; margin-bottom: 2px;"></oda-button>
             <div horizontal-center flex style="gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden;">
                 <div class="form-tab" horizontal-center no-flex border hoverable ~for="formTabs"
                     ~class="{active: activeTabKey === $for.item.key}"
@@ -294,28 +273,28 @@ ODA({is: 'work-form',
             </div>
             <oda-button class="tabs-close-all" no-flex ~if="formTabs?.length > 1" icon="icons:close" :icon-size="16" title="Закрыть все дополнительные вкладки" @tap.stop="closeAllTabs($event)"></oda-button>
         </div>
-        <div id="formToolbar" slot="top" :hidden="!hasToolbar" ~show="hasToolbar" footer border-bottom horizontal-center no-flex style="padding: 2px 6px; gap: 6px; box-sizing: border-box;">
-            <div class="toolbar-zone left" horizontal-center no-flex style="gap: 4px;">
+        <div id="formToolbar" slot="main-top" :hidden="!hasToolbar" ~show="hasToolbar" footer border-bottom horizontal-center no-flex style="padding: 4px 10px; gap: 8px; min-height: 36px; box-sizing: border-box;">
+            <div class="toolbar-zone left" horizontal-center no-flex style="gap: 6px;">
                 <item-tools id="topMainTools" :$item="currentItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topMainToolItems" @tools-changed="onToolsListChanged('topMainToolItems', $event)" show-labels></item-tools>
                 <item-tools id="topFocusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topFocusedToolItems" @tools-changed="onToolsListChanged('topFocusedToolItems', $event)" show-labels></item-tools>
                 <slot name="tool-left" @slotchange="_checkToolbarSlots()"></slot>
             </div>
-            <div class="toolbar-zone center" horizontal-center flex style="justify-content: center; gap: 4px; min-width: 0;">
+            <div class="toolbar-zone center" horizontal-center flex style="justify-content: center; gap: 6px; min-width: 0;">
                 <slot name="tool-center" @slotchange="_checkToolbarSlots()"></slot>
             </div>
-            <div class="toolbar-zone right" horizontal-center no-flex style="gap: 4px; margin-left: auto;">
+            <div class="toolbar-zone right" horizontal-center no-flex style="gap: 6px; margin-left: auto;">
                 <slot name="tool-right" @slotchange="_checkToolbarSlots()"></slot>
             </div>
         </div>
-        <div id="formFooter" slot="footer" :hidden="!hasFooter" ~show="hasFooter" footer border-top horizontal-center no-flex style="justify-items: space-between; padding: 2px 6px; gap: 4px; box-sizing: border-box;">
+        <div id="formFooter" slot="footer" :hidden="!hasFooter" ~show="hasFooter" footer border-top horizontal-center no-flex style="justify-items: space-between; padding: 4px 10px; gap: 8px; min-height: 36px; box-sizing: border-box;">
             <item-tools id="focusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="service" ::tool-items="focusedToolItems" @tools-changed="onToolsListChanged('focusedToolItems', $event)" show-labels></item-tools>
             <slot name="footer-left"></slot>
             <div flex></div>
             <div class="obj-footer-actions" horizontal-center no-flex ~if="isObjectViewActive">
-                <button type="button" class="obj-footer-btn primary" ~if="view_control?.canSave" :disabled="view_control?.busy" @tap="onObjectOk()">OK</button>
-                <button type="button" class="obj-footer-btn" :disabled="view_control?.busy" @tap="onObjectClose()">Закрыть</button>
+                <oda-button class="obj-footer-btn primary" content border hoverable ~if="view_control?.canSave" :disabled="Boolean(view_control?.busy)" icon="icons:check" :icon-size="18" label="OK" @tap="onObjectOk()"></oda-button>
+                <oda-button class="obj-footer-btn" content border hoverable :disabled="Boolean(view_control?.busy)" icon="icons:close" :icon-size="18" label="Закрыть" @tap="onObjectClose()"></oda-button>
             </div>
-            <div no-flex horizontal-center ~show="dialog" style="gap: 4px;">
+            <div no-flex horizontal-center ~show="dialog" style="gap: 6px;">
                 <oda-button info-invert icon="icons:check" :icon-size @tap="ok" label="OK"></oda-button>
                 <oda-button icon="icons:close" :icon-size @tap="cancel" label="Отмена"></oda-button>
             </div>
@@ -365,6 +344,107 @@ ODA({is: 'work-form',
         }
     },
     allowZoom: true,
+    hideLeftTabs: true,
+    classTreeClosed: false,
+    _applyingClassTreeState: false,
+    get $saveKey() {
+        const root = this._rootItem || this.$item;
+        const raw = root?.short || root?.path || '';
+        const fn = globalThis.__workClassPicker?.resolveDataRootPath || globalThis.WORK?.resolveDataRootPath;
+        return (typeof fn === 'function' ? fn(raw, root) : '') || String(raw).replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '');
+    },
+    _classTreeStorageKey(root = this._rootItem || this.$item) {
+        const raw = root?.short || root?.path || '';
+        if (!raw)
+            return '';
+        const fn = globalThis.__workClassPicker?.resolveDataRootPath || globalThis.WORK?.resolveDataRootPath;
+        const rootPath = (typeof fn === 'function' ? fn(raw, root) : '') || String(raw).replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '');
+        return rootPath ? `work.form.classTree:${rootPath}` : '';
+    },
+    _loadSavedClassTreeClosed(root = this._rootItem || this.$item) {
+        const key = this._classTreeStorageKey(root);
+        if (key && typeof localStorage !== 'undefined') {
+            try {
+                const raw = localStorage.getItem(key);
+                if (raw !== null && raw !== undefined) {
+                    if (raw === 'true' || raw === '1')
+                        return true;
+                    if (raw === 'false' || raw === '0')
+                        return false;
+                    const parsed = JSON.parse(raw);
+                    if (typeof parsed === 'boolean')
+                        return parsed;
+                    if (parsed && typeof parsed.closed === 'boolean')
+                        return parsed.closed;
+                }
+            }
+            catch { /* ignore */ }
+        }
+        return Boolean(this.mobile);
+    },
+    _saveClassTreeClosed(closed, root = this._rootItem || this.$item) {
+        const key = this._classTreeStorageKey(root);
+        if (!key || typeof localStorage === 'undefined')
+            return;
+        try {
+            localStorage.setItem(key, JSON.stringify({ closed: Boolean(closed) }));
+        }
+        catch { /* ignore */ }
+    },
+    formPeriod: null,
+    setFormPeriod(period) {
+        if (!period || typeof period !== 'object')
+            return;
+        this.formPeriod = {
+            packetsKey: String(period.packetsKey || '*'),
+            from: String(period.from || ''),
+            to: String(period.to || ''),
+            ...(period.mode ? { mode: String(period.mode) } : {}),
+        };
+    },
+    _captureCurrentViewPeriod() {
+        const vc = this.view_control;
+        if (!vc)
+            return;
+        const pk = typeof vc.packetsKey === 'string' ? vc.packetsKey : '';
+        const from = String(vc.from || vc.period?.start || '');
+        const to = String(vc.period || vc.to ? (vc.to || vc.period?.end || '') : '');
+        if (pk || from || to) {
+            this.setFormPeriod({ packetsKey: pk || '*', from, to });
+        }
+    },
+    _withFormPeriod(nav = null) {
+        const fp = this.formPeriod;
+        if (!fp)
+            return nav;
+        const base = nav && typeof nav === 'object' ? { ...nav } : {};
+        if (base.packetsKey === undefined && fp.packetsKey)
+            base.packetsKey = fp.packetsKey;
+        if (base.from === undefined && fp.from !== undefined)
+            base.from = fp.from;
+        if (base.to === undefined && fp.to !== undefined)
+            base.to = fp.to;
+        return base;
+    },
+    toggleClassTree(e) {
+        e?.stopPropagation?.();
+        const drawer = this.left_drawer;
+        const nextClosed = drawer ? !drawer.closed : !this.classTreeClosed;
+        this._applyingClassTreeState = true;
+        try {
+            if (drawer)
+                drawer.closed = nextClosed;
+            this.classTreeClosed = Boolean(nextClosed);
+        }
+        finally {
+            this._applyingClassTreeState = false;
+        }
+        this._saveClassTreeClosed(this.classTreeClosed);
+        if (!this.classTreeClosed) {
+            const tree = this.querySelector?.('item-tree#formClassTree') || this.$?.('#formClassTree');
+            tree?.onShow?.();
+        }
+    },
     iconSize: 24,
     standaloneConsultant: false,
     /**
@@ -726,10 +806,37 @@ ODA({is: 'work-form',
             tree.label = this.rootItemLabel;
             tree.execute = (item) => this.onClassTreeSelect(item);
         }
+        const savedClosed = this._loadSavedClassTreeClosed(root);
+        this._applyingClassTreeState = true;
+        try {
+            this.classTreeClosed = savedClosed;
+            if (this.left_drawer)
+                this.left_drawer.closed = savedClosed;
+        }
+        finally {
+            this._applyingClassTreeState = false;
+        }
         this.async(() => {
-            if (!this.mobile && this.left_drawer) {
-                this.left_drawer.closed = false;
-                if (typeof tree?.onShow === 'function')
+            if (this.left_drawer) {
+                if (!this._leftDrawerObserved) {
+                    this._leftDrawerObserved = true;
+                    this.left_drawer.addEventListener('closed-changed', () => {
+                        if (this._applyingClassTreeState)
+                            return;
+                        this.classTreeClosed = Boolean(this.left_drawer?.closed);
+                        this._saveClassTreeClosed(this.classTreeClosed);
+                    });
+                }
+                const targetClosed = this._loadSavedClassTreeClosed(this._rootItem || this.$item);
+                this._applyingClassTreeState = true;
+                try {
+                    this.left_drawer.closed = targetClosed;
+                    this.classTreeClosed = targetClosed;
+                }
+                finally {
+                    this._applyingClassTreeState = false;
+                }
+                if (!targetClosed && typeof tree?.onShow === 'function')
                     tree.onShow();
             }
         }, 50);
@@ -1386,9 +1493,11 @@ ODA({is: 'work-form',
     async _mountActiveView(n) {
         if (!n) return;
         const seq = ++this._mountSeq;
+        this._captureCurrentViewPeriod();
         const curItem = this.currentItem;
-        const nav = this._pendingNav || this._takeNav(curItem?.short || curItem?.path);
-        const curTab = this._ensureCurrentTab(n, nav);
+        const rawNav = this._pendingNav || this._takeNav(curItem?.short || curItem?.path);
+        const nav = this._withFormPeriod(rawNav);
+        const curTab = this._ensureCurrentTab(n, rawNav);
         const tabItem = curTab?.$item || curItem;
         const cacheKey = `${curTab?.key || (tabItem?.short || '')}::${n.id}`;
         let el = this.controls[cacheKey];
@@ -1423,6 +1532,9 @@ ODA({is: 'work-form',
                 if (nav) {
                     el._initialNav = nav;
                     this._pendingNav = null;
+                    if (typeof el._applyNavFields === 'function') {
+                        try { el._applyNavFields(nav); } catch { /* ignore */ }
+                    }
                 }
                 this.controls[cacheKey] = el;
             }
@@ -1465,9 +1577,12 @@ ODA({is: 'work-form',
         this._wakeBars();
         if (this.host)
             this.host.view_name = n.id;
-        if (nav && this._pendingNav === nav && el._attachedDone && typeof el?.applyNav === 'function') {
+        if (rawNav && this._pendingNav === rawNav && el._attachedDone && typeof el?.applyNav === 'function') {
             this._pendingNav = null;
             Promise.resolve(el.applyNav(nav)).catch(err => console.error(err));
+        }
+        else if (!isNewEl && this.formPeriod && el._attachedDone && typeof el?.syncFormPeriod === 'function') {
+            Promise.resolve(el.syncFormPeriod(this.formPeriod)).catch(err => console.error(err));
         }
         try {
             const exp = window.top?.explorer || window.parent?.explorer;

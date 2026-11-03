@@ -11,7 +11,8 @@ import { openDataDb } from '../sources/data/db.js';
 import { refreshClasses } from '../sources/data/classes.js';
 import { classSchema, checkSchema } from '../sources/data/schema.js';
 import {
-    createObject, updateObject, deleteObject, restoreObject, readObject, objectVersions, referencedBy, queryObjects, writeVersion,
+    createObject, updateObject, deleteObject, restoreObject, readObject, objectVersions, referencedBy, queryObjects, writeVersion, nextOperationNumber,
+    getDocumentBinder, linkDocuments, unlinkDocuments, candidateBinderOperations,
 } from '../sources/data/objects.js';
 import { DataError } from '../sources/data/errors.js';
 
@@ -335,5 +336,64 @@ describe('объекты', () => {
         assert.equal(s.fields.find(f => f.id === 'client').target, '/ORGANIZATIONS/MY_ORG/DATA/CATALOGS/CLIENTS',
             'ссылка на справочник разрешена в локальный класс внутри $base');
         assert.equal(s.postings.length, 1, 'правила проводок унаследованы по Ancestor');
+    });
+
+    it('настраиваемый авто-нумератор операций (NUMERATOR): автоприсвоение номера и обнуление с началом нового года', async () => {
+        cls('DATA/OPERATIONS/NUMBERED', '$operation', `{
+            label: 'Нумеруемая операция',
+            NUMERATOR: { enabled: true, reset: 'year', pad: 4, prefix: 'ДОК-' },
+            METADATA: {
+                FIELDS: [{ id: 'sum', label: 'Сумма', type: 'Money' }],
+                POSTINGS: [{ id: 'p1', amount: 'sum', debit: { account: '/DATA/REGISTER/62', analytics: { counterparty: 'client' } }, credit: { account: '/DATA/REGISTER/90' } }]
+            }
+        }`);
+        await refreshClasses(db, tmp);
+        const s = classSchema(db, '/DATA/OPERATIONS/NUMBERED');
+        assert.equal(s.numerator.enabled, true);
+        assert.equal(s.numerator.field, 'num', 'поле num автоматически добавлено нумератором');
+        assert.equal(s.numerator.reset, 'year');
+
+        const op1 = createObject(db, { cid: '/DATA/OPERATIONS/NUMBERED', time: '2025-06-15', body: { sum: 100 } });
+        assert.equal(op1.body.num, 'ДОК-0001');
+        const op2 = createObject(db, { cid: '/DATA/OPERATIONS/NUMBERED', time: '2025-11-20', body: { sum: 200 } });
+        assert.equal(op2.body.num, 'ДОК-0002');
+        assert.equal(nextOperationNumber(db, s, '2025-12-31'), 'ДОК-0003');
+
+        // В новом 2026 году нумератор автоматически обнуляется и начинает с 0001
+        assert.equal(nextOperationNumber(db, s, '2026-01-01'), 'ДОК-0001');
+        const op2026 = createObject(db, { cid: '/DATA/OPERATIONS/NUMBERED', time: '2026-02-10', body: { sum: 300 } });
+        assert.equal(op2026.body.num, 'ДОК-0001');
+    });
+
+    it('подшивка операций (Основание → Следствие): связь при создании, ручная подшивка, кандидаты по контрагенту и открепление', async () => {
+        const buyer = createObject(db, { cid: '/DATA/CATALOGS/SUBJECTS/LEGAL', body: { name: 'ООО «Заказчик»', inn: '7701234567' } });
+        const invoice = createObject(db, { cid: '/DATA/OPERATIONS/SALES/RETAIL', time: '2026-03-01', body: { name: 'Счёт №10', sum: 50000, client: buyer.id } });
+        const payment = createObject(db, {
+            cid: '/DATA/OPERATIONS/SALES/RETAIL',
+            time: '2026-03-05',
+            basis_id: invoice.id,
+            body: { name: 'Платёжное поручение №25', sum: 50000, client: buyer.id },
+        });
+
+        const invBinder = getDocumentBinder(db, invoice.id);
+        assert.equal(invBinder.parents.length, 0);
+        assert.equal(invBinder.children.length, 1);
+        assert.equal(invBinder.children[0].id, payment.id);
+        assert.equal(invBinder.children[0].party, 'ООО «Заказчик»');
+
+        const payBinder = getDocumentBinder(db, payment.id);
+        assert.equal(payBinder.parents.length, 1);
+        assert.equal(payBinder.parents[0].id, invoice.id);
+        assert.equal(payBinder.children.length, 0);
+
+        const act = createObject(db, { cid: '/DATA/OPERATIONS/SALES/RETAIL', time: '2026-03-10', body: { name: 'Акт №1', sum: 50000, client: buyer.id } });
+        const cands = candidateBinderOperations(db, invoice.id, { samePartyOnly: true });
+        assert.ok(cands.items.some(i => i.id === act.id), 'акт по тому же контрагенту найден в кандидатах подшивки');
+
+        linkDocuments(db, { sourceId: invoice.id, targetId: act.id });
+        assert.equal(getDocumentBinder(db, invoice.id).children.length, 2);
+
+        unlinkDocuments(db, { id: invoice.id, targetId: act.id });
+        assert.equal(getDocumentBinder(db, invoice.id).children.length, 1);
     });
 });

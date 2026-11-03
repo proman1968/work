@@ -98,7 +98,7 @@ export const writeTable = {
             if (ctx.entry)
                 ctx.entry.path = real;
             const req = absPath(args.path, ctx);
-            return (real !== req ? 'сохранено ' + real + ' (запрошено ' + req + '; в классе файлы ложатся в зону роли — используй этот путь)' : 'сохранено ' + real)
+            return (real !== req ? 'сохранено ' + real + ' (запрошено ' + req + '; дальше используй фактический путь ' + real + ')' : 'сохранено ' + real)
                 + ', ' + formatSize(buf.length);
         },
     };

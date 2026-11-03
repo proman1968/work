@@ -77,6 +77,11 @@ ORGANIZATIONS/*/
 **/$*/ADMIN/
 **/$*/USER/
 **/$*/BOSS/
+ORGANIZATIONS/**/$*/task/
+ORGANIZATIONS/**/$*/pdf/
+ORGANIZATIONS/**/$*/docx/
+ORGANIZATIONS/**/$*/xlsx/
+ORGANIZATIONS/**/$*/pptx/
 **/#system/work.db*
 
 # Рабочие данные лицензионного сервера (ключ центра сертификации, реестр) при локальном запуске

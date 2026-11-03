@@ -4,28 +4,303 @@
 <meta charset="utf-8">
 <title>Платёжное поручение</title>
 <style>
-    body { font: 13px/1.4 Arial, sans-serif; margin: 20mm; color: #000; }
-    h1 { font-size: 18px; margin: 0 0 4px; }
-    .sub { color: #555; margin-bottom: 16px; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
-    td { border: 1px solid #000; padding: 6px 8px; vertical-align: top; }
-    td.k { width: 28%; background: #f3f3f3; }
-    .sum { font-size: 16px; font-weight: bold; }
-    .sign { margin-top: 36px; display: flex; gap: 48px; }
-    .sign div { border-top: 1px solid #000; min-width: 180px; padding-top: 4px; font-size: 11px; }
-    @media print { body { margin: 10mm; } }
+    @page { size: A4 portrait; margin: 12mm 15mm; }
+    * { box-sizing: border-box; }
+    body {
+        font: 12px/1.25 "Times New Roman", Times, serif;
+        color: #000;
+        background: #fff;
+        margin: 0;
+        padding: 12mm 15mm;
+    }
+    @media print {
+        body { padding: 0; }
+    }
+    .pp-sheet {
+        max-width: 180mm;
+        margin: 0 auto;
+    }
+    table.pp-top {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 6px;
+    }
+    table.pp-top td {
+        vertical-align: top;
+        padding: 0;
+    }
+    .line-box {
+        display: inline-block;
+        width: 44mm;
+        text-align: center;
+        margin-right: 10mm;
+    }
+    .line-box .val {
+        min-height: 16px;
+        border-bottom: 1px solid #000;
+        font-size: 12px;
+    }
+    .line-box .cap {
+        font-size: 9.5px;
+        padding-top: 2px;
+    }
+    .okud-box {
+        border: 1px solid #000;
+        padding: 2px 6px;
+        font-size: 12px;
+        display: inline-block;
+        float: right;
+    }
+    table.pp-head {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 8px 0 10px;
+    }
+    table.pp-head td {
+        vertical-align: bottom;
+        padding: 0;
+    }
+    .pp-title {
+        font-size: 14px;
+        font-weight: bold;
+        white-space: nowrap;
+        padding-right: 8px;
+    }
+    .status-box {
+        border: 1px solid #000;
+        width: 11mm;
+        height: 7mm;
+        text-align: center;
+        vertical-align: middle;
+        font-size: 12px;
+        float: right;
+        line-height: 6.5mm;
+    }
+    table.pp-grid {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+    table.pp-grid td {
+        border: 1px solid #000;
+        padding: 3px 5px;
+        vertical-align: top;
+        font-size: 12px;
+        word-wrap: break-word;
+    }
+    table.pp-grid td.no-top { border-top: none; }
+    table.pp-grid td.no-bottom { border-bottom: none; }
+    table.pp-grid td.no-left { border-left: none; }
+    table.pp-grid td.no-right { border-right: none; }
+    .lbl-bottom {
+        font-size: 10px;
+        color: #111;
+        margin-top: 6px;
+    }
+    .sum-num {
+        font-size: 13px;
+        font-weight: bold;
+    }
+    table.pp-tax {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+    table.pp-tax td {
+        border: 1px solid #000;
+        border-top: none;
+        padding: 2px 4px;
+        min-height: 18px;
+        height: 18px;
+        font-size: 11px;
+        text-align: center;
+    }
+    table.pp-footer {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 14px;
+    }
+    table.pp-footer td {
+        vertical-align: top;
+        padding: 4px 6px;
+        font-size: 11px;
+    }
+    .sign-line {
+        border-bottom: 1px solid #000;
+        height: 22px;
+        margin-bottom: 2px;
+    }
+    .sign-cap {
+        font-size: 9.5px;
+        text-align: center;
+    }
 </style>
 </head>
 <body>
-<h1>Платёжное поручение № {{doc.number}}</h1>
-<div class="sub">от {{doc.date}} · {{doc.label}}</div>
-<table>
-    <tr><td class="k">Плательщик</td><td>{{org.name}}<br>ИНН {{org.inn}}, КПП {{org.kpp}}, р/с {{org.account}}<br>{{org.bank}}, БИК {{org.bik}}, к/с {{org.corr}}</td></tr>
-    <tr><td class="k">Получатель</td><td>{{coalesce(counterparty, employee, doc.label)}}</td></tr>
-    <tr><td class="k">Сумма</td><td class="sum">{{money(sum)}} ₽</td></tr>
-    <tr><td class="k">Сумма прописью</td><td>{{words(sum)}}</td></tr>
-    <tr><td class="k">Назначение платежа</td><td>{{coalesce(purpose, doc.label)}}{{#if contract}}. Договор: {{contract}}{{/if}}</td></tr>
-</table>
-<div class="sign"><div>Руководитель</div><div>Главный бухгалтер</div><div>Банк</div></div>
+<div class="pp-sheet">
+    <table class="pp-top">
+        <tr>
+            <td>
+                <div class="line-box">
+                    <div class="val">&nbsp;</div>
+                    <div class="cap">Поступ. в банк плат.</div>
+                </div>
+                <div class="line-box">
+                    <div class="val">{{#if doc.status == 'проведена'}}{{doc.date}}{{/if}}</div>
+                    <div class="cap">Списано со сч. плат.</div>
+                </div>
+            </td>
+            <td style="width: 30mm; text-align: right;">
+                <span class="okud-box">0401060</span>
+            </td>
+        </tr>
+    </table>
+
+    <table class="pp-head">
+        <tr>
+            <td class="pp-title">ПЛАТЕЖНОЕ ПОРУЧЕНИЕ № &nbsp; {{doc.number}}</td>
+            <td style="text-align: center; width: 38mm;">
+                <div class="line-box" style="width: 34mm; margin: 0;">
+                    <div class="val">{{doc.date}}</div>
+                    <div class="cap">Дата</div>
+                </div>
+            </td>
+            <td style="text-align: center; width: 38mm;">
+                <div class="line-box" style="width: 34mm; margin: 0;">
+                    <div class="val">Электронно</div>
+                    <div class="cap">Вид платежа</div>
+                </div>
+            </td>
+            <td style="width: 16mm; text-align: right;">
+                <div class="status-box">{{state}}</div>
+            </td>
+        </tr>
+    </table>
+
+    <table class="pp-grid">
+        <colgroup>
+            <col style="width: 26%;">
+            <col style="width: 26%;">
+            <col style="width: 9%;">
+            <col style="width: 14%;">
+            <col style="width: 10%;">
+            <col style="width: 15%;">
+        </colgroup>
+        <tr>
+            <td colspan="1" style="border-top: none; border-left: none;">Сумма<br>прописью</td>
+            <td colspan="5" style="border-top: none; border-right: none;">{{words(sum)}}</td>
+        </tr>
+        <tr>
+            <td>ИНН &nbsp; {{org.inn}}</td>
+            <td>КПП &nbsp; {{org.kpp}}</td>
+            <td rowspan="2">Сумма</td>
+            <td colspan="3" rowspan="2" class="sum-num">{{money(sum)}}</td>
+        </tr>
+        <tr>
+            <td colspan="2" class="no-bottom">
+                <div>{{coalesce(org.full_name, org.name)}}</div>
+            </td>
+        </tr>
+        <tr>
+            <td colspan="2" class="no-top">
+                <div class="lbl-bottom">Плательщик</div>
+            </td>
+            <td>Сч. №</td>
+            <td colspan="3">{{coalesce(acct, org.account)}}</td>
+        </tr>
+        <tr>
+            <td colspan="2" rowspan="2">
+                <div>{{org.bank}}</div>
+                <div class="lbl-bottom">Банк плательщика</div>
+            </td>
+            <td>БИК</td>
+            <td colspan="3">{{org.bik}}</td>
+        </tr>
+        <tr>
+            <td>Сч. №</td>
+            <td colspan="3">{{org.corr}}</td>
+        </tr>
+        <tr>
+            <td colspan="2" rowspan="2">
+                <div>{{party.bank}}</div>
+                <div class="lbl-bottom">Банк получателя</div>
+            </td>
+            <td>БИК</td>
+            <td colspan="3">{{party.bik}}</td>
+        </tr>
+        <tr>
+            <td>Сч. №</td>
+            <td colspan="3">{{party.corr}}</td>
+        </tr>
+        <tr>
+            <td>ИНН &nbsp; {{party.inn}}</td>
+            <td>КПП &nbsp; {{party.kpp}}</td>
+            <td rowspan="2">Сч. №</td>
+            <td colspan="3" rowspan="2">{{party.account}}</td>
+        </tr>
+        <tr>
+            <td colspan="2" rowspan="3">
+                <div>{{coalesce(party.name, recipient_name, recipient, counterparty, employee, doc.label)}}</div>
+                <div class="lbl-bottom" style="margin-top: 14px;">Получатель</div>
+            </td>
+        </tr>
+        <tr>
+            <td>Вид оп.</td>
+            <td>01</td>
+            <td>Срок плат.</td>
+            <td>&nbsp;</td>
+        </tr>
+        <tr>
+            <td>Наз. пл.</td>
+            <td>&nbsp;</td>
+            <td>Очер. плат.</td>
+            <td>{{coalesce(priority, 5)}}</td>
+        </tr>
+        <tr>
+            <td colspan="2" class="no-top">&nbsp;</td>
+            <td>Код</td>
+            <td>0</td>
+            <td>Рез. поле</td>
+            <td>&nbsp;</td>
+        </tr>
+    </table>
+
+    <table class="pp-tax">
+        <tr>
+            <td style="width: 24%;">{{kbk}}</td>
+            <td style="width: 16%;">{{okato}}</td>
+            <td style="width: 10%;">{{tax_base}}</td>
+            <td style="width: 14%;">{{tax_period}}</td>
+            <td style="width: 14%;">{{tax_num}}</td>
+            <td style="width: 12%;">{{tax_date}}</td>
+            <td style="width: 10%;">{{tax_type}}</td>
+        </tr>
+    </table>
+
+    <table class="pp-grid" style="border-top: none;">
+        <tr>
+            <td style="border-top: none; min-height: 28mm; height: 28mm;">
+                <div>{{coalesce(descript, purpose, comment, doc.label)}}{{#if contract}}. Договор: {{contract}}{{/if}}</div>
+                <div class="lbl-bottom" style="margin-top: 16px;">Назначение платежа</div>
+            </td>
+        </tr>
+    </table>
+
+    <table class="pp-footer">
+        <tr>
+            <td style="width: 22%; text-align: center; padding-top: 18px;">М.П.</td>
+            <td style="width: 46%;">
+                <div style="text-align: center; font-weight: bold; margin-bottom: 6px;">Подписи</div>
+                <div class="sign-line"></div>
+                <div class="sign-cap">{{org.director}}</div>
+                <div class="sign-line" style="margin-top: 8px;"></div>
+                <div class="sign-cap">{{org.chief_accountant}}</div>
+            </td>
+            <td style="width: 32%; text-align: center;">
+                <div style="font-weight: bold; margin-bottom: 6px;">Отметки банка</div>
+            </td>
+        </tr>
+    </table>
+</div>
 </body>
 </html>

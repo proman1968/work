@@ -1092,6 +1092,13 @@ export class $folder extends $item{
             const cached = this[R]?.cache?.[list];
             if (Array.isArray(cached))
                 return cached.length > 0;
+            if (this instanceof FS.$file && (list === 'items' || list === 'entries')) {
+                const sfDir = this.storage_folder?.dir;
+                if (!sfDir || !fs.existsSync(sfDir))
+                    return false;
+                const entries = fs.readdirSync(sfDir);
+                return entries.some(name => name[0] !== '$' && name[0] !== '.' && name[0] !== '#');
+            }
             if (this.constructor === FS.$folder && !this.isType && (list === 'items' || list === 'entries') && fs.existsSync(this.dir)) {
                 const entries = fs.readdirSync(this.dir);
                 return entries.some(name => name[0] !== '$' && name[0] !== '.' && name[0] !== '#');

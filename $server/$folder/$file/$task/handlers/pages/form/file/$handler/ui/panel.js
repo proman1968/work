@@ -86,8 +86,9 @@ ODA({ is: 'microchat-panel',
     onEffort(e) { this._set('effort', e.detail?.value); },
     onMode(e) { this._set('mode', e.detail?.value); },
     async _upload(files) {
-        const owner = await Promise.resolve(this.$item.$owner);
-        const target = typeof owner?.save_file === 'function' ? owner : this.$item;
+        const target = typeof this.$item?.save_file === 'function'
+            ? this.$item
+            : await Promise.resolve(this.$item?.$owner);
         const out = [];
         for (const file of files) {
             if (file.internalPath) {
@@ -97,7 +98,7 @@ ODA({ is: 'microchat-panel',
             }
             if (!(file instanceof File))
                 continue;
-            const log = await target.save_file(file, { ignore_save_logs: true });
+            const log = await target.save_file(file, { ignore_save_logs: true, mainContext: this.$item?.path });
             const path = log?.logFullPath || log?.path;
             if (path)
                 out.push({ path: path.startsWith('/') ? path : '/' + path, name: file.name });

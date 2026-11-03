@@ -413,6 +413,18 @@ ODA({
             this._nowItem.activeLabel = this._nowItem.idleLabel;
             this._nowItem.label = this._nowItem.idleLabel;
             this._updateArrowTitles();
+        },
+        _onValueChanged(value) {
+            if (!this._allItem || !this._years?.length) return;
+            const currentKey = this._selectionKey(this.selection || []);
+            const nextKey = value || '*';
+            if (nextKey === currentKey) return;
+            const found = this._itemsByKey(nextKey);
+            if (found) {
+                this._applySelection(found);
+            } else if (nextKey === '*') {
+                this._applySelection([this._allItem]);
+            }
         }
     },
     _hasCustomDays: false,
@@ -938,8 +950,9 @@ ODA({
     // Выбор → ключ для value ($save).
     _selectionKey(selection) {
         return selection.map(i => {
-            if (i.is === 'oda-packets-now-selector') {
-                return i.granularity && i.granularity !== this.mode ? `now:${i.granularity}` : 'now';
+            if (i.is === 'oda-packets-now-selector' || i._isNowTarget) {
+                const gran = i.granularity || (typeof this.value === 'string' && this.value.startsWith('now:') ? this.value.slice(4) : '');
+                return gran && gran !== this.mode ? `now:${gran}` : 'now';
             }
             if (i.name === 'period' || i.name === 'custom-period' || i._isCustomRange) {
                 return `period:${i.start}:${i.end}`;
@@ -959,12 +972,43 @@ ODA({
         }
         if (key === '*') return this._allItem || null;
         if (key.startsWith('period:')) return this._restorePeriod(key.slice(7));
-        const node = this._dateNodes?.[key.replace(/\*+$/, '')];
-        if (node && node.mask === key && !node.disabled) {
-            if (['year', 'quarter', 'month', 'day'].includes(node.type)) {
-                this._setModeSilently(node.type);
+        const cleanName = key.replace(/\*+$/, '');
+        const node = this._dateNodes?.[cleanName];
+        if (node && node.mask === key) {
+            const unitType = node.type;
+            const [, unitEnd] = _leafSpan(cleanName, unitType);
+            if (!node.disabled || (this._hasCustomDays && this._lo && unitEnd >= this._lo)) {
+                if (['year', 'quarter', 'month', 'day'].includes(unitType)) {
+                    this._setModeSilently(unitType);
+                }
+                return node;
             }
-            return node;
+        }
+        if (this._hasCustomDays && this._lo) {
+            const unitType = _getType(cleanName);
+            if (['year', 'quarter', 'month', 'day'].includes(unitType) && _getMask(cleanName) === key) {
+                const [, unitEnd] = _leafSpan(cleanName, unitType);
+                if (unitEnd >= this._lo) {
+                    this._setModeSilently(unitType);
+                    const yStr = cleanName.slice(0, 4);
+                    let yearNode = (this._years || []).find(y => y.name === yStr) || null;
+                    if (!yearNode && Array.isArray(this._years)) {
+                        yearNode = this._makeItem({ name: yStr, items: [], disabled: false });
+                        this._years.push(yearNode);
+                        this._years.sort((a, b) => b.name.localeCompare(a.name));
+                    }
+                    const lbl = _getFullLabel(cleanName, unitType);
+                    return {
+                        name: cleanName,
+                        type: unitType,
+                        root: yearNode,
+                        mask: key,
+                        label: lbl,
+                        fullLabel: lbl,
+                        _isSyntheticTarget: true
+                    };
+                }
+            }
         }
         return null;
     },
@@ -1032,7 +1076,9 @@ ODA({
         return this._periodItem;
     },
     _applySelection(selection) {
+        const nowTargets = new Set((selection || []).filter(s => s?._isNowTarget));
         this._clearSelected(this._years);
+        for (const s of nowTargets) s._isNowTarget = true;
         if (this._nowItem) {
             this._nowItem.selected = false;
             this._nowItem.idleLabel = NOW_IDLE_LABELS[this.mode] || 'Месяц';
@@ -1110,12 +1156,13 @@ ODA({
         this.period = this._resolvePeriod(selection);
         this.value = this._selectionKey(selection);
         this._syncBarItems(showCustomPeriod);
-        this.fire('selection-changed', { selected: this.selected, selection: this.selection, mask: this.mask, period: this.period });
+        this.fire('selection-changed', { selected: this.selected, selection: this.selection, mask: this.mask, period: this.period, value: this.value });
     },
     // Сброс отметки по всему дереву, иначе вложенный месяц/день остаётся подсвеченным в меню
     _clearSelected(items) {
         for (const i of items || []) {
             i.selected = false;
+            i._isNowTarget = false;
             if (i.items?.length) this._clearSelected(i.items);
         }
     },
@@ -1133,7 +1180,7 @@ ODA({
             const clipped = this._clipRange(s, e);
             if (clipped) return { start: clipped[0], end: clipped[1] };
             // «Сейчас» вне диапазона журнала: выбор остаётся на своей дате, таблица пустая
-            if (only.is === 'oda-packets-now-selector' || only._isNowTarget) {
+            if (only.is === 'oda-packets-now-selector' || only._isNowTarget || only._isSyntheticTarget) {
                 return { start: s, end: e };
             }
             return null;

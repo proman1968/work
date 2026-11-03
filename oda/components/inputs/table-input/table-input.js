@@ -80,7 +80,8 @@ ODA({
     $public: {
         value: {
             $type: Array
-        }
+        },
+        at: ''
     },
     /** карта контролов ячеек (живая привязка: модули импортируют друг друга) */
     get controls() {
@@ -119,9 +120,39 @@ ODA({
         const n = (this.value ?? []).length;
         return [n ? n + ' стр.' : '', this.totalsText].filter(Boolean).join(' · ');
     },
+    async addRow() {
+        const cols = this.tableColumns || [];
+        const linkCol = cols.find(c => c.type === 'link' && c.catalog && !c.readonly);
+        const pickFn = globalThis.__workCatalogPicker?.openCatalogPickerDialog;
+        if (linkCol && typeof pickFn === 'function' && typeof WORK?.showModal === 'function' && typeof document !== 'undefined') {
+            const res = await pickFn({
+                catalog: linkCol.catalog,
+                at: this.at || '',
+                multiple: true,
+                allowEmptyRow: true,
+                title: `Подбор: ${linkCol.label || this.label || 'Объекты'}`,
+            });
+            if (!res)
+                return;
+            if (res.emptyRow) {
+                this.value = [...(this.value ?? []), {}];
+                return;
+            }
+            if (Array.isArray(res.items) && res.items.length) {
+                const buildFn = globalThis.__workCatalogPicker?.buildTableRowsFromPicked;
+                const newRows = typeof buildFn === 'function'
+                    ? buildFn(cols, linkCol, res.items)
+                    : res.items.map(item => ({ [linkCol.id]: item.id }));
+                this.value = [...(this.value ?? []), ...newRows];
+                this.focusedRow = this.rows.at(-1);
+                return;
+            }
+        }
+        this.value = [...(this.value ?? []), {}];
+    },
     get tools() {
         return [
-            { icon: 'icons:add', label: 'Новый', title: 'Добавить строку', edit: true, action: () => this.value = [...(this.value ?? []), {}] },
+            { icon: 'icons:add', label: 'Новый', title: 'Добавить строку (подбор из справочника)', edit: true, action: () => this.addRow() },
             { icon: 'icons:content-copy', label: 'Копия', title: 'Дублировать строку', edit: true, disabled: !this.focusedRow,
                 action: () => this.value = [...(this.value ?? []), { ...sourceOf(this.focusedRow) }] },
             { icon: 'icons:delete', label: 'Удалить', title: 'Удалить строку', edit: true, disabled: !this.focusedRow,
