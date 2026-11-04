@@ -112,20 +112,22 @@ export default {
     $listeners: {
         tap(e) {
             // e.stopPropagation();
+            let h = this;
+            while (h && h.localName !== 'item-menu') {
+                h = h.host || h.parentElement;
+            }
+            const menuCtx = h?.$item || this.topHost?.$item;
             if (this.autoRun) {
                 this.async(() => {
                     if (this.$pdp.execute) {
                         this.$pdp.execute(this.$item);
                     }
                     else {
-                        this.$item.$context = this.topHost.$item;
+                        if (menuCtx)
+                            this.$item.$context = menuCtx;
                         this.$item.execute();
                     }
                 })
-            }
-            let h = this;
-            while (h && h.localName !== 'item-menu') {
-                h = h.host || h.parentElement;
             }
             if (h) {
                 h.parentElement?.fire('close');

@@ -73,9 +73,19 @@ export default {
         const $item = this.$item;
         if (!$item)
             return null;
+        const stampContext = (node) => {
+            if (!node || typeof node !== 'object')
+                return node;
+            node.$context = $item;
+            if (Array.isArray(node.items)) {
+                for (const ch of node.items)
+                    stampContext(ch);
+            }
+            return node;
+        };
         // роль должна быть известна до запроса: без неё фильтр по роли не сработает
         return Promise.resolve($item.ensureRole?.()).then(() =>
-            $item.fetch('handlers', { path: this.path }));
+            $item.fetch('handlers', { path: this.path })).then(root => stampContext(root));
     },
     get tools(){
         return this.customTools || this.$item?.tools || [];

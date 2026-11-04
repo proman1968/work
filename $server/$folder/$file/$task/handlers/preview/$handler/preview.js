@@ -85,6 +85,8 @@ export default {
     `,
     task: null,
     running: false,
+    streamText: '',
+    streamField: '',
     now: 0,
     $item: {
         async set(n) {
@@ -95,6 +97,8 @@ export default {
     _bindPreview(n) {
         this._unbindPreview();
         this._bound = n || null;
+        this.streamText = '';
+        this.streamField = '';
         if (!n)
             return;
         const reload = () => this.debounce('task-preview', () => this._load(), 300);
@@ -105,12 +109,35 @@ export default {
                 if (s && this.task) {
                     this.task = { ...this.task, status: s };
                     this.running = s === 'running' || s === 'waiting';
+                    if (!this.running) {
+                        this.streamText = '';
+                        this.streamField = '';
+                    }
                     this._tick();
                 }
                 reload();
             },
+            'task.delta': e => {
+                const d = e.detail?.value;
+                if (!d?.token)
+                    return;
+                this.running = true;
+                if (this.task && this.task.status !== 'running')
+                    this.task = { ...this.task, status: 'running' };
+                const fld = d.field === 'reasoning' ? 'reasoning' : 'content';
+                if (this.streamField !== fld) {
+                    this.streamField = fld;
+                    this.streamText = '';
+                }
+                this.streamText = (this.streamText || '') + d.token;
+                this._tick();
+            },
             'chat.start': () => { this.running = true; this._tick(); },
-            'chat.done': reload,
+            'chat.done': () => {
+                this.streamText = '';
+                this.streamField = '';
+                reload();
+            },
         };
         for (const [k, fn] of Object.entries(this._h))
             n.listen(k, fn);
@@ -228,6 +255,12 @@ export default {
         if (s === 'running') {
             if (t)
                 return toolMeta(t.name).label + ' ' + toolTarget(t);
+            if (this.streamField === 'content' && this.streamText)
+                return 'пишет ответ';
+            if (this.streamField === 'reasoning' && this.streamText) {
+                const lastLine = String(this.streamText).trim().split('\n').pop() || '';
+                return lastLine ? ('думает: ' + lastLine.slice(0, 120)) : 'думает';
+            }
             const last = this.items[this.items.length - 1];
             if (last?.type === 'assistant' && !last.durationMs)
                 return last.content ? 'пишет ответ' : 'думает';
@@ -258,6 +291,8 @@ export default {
         for (let i = items.length - 1; i >= 0; i--)
             if (items[i]?.type === 'assistant' && String(items[i].content || '').trim() && !items[i].error)
                 return String(items[i].content);
+        if (this.status === 'running' && this.streamField === 'content' && String(this.streamText || '').trim())
+            return String(this.streamText);
         return '';
     },
     /** Все файлы задачи: ваши вложения и созданное агентом — как на вкладке «Файлы» задачи. */

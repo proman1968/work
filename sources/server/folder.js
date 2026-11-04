@@ -1302,6 +1302,9 @@ export class $folder extends $item{
                                 file = (FS[meta] || FS.$class)
                                 // file = $class;
                         }
+                        else if (id === 'form' && this.id === 'pages' && this.parent?.id === 'handlers') {
+                            file = FS.$handler;
+                        }
                     }
                 }
                 switch(id){
@@ -1956,7 +1959,7 @@ export class $folder extends $item{
             return cls.roles(params);
         return [];
     }
-    reset(initiator){
+    reset(initiator, opts){
         this[R].cache = {};
         let key = this.short;
         for(let session of Object.values($server.sessions)){
@@ -1967,7 +1970,7 @@ export class $folder extends $item{
                     socket.ws.send(JSON.stringify({path: key, initiator: initiator?.id}));
             }
         }
-        if(!(this instanceof FS.$class)){
+        if(!(this instanceof FS.$class) && !opts?.selfOnly){
 
             if(this.id === 'class.js'){
                 let keys = Object.keys($server.merges).filter(key=>key.split(';').includes(this.real_dir));

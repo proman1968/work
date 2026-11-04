@@ -91,13 +91,16 @@ function migrateLegacy(blocks) {
  */
 export async function getBody(file) {
     const s = stateOf(file);
-    if (s.running && s.body)
+    if ((s.running || s.writing) && s.body)
         return s.body;
     let raw = '';
     try {
         raw = String(await file.load({ encoding: 'utf-8' }) ?? '');
     }
     catch (e) { log.debug('task.load', e); /* нового файла ещё нет */ }
+    // Пока шло чтение с диска, задача могла уже запуститься в памяти — не затираем живой s.body!
+    if ((s.running || s.writing) && s.body)
+        return s.body;
     let parsed;
     try {
         parsed = raw.trim() ? JSON.parse(raw) : {};
@@ -105,11 +108,16 @@ export async function getBody(file) {
     catch {
         parsed = { items: [{ id: genId(), type: 'error', time: Date.now(), content: 'Файл задачи повреждён (не JSON) — начата новая лента.' }] };
     }
-    s.body = normalizeBody(parsed);
+    const next = normalizeBody(parsed);
+    // Если на диске ещё пустой стартовый файл, а в памяти s.body уже содержит реплики — сохраняем память
+    if (s.body?.items?.length && !next.items?.length)
+        return s.body;
+    s.body = next;
     return s.body;
 }
 
-/** Атомарная запись (tmp + rename), с коалесцированием частых сохранений. */
+/** Атомарная запись (tmp + rename), с коалесцированием частых сохранений.
+ *  На Windows при занятом целевом файле пишем напрямую без unlink, чтобы файл ни на мс не исчезал с диска. */
 async function save(s, session) {
     if (s.writing) {
         s.again = true;
@@ -124,19 +132,14 @@ async function save(s, session) {
             const tmp = dir + '.tmp';
             try {
                 await WORK.fsp.writeFile(tmp, text, 'utf-8');
-                try {
-                    await WORK.fsp.rename(tmp, dir);
-                }
-                catch {
-                    await WORK.fsp.unlink(dir).catch(() => {});
-                    await WORK.fsp.rename(tmp, dir);
-                }
+                await WORK.fsp.rename(tmp, dir);
             }
             catch {
                 await WORK.fsp.writeFile(dir, text, 'utf-8');
+                await WORK.fsp.unlink(tmp).catch(() => {});
             }
             try {
-                s.file.reset?.();
+                s.file.reset?.(undefined, { selfOnly: true });
             }
             catch (e) { log.debug('task.reset', e); /* кэш файла */ }
         } while (s.again);
@@ -296,6 +299,11 @@ function makeHost(s, session) {
     const body = s.body;
     return {
         get mode() { return body.mode; },
+        get effort() { return body.effort; },
+        setEffort: level => {
+            if (['off', 'low', 'medium', 'high'].includes(String(level || '')))
+                body.effort = String(level);
+        },
         get signal() { return s.controller?.signal; },
         allowed: {
             has: n => body.allowed.includes(n),
@@ -463,7 +471,7 @@ function start(s, session, file) {
                 depth,
                 ctx: { session, place, env, task: file, tz: body.tz, role: body.role },
                 loadImage: env.loadImage,
-                effort: body.effort,
+                effort: body.effort || def?.meta.effort,
                 maxTurns: Number(def?.meta.maxTurns || env.config.maxTurns) || undefined,
             });
             body.status = res.status === 'done' ? 'idle' : res.status;
@@ -474,6 +482,7 @@ function start(s, session, file) {
             body.status = 'error';
         }
         finally {
+            s.body = body;
             delete body.waiting;
             s.waiters.clear();
             const wasInterrupted = !!s.interrupted;
@@ -661,6 +670,8 @@ export async function prompt(file, params = {}) {
         body.mode = params.mode;
     if (params.model)
         body.model = params.model;
+    s.body = body;
+    await save(s, session);
     start(s, session, file);
     return { ok: true };
 }

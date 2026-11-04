@@ -69,17 +69,30 @@ export class $handler extends $class{
         }
     }
     async execute(...params) {
+        const rawPath = String(this.path || this.short || '');
+        const formViewMatch = rawPath.match(/\/handlers\/pages\/form(?:\/([^/$]+))?/);
+        if (formViewMatch && window.execute) {
+            const viewId = formViewMatch[1] || (this.id && this.id !== 'form' ? this.id : '');
+            const rawSelf = this[R]?.target || this;
+            const hasOwnCtx = Object.prototype.hasOwnProperty.call(rawSelf, '$context') || Object.prototype.hasOwnProperty.call(this, '$context');
+            const ctx = hasOwnCtx ? await this.$context : null;
+            if (ctx && ctx.type !== '$handler') {
+                window.execute(ctx, viewId ? { view: viewId } : undefined);
+                return;
+            }
+            window.execute(this, viewId ? { view: viewId } : undefined);
+            return;
+        }
+
         const module = await this.getModule();
-        if (module.execute) {
+        if (module?.execute) {
             module.execute.call(this, ...params);
             return;
         }
 
-        if (this.short.includes('form')) {
-            if (window.execute) {
-                window.execute(this);
-                return;
-            }
+        if (this.short.includes('form') && window.execute) {
+            window.execute(this);
+            return;
         }
         window.open(this.short + '/');
     }

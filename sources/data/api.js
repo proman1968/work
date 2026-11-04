@@ -43,6 +43,7 @@ import {
 import { DataError } from './errors.js';
 import { localDay } from './time.js';
 import { buildWorkspace } from './workspace.js';
+import * as SQL_INSPECTOR from './sql-inspector.js';
 import { normalizeSecurity, walkPlaces, trailKey } from '../server/access/workplaces.js';
 
 /** Ссылки рабочих мест — модулем по требованию: links.js тянет сервер, который сам импортирует этот модуль. */
@@ -1058,4 +1059,12 @@ export const DATA_METHODS = Object.freeze({
     db_close_period: { level: 'admin', fn: method('admin', ({ db, p }) => ({
         closed_until: 'day' in p ? closePeriod(db, p.day) : closedUntil(db),
     })) },
+
+    /** Инспектор и редактор SQL-баз данных (sql_databases, sql_schema, sql_rows, sql_update_row, sql_insert_row, sql_delete_row). */
+    sql_databases: { level: 'admin', fn: (item, p) => SQL_INSPECTOR.listSqlDatabases(item, p) },
+    sql_schema: { level: 'admin', fn: (item, p) => SQL_INSPECTOR.getSqlSchema(item, p) },
+    sql_rows: { level: 'admin', fn: (item, p) => SQL_INSPECTOR.querySqlRows(item, p) },
+    sql_update_row: { level: 'admin', fn: (item, p) => SQL_INSPECTOR.updateSqlRow(item, p) },
+    sql_insert_row: { level: 'admin', fn: (item, p) => SQL_INSPECTOR.insertSqlRow(item, p) },
+    sql_delete_row: { level: 'admin', fn: (item, p) => SQL_INSPECTOR.deleteSqlRows(item, p) },
 });

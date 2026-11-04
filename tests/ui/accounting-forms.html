@@ -12,6 +12,7 @@ import '/oda/oda.js';
 await import('/$server/$folder/lib/class-picker/class-picker.js');
 import objectsProto from '/$server/$folder/$class/handlers/pages/form/objects/$handler/objects.js';
 import postingsProto from '/MODULES/Register/REGISTER/$register/$folder/$class/$account/handlers/pages/form/postings/$handler/postings.js';
+import databaseProto from '/$server/$folder/$class/$structure/handlers/pages/form/database/$handler/database.js';
 // cloneProto обнуляет imports, поэтому компоненты из них стенд грузит сам.
 // oda-packets нужен как полоса периодов: без неё элемент остаётся обычным HTMLElement.
 await import('/oda//packets.js');
@@ -120,6 +121,7 @@ async function waitPopover() {
 
 await ODA(cloneProto(objectsProto, 'test-objects'));
 await ODA(cloneProto(postingsProto, 'test-postings'));
+await ODA(cloneProto(databaseProto, 'test-database'));
 await ODA({ is: 'test-getter-for',
     template: `<div class="g" ~for="derived">{{$for.item}}</div>`,
     items: [],
@@ -751,6 +753,118 @@ await test('objects: в окне объекта справочника видн�
     assert(deepText(modal).includes('62 Расчёты с покупателями') && deepText(modal).includes('Реализация Р-001'), 'траектория показана: ' + deepText(modal));
     pop.close();
     await opening;
+    el.remove();
+});
+
+await test('database: представление База данных рендерит таблицы, записи, ER-схему, DDL и инспектор записи', async () => {
+    const calls = [];
+    const item = {
+        path: '/ORGANIZATIONS/Маслоторг',
+        type: '$base',
+        fetch: async (method, params = {}, body) => {
+            calls.push({ method, params, body });
+            if (method === 'sql_databases') {
+                return {
+                    scope: 'base',
+                    basePath: '/ORGANIZATIONS/Маслоторг',
+                    databases: [{
+                        id: 'base:/ORGANIZATIONS/Маслоторг',
+                        label: 'Маслоторг (work.db)',
+                        file: 'ORGANIZATIONS/Маслоторг/$base/#system/work.db',
+                        totalBytes: 913408,
+                        userVersion: 5,
+                        journalMode: 'wal',
+                        tableCount: 2,
+                    }],
+                };
+            }
+            if (method === 'sql_schema') {
+                return {
+                    dbId: 'base:/ORGANIZATIONS/Маслоторг',
+                    file: 'ORGANIZATIONS/Маслоторг/$base/#system/work.db',
+                    totalBytes: 913408,
+                    userVersion: 5,
+                    journalMode: 'wal',
+                    tables: [
+                        {
+                            name: 'objects',
+                            objectType: 'table',
+                            isVirtual: false,
+                            withoutRowid: false,
+                            isShadow: false,
+                            hasRowid: true,
+                            pkColumns: ['id'],
+                            rowCount: 1,
+                            description: 'Объекты справочников и операций',
+                            sql: 'CREATE TABLE objects (id TEXT PRIMARY KEY, cid TEXT NOT NULL, body TEXT)',
+                            columns: [
+                                { cid: 0, name: 'id', colType: 'TEXT', notnull: false, dfltValue: null, pk: 1 },
+                                { cid: 1, name: 'cid', colType: 'TEXT', notnull: true, dfltValue: null, pk: 0 },
+                                { cid: 2, name: 'body', colType: 'TEXT', notnull: true, dfltValue: "'{}'", pk: 0 },
+                            ],
+                            indexes: [{ name: 'objects_cid', unique: false, origin: 'c', columns: ['cid'] }],
+                        },
+                        {
+                            name: 'classes',
+                            objectType: 'table',
+                            isVirtual: false,
+                            withoutRowid: false,
+                            isShadow: false,
+                            hasRowid: true,
+                            pkColumns: ['cid'],
+                            rowCount: 1,
+                            description: 'Кэш классов',
+                            sql: 'CREATE TABLE classes (cid TEXT PRIMARY KEY, label TEXT)',
+                            columns: [
+                                { cid: 0, name: 'cid', colType: 'TEXT', notnull: false, dfltValue: null, pk: 1 },
+                                { cid: 1, name: 'label', colType: 'TEXT', notnull: true, dfltValue: null, pk: 0 },
+                            ],
+                            indexes: [],
+                        },
+                    ],
+                    relations: [
+                        { fromTable: 'objects', fromColumn: 'cid', toTable: 'classes', toColumn: 'cid', label: 'Класс объекта', kind: 'logical' },
+                    ],
+                };
+            }
+            if (method === 'sql_rows') {
+                return {
+                    dbId: 'base:/ORGANIZATIONS/Маслоторг',
+                    table: params.table || 'objects',
+                    keyColumns: ['id'],
+                    pkColumns: ['id'],
+                    hasRowid: true,
+                    total: 1,
+                    rows: [
+                        { __rowid__: 1, id: 'obj.1', cid: 'cat.items', body: '{"name":"Масло сливочное"}' },
+                    ],
+                };
+            }
+            if (method === 'sql_update_row') {
+                return { ok: true, changes: 1 };
+            }
+            return null;
+        },
+    };
+    const el = await mount('test-database', { $item: item });
+    assert(await until(() => deepText(el).includes('Масло сливочное')), 'строка таблицы objects отрисована: ' + deepText(el));
+    assert(deepText(el).includes('cat.items ↗'), 'FK ссылка отрисована со значком ↗');
+
+    // Выбираем строку и проверяем инспектор записи
+    el.selectRow(el.rows[0]);
+    await tick(60);
+    assert(await until(() => deepText(el).includes('Запись: id=obj.1')), 'инспектор записи открылся');
+    el.onEditorFieldInput('body', '{"name":"Масло топлёное"}');
+    await el.saveSelectedRow();
+    assert(calls.some(c => c.method === 'sql_update_row'), 'вызван sql_update_row');
+
+    // Переключаемся в режим ER-схемы и DDL
+    el.setViewMode('er');
+    await tick(60);
+    assert(await until(() => deepText(el).includes('Карта таблиц и связей базы данных')), 'ER-схема отрисована');
+    el.setViewMode('ddl');
+    await tick(60);
+    assert(await until(() => deepText(el).includes('CREATE TABLE objects')), 'DDL таблицы отрисован');
     el.remove();
 });
 

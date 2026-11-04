@@ -214,7 +214,7 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
 
     if (hasSafetensorsAndTokenizer(weightsDir)) {
         const tokenizer = getTokenizer(weightsDir);
-        const enableThinking = Boolean(options?.effort && options.effort !== 'off' && options.effort !== 'low');
+        const enableThinking = Boolean(options?.effort && options.effort !== 'off');
         const promptText = buildChatMlPrompt(turns.length ? turns : [{ role: 'user', content: 'Привет!' }], grounding, enableThinking);
         const inputIds = Array.from(tokenizer.encode(promptText), Number);
 

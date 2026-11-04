@@ -157,7 +157,7 @@ async function workGrep(args, ctx) {
             break;
         if (!(f instanceof FS.$file))
             continue;
-        if (mask && !mask.test(f.id))
+        if (mask && !mask.test(relPath(f, root)) && !mask.test(f.id))
             continue;
         if ((f.stat?.size ?? 0) > FILE_SIZE_MAX)
             continue;

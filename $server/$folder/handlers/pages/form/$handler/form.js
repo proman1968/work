@@ -569,8 +569,9 @@ ODA({is: 'work-form',
                 if (this._initializingItem || !this._rootItem)
                     return;
                 const d = ev?.data;
-                const myShort = this._rootItem?.short || this._rootItem?.path || this.$item?.short || this.$item?.path || '';
-                if (d?.short && d.short === myShort) {
+                const myShort = (this._rootItem?.short || this._rootItem?.path || this.$item?.short || this.$item?.path || '') || '/';
+                const msgShort = d?.short || '/';
+                if (d && msgShort === myShort) {
                     const nav = this._takeNav(myShort) || d.nav;
                     if (nav)
                         this.applyNav(nav);
@@ -583,21 +584,24 @@ ODA({is: 'work-form',
         this._navChannel = null;
     },
     _saveNav(short, nav) {
+        const key = short || '/';
         try {
-            sessionStorage.setItem('work.form.nav:' + short, JSON.stringify(nav));
+            sessionStorage.setItem('work.form.nav:' + key, JSON.stringify(nav));
         } catch {}
         try {
-            this._navChannel?.postMessage({ short, nav });
+            this._navChannel?.postMessage({ short: key, nav });
         } catch {}
     },
     _takeNav(short) {
-        if (!short)
-            return null;
+        const key = short || '/';
         try {
-            const raw = sessionStorage.getItem('work.form.nav:' + short);
+            const raw = sessionStorage.getItem('work.form.nav:' + key)
+                ?? (short === '' ? sessionStorage.getItem('work.form.nav:') : null);
             if (!raw)
                 return null;
-            sessionStorage.removeItem('work.form.nav:' + short);
+            sessionStorage.removeItem('work.form.nav:' + key);
+            if (short === '')
+                sessionStorage.removeItem('work.form.nav:');
             return JSON.parse(raw);
         } catch {
             return null;
@@ -618,6 +622,8 @@ ODA({is: 'work-form',
         if (nav.view && this.view?.id !== nav.view) {
             const v = await this.resolveView(nav.view);
             if (v && this.view?.id !== v.id) {
+                if (this.host)
+                    this.host.view_name = v.id;
                 this.view = v;
                 return;
             }

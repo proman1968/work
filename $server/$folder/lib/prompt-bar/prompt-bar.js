@@ -5,29 +5,11 @@ export default {
 /**
  * work-prompt-bar — единый композер WORK (чат класса, микрочат задачи).
  * Поле с автовысотой (Enter — отправить, Shift+Enter — строка, Ctrl+Enter — файлы, Esc — стоп/очистить),
- * вложения (+, вставка картинок, перетаскивание), получатели, модель и уровень рассуждения (ai),
+ * вложения (+, вставка картинок, перетаскивание), получатели, модель (ai),
  * режим (если задан modes), диктовка (Web Speech; в обычном чате — ещё и аудиофайл), отправка/стоп.
- * События: send, stop, clear, prompt-key; model/effort/mode — свойства (хост слушает *-changed).
+ * Уровень рассуждений (effort) модель выбирает сама в зависимости от сложности задачи.
+ * События: send, stop, clear, prompt-key; model/mode — свойства (хост слушает *-changed).
  */
-
-const EFFORTS = [
-    { id: 'off', label: 'Без рассуждения', short: 'Выкл' },
-    { id: 'low', label: 'Рассуждение: низкое', short: 'Низкое' },
-    { id: 'medium', label: 'Рассуждение: среднее', short: 'Среднее' },
-    { id: 'high', label: 'Рассуждение: высокое', short: 'Высокое' },
-];
-
-function capList(item) {
-    const c = item?.DATA?.capabilities ?? item?.capabilities;
-    if (c && typeof c.then === 'function')
-        return c;
-    if (c == null || c === '')
-        return;
-    if (Array.isArray(c))
-        return c;
-    const list = String(c).split(/[\s,]+/).filter(Boolean);
-    return list.length ? list : undefined;
-}
 
 /** Является ли узел $ai языковой моделью, подходящей для чата (не image/audio/embedding/asr/tts). */
 export function isChatModel(item) {
@@ -317,9 +299,6 @@ ODA({ is: 'work-prompt-bar',
                 <button class="pill" ~if="ai" :title="modelTitle" @pointerdown.stop="selectModel($event)">
                     <oda-icon :icon="modelIcon" :icon-size="16"></oda-icon><span>{{modelName}}</span><oda-icon icon="carbon:chevron-down" :icon-size="12"></oda-icon>
                 </button>
-                <button class="pill" ~if="ai && hasEffort" title="Уровень рассуждения" @tap="chooseEffort">
-                    <oda-icon icon="carbon:idea" :icon-size="14"></oda-icon><span>{{effortLabel}}</span>
-                </button>
                 <span class="timer" ~if="recording">⏺ {{timer}}</span>
                 <button class="dialog-btn" ~if="dialog" :on="dialogOn" :title="dialogOn ? 'Выключить голосовой диалог' : 'Голосовой диалог: говорите с агентом'" :aria-pressed="dialogOn ? 'true' : 'false'" @tap="toggleDialog">
                     <work-voice-bars :on="dialogOn"></work-voice-bars>
@@ -383,26 +362,6 @@ ODA({ is: 'work-prompt-bar',
     get modelTitle() {
         const parts = String(this.model || '').split('/').filter(Boolean);
         return parts.length >= 3 ? 'Модель: ' + parts.slice(1).join(' / ') : 'Выбрать модель';
-    },
-    /** Строго по capabilities: нет флага `effort` — нет кнопки. Пока список грузится — скрыта. */
-    get hasEffort() {
-        const item = this.modelItem;
-        if (item && typeof item.then === 'function') {
-            item.then(() => { this.hasEffort = undefined; });
-            return false;
-        }
-        const list = capList(item);
-        if (list && typeof list.then === 'function') {
-            Promise.resolve(list).then(() => { this.hasEffort = undefined; });
-            return false;
-        }
-        return !!list?.includes('effort');
-    },
-    get effortLevel() {
-        return this.effort || 'low';
-    },
-    get effortLabel() {
-        return (EFFORTS.find(e => e.id === this.effortLevel) || EFFORTS[1]).short;
     },
     get modeMeta() {
         return (this.modes || []).find(m => m.id === this.mode) || this.modes?.[0];
@@ -675,12 +634,6 @@ ODA({ is: 'work-prompt-bar',
         const id = await this._menu(e, this.modes || [], this.mode);
         if (id)
             this.mode = id;
-        this.focusInput();
-    },
-    async chooseEffort(e) {
-        const id = await this._menu(e, EFFORTS, this.effortLevel);
-        if (id)
-            this.effort = id;
         this.focusInput();
     },
     async selectModel(e) {

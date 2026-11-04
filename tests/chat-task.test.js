@@ -80,7 +80,7 @@ describe('chat-task: создание задачи (runCreateTask)', () => {
         assert.equal(deps.saved.params.includes, JSON.stringify(['/USERS/U1/up/a.pdf']));
         assert.equal(deps.saved.name, 'Сделай отчёт «итог»');
         assert.equal(deps.saved.body.model, '/MODELS/m');
-        assert.equal(deps.saved.body.effort, 'low', 'effort всегда в теле');
+        assert.equal(deps.saved.body.effort, undefined, 'effort не хардкодится из UI — выбирается моделью по сложности');
         assert.deepEqual(deps.saved.body.items, []);
         assert.equal(res.path, '/BASE/$base/USER/task/2026-10-08/1791000000000.U1.task');
     });

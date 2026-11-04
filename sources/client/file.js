@@ -93,8 +93,21 @@ export class $file extends $folder{
                     module = await import(n.short + '/~/handlers/preview/~/class.js');
                 }
                 let def = module?.default;
-                const proto = def && typeof def === 'object' ? { ...def, is: n.ext + '-preview' } : def;
-                WORK(proto);
+                if (def && typeof def === 'object') {
+                    const proto = Object.defineProperties(
+                        Object.create(Object.getPrototypeOf(def)),
+                        Object.getOwnPropertyDescriptors(def)
+                    );
+                    if (Array.isArray(def.extends))
+                        proto.extends = [...def.extends];
+                    if (Array.isArray(def.imports))
+                        proto.imports = [...def.imports];
+                    proto.is = n.ext + '-preview';
+                    await WORK(proto);
+                }
+                else if (def) {
+                    await WORK(def);
+                }
                 return true;
             }
             catch(e){

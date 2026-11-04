@@ -5,9 +5,9 @@
  */
 export default {
     template: /*html*/`
-        <oda-button content ~if="showSelector" :icon="roleIcon" :title="itemRole" :icon-size @tap="nextRole"
-            style="font-size: xx-small; border-radius: 50%;"
-            center icon-pos="top"
+        <oda-button content accent ~if="showSelector" :icon="roleIcon" :title="itemRole" :icon-size @tap="nextRole"
+            style="border-radius: 16px; padding: 2px 8px;"
+            center icon-pos="left" rotate="0" blink="0" :label="itemRole"
         ></oda-button>
     `,
     get itemRole() {

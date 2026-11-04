@@ -20,8 +20,8 @@ ODA({ is: 'microchat-panel',
             .go { border-radius: 999px; padding: 0 12px; height: 24px; font-size: x-small; border: 1px solid var(--subtle-border); }
         </style>
         <work-prompt-bar ai ::value ::files :pending="busy" :placeholder
-            :model="data?.model" :effort="data?.effort" :modes :mode
-            @model-changed.stop="onModel" @effort-changed.stop="onEffort" @mode-changed.stop="onMode"
+            :model="data?.model" :modes :mode
+            @model-changed.stop="onModel" @mode-changed.stop="onMode"
             @send="send" @stop="stop"></work-prompt-bar>
         <div class="foot">
             <span flex>{{hint}}</span>
@@ -83,7 +83,6 @@ ODA({ is: 'microchat-panel',
         this.$item?.fetch('configure', { [key]: v });
     },
     onModel(e) { this._set('model', e.detail?.value); },
-    onEffort(e) { this._set('effort', e.detail?.value); },
     onMode(e) { this._set('mode', e.detail?.value); },
     async _upload(files) {
         const target = typeof this.$item?.save_file === 'function'

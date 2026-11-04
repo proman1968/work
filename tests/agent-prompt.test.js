@@ -5,10 +5,10 @@
 import '../sources/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runLoop, toMessages, splitSystem, systemText, maybeCompact, VOLATILE_HEAD, EMPTY_NUDGE } from '../sources/modules/agent/loop.js';
+import { runLoop, toMessages, splitSystem, systemText, maybeCompact, resolveTurnEffort, createThinkSplitter, VOLATILE_HEAD, EMPTY_NUDGE } from '../sources/modules/agent/loop.js';
 import { estimateTokens } from '../sources/modules/agent/util.js';
 import { stableToolOrder } from '../sources/modules/agent/index.js';
-import { listing } from '../sources/modules/agent/tools/meta.js';
+import { listing, metaTools } from '../sources/modules/agent/tools/meta.js';
 
 function scripted(steps, log = []) {
     let i = 0;
@@ -146,5 +146,86 @@ describe('детерминированный порядок инструмент
         const input = names.map(name => ({ name }));
         stableToolOrder(input);
         assert.deepEqual(input.map(t => t.name), names);
+    });
+});
+
+describe('управление effort моделью и субагентами, потоковый <think> и изоляция субагентов', () => {
+    it('resolveTurnEffort: автоопределение по сложности задачи и уважение выбора модели', () => {
+        const shortMsg = [{ id: 'u', type: 'user', content: 'Привет! Как дела?' }];
+        assert.equal(resolveTurnEffort(undefined, shortMsg, 0), 'low');
+        assert.equal(resolveTurnEffort(undefined, shortMsg, 1), 'low');
+        assert.equal(resolveTurnEffort('off', shortMsg, 0), 'off');
+        const analysisMsg = [{ id: 'u', type: 'user', content: 'Проанализируй обороты по счёту 62 и рассчитай итог' }];
+        assert.equal(resolveTurnEffort(undefined, analysisMsg, 0), 'medium');
+        const archMsg = [{ id: 'u', type: 'user', content: 'Спроектируй архитектуру модуля и проведи комплексный рефакторинг' }];
+        assert.equal(resolveTurnEffort(undefined, archMsg, 0), 'high');
+        assert.equal(resolveTurnEffort('high', shortMsg, 0), 'high', 'явный выбор модели не понижается');
+    });
+
+    it('createThinkSplitter: потоковое отделение <think>…</think> в reasoning без утечки в content', () => {
+        let content = '';
+        let reasoning = '';
+        const sp = createThinkSplitter(c => { content += c; }, r => { reasoning += r; });
+        for (const ch of ['  <th', 'ink>\nшаг 1: ', 'проверить данные</th', 'ink>\nГотовый ответ'])
+            sp.push(ch);
+        sp.flush();
+        assert.equal(reasoning, 'шаг 1: проверить данные');
+        assert.equal(content, 'Готовый ответ');
+    });
+
+    it('todo_write переключает effort текущего цикла, а субагент task получает свой effort и не ломает todos/noteContext родителя', async () => {
+        const log = [];
+        const subLog = [];
+        const noted = [];
+        let currentEffort;
+        let todos = [];
+        const todoTool = metaTools.find(t => t.name === 'todo_write');
+        const taskTool = metaTools.find(t => t.name === 'task');
+        const h = host({
+            setEffort: v => { currentEffort = v; },
+            getTodos: () => todos,
+            setTodos: v => { todos = v; },
+            noteContext: c => noted.push(c),
+        });
+        const subLlm = scripted([{ text: 'Отчёт субагента' }], subLog);
+        const env = {
+            agents: new Map([['explore', { name: 'explore', meta: { tools: 'readonly', effort: 'low' }, body: 'Исследователь' }]]),
+            skills: new Map(),
+            config: { subagentModel: '/MODELS/sub' },
+            loadImage: async () => null,
+            llmFor: async () => subLlm,
+            makeSystemParts: async () => ({ stable: 'SUB', volatile: '' }),
+            makeTools: async () => [ls],
+        };
+        const mainLlm = scripted([
+            {
+                calls: [
+                    { name: 'todo_write', args: { todos: [{ content: 'Собрать данные', status: 'in_progress' }, { content: 'Сделать вывод', status: 'pending' }], effort: 'high' } },
+                    { name: 'task', args: { agent: 'explore', prompt: 'Найди файлы', effort: 'medium' } },
+                ],
+            },
+            {
+                calls: [
+                    { name: 'todo_write', args: { todos: [{ content: 'Собрать данные', status: 'completed' }, { content: 'Сделать вывод', status: 'completed' }], effort: 'low' } },
+                ],
+            },
+            { text: 'Итог готов' },
+        ], log);
+        const items = [{ id: 'u', type: 'user', content: 'Выполни задачу' }];
+        const res = await runLoop({
+            llm: mainLlm,
+            system: 'MAIN',
+            items,
+            tools: [ls, todoTool, taskTool],
+            host: h,
+            ctx: { env },
+        });
+        assert.equal(res.status, 'done');
+        assert.equal(log[0].effort, 'low', 'первый ход обычной реплики — low');
+        assert.equal(log[1].effort, 'high', 'после todo_write(effort=high) следующий ход идёт с high');
+        assert.equal(log[2].effort, 'low', 'после todo_write(effort=low) финальный ход идёт с low');
+        assert.equal(subLog.length, 1, 'субагент выполнился за 1 ход без ложной [Самопроверки] по открытым todos родителя');
+        assert.equal(subLog[0].effort, 'medium', 'субагент получил effort=medium от вызывающей модели');
+        assert.equal(noted.length, 3, 'noteContext вызывался только для 3 ходов родителя, субагент его не перезаписывал');
     });
 });

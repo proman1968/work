@@ -653,7 +653,12 @@ export const classSecurityMethods = {
         return this._isSystemPath(item);
     },
 
-    /** Прочитать секрет из #secret (fallback: #system). Требует ADMIN. */
+    /**
+     * Прочитать секрет из #secret (fallback: #system). Требует ADMIN.
+     * @param {object} [params]
+     * @param {string} params.filename Имя файла секрета
+     * @returns {Promise<object>} Объект секрета
+     */
     async read_secret(params = {}) {
         await this.assertAccess(params, this.constructor.ACCESS_LEVEL.ADMIN);
         const filename = params.filename;
@@ -674,7 +679,13 @@ export const classSecurityMethods = {
         return {};
     },
 
-    /** Сохранить секрет в #secret через save_file. Требует ADMIN. */
+    /**
+     * Сохранить секрет в #secret через save_file. Требует ADMIN.
+     * @param {object} [params]
+     * @param {string} params.filename Имя файла секрета
+     * @param {object|string} params.post Содержимое секрета
+     * @returns {Promise<object>} Результат сохранения
+     */
     async save_secret(params = {}) {
         await this.assertAccess(params, this.constructor.ACCESS_LEVEL.ADMIN);
         if (!params.filename)

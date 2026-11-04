@@ -608,47 +608,15 @@ function hasCap(ai, name) {
     return String(c || '').split(/[\s,]+/).filter(Boolean).includes(name);
 }
 
-const DEEP_TASK_RE = /(?:проанализируй|разработай|напиши\s+код|исправь|почему\s+не|сверь|составь\s+план|сравни|рассчитай|пересчитай|архитектур|рефактор|оптимизируй|миграци|отлад|найди\s+ошибк|сделай\s+отч[её]т|сформируй)/iu;
-
 /**
- * В режиме живого диалога (при дефолтном effort='low') на первом шаге реплики человека
- * отключаем блок <think> (reasoning_effort='none'), если это разговорная фраза или быстрый вопрос без ТЗ/вложений.
- * Как только вызван инструмент (следующий шаг с role='tool') или пришло реальное задание — рассуждение включается.
+ * Передача уровня рассуждений (effort), выбранного ядром агента или моделью, в протокол провайдера.
  */
-function shouldSkipThinkingOnDialogTurn(effort, messages) {
-    if (effort !== 'low')
-        return false;
-    const list = Array.isArray(messages) ? messages : [];
-    let idx = list.length - 1;
-    while (idx >= 0) {
-        const m = list[idx];
-        const txt = typeof m?.content === 'string' ? m.content : (Array.isArray(m?.content) ? String(m.content[0]?.text || '') : '');
-        if (m?.role === 'user' && (txt.startsWith('[Служебный контекст') || txt.startsWith('[Скриншоты экрана')))
-            idx--;
-        else
-            break;
-    }
-    if (idx < 0)
-        return false;
-    const last = list[idx];
-    if (last?.role !== 'user')
-        return false;
-    if (Array.isArray(last.content))
-        return false;
-    const text = String(last.content || '').trim();
-    if (!text || text.includes('[Вложения]') || text.length > 220 || DEEP_TASK_RE.test(text))
-        return false;
-    return true;
-}
-
 function applyEffort(body, ai, options = {}) {
     if (!hasCap(ai, 'effort') || !('effort' in options))
         return;
-    let effort = options.effort;
+    const effort = options.effort;
     if (effort == null || effort === '')
         return;
-    if (shouldSkipThinkingOnDialogTurn(effort, options.messages))
-        effort = 'off';
     const off = effort === 'off' || effort === false;
     const native = ai.protocol === 'ollama' || /\/api\/chat\b/.test(String(ai.baseUrl || ''));
     if (native)

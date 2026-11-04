@@ -96,7 +96,7 @@ export const metaTools = [
     {
         name: 'todo_write',
         planSafe: true,
-        description: 'План работы (чек-лист), видимый человеку. Для задач из 3+ шагов: заведи план, держи ровно один пункт in_progress, отмечай completed сразу по факту. Передавай список целиком.',
+        description: 'План работы (чек-лист), видимый человеку, и выбор уровня рассуждений (effort). Для задач из 3+ шагов: заведи план, держи ровно один пункт in_progress, отмечай completed сразу по факту. Передавай список целиком. Попутно можешь задать свой effort (off|low|medium|high) соразмерно сложности оставшихся шагов.',
         parameters: {
             type: 'object',
             properties: {
@@ -111,6 +111,11 @@ export const metaTools = [
                         required: ['content', 'status'],
                     },
                 },
+                effort: {
+                    type: 'string',
+                    enum: ['off', 'low', 'medium', 'high'],
+                    description: 'Уровень твоих рассуждений на следующие ходы по сложности задачи: off (простые действия), low (обычная работа), medium (анализ/сверка/код), high (сложная архитектура/отладка)',
+                },
             },
             required: ['todos'],
         },
@@ -119,9 +124,15 @@ export const metaTools = [
                 .filter(t => t && t.content)
                 .map(t => ({ content: String(t.content), status: TODO_STATUS.includes(t.status) ? t.status : 'pending' }));
             ctx.host.setTodos?.(todos);
+            if (args.effort && ['off', 'low', 'medium', 'high'].includes(String(args.effort))) {
+                const eff = String(args.effort);
+                ctx.host.setEffort?.(eff);
+                try { ctx.host.effort = eff; } catch { /* getter-only on makeHost */ }
+            }
             await ctx.host.save();
             const done = todos.filter(t => t.status === 'completed').length;
-            return 'план обновлён: ' + done + '/' + todos.length + ' выполнено';
+            return 'план обновлён: ' + done + '/' + todos.length + ' выполнено'
+                + (args.effort ? ' (effort: ' + args.effort + ')' : '');
         },
     },
     {
@@ -176,13 +187,18 @@ export const metaTools = [
         concurrent: true,
         planSafe: true,
         permission: () => ({ verdict: 'allow' }),
-        description: 'Поручить подзадачу субагенту (свой контекст, свой набор инструментов). Для широкого исследования, параллельных независимых подзадач, объёмного чтения. Результат — его итоговый отчёт. Пиши поручение самодостаточно: субагент не видит этот разговор. Субагент работает в той же роли задачи и не получает инструментов сверх твоего набора: работу, для которой тебе не хватает инструментов, ему не поручай — объясни ограничение пользователю.',
+        description: 'Поручить подзадачу субагенту (свой контекст, свой набор инструментов). Для широкого исследования, параллельных независимых подзадач, объёмного чтения. Результат — его итоговый отчёт. Пиши поручение самодостаточно: субагент не видит этот разговор. Выбирай effort субагента по сложности поручения (off/low — поиск и чтение, medium — анализ/сверка/код, high — сложная архитектура и отладка). Субагент работает в той же роли задачи и не получает инструментов сверх твоего набора: работу, для которой тебе не хватает инструментов, ему не поручай — объясни ограничение пользователю.',
         parameters: {
             type: 'object',
             properties: {
                 agent: { type: 'string', description: 'Имя субагента из списка «Субагенты»' },
                 description: { type: 'string', description: 'Коротко (3–6 слов), что делает' },
                 prompt: { type: 'string', description: 'Полное поручение: цель, контекст, что вернуть' },
+                effort: {
+                    type: 'string',
+                    enum: ['off', 'low', 'medium', 'high'],
+                    description: 'Уровень рассуждений субагента по сложности подзадачи: off (простая выборка), low (поиск и сводка), medium (анализ, сверка, код), high (сложная архитектура/отладка)',
+                },
             },
             required: ['prompt'],
         },
@@ -197,6 +213,11 @@ export const metaTools = [
                 throw new Error('нет субагента «' + name + '». Есть: ' + [...env.agents.keys()].join(', '));
             const entry = ctx.entry;
             entry.agent = name;
+            const effort = ['off', 'low', 'medium', 'high'].includes(String(args.effort || ''))
+                ? String(args.effort)
+                : (def.meta.effort ? String(def.meta.effort) : undefined);
+            if (effort)
+                entry.effort = effort;
             entry.items = [{ id: genId(), type: 'user', time: Date.now(), content: String(args.prompt) }];
             await ctx.host.save();
             // 9.2: дешёвая модель для субагентов (ai/config.js subagentModel) — если у агента нет своей
@@ -213,6 +234,8 @@ export const metaTools = [
                 hooks: ctx.hooks, // правила организации действуют и на субагента: иначе их обходило бы делегирование
                 // субагент работает в той же роли задачи (и тех же правах), что и основной агент
                 ctx: { session: ctx.session, place: ctx.place, env, role: ctx.role, task: ctx.task, tz: ctx.tz },
+                loadImage: env.loadImage,
+                effort,
                 maxTurns: Number(def.meta.maxTurns) || 40,
             });
             if (res.status === 'stopped')
@@ -233,6 +256,11 @@ export const metaTools = [
             agent: { type: 'string', description: 'Имя агента из списка «Субагенты»' },
             prompt: { type: 'string', description: 'Самодостаточное поручение' },
             description: { type: 'string', description: 'Название задачи для человека' },
+            effort: {
+                type: 'string',
+                enum: ['off', 'low', 'medium', 'high'],
+                description: 'Уровень рассуждений субагента по сложности задачи (off | low | medium | high)',
+            },
         }, required: ['agent', 'prompt'] },
         async run(args, ctx) {
             if (!ctx.task?.path || !ctx.session?.uid || !ctx.role)
@@ -262,9 +290,13 @@ export const metaTools = [
                 throw new Error('agent_start: в зоне роли уже ' + existing + ' дочерних задач (потолок ' + max
                     + ') — останови ненужные (agent_stop) или используй разовых субагентов (task)');
             const name = String(args.description || args.agent).slice(0, 80);
+            const effort = ['off', 'low', 'medium', 'high'].includes(String(args.effort || ''))
+                ? String(args.effort)
+                : (def.meta.effort ? String(def.meta.effort) : undefined);
             const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle', mode: parentMode,
                 parentTask: ctx.task.path, ownerUid: ctx.session.uid, childAgent: def.name, childDepth: depth,
                 model: def.meta.model || ctx.llm.name, role: ctx.role,
+                ...(effort ? { effort } : {}),
                 ...(pcall ? { callRestrict: [...pcall.restrictedMethods] } : {}) };
             // skip_file_handler: не запускать триггер одновременно с явным prompt ниже.
             const log = await callAs(point, 'save_file', {

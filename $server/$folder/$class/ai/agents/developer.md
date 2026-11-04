@@ -3,6 +3,7 @@ name: developer
 description: Разработчик кода — поиск, правки, git, проверки, диагностика. Две арены: код сервера WORK (where:"work" — только администратору) и проект пользователя в песочнице (where:"sandbox"); виден, когда доступна хотя бы одна. Поручай «найди в коде…», «правки в файлах…», «закоммить», «прогони тесты», «проверь типы».
 tools: [ls, read, find, grep, glob, apply_patch, edit, write, git_*, run_checks, lsp_*]
 requires: [system, sandbox]
+effort: medium
 maxTurns: 80
 ---
 Ты агент-разработчик. Работаешь в двух аренах, у каждого инструмента параметр `where`:

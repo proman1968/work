@@ -75,6 +75,69 @@ export function stageText(stage, info = {}) {
     }
 }
 
+const NON_CHAT_MODEL_RE = /(flux|sdxl|stable-?diffusion|z-image|embedding|bge-|rerank|whisper|\basr\b|\btts\b|\bstt\b|voice|kokoro|musicgen|wan2|ltx-video)/i;
+
+/** Является ли узел $ai языковой моделью, подходящей для чата (не image/audio/embedding/asr/tts). */
+export function isChatModel(item) {
+    if (!item)
+        return false;
+    if (item.type && item.type !== '$ai')
+        return false;
+    const mod = String(item.DATA?.modality ?? (typeof item.modality === 'string' ? item.modality : '') ?? '').toLowerCase();
+    if (['image', 'audio', 'embedding', 'video', 'voice', 'asr', 'tts', 'stt'].includes(mod))
+        return false;
+    const name = String(item.id || item.label || item.DATA?.label || item.path || '').toLowerCase();
+    if (NON_CHAT_MODEL_RE.test(name))
+        return false;
+    const caps = item.DATA?.capabilities ?? item.capabilities;
+    if (caps && typeof caps.then !== 'function') {
+        const list = Array.isArray(caps)
+            ? caps.map(String)
+            : String(caps || '').split(/[\s,]+/).filter(Boolean);
+        if (list.length)
+            return list.includes('chat');
+    }
+    return true;
+}
+
+function userAiStorageKey(suffix = 'model') {
+    const uid = globalThis.WORK?.uid
+        || globalThis.WORK?.USER?.id
+        || globalThis.WORK?.credentials?.uid
+        || 'default';
+    return `work.user.ai:${uid}:${suffix}`;
+}
+
+export function getUserPreferredModel() {
+    if (typeof localStorage === 'undefined')
+        return '';
+    try {
+        const val = localStorage.getItem(userAiStorageKey('model'))
+            || localStorage.getItem('work.user.ai:default:model')
+            || '';
+        if (val && NON_CHAT_MODEL_RE.test(val))
+            return '';
+        return val;
+    }
+    catch {
+        return '';
+    }
+}
+
+export function setUserPreferredModel(modelPath) {
+    if (!modelPath || typeof localStorage === 'undefined')
+        return;
+    if (NON_CHAT_MODEL_RE.test(modelPath))
+        return;
+    try {
+        localStorage.setItem(userAiStorageKey('model'), modelPath);
+        localStorage.setItem('work.user.ai:default:model', modelPath);
+        if (typeof BroadcastChannel !== 'undefined')
+            new BroadcastChannel('work-user-ai-model').postMessage({ model: modelPath });
+    }
+    catch { /* ignore */ }
+}
+
 /**
  * Создание задачи из чата: [вложения параллельно] → сохранение .task → запуск агента.
  * Запуск — явный prompt по пути из ответа (on_save-триггер для этого сохранения отключён): ничего не ждёт
@@ -126,8 +189,8 @@ export async function runCreateTask({ text, files = [], params = {}, settings = 
         const body = { name, created: Date.now(), items: [] };
         if (settings.model)
             body.model = settings.model;
-        // effort всегда в body: иначе задача стартует без effort и модель рассуждает «как попало»
-        body.effort = settings.effort || 'low';
+        if (settings.effort)
+            body.effort = settings.effort;
         // Запуск агента — как всегда, триггером on_save задачи (см. ////triggers/on_save).
         const saveParams = { ...params };
         if (attachments.length)

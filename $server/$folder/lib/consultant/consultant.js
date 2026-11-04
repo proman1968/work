@@ -435,8 +435,8 @@ ODA({
             <oda-button class="down attn" ~if="hasMessages && !pinned && needsHuman" accent-invert icon="carbon:arrow-down" :icon-size="16" label="Агент ждёт вас" title="Перейти к вопросу или разрешению" @tap="toBottom"></oda-button>
             <microchat-voice ~if="voiceOn"></microchat-voice>
             <work-prompt-bar ai ::value ::files :pending="busy" :placeholder="placeholderText"
-                ::model ::effort
-                @model-changed.stop="onModelChanged" @effort-changed.stop="onEffortChanged"
+                ::model
+                @model-changed.stop="onModelChanged"
                 @send="send" @stop="stop"></work-prompt-bar>
         </div>
 
@@ -457,7 +457,6 @@ ODA({
     value: '',
     files: [],
     model: { $def: '', $save: true },
-    effort: { $def: 'low', $save: true },
     toastText: '',
     showHistory: false,
     recentTasks: [],
@@ -723,14 +722,6 @@ ODA({
         if (this.taskItem)
             this.taskItem.fetch('configure', { model: v }).catch(() => {});
     },
-    onEffortChanged(e) {
-        const v = e?.detail?.value;
-        if (!v)
-            return;
-        this.effort = v;
-        if (this.taskItem)
-            this.taskItem.fetch('configure', { effort: v }).catch(() => {});
-    },
 
     startNewChat() {
         this._unbindTask();
@@ -857,7 +848,6 @@ ODA({
                 prompt: text,
                 created: Date.now(),
                 items: [],
-                effort: this.effort || 'low',
                 ...(voice ? { voice: true } : {}),
             };
             if (this.model)

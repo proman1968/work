@@ -110,17 +110,26 @@ ODA({is: 'chat-item',
         </div>
         <div class="card" shadow :flex="expanded || compact || isTask" vertical ~style="cardLayoutStyle" @tap="onCardTap($event)">
             <div class="title" no-flex light horizontal ~if="!(expanded && bodyHeader)" style="justify-content: space-between; align-items: center;">
-                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText" hide-history-time>
+                <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText || !!missingTargetPath" hide-history-time>
                     <span class="file-time" ~if="fileTime">{{fileTime}}</span>
                 </item-node>
-                <oda-button ~if="!compact && !isOperationLog" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
-            </div>       
-            <div class="preview" ~if="!expanded && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
-            <div class="preview" ~if="!expanded && !$file && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
-            <div header ~if="!expanded && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
+                <oda-button ~if="!compact && !isOperationLog && !missingTargetPath" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
+            </div>
+            <div class="preview missing-file-box" ~if="!expanded && missingTargetPath" horizontal style="align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px;">
+                <div horizontal style="align-items: center; gap: 8px; min-width: 0; color: var(--error-color, #dc2626);">
+                    <oda-icon icon="icons:warning" :icon-size="18" style="flex-shrink: 0;"></oda-icon>
+                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" :title="missingTargetPath">
+                        Такого файла нет: <b>{{missingTargetLabel}}</b>
+                    </span>
+                </div>
+                <oda-button ~if="isAdminRole" class="delete-log-btn" error-invert icon="icons:delete" :icon-size="16" label="Удалить лог" title="Удалить запись лога об отсутствующем файле" @tap.stop="deleteMissingLog($event)" style="border-radius: 6px; padding: 3px 10px; scale: 1; flex-shrink: 0;"></oda-button>
+            </div>
+            <div class="preview" ~if="!expanded && !missingTargetPath && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
+            <div class="preview" ~if="!expanded && !missingTargetPath && !$file && !hasTargetFilePath && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
+            <div header ~if="!expanded && !missingTargetPath && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
-            <div class="body" flex vertical ~if="expanded">
+            <div class="body" flex vertical ~if="expanded && !missingTargetPath">
                 <div ~is="formTag" flex :$item="$file" @own-header="bodyHeader = true" @close-view="expanded = false"></div>
             </div>
         </div>
@@ -323,6 +332,60 @@ ODA({is: 'chat-item',
     },
     previewTag: 'item-node',
     hasPreview: false,
+    missingTargetPath: '',
+    get hasTargetFilePath() {
+        const p = String(this.log?.path || '').trim();
+        const ext = String(this.log?.ext || '').toLowerCase();
+        return Boolean(p && !p.endsWith('.logs') && ext !== 'operation' && ext !== 'object');
+    },
+    get missingTargetLabel() {
+        const p = String(this.missingTargetPath || '').trim();
+        if (!p)
+            return '';
+        return p.split('/').filter(Boolean).pop() || p;
+    },
+    get isAdminRole() {
+        const pdpRole = this.$pdp?.$item?.role || this.$pdp?.activeRole;
+        if (pdpRole)
+            return pdpRole === 'ADMIN';
+        const wf = typeof document !== 'undefined' ? document.querySelector?.('pages-form')?.$?.('work-form') : null;
+        if (wf?.activeRole)
+            return wf.activeRole === 'ADMIN';
+        return globalThis.WORK?.preferredRole === 'ADMIN';
+    },
+    async deleteMissingLog(e) {
+        e?.stopPropagation?.();
+        const owner = this.$pdp?.$item
+            || (typeof document !== 'undefined' ? document.querySelector?.('pages-form')?.$?.('work-form')?.currentItem : null)
+            || globalThis.WORK;
+        if (!owner || typeof owner.fetch !== 'function')
+            return;
+        try {
+            await owner.fetch('delete_log_entry', {
+                stubPath: this.log?.logsFilePath || this.$item?.path || '',
+                path: this.missingTargetPath || this.log?.path || '',
+                time: this.log?.time || 0,
+                sender: this.log?.sender || '',
+            });
+            // Убираем удалённую карточку из родительского chat-day сразу без перезагрузки ленты
+            let p = this.parentElement || this.host || this.getRootNode?.()?.host;
+            while (p && p.localName !== 'chat-day')
+                p = p.parentElement || p.host || p.getRootNode?.()?.host;
+            if (p && Array.isArray(p.logItems)) {
+                const curId = this.$item?.id;
+                if (curId && p._wrappedById instanceof Map)
+                    p._wrappedById.delete(curId);
+                p.logItems = p.logItems.filter(it => it !== this.$item && it?.id !== curId);
+                p.render?.();
+            }
+            else {
+                this.remove?.();
+            }
+        }
+        catch (err) {
+            console.warn('[chat-item] delete_log_entry:', err);
+        }
+    },
     _bodyCacheKeys: ['itemBody', 'fileLabel', 'fileTime', 'sender', 'log', 'logContent', 'isText', 'hideAvatar'],
     _resetBodyCache() {
         this.invalidate(...this._bodyCacheKeys);
@@ -494,13 +557,33 @@ ODA({is: 'chat-item',
                 return this._includeFile;
             if (this.history || (!this.$item && !this.log?.path))
                 return null;
+            // Если $item уже является самим файлом .task (принят через adoptTask), используем его напрямую без ожидания itemBody
+            if (this.$item && !this.$item.logRow && (this.$item.ext === 'task' || String(this.$item.id || '').endsWith('.task'))) {
+                const taskFile = this.$item;
+                this.missingTargetPath = '';
+                return this.loadPreview(taskFile).then(() => taskFile);
+            }
             return Promise.resolve(this.itemBody).then(async body => {
-                if (!body?.path || body?.ext === 'operation' || body?.ext === 'object') {
+                if (!body?.path || String(body.path).endsWith('.logs') || body?.ext === 'operation' || body?.ext === 'object') {
                     if (body?.ext === 'operation' || body?.ext === 'object')
                         this.hasPreview = true;
                     return null;
                 }
-                let $file = await WORK.get_item(body.path, 'info');
+                let $file = null;
+                try {
+                    $file = await WORK.get_item(body.path, 'info');
+                }
+                catch {
+                    $file = null;
+                }
+                if (!$file || (typeof $file === 'object' && !$file.path && !$file.id && !$file.type)) {
+                    this.missingTargetPath = String(body.path);
+                    this.hasPreview = false;
+                    this.previewIsReady = true;
+                    this.render();
+                    return null;
+                }
+                this.missingTargetPath = '';
                 if ($file && !$file.id && $file.path) {
                     $file.DATA ??= {};
                     $file.DATA.id = $file.path.split('/').pop();
@@ -542,6 +625,16 @@ ODA({is: 'chat-item',
     $item: {
         $def: null,
         set(n) {
+            const nextKey = n ? String(n.path || n.id || '') : '';
+            if (nextKey && this._currentItemKey === nextKey && this.log) {
+                const nextRow = n?.logRow || n?.DATA?.logRow;
+                if (nextRow && typeof nextRow === 'object' && typeof nextRow.then !== 'function') {
+                    this.log = { ...nextRow };
+                }
+                return;
+            }
+            this._currentItemKey = nextKey;
+            this.missingTargetPath = '';
             this._resetBodyCache();
             this.previewIsReady = false;
             this.senderIsReady = false;

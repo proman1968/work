@@ -87,7 +87,14 @@ export const classFeedMethods = {
         throw new Error(ACCESS_DENIED);
     },
 
-    /** Чистая лог-запись (сообщение) без физического файла. */
+    /**
+     * Чистая лог-запись (сообщение) без физического файла.
+     * @param {object} [params]
+     * @param {string} params.message Текст сообщения
+     * @param {string|string[]} [params.receivers] Получатели (uid)
+     * @param {string|string[]} [params.includes] Вложенные WORK-пути
+     * @returns {Promise<object>} Запись лога
+     */
     async save_message(params = {}) {
         await this._assertCanPost(params);
         const time = Date.now();
@@ -133,6 +140,12 @@ export const classFeedMethods = {
         return LOGS.appendIncludes(this, params.entryPath, params.includePaths, { session: params.session });
     },
 
+    /** Удалить запись лога (только для ADMIN). */
+    async delete_log_entry(params = {}) {
+        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
+        return LOGS.deleteLogEntry(this, params);
+    },
+
     /** @deprecated используй append_log_includes({ entryPath, includePaths }) */
     async appendLogIncludes(entryPath, includePaths = [], params = {}) {
         if (entryPath && typeof entryPath === 'object' && entryPath.entryPath) {
@@ -148,7 +161,13 @@ export const classFeedMethods = {
         return this.logs({ ...params, mode: 'index' });
     },
 
-    /** Универсальный доступ к логам класса — единая точка чтения. */
+    /**
+     * Универсальный доступ к логам класса — единая точка чтения.
+     * @param {object} [params]
+     * @param {string} [params.mode] Режим: folder | dates | bodies | index | files
+     * @param {string} [params.day] Дата YYYY-MM-DD
+     * @returns {Promise<any>} Записи или метаданные логов
+     */
     async logs(params = {}) {
         const source = await this._logSource(params);
         if (source !== this)

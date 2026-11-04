@@ -1,11 +1,12 @@
-import { taskKeyOf, taskDayOf, isCreatedTask, pathOfLog } from './chat-task.js';
 import {
+    taskKeyOf,
+    taskDayOf,
+    isCreatedTask,
+    pathOfLog,
     isChatModel,
     getUserPreferredModel,
     setUserPreferredModel,
-    getUserPreferredEfforts,
-    setUserPreferredEfforts,
-} from '/$server/$folder/lib/prompt-bar/prompt-bar.js';
+} from './chat-task.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 /** localStorage.workChatDebug = 1 — журнал времён создания задачи в консоли. */
@@ -64,7 +65,7 @@ ODA({is: 'form-chat',
                 position: relative;
             }
         </style>
-        <oda-chat id="chat" :$item ::model ::efforts></oda-chat>
+        <oda-chat id="chat" :$item ::model></oda-chat>
     `,
     async attached(){
         if (typeof BroadcastChannel !== 'undefined' && !this._modelBc) {
@@ -98,8 +99,6 @@ ODA({is: 'form-chat',
                 setUserPreferredModel(n);
         }
     },
-    efforts: { $def: {} },
-    effort: { $def: '' },
     get $saveKey(){
         return this.$item?.short;
     },
@@ -107,13 +106,6 @@ ODA({is: 'form-chat',
         const userModel = getUserPreferredModel();
         if (userModel && this.model !== userModel)
             this.model = userModel;
-        const userEfforts = getUserPreferredEfforts();
-        if (Object.keys(userEfforts).length)
-            this.efforts = userEfforts;
-        if (this.effort && this.model && !this.efforts?.[this.model]) {
-            this.efforts = { ...this.efforts, [this.model]: this.effort };
-            setUserPreferredEfforts(this.efforts);
-        }
         if (!this.model) {
             try {
                 const children = await WORK.children;
@@ -352,7 +344,7 @@ ODA({is: 'oda-chat',
             <microchat-voice ~if="voiceOn"></microchat-voice>
             <work-prompt-bar style="margin: 8px;" @tap="focusedItem = null"
                 ::value ::files :ai="isAIMode" :placeholder :pending="awaitTask"
-                ::model ::effort ::tts-mode ::receivers :dept-users="deptUsers" :operation-classes="operationClasses" :show-tts="true"
+                ::model ::tts-mode ::receivers :dept-users="deptUsers" :operation-classes="operationClasses" :show-tts="true"
                 @receivers-changed="onReceiversChanged($event)" @create-operation="onCreateOperation($event)"
                 @send="onBarSend" @stop="onBarStop" @clear="clear" @prompt-key="_onPromptKey"></work-prompt-bar>
         </div>
@@ -444,20 +436,11 @@ ODA({is: 'oda-chat',
             setUserPreferredModel(n);
         },
     },
-    efforts: {},
     get $saveKey(){
         return this.$item?.short;
     },
     get modelItem(){
         return this.model ? WORK.get_item(this.model) : null;
-    },
-    get effort() {
-        return this.efforts?.[this.model] || 'low';
-    },
-    set effort(n) {
-        if (!this.model || !n) return;
-        this.efforts = { ...this.efforts, [this.model]: n };
-        setUserPreferredEfforts(this.efforts);
     },
     clear(e){
         this.value = '';
@@ -669,17 +652,30 @@ ODA({is: 'oda-chat',
             const body = { name, created: Date.now(), items: [], ...(useVoice ? { voice: true } : {}) };
             if (this.model)
                 body.model = this.model;
-            body.effort = this.effort || this.$('work-prompt-bar')?.effortLevel || 'low';
             const params = { encoding: 'utf-8', ...(useVoice ? { voice: true } : {}) };
-            if (WORK.uid)
-                params.sender = WORK.uid;
+            if (globalThis.WORK?.uid)
+                params.sender = globalThis.WORK.uid;
+            const canLookupTask = typeof globalThis.WORK?.get_item === 'function';
+            if (files.length && !canLookupTask) {
+                const preAttachments = [];
+                await Promise.all(files.map(async file => {
+                    const fLog = await item.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
+                    const fPath = await pathOfLog(fLog);
+                    if (fPath)
+                        preAttachments.push({ path: fPath.startsWith('/') ? fPath : '/' + fPath, name: file.name });
+                }));
+                if (preAttachments.length) {
+                    params.includes = JSON.stringify(preAttachments.map(a => a.path));
+                    params.attachments = JSON.stringify(preAttachments);
+                }
+            }
             // Сначала создаём саму задачу, чтобы прикреплённые и создаваемые файлы размещались в папке этого таска
-            if (files.length)
+            if (files.length && canLookupTask)
                 params.skip_file_handler = true;
             const log = await item.save_file(new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' }), params);
             const path = await pathOfLog(log);
-            if (path && files.length) {
-                const createdTask = await WORK.get_item(path).catch(() => null);
+            if (path && files.length && canLookupTask) {
+                const createdTask = await globalThis.WORK.get_item(path).catch(() => null);
                 const targetHolder = createdTask || item;
                 const attachments = [];
                 await Promise.all(files.map(async file => {
@@ -690,21 +686,24 @@ ODA({is: 'oda-chat',
                 }));
                 if (attachments.length && createdTask) {
                     const includePaths = attachments.map(a => a.path);
-                    await item.fetch('append_log_includes', { entryPath: path, includePaths }).catch(() => {});
-                    await createdTask.fetch('prompt', {}, JSON.stringify({ prompt: text, attachments })).catch(() => {});
+                    await item.fetch?.('append_log_includes', { entryPath: path, includePaths })?.catch?.(() => {});
+                    await createdTask.fetch?.('prompt', {}, JSON.stringify({ prompt: text, attachments }))?.catch?.(() => {});
                 }
             }
-            this.awaitTask = false;
             if (path) {
+                this._awaitTaskPath = String(path);
+                this._awaitTaskKey = taskKeyOf(path);
                 await this._openCreated(path);
-                if (useVoice) {
-                    const createdTask = await WORK.get_item(path).catch(() => null);
+                if (useVoice && canLookupTask) {
+                    const createdTask = await globalThis.WORK.get_item(path).catch(() => null);
                     if (createdTask)
                         this._bindChatVoiceTask(createdTask);
                 }
             }
-            else
+            else {
+                this.awaitTask = false;
                 this._awaitNewTask('');
+            }
         }
         catch (err) {
             console.warn('[chat] создание задачи', err);
@@ -740,6 +739,7 @@ ODA({is: 'oda-chat',
             if (!file || Array.isArray(file))
                 throw new Error('нет файла задачи: ' + path);
             await dayEl.adoptTask(file);
+            this.awaitTask = false;
         }
         catch (err) {
             console.warn('[chat] открыть созданную задачу напрямую не вышло — ждём запись ленты:', err?.message || err);
@@ -1010,9 +1010,13 @@ ODA({is: 'chat-ribbon',
         }
         if (!dates.includes(today))
             dates = [...dates, today].sort();
-        this.dateList = dates;
-        this.render();
-        return true;
+        const prevDates = Array.isArray(this.dateList) ? this.dateList : [];
+        if (prevDates.length !== dates.length || prevDates.some((d, i) => d !== dates[i])) {
+            this.dateList = dates;
+            this.render();
+            return true;
+        }
+        return false;
     },
     get onChanged() {
         return () => this.refreshDates();
@@ -1166,13 +1170,18 @@ ODA({is: 'chat-day',
     async adoptTask(file) {
         const key = taskKeyOf(file.path) || String(file.id);
         (this._adopted ??= new Map()).set(key, file);
-        if (!(this.logItems || []).some(i => i?.id === file.id))
-            this.logItems = this._sortLogFiles([...(this.logItems || []), file]);
+        const isSameTask = it => it && (
+            it.id === file.id
+            || taskKeyOf(it.logRow?.path || it.path) === key
+            || String(it.id || '').replace(/\.logs$/i, '.task') === key
+        );
+        const filtered = (this.logItems || []).filter(it => !isSameTask(it));
+        this.logItems = this._sortLogFiles([...filtered, file]);
         this.expanded = true;
         this.render();
         this._scrollRibbonDown();
         for (let i = 0; i < 60; i++) {
-            const card = [...(this.$$('chat-item') || [])].find(el => el.$item?.id === file.id);
+            const card = [...(this.$$('chat-item') || [])].find(el => isSameTask(el.$item));
             if (card) {
                 card.expanded = true;
                 for (let j = 0; j < 30; j++) {
@@ -1198,14 +1207,22 @@ ODA({is: 'chat-day',
         const rawRow = row.DATA?.logsFilePath ? { ...row.DATA } : row;
         const uid = rawRow.sender || 'system';
         const id = `${rawRow.time || 0}.${uid}.logs`;
-        return {
+        this._wrappedById ??= new Map();
+        const existing = this._wrappedById.get(id);
+        if (existing) {
+            existing.logRow = rawRow;
+            return existing;
+        }
+        const wrapped = {
             id,
             name: id,
             ext: 'logs',
             path: rawRow.logsFilePath || `/${id}`,
             logRow: rawRow,
-            load: async () => ({ ...rawRow }),
+            load: async () => ({ ...(wrapped.logRow || rawRow) }),
         };
+        this._wrappedById.set(id, wrapped);
+        return wrapped;
     },
     async _bindLogsFolder(){
         const source = await Promise.resolve(this.logsSource);
@@ -1288,11 +1305,15 @@ ODA({is: 'chat-day',
             return;
         try {
             const items = await this._fetchLogFiles();
-            const prevLen = (this.logItems || []).length;
-            this.logItems = items;
-            this.render();
-            if (items.length > prevLen)
-                this._scrollRibbonDown();
+            const prev = Array.isArray(this.logItems) ? this.logItems : [];
+            const prevLen = prev.length;
+            const sameList = prev.length === items.length && items.every((it, idx) => it === prev[idx] || (it?.id && it.id === prev[idx]?.id));
+            if (!sameList) {
+                this.logItems = items;
+                this.render();
+                if (items.length > prevLen)
+                    this._scrollRibbonDown();
+            }
             await this._expandCreatedTask();
         }
         catch (err) {

@@ -12,6 +12,7 @@ tools: readonly            # readonly | * | [ls, read, web_*, svc_*_query]
 call: [members, security_log]   # необязательно: разрешённые методы инструмента call
 requires: system           # необязательно: system | sandbox — виден, только если это доступно
 model: /MODELS/…           # необязательно: своя модель
+effort: low                # необязательно: уровень рассуждений по умолчанию (off | low | medium | high)
 maxTurns: 40               # необязательно
 ---
 Роль и правила субагента (добавляются к общему system).

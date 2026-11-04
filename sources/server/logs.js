@@ -676,3 +676,73 @@ export async function appendIncludes(storage, entryPath, includePaths = [], para
     }
     return null;
 }
+
+/**
+ * Удалить запись лога из SQLite (и при наличии — дублирующую копию в личном кабинете / базе организации).
+ * Доступно только администратору (проверяется на уровне вызывающего класса).
+ */
+export async function deleteLogEntry(storage, params = {}) {
+    let p = params;
+    if (typeof p.post === 'string' && p.post.trim()) {
+        try { p = { ...p, ...JSON.parse(p.post) }; } catch { /* ignore */ }
+    }
+    else if (p.post && typeof p.post === 'object') {
+        p = { ...p, ...p.post };
+    }
+    const stubPath = String(p.stubPath || p.logsFilePath || '').trim();
+    const targetPath = String(p.path || p.entryPath || '').trim();
+    const time = Number(p.time) || 0;
+    const sender = String(p.sender || '').trim();
+
+    if (!stubPath && !targetPath && !time)
+        throw new Error('delete_log_entry: не указан ключ удаляемой записи лога');
+
+    const rootDir = globalThis.WORK?.real_dir || globalThis.WORK?.dir || process.cwd();
+    const dbsToClean = new Set();
+    try {
+        dbsToClean.add(await dbForStorage(storage));
+    }
+    catch { /* ignore */ }
+    try {
+        dbsToClean.add(await dataDb('', rootDir));
+    }
+    catch { /* ignore */ }
+
+    for (const candidate of [stubPath, targetPath, storage?.path || '']) {
+        const m = String(candidate || '').match(/^\/(ORGANIZATIONS|BASES)\/([^/]+)/);
+        if (m) {
+            const orgDbPath = `/${m[1]}/${m[2]}`;
+            try {
+                dbsToClean.add(await dataDb(orgDbPath, rootDir));
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    let deleted = 0;
+    for (const db of dbsToClean) {
+        if (!db)
+            continue;
+        if (stubPath) {
+            const r1 = db.prepare('DELETE FROM logs WHERE stub_path = ?').run(stubPath);
+            deleted += Number(r1?.changes) || 0;
+        }
+        if (targetPath) {
+            const normTarget = targetPath.startsWith('/') ? targetPath : '/' + targetPath;
+            const r2 = db.prepare('DELETE FROM logs WHERE path = ? OR path = ?').run(targetPath, normTarget);
+            deleted += Number(r2?.changes) || 0;
+        }
+        if (time > 0 && sender) {
+            const r3 = db.prepare('DELETE FROM logs WHERE time = ? AND sender = ?').run(time, sender);
+            deleted += Number(r3?.changes) || 0;
+        }
+        else if (time > 0 && !stubPath && !targetPath) {
+            const fp = feedPathOf(storage);
+            const r4 = db.prepare('DELETE FROM logs WHERE feed_path = ? AND time = ?').run(fp, time);
+            deleted += Number(r4?.changes) || 0;
+        }
+    }
+
+    storage?.reset?.();
+    return { ok: true, deleted };
+}

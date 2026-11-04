@@ -529,16 +529,31 @@ export default {
         window.execute = async ($item, nav) => {
             if (!$item)
                 return;
+            if ($item.type === '$handler') {
+                const rawHPath = String($item.path || $item.short || '');
+                const mForm = rawHPath.match(/^(.*?)\/(?:~|\$[^/]+(?:\/\$[^/]+)*)\/handlers\/pages\/form(?:\/([^/$]+))?/);
+                const rawSelf = $item[R]?.target || $item;
+                const ctx = (Object.prototype.hasOwnProperty.call(rawSelf, '$context') || Object.prototype.hasOwnProperty.call($item, '$context'))
+                    ? await $item.$context
+                    : null;
+                if (ctx && ctx.type !== '$handler') {
+                    const viewId = mForm?.[2] || ($item.id && $item.id !== 'form' ? $item.id : '');
+                    $item = ctx;
+                    if (viewId)
+                        nav = { ...(nav && typeof nav === 'object' ? nav : {}), view: viewId };
+                }
+            }
             const short = $item?.short ?? $item?.path ?? '';
             const dataRoot = ($item?.type !== '$handler') ? this._resolveDataRootPath(short, $item) : '';
             const openShort = dataRoot || short;
+            const navKey = openShort || '/';
             const effectiveNav = dataRoot
                 ? { ...(nav && typeof nav === 'object' ? nav : {}), targetClassPath: nav?.targetClassPath || short }
                 : nav;
             if (effectiveNav && typeof effectiveNav === 'object') {
                 try {
-                    sessionStorage.setItem('work.form.nav:' + openShort, JSON.stringify(effectiveNav));
-                    new BroadcastChannel('work-form-nav').postMessage({ short: openShort, nav: effectiveNav });
+                    sessionStorage.setItem('work.form.nav:' + navKey, JSON.stringify(effectiveNav));
+                    new BroadcastChannel('work-form-nav').postMessage({ short: navKey, nav: effectiveNav });
                 }
                 catch { /* ignore */ }
             }
@@ -555,7 +570,11 @@ export default {
             }
             this.load_page(fullUrl);
             if (effectiveNav && typeof effectiveNav === 'object') {
-                const existingFrame = (this.$$?.('iframe') || []).find(f => f.src === fullUrl);
+                const existingFrame = (this.$$?.('iframe') || []).find(f => {
+                    if (f.src === fullUrl)
+                        return true;
+                    try { return decodeURI(f.src) === decodeURI(fullUrl); } catch { return false; }
+                });
                 const wf = existingFrame?.contentDocument?.querySelector?.('pages-form')?.$?.('work-form');
                 if (wf && wf._rootItem && typeof wf.applyNav === 'function') {
                     wf.applyNav(effectiveNav);

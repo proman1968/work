@@ -51,27 +51,29 @@ export const USAGE_TRUST_MIN = 0.7;
 export const VOLATILE_HEAD = '[Служебный контекст среды на этот ход — не реплика пользователя]\n';
 
 const DEEP_TASK_RE = /(?:проанализируй|разработай|напиши\s+код|исправь|почему\s+не|сверь|составь\s+план|сравни|рассчитай|пересчитай|архитектур|рефактор|оптимизируй|миграци|отлад|найди\s+ошибк|сделай\s+отч[её]т|сформируй)/iu;
+const HIGH_TASK_RE = /(?:архитектур|рефактор|миграци|спроектируй|полн(?:ый|ую)\s+аудит|комплексн|многошагов|почему\s+падает|найди\s+причину)/iu;
 
 /**
- * Адаптивный выбор уровня рассуждения на ход:
- * - Если явно задан 'off', 'medium' или 'high' — возвращаем как есть.
- * - При 'low' (по умолчанию): на первом шаге (turn === 0) короткой разговорной реплики без вложений и сложного ТЗ
- *   возвращаем 'off' (мгновенный ответ без паузы на <think>), а на шагах после инструментов (turn > 0) или на реальных задачах — 'low'.
+ * Автоматический выбор уровня рассуждения на ход (если модель сама ещё не задала его через todo_write / task):
+ * - Если явно задан 'off', 'low', 'medium' или 'high' — возвращаем как есть.
+ * - Если не задан — оцениваем сложность последнего поручения:
+ *   • сложная архитектура / рефакторинг / отладка / большое ТЗ → 'high';
+ *   • анализ, расчёты, код, отчёты или работа с вложениями → 'medium';
+ *   • обычные запросы и рабочие шаги → 'low' (не выключаем в 'off', чтобы модель с инструментами удерживала инструкции system.md).
  */
 export function resolveTurnEffort(effort, items, turn = 0) {
-    if (!effort || effort === 'off' || effort === false || effort === 'medium' || effort === 'high')
-        return effort;
-    if (turn > 0)
+    if (effort === 'off' || effort === false || effort === 'low' || effort === 'medium' || effort === 'high')
         return effort;
     const lastUser = [...(items || [])].reverse().find(i => i?.type === 'user');
     if (!lastUser)
-        return effort;
-    if (Array.isArray(lastUser.attachments) && lastUser.attachments.length > 0)
-        return effort;
+        return 'low';
+    const hasAttachments = Array.isArray(lastUser.attachments) && lastUser.attachments.length > 0;
     const text = String(lastUser.content || '').trim();
-    if (!text || text.length > 220 || DEEP_TASK_RE.test(text))
-        return effort;
-    return 'off';
+    if (HIGH_TASK_RE.test(text) || text.length > 900)
+        return 'high';
+    if (hasAttachments || text.length > 220 || DEEP_TASK_RE.test(text))
+        return 'medium';
+    return 'low';
 }
 
 /**
@@ -135,11 +137,16 @@ async function runLoopCore(opts) {
     const byName = new Map(tools.map(t => [t.name, t]));
     const schemas = tools.map(toSchema);
     try {
-        // подтверждённые после рестарта вызовы последнего хода — исполнить до продолжения
+        // подтверждённые после рестарта вызовы последнего хода (и оставшиеся за ними pending) — исполнить до продолжения
         const last = [...items].reverse().find(i => i.type === 'assistant');
-        for (const entry of last?.tools || [])
-            if (entry.status === 'approved')
-                await runOne({ entry, tool: byName.get(entry.name), it: last, host, llm, opts, preapproved: true });
+        if (last?.tools?.some(t => t.status === 'approved')) {
+            for (const entry of last.tools) {
+                if (entry.status === 'approved')
+                    await runOne({ entry, tool: byName.get(entry.name), it: last, host, llm, opts, preapproved: true });
+                else if (entry.status === 'pending')
+                    await runOne({ entry, tool: byName.get(entry.name), it: last, host, llm, opts });
+            }
+        }
         await recoverInterrupted(items, host);
         let empty = 0;
         let selfChecked = false; // 9.5: самопроверка — не чаще одного раза на задачу (без зацикливания)
@@ -161,25 +168,31 @@ async function runLoopCore(opts) {
             }
             const system = typeof opts.system === 'function' ? await opts.system() : (opts.system ?? '');
             const toolsTokens = estimateTokens(schemas);
-            await maybeCompact({ llm, items, host, system, toolsTokens, hooks: opts.hooks, task: opts.ctx?.task });
+            const compactLlm = opts.ctx?.env?.config?.compactModel && typeof opts.ctx?.env?.compactLlm === 'function'
+                ? await opts.ctx.env.compactLlm(llm.name).catch(() => llm)
+                : llm;
+            await maybeCompact({ llm: compactLlm, items, host, system, toolsTokens, hooks: opts.hooks, task: opts.ctx?.task, contextTokens: llm.contextTokens });
             const images = llm.vision ? await loadImages(items, opts.loadImage) : null;
             const messages = toMessages(system, items, images);
             if (empty)
                 messages.push({ role: 'user', content: EMPTY_NUDGE });
             const systemTokens = estimateTokens(systemText(system));
             const measured = estimateContext({ items, system, toolsTokens });
-            host.noteContext?.({
-                limit: Number(llm.contextTokens) || 0,
-                system: systemTokens,
-                tools: toolsTokens,
-                messages: estimateTokens(messages) - systemTokens,
-                used: measured.tokens,
-                source: measured.source,
-            });
+            if (!opts.depth) {
+                host.noteContext?.({
+                    limit: Number(llm.contextTokens) || 0,
+                    system: systemTokens,
+                    tools: toolsTokens,
+                    messages: estimateTokens(messages) - systemTokens,
+                    used: measured.tokens,
+                    source: measured.source,
+                });
+            }
             const it = { id: genId(), type: 'assistant', content: '', time: Date.now(), model: llm.name };
             items.push(it);
             await host.save();
-            const turnEffort = resolveTurnEffort(opts.effort, items, turn);
+            const rawEffort = opts.depth ? opts.effort : (host.effort || opts.effort);
+            const turnEffort = resolveTurnEffort(rawEffort, items, turn);
             const calls = await streamTurn({ llm, host, it, messages, schemas: schemas.length ? schemas : undefined, effort: turnEffort });
             // 9.2: стоимость хода по тарифам модели (pricing) + учёт (agent_usage в .index/work.db)
             if (it.usage) {
@@ -216,8 +229,8 @@ async function runLoopCore(opts) {
                 }
                 // 9.5: самопроверка — в плане остались незакрытые пункты: реплика-подсказка и ещё ход
                 // (модель либо завершает их инструментами, либо объясняет в ответе, почему нельзя);
-                // даётся один раз — иначе цикл не завершился бы никогда
-                const open = openTodosOf(host.getTodos?.());
+                // даётся один раз и только основному агенту (!opts.depth) — у субагентов нет своего todo_write
+                const open = !opts.depth ? openTodosOf(host.getTodos?.()) : [];
                 if (open.length && !selfChecked) {
                     selfChecked = true;
                     items.push({
@@ -362,19 +375,97 @@ export function toSchema(tool) {
     };
 }
 
+/**
+ * Потоковый разделитель <think>…</think> в текстовом канале (для моделей без отдельного reasoning_content):
+ * на лету направляет содержимое внутри <think>…</think> в onReasoning, а снаружи — в onContent.
+ */
+export function createThinkSplitter(onContent, onReasoning) {
+    let state = 'start'; // 'start' | 'think' | 'content'
+    let buf = '';
+    return {
+        push(chunk) {
+            const s = String(chunk ?? '');
+            if (!s)
+                return;
+            if (state === 'content') {
+                onContent(s);
+                return;
+            }
+            buf += s;
+            if (state === 'start') {
+                const open = buf.match(/^\s*<think>/i);
+                if (open) {
+                    buf = buf.slice(open[0].length).replace(/^\r?\n/, '');
+                    state = 'think';
+                }
+                else if (/^\s*(?:<(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?)?$/i.test(buf)) {
+                    return; // ждём до 7 символов префикса <think>
+                }
+                else {
+                    state = 'content';
+                    const out = buf;
+                    buf = '';
+                    onContent(out);
+                    return;
+                }
+            }
+            if (state === 'think') {
+                const closeIdx = buf.search(/<\/think>/i);
+                if (closeIdx >= 0) {
+                    const thought = buf.slice(0, closeIdx);
+                    if (thought)
+                        onReasoning(thought);
+                    const rest = buf.slice(closeIdx + 8).replace(/^\s+/, '');
+                    buf = '';
+                    state = 'content';
+                    if (rest)
+                        onContent(rest);
+                    return;
+                }
+                // придерживаем возможный разорванный хвост `</think>` на границе чанков
+                const partial = buf.match(/<(?:\/(?:t(?:h(?:i(?:n(?:k)?)?)?)?)?)?$/i);
+                const safeLen = partial ? partial.index : buf.length;
+                if (safeLen > 0) {
+                    onReasoning(buf.slice(0, safeLen));
+                    buf = buf.slice(safeLen);
+                }
+            }
+        },
+        flush() {
+            if (!buf)
+                return;
+            const rest = buf;
+            buf = '';
+            if (state === 'think')
+                onReasoning(rest);
+            else
+                onContent(rest);
+        },
+    };
+}
+
 /** Один ход модели: стрим текста/рассуждения, ретраи до первого токена. */
 async function streamTurn({ llm, host, it, messages, schemas, effort }) {
     const t0 = Date.now();
     for (let attempt = 0; ; attempt++) {
         let calls = [];
         let finish = null;
+        const splitter = createThinkSplitter(
+            token => {
+                it.content += token;
+                host.emit?.({ type: 'delta', item: it.id, field: 'content', token });
+            },
+            token => {
+                it.reasoning = (it.reasoning || '') + token;
+                host.emit?.({ type: 'delta', item: it.id, field: 'reasoning', token });
+            }
+        );
         try {
             for await (const ch of llm.stream({ messages, tools: schemas, signal: host.signal, effort })) {
                 if (host.signal?.aborted)
                     break;
                 if (typeof ch === 'string') {
-                    it.content += ch;
-                    host.emit?.({ type: 'delta', item: it.id, field: 'content', token: ch });
+                    splitter.push(ch);
                 }
                 else if (ch?.type === 'reasoning') {
                     it.reasoning = (it.reasoning || '') + ch.content;
@@ -394,6 +485,7 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                 else if (ch?.type === 'finish')
                     finish = ch;
             }
+            splitter.flush();
             if (host.signal?.aborted) {
                 it.stopped = true;
                 throw new StopError();
@@ -740,7 +832,8 @@ export function toMessages(system, items, images = null) {
         out.push({ role: 'system', content: stable });
     const live = items.filter(i => !i.compacted);
     const assistants = live.filter(i => i.type === 'assistant');
-    const fullFrom = assistants.length - KEEP_FULL_TURNS;
+    // ступенчатая граница микросжатия (шагами по KEEP_FULL_TURNS): префикс истории не меняется на каждом ходе, сохраняя Prompt Cache
+    const fullFrom = Math.floor(Math.max(0, assistants.length - 1) / KEEP_FULL_TURNS) * KEEP_FULL_TURNS;
     let ai = 0;
     for (const it of live) {
         switch (it.type) {
@@ -855,9 +948,9 @@ export function estimateContext({ items, system, toolsTokens = 0 }) {
 }
 
 /** Сжатие: контекст близок к пределу — старая часть ленты → сводка. toolsTokens — схемы инструментов для эвристики без usage. */
-export async function maybeCompact({ llm, items, host, system, force = false, toolsTokens = 0, hooks, task }) {
+export async function maybeCompact({ llm, items, host, system, force = false, toolsTokens = 0, hooks, task, contextTokens }) {
     stripOldShots(items);
-    const limit = Number(llm.contextTokens) || 32000;
+    const limit = Number(contextTokens || llm.contextTokens) || 32000;
     if (!force && estimateContext({ items, system, toolsTokens }).tokens < limit * COMPACT_AT)
         return false;
     const live = items.filter(i => !i.compacted);
@@ -883,15 +976,24 @@ export async function maybeCompact({ llm, items, host, system, force = false, to
             + (m.tool_calls ? '\n' + m.tool_calls.map(c => '→ ' + c.function.name + ' ' + c.function.arguments).join('\n') : ''))
         .join('\n\n');
     let summary = '';
-    for await (const ch of llm.stream({
-        messages: [
-            { role: 'system', content: 'Ты сжимаешь историю работы агента. Сохрани: цель пользователя, принятые решения, факты и пути (WORK-пути, файлы, классы), что уже сделано, что осталось, открытые вопросы. Кратко, по-русски, списками.' },
-            { role: 'user', content: clip(transcript, Math.floor(limit * 2.4)) },
-        ],
-        signal: host.signal,
-    })) {
-        if (typeof ch === 'string')
-            summary += ch;
+    try {
+        for await (const ch of llm.stream({
+            messages: [
+                { role: 'system', content: 'Ты сжимаешь историю работы агента. Сохрани: цель пользователя, принятые решения, факты и пути (WORK-пути, файлы, классы), что уже сделано, что осталось, открытые вопросы. Кратко, по-русски, списками.' },
+                { role: 'user', content: clip(transcript, Math.floor(limit * 2.4)) },
+            ],
+            signal: host.signal,
+            effort: 'off',
+        })) {
+            if (typeof ch === 'string')
+                summary += ch;
+        }
+    }
+    catch (e) {
+        if (host.signal?.aborted)
+            throw e;
+        log.warn('maybeCompact: не удалось сжать контекст, продолжаю без сжатия: ' + String(e?.message || e).slice(0, 120));
+        return false;
     }
     summary = stripThink(summary).trim();
     if (!summary)

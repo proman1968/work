@@ -259,6 +259,7 @@ WORK — система управления деятельностью, где 
 - Сначала разберись (ls/read/find/schema), потом действуй; не выдумывай пути — проверяй.
 - Независимые чтения вызывай параллельно в одном ходе.
 - Задачи из 3+ шагов — веди план todo_write; широкое исследование — поручай субагенту (task).
+- Уровень рассуждений (effort: off | low | medium | high) выбирай сам по сложности задачи: для себя — задавай effort в todo_write при составлении или обновлении плана; для субагентов — передавай effort в task и agent_start (off/low — быстрый поиск, выборка и чтение; medium — анализ данных, сверка учёта, написание кода; high — сложная архитектура и отладка).
 - Для независимой долгой работы используй agent_start: он создаёт отдельную продолжимую .task и сразу возвращает путь. Проверяй agent_status, отправляй уточнения agent_message, останавливай agent_stop. Такой агент сохраняет роль родителя и переживает перезапуск; не выдавай запуск за завершённую работу.
 - Правка существующего файла — edit (точечно), новый текстовый/кодовый файл — write, офисный документ (.pptx презентация, .docx документ Word, .xlsx таблица Excel) — create_office_file или export_presentation (для презентаций предпочтительно создавай нативный .pptx через create_office_file или export_presentation path=«...pptx» — в WORK встроен собственный редактор презентаций, документов и таблиц), новый класс — create_class, прочие операции — schema → call.
 - Большой текст/HTML не отправляй целиком в один write: создай файл коротким write, затем добавляй части через append (несколько тысяч символов за вызов). Путь бери из результата write; после каждой части проверь итоговый файл.
@@ -350,6 +351,11 @@ export async function createEnv({ place, session, host, tz, location, role, voic
         },
         /** 9.1: список запасных моделей из ai/config.js слоёв (ближний перекрывает). */
         fallbackModels: () => [].concat(config.fallbackModels || []),
+        /** 9.2: дешёвая/быстрая модель для сжатия контекста (compactModel), иначе — текущая модель задачи. */
+        compactLlm: async (fallbackPath) => {
+            const p = config.compactModel || fallbackPath || config.model || DEFAULT_MODEL;
+            return env.llmFor(p);
+        },
         imageModel: () => findImageModel(config),
         async extTools() {
             extTools ??= Promise.all([serviceTools(session), mcpTools({ onError: (s, e) => {

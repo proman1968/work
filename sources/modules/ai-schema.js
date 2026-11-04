@@ -145,10 +145,18 @@ function parseSourceFile(proto) {
     if (!sourceUrl)
         return result;
 
-    let source;
+    let filePath;
+    let sources = [];
     try {
-        const filePath = fileURLToPath(sourceUrl);
-        source = fs.readFileSync(filePath, 'utf-8');
+        filePath = fileURLToPath(sourceUrl);
+        sources.push(fs.readFileSync(filePath, 'utf-8'));
+        const subDir = filePath.replace(/\.js$/i, '');
+        if (subDir !== filePath && fs.existsSync(subDir) && fs.statSync(subDir).isDirectory()) {
+            for (const entry of fs.readdirSync(subDir).sort()) {
+                if (entry.endsWith('.js'))
+                    sources.push(fs.readFileSync(subDir + '/' + entry, 'utf-8'));
+            }
+        }
     }
     catch (e) {
         console.warn('[ai-schema] Не удалось прочитать исходник:', e.message);
@@ -156,13 +164,15 @@ function parseSourceFile(proto) {
     }
 
     const regex = /(\/\*\*[\s\S]*?\*\/)\s*((?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(\w+)\s*\()/g;
-    let match;
-    while ((match = regex.exec(source)) !== null) {
-        const docBlock = match[1];
-        const name = match[3];
-        const parsed = parseJSDocBlock(docBlock);
-        if (parsed)
-            result[name] = parsed;
+    for (const source of sources) {
+        let match;
+        while ((match = regex.exec(source)) !== null) {
+            const docBlock = match[1];
+            const name = match[3];
+            const parsed = parseJSDocBlock(docBlock);
+            if (parsed)
+                result[name] = parsed;
+        }
     }
 
     return result;
