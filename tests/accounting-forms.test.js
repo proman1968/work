@@ -1346,7 +1346,7 @@ describe('архитектура представлений формы (VIEW п�
                 .map(i => i.id);
             assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
 
-            assert.deepEqual(await viewsOf(sales, 'ADMIN'), ['builder', 'chat', 'staff'], 'Подразделение: у ADMIN конструктор, чат и настройка ролей/мест');
+            assert.deepEqual(await viewsOf(sales, 'ADMIN'), ['builder', 'chat', 'messengers', 'staff'], 'Подразделение: у ADMIN конструктор, чат, мессенджеры и настройка ролей/мест');
             assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'folder', 'search'], 'Подразделение: у BOSS чат, файлы и поиск');
             assert.deepEqual(await viewsOf(sales, 'USER'), ['calendar', 'chat', 'email'], 'Подразделение: у USER рабочие инструменты');
         }

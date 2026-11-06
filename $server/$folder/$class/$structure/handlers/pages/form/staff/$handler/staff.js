@@ -1,5 +1,5 @@
 export default {
-    imports: 'oda//icon, oda//button, ~/lib//messenger-settings.js',
+    imports: 'oda//icon, oda//button, /~/lib//messenger-settings.js',
     template: /*html*/`
         <style>
             :host {
