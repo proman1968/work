@@ -73,17 +73,20 @@ const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
 /** Нормализовать правило (бросает при ошибке). */
 export function normalizeRule(rule = {}) {
+    if (rule.scope != null && rule.scope !== '' && !['personal', 'department'].includes(String(rule.scope)))
+        throw new Error('scope: personal (лично) | department (общее по подразделению)');
+    const extra = rule.scope === 'department' ? { scope: 'department' } : {};
     if (rule.once) {
         const t = Date.parse(rule.once);
         if (!Number.isFinite(t))
             throw new Error('once: нужна дата-время ISO, например 2026-10-01T09:00:00+03:00');
-        return { once: new Date(t).toISOString() };
+        return { once: new Date(t).toISOString(), ...extra };
     }
     if (rule.every != null) {
         const every = Math.round(Number(rule.every));
         if (!Number.isFinite(every) || every < MIN_EVERY_MIN || every > 7 * 24 * 60)
             throw new Error('every: от ' + MIN_EVERY_MIN + ' минут до недели');
-        return { every };
+        return { every, ...extra };
     }
     // 9.8: календарная дата — конкретный день (однократно), ежемесячно или ежегодно
     if (rule.date != null) {
@@ -96,18 +99,18 @@ export function normalizeRule(rule = {}) {
         const repeat = rule.repeat == null || rule.repeat === '' ? 'once' : String(rule.repeat);
         if (!['once', 'monthly', 'yearly'].includes(repeat))
             throw new Error('repeat: once (по умолчанию) | monthly | yearly');
-        return { date: dm[0], at: at[1].padStart(2, '0') + ':' + at[2], repeat };
+        return { date: dm[0], at: at[1].padStart(2, '0') + ':' + at[2], repeat, ...extra };
     }
     const m = String(rule.at || '').match(/^(\d{1,2}):(\d{2})$/);
     if (!m || +m[1] > 23 || +m[2] > 59)
         throw new Error('нужно at "ЧЧ:ММ", every (минуты), once (дата-время) или date (календарная дата)');
     // 9.8: workdays — пн–пт (сахар над days)
     if (rule.workdays === true)
-        return { at: m[1].padStart(2, '0') + ':' + m[2], days: [1, 2, 3, 4, 5], workdays: true };
+        return { at: m[1].padStart(2, '0') + ':' + m[2], days: [1, 2, 3, 4, 5], workdays: true, ...extra };
     const days = rule.days == null ? [1, 2, 3, 4, 5, 6, 7] : [...new Set([].concat(rule.days).map(Number))];
     if (!days.length || days.some(d => !Number.isInteger(d) || d < 1 || d > 7))
         throw new Error('days: числа 1–7 (1 — понедельник)');
-    return { at: m[1].padStart(2, '0') + ':' + m[2], days: days.sort() };
+    return { at: m[1].padStart(2, '0') + ':' + m[2], days: days.sort(), ...extra };
 }
 
 /** Следующий запуск после from (мс) или null (разовое уже прошло). */
@@ -166,28 +169,29 @@ export function nextRun(rule, tz, from = Date.now()) {
 }
 
 export function describeRule(rule) {
+    const suffix = rule.scope === 'department' ? ' [по подразделению]' : '';
     if (rule.once)
-        return 'однократно ' + rule.once;
+        return 'однократно ' + rule.once + suffix;
     if (rule.every)
-        return 'каждые ' + rule.every + ' мин';
+        return 'каждые ' + rule.every + ' мин' + suffix;
     if (rule.date) {
         if (rule.repeat === 'monthly')
-            return 'ежемесячно ' + Number(rule.date.slice(8)) + '-го в ' + rule.at;
+            return 'ежемесячно ' + Number(rule.date.slice(8)) + '-го в ' + rule.at + suffix;
         if (rule.repeat === 'yearly')
-            return 'ежегодно ' + rule.date.slice(5) + ' в ' + rule.at;
-        return rule.date.split('-').reverse().join('.') + ' в ' + rule.at + ' (однократно)';
+            return 'ежегодно ' + rule.date.slice(5) + ' в ' + rule.at + suffix;
+        return rule.date.split('-').reverse().join('.') + ' в ' + rule.at + ' (однократно)' + suffix;
     }
     if (rule.workdays)
-        return 'по рабочим дням в ' + rule.at;
+        return 'по рабочим дням в ' + rule.at + suffix;
     const names = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
     const days = rule.days.length === 7 ? 'ежедневно' : rule.days.map(d => names[d - 1]).join(',');
-    return days + ' в ' + rule.at;
+    return days + ' в ' + rule.at + suffix;
 }
 
 function row2obj(r) {
     const rule = JSON.parse(r.rule);
     return {
-        id: r.id, task: r.task, label: r.label, prompt: r.prompt, rule, when: describeRule(rule), tz: r.tz,
+        id: r.id, uid: r.uid, task: r.task, label: r.label, prompt: r.prompt, rule, when: describeRule(rule), tz: r.tz,
         next: r.next ? new Date(r.next).toISOString() : null,
         last: r.last ? new Date(r.last).toISOString() : null,
         lastError: r.last_error || undefined, enabled: !!r.enabled,
@@ -282,7 +286,18 @@ async function defaultRunner(r) {
     const session = { uid: r.uid, $user: user, principal: Object.freeze({ kind: 'user', id: r.uid }), scheduled: true, sockets: {}, send() {} };
     await file.assertAccess({ session }, 'read');
     const stamp = new Date().toLocaleString('ru-RU', { timeZone: r.tz || undefined });
-    await file.prompt({ session, prompt: '[по расписанию «' + r.label + '», ' + stamp + ']\n' + r.prompt });
+    const res = await file.prompt({ session, prompt: '[по расписанию «' + r.label + '», ' + stamp + ']\n' + r.prompt });
+    try {
+        const { notifyScheduledRun } = await import('../notify/index.js');
+        const rawBody = typeof file.load === 'function' ? await file.load().catch(() => null) : null;
+        const parsed = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
+        const lastAssistant = [...(parsed?.items || [])].reverse().find(i => i.type === 'assistant' && i.content && !i.error);
+        const answer = String(lastAssistant?.content || res?.answer || r.prompt || '').trim();
+        await notifyScheduledRun({ schedule: r, file, answer });
+    }
+    catch (e) {
+        console.warn('[scheduler notify]', e.message);
+    }
 }
 
 let timer = null;

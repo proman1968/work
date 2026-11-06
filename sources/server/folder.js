@@ -434,7 +434,8 @@ export class $folder extends $item{
                     res.push(el);
                 else {
                     const mergedItems = [...(old.items || []), ...(el.items || [])];
-                    Object.assign(old, el);
+                    if (el.type || !old.type)
+                        Object.assign(old, el);
                     if (mergedItems.length)
                         old.items = mergedItems;
                 }

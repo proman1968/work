@@ -1,5 +1,5 @@
 export default {
-    imports: 'oda//icon, oda//button',
+    imports: 'oda//icon, oda//button, ~/lib//messenger-settings.js',
     template: /*html*/`
         <style>
             :host {
@@ -199,6 +199,7 @@ export default {
                 </div>
             </div>
         </div>
+        <oda-messenger-settings :$item="$item" :can-edit="canEdit" :user-map="userMap"></oda-messenger-settings>
         <div ~if="error" style="color:var(--error-color, #c00);">{{error}}</div>
     `,
     security: null,
@@ -327,6 +328,7 @@ export default {
             this.security = JSON.parse(JSON.stringify(nextSec));
             this.$item.reset?.();
             this.$item.fire?.('changed', { value: null });
+            this.shadowRoot?.querySelector?.('oda-messenger-settings')?.reload?.();
         }
         catch (e) {
             this.error = String(e?.message || e);

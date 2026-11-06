@@ -229,6 +229,15 @@ async function pushNotify(s, session, kind, text, detail = {}) {
     catch (e) {
         console.warn('[task push]', e.message);
     }
+    if (!(session?.scheduled && kind === 'done')) {
+        try {
+            const { notifyTaskEvent } = await import('../notify/index.js');
+            await notifyTaskEvent({ file: s.file, uid, kind, text, detail });
+        }
+        catch (e) {
+            console.warn('[task messenger]', e.message);
+        }
+    }
 }
 
 function lastAnswer(body) {

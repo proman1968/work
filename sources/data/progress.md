@@ -1,6 +1,16 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [14:30, 06.11] Доставка напоминаний расписаний и уведомлений задач в мессенджеры Telegram и MAX с привязкой ботов к `$structure` и наследованием по иерархии (`sources/modules/notify/*`, `scheduler.js`, `schedule.js`, `session.js`, `messenger-settings.js`, `staff.js`, `chat/class.js`, `tests/notify-channels.test.js`):
+  - **Модуль каналов мессенджеров (`sources/modules/notify/{index,telegram,max}.js`):**
+    1. Реализованы адаптеры протоколов **Telegram Bot API** (`getMe`, `sendMessage`, `getUpdates`, разбор `/start <CODE>`) и **MAX Bot API** (`https://botapi.max.ru`: `me`, `messages`, `updates` с поддержкой `bot_started`, `message_created`, `bot_added`).
+    2. Привязка ботов к точкам оргмодели (`$structure`, `$base`, `$server`, `$user`) хранится в `<meta_folder>/#secret/messengers.json` с шифрованием AES-256-GCM (`secret-box.js`) и маскированием токенов при отдаче в UI.
+    3. Реализовано иерархическое наследование ботов (`resolveBotForPoint`, геттер `messengerBot` на `$class`): если у подразделения `$structure` нет собственного бота, автоматически используется бот вышестоящего подразделения, организации (`$base`) или сервера (`$server`).
+    4. Состав получателей подразделения (`getPointMemberUids`, `findUserPoints`) берётся напрямую из настроек безопасности `#security` точки (`BOSS`, `ADMIN`, `USER` и рабочие места `ROLES`); личные чаты пользователей (`USERS/<uid>/$user/#secret/messengers.json`) и групповые чаты подразделений привязываются по одноразовым кодам `/start <CODE>` (TTL 15 мин, фоновый опрос `startNotifier`).
+    5. Поддержаны два режима доставки: **персональная** (`notifyPersonal`) и **общая по подразделению** (`notifyDepartment` — в групповой чат `groupChatId` и/или веером всем привязанным участникам `#security` с автоматическим fallback на браузерный Web-Push).
+  - **Интеграция с расписаниями (`scheduler.js`, `tools/schedule.js`), задачами (`session.js`) и UI (`oda-messenger-settings`):**
+    1. В `scheduler.js` (`defaultRunner`) и `session.js` (`pushNotify`) подключена доставка напоминаний и событий задач (`waiting`, `error`, `review`, `done`) через мессенджер точки; в инструмент `schedule` добавлены параметр `scope: 'personal' | 'department'` и действия `link`, `unlink`, `status`, `send`.
+    2. Создан единый системный компонент `oda-messenger-settings` (`$server/$folder/lib/messenger-settings/messenger-settings.js`), встроенный в представление «Роли и места» (`form/staff`) и вызываемый по кнопке настроек `⚙` в чате (`form/chat` → `showSettings`).
 - [12:00, 06.11] Корректировка разговорного режима ИИ, исправление отображения офисных документов (`oda-office-editor`), компактных ссылок на файлы в Markdown и вкладок «Файлы» / «Результаты» в доке задачи:
   - **Разговорный режим без ложных срабатываний во время ожидания ответа (`$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice.js`, `consultant.js`, `tests/voice-speaker.test.js`):**
     1. В `VoiceController` добавлены флаг `_awaitingReply`, блокировка `isMicListening()`, учёт защитного интервала `_echoUntil` в `MicCapture`/`LevelMeter` и физическая приостановка аудио-трека микрофона (`setSuspended(true)`) на всё время распознавания (`recognizing`), создания/запуска задачи на сервере и обдумывания ответа (`thinking`).

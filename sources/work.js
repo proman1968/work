@@ -57,6 +57,12 @@ if (process.env.WORK_SCHEDULE !== '0') {
     startScheduler();
 }
 
+// Каналы мессенджеров (Telegram / MAX — привязка кодов /start <CODE>); WORK_NOTIFY=0 — выключить
+if (process.env.WORK_NOTIFY !== '0' && !process.env.WORK_TEST) {
+    const { startNotifier } = await import('./modules/notify/index.js');
+    startNotifier();
+}
+
 // Песочницы: остановка простаивающих компьютеров (флаг + тихий пропуск без Docker); WORK_SWEEP=0 — выключить
 if (process.env.WORK_SWEEP !== '0') {
     setInterval(async () => {

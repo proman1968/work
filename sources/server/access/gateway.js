@@ -18,6 +18,7 @@ import { audit } from './audit.js';
 import { DATA_METHODS } from '../../data/api.js';
 import { TRAINER_METHODS } from '../../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../../modules/license/index.js';
+import { NOTIFY_METHODS } from '../../modules/notify/index.js';
 
 export const LEVEL = Object.freeze({ PUBLIC: 'public', USER: 'user', READ: 'read', CALL: 'call', WRITE: 'write', ADMIN: 'admin' });
 
@@ -47,7 +48,7 @@ export const MEMBERS = Object.freeze({
     isInherit: L.READ, isCustom: L.READ, time: L.READ, history: L.READ, status: L.READ,
     items: L.READ, entries: L.READ, files: L.READ, folders: L.READ, children: L.READ,
     users: L.READ, guests: L.READ, admins: L.READ, bosses: L.READ, allAdmins: L.READ,
-    allBosses: L.READ, assignedUsers: L.READ, declared_roles: L.READ, data_types: L.READ,
+    allBosses: L.READ, assignedUsers: L.READ, declared_roles: L.READ, data_types: L.READ, messengerBot: L.READ,
     inherit_ancestor: L.READ, ancestor: L.READ, tilde: L.READ, contentType: L.READ,
     $parent: L.READ, $owner: L.READ, $class: L.READ, $folder: L.READ, $users: L.READ,
     types: L.READ, system_types: L.READ, allowed_child_types: L.READ,
@@ -66,6 +67,8 @@ export const MEMBERS = Object.freeze({
     ...Object.fromEntries(Object.entries(TRAINER_METHODS).map(([name, m]) => [name, m.level])),
     // лицензирование ПАК WORK (sources/modules/license/index.js)
     ...Object.fromEntries(Object.entries(LICENSE_METHODS).map(([name, m]) => [name, m.level])),
+    // каналы уведомлений Telegram / MAX (sources/modules/notify/index.js)
+    ...Object.fromEntries(Object.entries(NOTIFY_METHODS).map(([name, m]) => [name, m.level])),
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,

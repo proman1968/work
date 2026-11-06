@@ -21,6 +21,7 @@ import * as WORKPLACES from './access/workplaces.js';
 import { DATA_METHODS, classHasObjects, classObjectCount, markClassesDirty } from '../data/api.js';
 import { TRAINER_METHODS, localStreamChat } from '../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../modules/license/index.js';
+import { NOTIFY_METHODS, resolveBotForPoint, sanitizeBotForUi } from '../modules/notify/index.js';
 import { DATA_TYPES } from '../data/classes.js';
 import {
     looksLikeFileId,
@@ -471,7 +472,9 @@ export class $class extends $folder {
         try {
             if (!fs.existsSync(this.real_dir))
                 fs.mkdirSync(this.real_dir + '/' + this.constructor.name, { recursive: true });
-            return FS.$folder.build(fs.readdirSync(this.real_dir).find(f => f[0] === '$'), this);
+            const metaId = fs.readdirSync(this.real_dir).find(f => f[0] === '$')
+                || (this instanceof FS.$handler ? this.constructor.name : undefined);
+            return FS.$folder.build(metaId, this);
         }
         catch (e) {
             console.warn('[WORK] meta_folder:', e.message);
@@ -733,6 +736,28 @@ for (const [name, m] of Object.entries(LICENSE_METHODS)) {
         configurable: true,
     });
 }
+// методы мессенджеров и уведомлений точки (messenger_*)
+for (const [name, m] of Object.entries(NOTIFY_METHODS)) {
+    Object.defineProperty($class.prototype, name, {
+        value: function (params = {}) {
+            return m.fn.call(this, params);
+        },
+        writable: true,
+        configurable: true,
+    });
+}
+Object.defineProperty($class.prototype, 'messengerBot', {
+    get: function () {
+        return resolveBotForPoint(this).then(res => res?.bot ? sanitizeBotForUi(res.bot, {
+            inherited: res.inherited,
+            sourcePath: res.sourcePath,
+            sourceLabel: res.sourceLabel,
+            groupChatId: res.groupChatId,
+            groupTitle: res.groupTitle,
+        }) : null);
+    },
+    configurable: true,
+});
 Object.defineProperty($class.prototype, 'localStreamChat', {
     value: localStreamChat,
     writable: true,
