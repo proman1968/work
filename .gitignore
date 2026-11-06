@@ -7,6 +7,7 @@ node_modules/
 /#system/node-key.json
 /#system/settings.json
 /#system/os.json
+/#system/run.pid
 /#system/lan/
 .env
 **/#secret/
