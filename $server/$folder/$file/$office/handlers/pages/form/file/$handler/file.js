@@ -136,6 +136,9 @@ export function evaluateSheetFormula(rawFormula, cells = {}, depth = 0) {
 }
 
 export default {
+    $public: {
+        allowSave: true,
+    },
     allowSave: true,
     isChanged: false,
     fileControl: 'oda-office-editor',
@@ -558,12 +561,13 @@ ODA({
             .pptx-el {
                 position: absolute;
                 box-sizing: border-box;
-                padding: 8px 10px;
+                padding: 4px 6px;
                 border: 1px solid transparent;
                 cursor: move;
                 outline: none;
                 white-space: pre-wrap;
-                overflow: hidden;
+                line-height: 1.3;
+                overflow: visible;
             }
             .pptx-el:hover {
                 border-color: #94a3b8;
@@ -590,18 +594,16 @@ ODA({
 
         <!-- Единая панель инструментов -->
         <div class="office-toolbar">
-            <span class="kind-badge" :data-kind="kind">{{kindLabel}}</span>
-
             <!-- Инструменты документа Word -->
             <div class="tb-group" ~if="kind === 'document'">
-                <select class="tb-select" @change="execDocFormatBlock($event.target.value); $event.target.value = ''">
+                <select class="tb-select" @change="onDocFormatBlockChange($event)">
                     <option value="">Стиль абзаца…</option>
                     <option value="P">Обычный текст</option>
                     <option value="H1">Заголовок 1</option>
                     <option value="H2">Заголовок 2</option>
                     <option value="H3">Заголовок 3</option>
                 </select>
-                <select class="tb-select" @change="execDocCmd('fontName', $event.target.value)">
+                <select class="tb-select" @change="execDocCmd('fontName', $event.target.value, $event)">
                     <option value="Inter, Segoe UI, Arial, sans-serif">Sans-serif (Inter / Arial)</option>
                     <option value="Times New Roman, serif">Times New Roman</option>
                     <option value="Georgia, serif">Georgia</option>
@@ -612,7 +614,7 @@ ODA({
                 <button class="tb-btn" title="Курсив (Ctrl+I)" @click="execDocCmd('italic')"><i>К</i></button>
                 <button class="tb-btn" title="Подчёркнутый (Ctrl+U)" @click="execDocCmd('underline')"><u>Ч</u></button>
                 <button class="tb-btn" title="Зачёркнутый" @click="execDocCmd('strikeThrough')"><s>S</s></button>
-                <input type="color" class="tb-color" title="Цвет текста" value="#111827" @input="execDocCmd('foreColor', $event.target.value)">
+                <input type="color" class="tb-color" title="Цвет текста" value="#111827" @input="execDocCmd('foreColor', $event.target.value, $event)">
                 <div class="tb-sep"></div>
                 <button class="tb-btn" title="По левому краю" @click="execDocCmd('justifyLeft')">⇤</button>
                 <button class="tb-btn" title="По центру" @click="execDocCmd('justifyCenter')">↔</button>
@@ -634,14 +636,14 @@ ODA({
                 <button class="tb-btn" :active="activeCellObj?.align === 'center'" title="По центру" @click="setCellStyle('align', 'center')">↔</button>
                 <button class="tb-btn" :active="activeCellObj?.align === 'right'" title="По правому краю" @click="setCellStyle('align', 'right')">⇥</button>
                 <div class="tb-sep"></div>
-                <select class="tb-select" title="Формат чисел" :value="activeCellObj?.numFmt || ''" @change="setCellStyle('numFmt', $event.target.value)">
+                <select class="tb-select" title="Формат чисел" :value="activeCellObj?.numFmt || ''" @change="setCellStyle('numFmt', $event.target.value, $event)">
                     <option value="">Общий формат</option>
                     <option value="number">1 234,56</option>
                     <option value="currency">1 234,56 ₽</option>
                     <option value="percent">12,3%</option>
                 </select>
-                <input type="color" class="tb-color" title="Цвет текста ячейки" :value="activeCellObj?.color || '#111827'" @input="setCellStyle('color', $event.target.value)">
-                <input type="color" class="tb-color" title="Цвет фона ячейки" :value="activeCellObj?.bg || '#ffffff'" @input="setCellStyle('bg', $event.target.value)">
+                <input type="color" class="tb-color" title="Цвет текста ячейки" :value="activeCellObj?.color || '#111827'" @input="setCellStyle('color', $event.target.value, $event)">
+                <input type="color" class="tb-color" title="Цвет фона ячейки" :value="activeCellObj?.bg || '#ffffff'" @input="setCellStyle('bg', $event.target.value, $event)">
                 <div class="tb-sep"></div>
                 <button class="tb-btn" title="Объединить / разъединить выделенные ячейки" @click="toggleMergeSelected()">⊞ Объединить</button>
                 <button class="tb-btn" title="Автосумма (SUM)" @click="insertAutoSum()">Σ Сумма</button>
@@ -663,7 +665,7 @@ ODA({
                     <div class="tb-sep"></div>
                     <button class="tb-btn" :active="selectedSlideEl.bold" @click="toggleSlideElProp('bold')"><b>Ж</b></button>
                     <button class="tb-btn" :active="selectedSlideEl.italic" @click="toggleSlideElProp('italic')"><i>К</i></button>
-                    <select class="tb-select" :value="String(selectedSlideEl.fontSize || 22)" @change="setSlideElProp('fontSize', Number($event.target.value))">
+                    <select class="tb-select" :value="String(selectedSlideEl.fontSize || 22)" @change="setSlideElProp('fontSize', Number($event.target.value), $event)">
                         <option value="14">14 px</option>
                         <option value="18">18 px</option>
                         <option value="22">22 px</option>
@@ -674,20 +676,12 @@ ODA({
                     <button class="tb-btn" :active="selectedSlideEl.align === 'left'" @click="setSlideElProp('align', 'left')">⇤</button>
                     <button class="tb-btn" :active="selectedSlideEl.align === 'center'" @click="setSlideElProp('align', 'center')">↔</button>
                     <button class="tb-btn" :active="selectedSlideEl.align === 'right'" @click="setSlideElProp('align', 'right')">⇥</button>
-                    <input type="color" class="tb-color" title="Цвет текста" :value="selectedSlideEl.color || '#1e293b'" @input="setSlideElProp('color', $event.target.value)">
-                    <input type="color" class="tb-color" title="Заливка блока" :value="selectedSlideEl.fill && selectedSlideEl.fill !== 'transparent' ? selectedSlideEl.fill : '#ffffff'" @input="setSlideElProp('fill', $event.target.value)">
+                    <input type="color" class="tb-color" title="Цвет текста" :value="selectedSlideEl.color || '#1e293b'" @input="setSlideElProp('color', $event.target.value, $event)">
+                    <input type="color" class="tb-color" title="Заливка блока" :value="selectedSlideEl.fill && selectedSlideEl.fill !== 'transparent' ? selectedSlideEl.fill : '#ffffff'" @input="setSlideElProp('fill', $event.target.value, $event)">
                 </div>
                 <div class="tb-sep"></div>
                 <button class="tb-btn" @click="startSlideShow()">▶ Показ слайдов</button>
             </div>
-
-            <div flex></div>
-
-            <span class="status-pill" :dirty="isChanged">{{statusText}}</span>
-            <button class="tb-btn save-btn" ~if="isChanged" :disabled="saving" title="Сохранить изменения (Ctrl+S)" @click="save()">💾 Сохранить</button>
-            <button class="tb-btn" title="Открыть напрямую в установленном на ПК Office (Word / Excel / PowerPoint / LibreOffice)" @click="openInDesktopOffice()">↗ В системном Office</button>
-            <button class="tb-btn" title="Печать документа" @click="printDocument()">🖨 Печать</button>
-            <button class="tb-btn" title="Скачать файл" @click="downloadDocument()">⬇ Скачать</button>
         </div>
 
         <!-- 1. РЕЖИМ ТАБЛИЦЫ (.xlsx / .xls / .csv) -->
@@ -887,6 +881,8 @@ ODA({
     },
 
     markDirty(dirty = true) {
+        if (dirty && this._loadingOffice)
+            return;
         this.isChanged = Boolean(dirty);
         if (this.isChanged)
             this.statusMessage = '';
@@ -895,8 +891,10 @@ ODA({
         if (this.hostView)
             this.hostView.isChanged = this.isChanged;
         const formHost = this._findFormHost();
-        if (formHost)
+        if (formHost) {
             formHost.focusedStateVersion = (formHost.focusedStateVersion || 0) + 1;
+            formHost.syncFromView?.(this.hostView || formHost.view_control);
+        }
     },
 
     _findFormHost() {
@@ -907,7 +905,32 @@ ODA({
         return null;
     },
 
-    async loadOfficeItem(item) {
+    attached() {
+        this._syncDocxDom();
+    },
+
+    _syncDocxDom() {
+        const apply = () => {
+            if (this.kind !== 'document')
+                return true;
+            const page = this.$?.('#docxPage');
+            if (!page)
+                return false;
+            if (page.innerHTML !== this.docHtml)
+                page.innerHTML = this.docHtml;
+            return true;
+        };
+        if (apply())
+            return;
+        for (const delay of [10, 40, 120]) {
+            this.async(() => apply(), delay);
+        }
+    },
+
+    async loadOfficeItem(rawItem) {
+        let item = await Promise.resolve(rawItem);
+        if (Array.isArray(item))
+            item = item.at(-1) || null;
         if (!item)
             return;
         const ext = String(item.ext || item.id?.split('.').pop() || 'docx').toLowerCase();
@@ -923,32 +946,37 @@ ODA({
     },
 
     applyLoadedModel(data = {}) {
-        this.kind = data.kind || 'document';
-        if (this.kind === 'spreadsheet') {
-            this.sheets = Array.isArray(data.sheets) && data.sheets.length
-                ? data.sheets
-                : [{ name: 'Лист1', rowCount: 30, colCount: 12, colWidths: Array(12).fill(110), merges: [], cells: {} }];
-            this.activeSheetIdx = 0;
-            this.setActiveCell(0, 0);
-            this._gridTick++;
+        this._loadingOffice = true;
+        try {
+            this.kind = data.kind || 'document';
+            if (this.kind === 'spreadsheet') {
+                this.sheets = Array.isArray(data.sheets) && data.sheets.length
+                    ? data.sheets
+                    : [{ name: 'Лист1', rowCount: 30, colCount: 12, colWidths: Array(12).fill(110), merges: [], cells: {} }];
+                this.activeSheetIdx = 0;
+                this.setActiveCell(0, 0);
+                this._gridTick++;
+            }
+            else if (this.kind === 'presentation') {
+                this.slides = Array.isArray(data.slides) && data.slides.length
+                    ? data.slides
+                    : [{ id: 'slide_1', title: 'Слайд 1', background: '#ffffff', elements: [] }];
+                this.activeSlideIdx = 0;
+                this.selectedSlideElId = '';
+            }
+            else {
+                this.docHtml = String(data.html || '<p><br></p>');
+                this.pageSetup = data.pageSetup || { widthMm: 210, heightMm: 297, marginMm: 20 };
+                this._syncDocxDom();
+            }
+            this.markDirty(false);
         }
-        else if (this.kind === 'presentation') {
-            this.slides = Array.isArray(data.slides) && data.slides.length
-                ? data.slides
-                : [{ id: 'slide_1', title: 'Слайд 1', background: '#ffffff', elements: [] }];
-            this.activeSlideIdx = 0;
-            this.selectedSlideElId = this.slides[0]?.elements?.[0]?.id || '';
-        }
-        else {
-            this.docHtml = String(data.html || '<p><br></p>');
-            this.pageSetup = data.pageSetup || { widthMm: 210, heightMm: 297, marginMm: 20 };
+        finally {
             this.async(() => {
-                const page = this.$?.('#docxPage');
-                if (page && page.innerHTML !== this.docHtml)
-                    page.innerHTML = this.docHtml;
-            }, 10);
+                this._loadingOffice = false;
+                this.markDirty(false);
+            }, 50);
         }
-        this.markDirty(false);
     },
 
     buildSavePayload() {
@@ -1249,6 +1277,8 @@ ODA({
     },
 
     onFormulaInput(e) {
+        if (e && e.isTrusted === false)
+            return;
         const val = e?.target?.value ?? '';
         this.formulaInputValue = val;
         if (!this.editingCoord)
@@ -1330,7 +1360,9 @@ ODA({
         this.setCellStyle(prop, !cur);
     },
 
-    setCellStyle(prop, val) {
+    setCellStyle(prop, val, e) {
+        if (e && e.isTrusted === false)
+            return;
         const sh = this.currentSheet;
         if (!sh)
             return;
@@ -1462,11 +1494,15 @@ ODA({
     // ========================================================================
 
     onDocxInput(e) {
+        if (e && e.isTrusted === false)
+            return;
         this.docHtml = e?.target?.innerHTML || '';
         this.markDirty(true);
     },
 
-    execDocCmd(cmd, value = null) {
+    execDocCmd(cmd, value = null, e) {
+        if (e && e.isTrusted === false)
+            return;
         const page = this.$?.('#docxPage');
         page?.focus?.();
         try {
@@ -1476,6 +1512,15 @@ ODA({
         if (page)
             this.docHtml = page.innerHTML;
         this.markDirty(true);
+    },
+
+    onDocFormatBlockChange(e) {
+        if (e && e.isTrusted === false)
+            return;
+        const tag = e?.target?.value || '';
+        if (e?.target)
+            e.target.value = '';
+        this.execDocFormatBlock(tag);
     },
 
     execDocFormatBlock(tag) {
@@ -1520,19 +1565,21 @@ ODA({
             left: (el.x || 0) + 'px',
             top: (el.y || 0) + 'px',
             width: (el.w || 300) + 'px',
-            minHeight: (el.h || 60) + 'px',
-            fontSize: (el.fontSize || 22) + 'px',
+            minHeight: (el.h || 28) + 'px',
+            fontSize: (el.fontSize || 16) + 'px',
             fontWeight: el.bold ? '700' : '400',
             fontStyle: el.italic ? 'italic' : 'normal',
             textAlign: el.align || 'left',
             color: el.color || '#1e293b',
             background: el.fill || 'transparent',
+            zIndex: el.decorative ? '0' : '1',
+            pointerEvents: el.decorative ? 'none' : 'auto',
         };
     },
 
     selectSlide(idx) {
         this.activeSlideIdx = idx;
-        this.selectedSlideElId = this.slides?.[idx]?.elements?.[0]?.id || '';
+        this.selectedSlideElId = '';
     },
 
     addSlide() {
@@ -1647,7 +1694,9 @@ ODA({
         this.setSlideElProp(prop, !el[prop]);
     },
 
-    setSlideElProp(prop, val) {
+    setSlideElProp(prop, val, e) {
+        if (e && e.isTrusted === false)
+            return;
         const el = this.selectedSlideEl;
         if (!el)
             return;

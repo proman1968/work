@@ -7,7 +7,7 @@
  *   microchat-doc     — просмотр дока: html/pdf — страница, картинка, markdown, текст; копировать/сохранить/открыть.
  * Состояние (docs, dockOpen, dockTab, stats) — у шелла (file.js); компоненты читают его через shell.
  */
-import { extOf, fileItemOf, fileUrl, copyText, findShell, fmtTime, linkifyWork, workHref } from './util.js';
+import { extOf, fileItemOf, fileUrl, copyText, findShell, fmtTime, linkifyWork, workHref, cleanWorkFilePath } from './util.js';
 import { fmtNum, fmtDate } from './docs.js';
 import '/$server/$folder/lib/dot/dot.js';
 import '/$server/$folder/lib/chat-item/chat-item.js';
@@ -433,10 +433,11 @@ ODA({ is: 'microchat-results',
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; }
             .sel-bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 4px; padding: 3px 8px; box-sizing: border-box; }
-            .sel { @apply --horizontal-center; gap: 6px; font-size: small; user-select: none; flex: 1; min-width: 0; }
+            .sel { @apply --horizontal-center; justify-content: space-between; gap: 8px; font-size: small; user-select: none; flex: 1; min-width: 0; }
+            .sel-center { @apply --horizontal-center; justify-content: center; gap: 6px; flex: 1; min-width: 0; overflow: hidden; text-align: center; }
             .sel .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-            .sel .cnt { @apply --muted; font-size: x-small; white-space: nowrap; }
-            .arr { @apply --content; @apply --border; cursor: pointer; padding: 2px 8px; color: inherit; line-height: 1.2; border-radius: 0; }
+            .sel .cnt { @apply --muted; font-size: x-small; white-space: nowrap; flex-shrink: 0; }
+            .arr { @apply --content; @apply --border; cursor: pointer; padding: 2px 8px; color: inherit; line-height: 1.2; border-radius: 0; flex-shrink: 0; }
             .arr:hover:not(:disabled) { @apply --hover; }
             .arr:disabled { opacity: .35; cursor: default; }
             .body { overflow: auto; min-height: 0; flex: 1; }
@@ -445,8 +446,10 @@ ODA({ is: 'microchat-results',
         <div class="sel-bar" no-flex ~if="items.length">
             <div class="sel" flex>
                 <button class="arr" :disabled="idx <= 0" @tap="prev" title="Предыдущий" aria-label="Предыдущий результат">‹</button>
-                <span class="name" :title="cur?.title">{{cur?.title}}</span>
-                <span class="cnt">{{idx + 1}} из {{items.length}}</span>
+                <div class="sel-center">
+                    <span class="name" :title="cur?.title">{{cur?.title}}</span>
+                    <span class="cnt" ~if="items.length > 1">{{idx + 1}} из {{items.length}}</span>
+                </div>
                 <button class="arr" :disabled="idx >= items.length - 1" @tap="next" title="Следующий" aria-label="Следующий результат">›</button>
             </div>
         </div>
@@ -527,9 +530,9 @@ ODA({ is: 'microchat-files',
             .meta .pub { color: var(--accent-color); font-weight: 600; }
             .view { @apply --vertical; flex: 1; min-height: 0; overflow: hidden; }
             .back-bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 8px; padding: 3px 8px; box-sizing: border-box; }
-            .back { @apply --content; @apply --border; cursor: pointer; padding: 3px 10px; color: inherit; font-size: small; border-radius: 0; }
+            .back { @apply --content; @apply --border; cursor: pointer; padding: 3px 10px; color: inherit; font-size: small; border-radius: 0; flex-shrink: 0; }
             .back:hover { @apply --hover; }
-            .back-bar span { @apply --muted; font-size: x-small; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+            .back-bar .file-title { font-size: small; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
             .empty { @apply --muted; text-align: center; padding: 40px 20px; }
         </style>
         <div class="list" ~if="!cur">
@@ -549,7 +552,7 @@ ODA({ is: 'microchat-files',
         <div class="view" ~if="cur">
             <div class="back-bar" no-flex>
                 <button class="back" @tap="close" title="К списку файлов">← Файлы</button>
-                <span flex :title="cur.real">{{cur.source === 'user' ? 'ваше вложение' : 'создано агентом'}} · {{items.length}} {{items.length === 1 ? 'файл' : 'файлов'}} в задаче</span>
+                <span class="file-title" flex :title="cur.title || cur.real">{{cur.title}}</span>
             </div>
             <microchat-doc flex :doc="curDoc"></microchat-doc>
         </div>
@@ -586,12 +589,6 @@ ODA({ is: 'microchat-doc',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; }
-            .bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 4px; padding: 3px 8px; min-width: 0; box-sizing: border-box; }
-            .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-size: small; }
-            .sub { @apply --muted; font-size: x-small; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-            .sub[mono] { font-family: var(--font-mono); }
-            .sub[link] { cursor: pointer; text-decoration: underline dotted; }
-            .bar oda-button { padding: 2px; }
             .body { overflow: auto; min-height: 0; }
             iframe { border: none; width: 100%; height: 100%; background: white; display: block; }
             .img { @apply --vertical; align-items: center; justify-content: center; padding: 16px; }
@@ -601,17 +598,6 @@ ODA({ is: 'microchat-doc',
             pre { margin: 0; padding: 12px 16px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; }
             .empty { @apply --muted; padding: 24px; text-align: center; }
         </style>
-        <div class="bar" no-flex>
-            <div vertical flex style="min-width: 0;">
-                <span class="name">{{doc?.title}}</span>
-                <span class="sub" :mono="isFile" :link="isFile" :title="isFile ? 'Открыть форму ' + path : subtitle" @tap="openForm">{{subtitle}}</span>
-            </div>
-            <oda-button no-flex ~if="isFile" icon="carbon:renew" :icon-size="16" title="Обновить" @tap="reload"></oda-button>
-            <oda-button no-flex ~if="!isImage && !isOffice" icon="carbon:copy" :icon-size="16" title="Копировать" @tap="copy"></oda-button>
-            <oda-button no-flex ~if="!isFile" icon="carbon:save" :icon-size="16" :title="saved ? 'Сохранено: ' + saved : 'Сохранить файлом .md в класс задачи'" :success="!!saved" @tap="save"></oda-button>
-            <oda-button no-flex icon="carbon:download" :icon-size="16" title="Скачать" @tap="download"></oda-button>
-            <oda-button no-flex ~if="isFile" icon="carbon:launch" :icon-size="16" title="Открыть в новой вкладке" @tap="launch"></oda-button>
-        </div>
         <div class="body" flex vertical>
             <iframe flex ~if="isPage" :src="url"></iframe>
             <oda-office-editor flex ~if="isOffice && officeReady" :$item="officeItem"></oda-office-editor>
@@ -659,9 +645,10 @@ ODA({ is: 'microchat-doc',
     },
     get isFile() { return this.doc?.kind === 'file'; },
     get path() { return this.isFile ? this.doc.path : ''; },
-    get ext() { return this.isFile ? extOf(this.path) : 'md'; },
+    get realPath() { return this.isFile ? (cleanWorkFilePath(this.path) || this.path) : ''; },
+    get ext() { return this.isFile ? (extOf(this.realPath) || extOf(this.path)) : 'md'; },
     get isOffice() { return OFFICE.includes(this.ext); },
-    get officeItem() { return this.isOffice && this.path ? fileItemOf(this.path) : null; },
+    get officeItem() { return this.isOffice && this.realPath ? fileItemOf(this.realPath) : null; },
     get isBinary() { return BINARY.includes(this.ext); },
     get isImage() { return IMAGE.includes(this.ext); },
     get isPage() { return PAGE.includes(this.ext); },
@@ -732,9 +719,26 @@ ODA({ is: 'microchat-doc',
         if (res)
             this.saved = res;
     },
-    launch() { window.open(fileUrl(this.path), '_blank'); },
-    openForm() {
-        if (this.isFile)
-            window.open(workHref(this.path), '_blank');
+    launch() { window.open(fileUrl(this.realPath || this.path), '_blank'); },
+    async openForm() {
+        if (!this.isFile)
+            return;
+        const targetPath = this.realPath || this.path;
+        const exec = window.top?.execute || window.execute;
+        if (typeof exec === 'function') {
+            let item = await WORK.get_item(targetPath);
+            if (Array.isArray(item))
+                item = item.at(-1) || null;
+            if (!item && targetPath !== this.path) {
+                item = await WORK.get_item(this.path);
+                if (Array.isArray(item))
+                    item = item.at(-1) || null;
+            }
+            if (item) {
+                await exec(item);
+                return;
+            }
+        }
+        window.open(workHref(targetPath), '_blank');
     },
 });

@@ -14,9 +14,10 @@ export default {
             return { ok: false, skipped: 'не новая задача' };
         let location = null;
         try {
-            location = params.location ? (typeof params.location === 'string' ? JSON.parse(params.location) : params.location) : null;
+            location = params.location ? (typeof params.location === 'string' ? JSON.parse(params.location) : params.location) : (body.location || null);
         }
-        catch { /* без геопозиции */ }
+        catch { location = body.location || null; }
+        const tz = params.tz || body.tz || location?.tz || undefined;
         let includes = params.includes;
         try {
             if (typeof includes === 'string')
@@ -30,11 +31,16 @@ export default {
             }
             catch { /* старый/повреждённый формат — сохраняем пути из includes */ }
         }
+        const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+        const promptText = params.prompt !== undefined
+            ? params.prompt
+            : (body.prompt !== undefined ? body.prompt : (hasAttachments && body.name === 'task' ? '' : body.name));
         return core.prompt(file, {
             session: params.session,
-            prompt: params.prompt || body.prompt || body.name,
+            prompt: promptText,
             attachments,
             location,
+            ...(tz ? { tz } : {}),
             voice: params.voice ?? body.voice,
         });
     },

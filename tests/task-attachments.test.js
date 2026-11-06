@@ -65,9 +65,64 @@ it('общий чат передаёт имя исходного файла от
         await chat.send.call(host);
         assert.deepEqual(JSON.parse(taskParams.includes), [history]);
 
+        // Отправка файлов без текстового промпта в режиме ИИ также создаёт .task (не падает в save_files)
+        let taskCreatedNoPrompt = false;
+        let savedTaskBody = null;
+        let saveFilesCalled = false;
+        const nodeNoPrompt = {
+            async save_files() {
+                saveFilesCalled = true;
+                return [];
+            },
+            async save_file(f, params) {
+                if (f.name.endsWith('.task')) {
+                    taskCreatedNoPrompt = true;
+                    savedTaskBody = JSON.parse(await f.text());
+                    taskParams = { ...params };
+                    return { path: '/BASE/task/124.X.task' };
+                }
+                return { path: history };
+            },
+        };
+        const hostNoPrompt = {
+            value: '', files: [file], isAIMode: true, model: '',
+            $pdp: { isPrivate: false, receivers: [], $item: nodeNoPrompt },
+            $(id) { return id === '#ribbon' ? { scrollDown: false } : { files: [file] }; },
+            _geo() { return null; },
+            clear() {}, focusInput() {}, _awaitNewTask() {},
+            _openCreated: async () => {},
+            _createTask: chat._createTask,
+        };
+        await chat.send.call(hostNoPrompt);
+        assert.equal(taskCreatedNoPrompt, true, 'без текстового промпта в режиме ИИ должна создаваться задача .task');
+        assert.equal(saveFilesCalled, false, 'save_files обычного чата не должен вызываться в режиме ИИ');
+        assert.equal(savedTaskBody.name, 'себестоимость июнь.xlsx');
+        assert.equal(savedTaskBody.prompt, '');
+        assert.equal(taskParams.prompt, '');
+
     }
     finally {
         globalThis.ODA = previous;
         globalThis.WORK = previousWork;
     }
+});
+
+it('toMessages формирует инструкцию изучить вложения и спросить пользователя при пустом тексте промпта', async () => {
+    const { toMessages } = await import('../sources/modules/agent/loop.js');
+    const items = [{
+        id: 'u1',
+        type: 'user',
+        content: '',
+        attachments: [
+            { path: '/BASE/task/.124.X.task/xlsx/себестоимость июнь.xlsx', name: 'себестоимость июнь.xlsx' },
+            { path: '/BASE/task/.124.X.task/xlsx/затраты.xlsx', name: 'затраты.xlsx' },
+        ],
+    }];
+    const msgs = toMessages('SYS', items);
+    const userMsg = msgs.find(m => m.role === 'user');
+    assert.ok(userMsg);
+    assert.match(userMsg.content, /Пользователь прикрепил файлы без текстового поручения/);
+    assert.match(userMsg.content, /спроси у пользователя, что с ними нужно сделать/);
+    assert.match(userMsg.content, /\[Вложения\]/);
+    assert.match(userMsg.content, /себестоимость июнь\.xlsx/);
 });

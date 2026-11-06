@@ -208,6 +208,81 @@ export function findShell(el) {
 
 const OFFLINE_KEY = 'WORK.offline-queue';
 const OFFLINE_MAX = 50; // реплик в очереди (защита localStorage от переполнения)
+const GEO_STORAGE_KEY = 'WORK.geo-fix';
+const GEO_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Получить геопозицию и часовой пояс пользователя без задержки отправки (ждёт не дольше waitMs, кэширует на 30 минут).
+ */
+export async function resolveClientLocation(waitMs = 250) {
+    const now = Date.now();
+    let tz = '';
+    try {
+        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    }
+    catch { /* ignore */ }
+
+    const root = globalThis.top || globalThis;
+    let cached = root.__workGeoFix || globalThis.__workGeoFix || null;
+    if (!cached) {
+        try {
+            const raw = globalThis.localStorage?.getItem?.(GEO_STORAGE_KEY);
+            if (raw)
+                cached = JSON.parse(raw);
+        }
+        catch { /* ignore */ }
+    }
+    if (cached && cached.lat != null && cached.lon != null && now - (cached.at || 0) < GEO_TTL_MS) {
+        return { lat: cached.lat, lon: cached.lon, ...(tz ? { tz } : {}) };
+    }
+
+    const navGeo = globalThis.navigator?.geolocation;
+    if (navGeo && (!root.__workGeoDeniedAt || now - root.__workGeoDeniedAt >= GEO_TTL_MS)) {
+        if (!root.__workGeoPromise) {
+            root.__workGeoPromise = new Promise(resolve => {
+                let done = false;
+                const finish = (pos, denied = false) => {
+                    if (done)
+                        return;
+                    done = true;
+                    clearTimeout(timer);
+                    root.__workGeoPromise = null;
+                    if (pos) {
+                        root.__workGeoFix = pos;
+                        globalThis.__workGeoFix = pos;
+                        try { globalThis.localStorage?.setItem?.(GEO_STORAGE_KEY, JSON.stringify(pos)); } catch { /* ignore */ }
+                    }
+                    if (denied)
+                        root.__workGeoDeniedAt = Date.now();
+                    resolve(pos);
+                };
+                const timer = setTimeout(() => finish(null), 5000);
+                try {
+                    navGeo.getCurrentPosition(
+                        p => finish({ lat: p.coords.latitude, lon: p.coords.longitude, at: Date.now() }),
+                        err => finish(null, err?.code === 1),
+                        { enableHighAccuracy: false, maximumAge: 600000, timeout: 4000 }
+                    );
+                }
+                catch {
+                    finish(null);
+                }
+            });
+        }
+        if (waitMs > 0 && root.__workGeoPromise) {
+            const got = await Promise.race([
+                root.__workGeoPromise,
+                new Promise(r => setTimeout(() => r(null), waitMs)),
+            ]);
+            if (got && got.lat != null && got.lon != null)
+                return { lat: got.lat, lon: got.lon, ...(tz ? { tz } : {}) };
+        }
+    }
+    const fresh = root.__workGeoFix || globalThis.__workGeoFix;
+    if (fresh && fresh.lat != null && fresh.lon != null && Date.now() - (fresh.at || 0) < GEO_TTL_MS)
+        return { lat: fresh.lat, lon: fresh.lon, ...(tz ? { tz } : {}) };
+    return tz ? { tz } : null;
+}
 
 /** Прочитать очередь офлайн-реплик (чистая — покрыта тестами). */
 export function offlineQueue() {
@@ -319,9 +394,73 @@ export function pathOfWorkHref(href) {
 
 const TRAIL = /[.,;:!?)»"'…]+$/;
 
+/** Снимок …/.имя/history/ДЕНЬ/снимок → путь самого живого файла …/имя (иначе путь как есть). */
+export function cleanWorkFilePath(p) {
+    const s = String(p || '').trim();
+    const m = s.match(/^(.*)\/\.([^/]+)\/history\/[^/]+\/[^/]+$/);
+    return m ? m[1] + '/' + m[2] : s;
+}
+
+/**
+ * Короткая подпись файла для Markdown: «<Точка хранения>/<Имя файла>»
+ * (например, «Перепелкин Роман/Отчёт по локальной сети 192.168.14.0-24.docx»),
+ * без служебных сегментов ($user, task, даты и .<id>.task).
+ */
+export function workPathLabel(rawPath) {
+    const real = cleanWorkFilePath(rawPath);
+    if (!extOf(real))
+        return real;
+    const segs = real.split('/').filter(Boolean);
+    const fileName = segs.pop() || real;
+    const pointSegs = [];
+    for (const seg of segs) {
+        if (seg[0] === '$' || seg === '~' || seg === 'task' || seg === 'logs' || seg === 'history' || seg[0] === '.')
+            break;
+        pointSegs.push(seg);
+    }
+    const pointPath = pointSegs.length ? '/' + pointSegs.join('/') : '/';
+    const itemsMap = globalThis.CORE?.$item?.ITEMS || globalThis.top?.CORE?.$item?.ITEMS || null;
+    const cached = itemsMap?.[pointPath];
+    let pointLabel = cached?.DATA?.label || cached?.label || '';
+
+    if (pointSegs[0] === 'USERS' && pointSegs[1]) {
+        const uid = pointSegs[1];
+        if (!pointLabel || pointLabel === uid) {
+            const curUser = globalThis.WORK?.USER || globalThis.top?.WORK?.USER;
+            if (curUser?.id === uid)
+                pointLabel = curUser.DATA?.label || curUser.label || '';
+        }
+        if (!pointLabel || pointLabel === uid) {
+            const usersNode = itemsMap?.['/USERS'];
+            const list = usersNode?.items || usersNode?.children || [];
+            const found = Array.isArray(list) ? list.find(u => u?.id === uid) : null;
+            if (found)
+                pointLabel = found.DATA?.label || found.label || '';
+        }
+        if ((!pointLabel || pointLabel === uid) && !cached) {
+            const getter = globalThis.WORK?.get_item || globalThis.top?.WORK?.get_item;
+            if (typeof getter === 'function')
+                getter.call(globalThis.WORK || globalThis.top?.WORK, pointPath);
+        }
+    }
+    else if (!pointLabel && pointSegs.length === 0) {
+        pointLabel = itemsMap?.['/']?.DATA?.label || itemsMap?.['/']?.label || 'WORK';
+    }
+    else if (!pointLabel && !cached && pointPath !== '/') {
+        const getter = globalThis.WORK?.get_item || globalThis.top?.WORK?.get_item;
+        if (typeof getter === 'function')
+            getter.call(globalThis.WORK || globalThis.top?.WORK, pointPath);
+    }
+
+    if (!pointLabel)
+        pointLabel = pointSegs.at(-1) || 'WORK';
+
+    return `${pointLabel}/${fileName}`;
+}
+
 /**
  * Markdown → с кликабельными WORK-путями (стандарт rules.md 1.1.1):
- * `/путь` в бэктиках и голые /КЛАСС/… пути в тексте → [путь](/путь/~/handlers/pages/form/);
+ * `/путь` в бэктиках и голые /КЛАСС/… пути в тексте → [Точка/Файл](/путь/~/handlers/pages/form/);
  * markdown-ссылки на абсолютные пути → WORK-формат. Блоки кода, внешние URL — без изменений.
  */
 export function linkifyWork(md, artifacts = new Map()) {
@@ -335,33 +474,56 @@ export function linkifyWork(md, artifacts = new Map()) {
 function linkifySegment(text, artifacts) {
     const keep = [];
     const hold = s => '\u0000' + (keep.push(s) - 1) + '\u0000';
-    const artifact = path => {
+    const formatWorkLink = (path, customLabel = '', codeWrap = false) => {
+        const real = cleanWorkFilePath(path);
+        const isFile = Boolean(extOf(real));
+        const target = isFile ? real : path;
+        let label = String(customLabel || '').trim();
+        const isRawTechLabel = !label || label.startsWith('/') || label.includes('/task/') || label.includes('.task/') || label.includes('/$');
+        if (isFile && isRawTechLabel) {
+            label = workPathLabel(real);
+            codeWrap = false;
+        }
+        else if (!label) {
+            label = path;
+        }
+        const disp = codeWrap ? '`' + label + '`' : label;
+        return '[' + disp + '](' + workHref(target) + ')';
+    };
+    const artifact = (path, customLabel = '') => {
         if (!artifacts.has(path))
             return null;
-        const name = path.split('/').pop();
-        const snapshot = artifacts.get(path);
-        return snapshot ? '[' + name + '](' + workHref(snapshot) + ')' : name;
+        return formatWorkLink(path, customLabel);
     };
     // готовые ссылки: абсолютный путь → WORK-формат
     text = text.replace(/\[([^\]\n]*)\]\(([^)\s]+)\)/g, (m, label, href) => {
         let h = href;
         try { h = decodeURI(href); } catch { /* как есть */ }
-        return hold(artifact(h) ?? (isWorkPath(h) ? '[' + label + '](' + workHref(h) + ')' : m));
+        const cleanH = h.replace(/\/~\/handlers\/(?:pages\/)?form\/?$/, '');
+        return hold(artifact(cleanH, label) ?? (isWorkPath(cleanH) ? formatWorkLink(cleanH, label) : m));
     });
     text = text.replace(/https?:\/\/[^\s)\]]+/g, m => hold(m));
     text = text.replace(/<[^>\n]+>/g, m => hold(m));
     // `путь` в бэктиках
     text = text.replace(/`([^`\n]+)`/g, (m, code) => {
         const c = code.trim();
-        return hold(artifact(c) ?? (isWorkPath(c) ? '[`' + c + '`](' + workHref(c) + ')' : m));
+        return hold(artifact(c) ?? (isWorkPath(c) ? formatWorkLink(c, '', !extOf(cleanWorkFilePath(c))) : m));
     });
+    // голые пути из известных артефактов задачи (могут содержать пробелы в имени файла)
+    if (artifacts?.size) {
+        const knownPaths = [...artifacts.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
+        for (const kp of knownPaths) {
+            if (text.includes(kp))
+                text = text.split(kp).join(hold(formatWorkLink(kp)));
+        }
+    }
     // голые пути в тексте
     text = text.replace(/(^|[\s(«"'])(\/[^\s`'"«»()\[\]<>]+)/g, (m, pre, raw) => {
         const tail = (raw.match(TRAIL) || [''])[0];
         const path = tail ? raw.slice(0, -tail.length) : raw;
         if (!isWorkPath(path, true))
             return m;
-        return pre + hold(artifact(path) ?? ('[' + path + '](' + workHref(path) + ')')) + tail;
+        return pre + hold(artifact(path) ?? formatWorkLink(path)) + tail;
     });
     return text.replace(/\u0000(\d+)\u0000/g, (_, n) => keep[+n]);
 }

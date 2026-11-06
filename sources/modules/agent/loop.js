@@ -900,10 +900,14 @@ function userContent(it, imageMap) {
     const text = String(it.content || '');
     const att = (it.attachments || []).filter(a => a?.path);
     const images = imageMap ? att.filter(a => imageMap.has(a.path)).map(a => ({ image_url: imageMap.get(a.path) })) : [];
+    const noPromptHint = !text.trim() && att.length
+        ? '[Пользователь прикрепил файлы без текстового поручения. Изучи приложенные файлы (read / read_table), кратко опиши их содержимое и спроси у пользователя, что с ними нужно сделать.]'
+        : '';
+    const head = text || noPromptHint;
     const note = att.length ? '\n\n[Вложения]\n' + att.map(a => '- ' + a.path + (a.name ? ' (' + a.name + ')' : '')).join('\n') : '';
     if (!images.length)
-        return text + note;
-    return [{ type: 'text', text: text + note }, ...images.map(a => ({ type: 'image_url', image_url: { url: a.image_url } }))];
+        return head + note;
+    return [{ type: 'text', text: head + note }, ...images.map(a => ({ type: 'image_url', image_url: { url: a.image_url } }))];
 }
 
 /**

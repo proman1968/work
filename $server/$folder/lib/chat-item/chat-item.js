@@ -1,3 +1,10 @@
+const CHAT_PREVIEW_EXTS = new Set([
+    'task', 'call',
+    'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico',
+    'mp4', 'webm', 'ogv', 'mov', 'm4v',
+    'mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac', 'opus',
+]);
+
 export default {
     imports: 'oda//button, oda//icon, ~/lib//node-explorer.js',
 }
@@ -104,16 +111,16 @@ ODA({is: 'chat-item',
                 align-self: center;
             }
         </style>
-        <div vertical ~if="!compact && !hideAvatar && !expanded" ~style="{padding: '0px 8px', order: (!isTask && !isSender) ? 2 : 0}">
+        <div vertical ~if="!compact && !hideAvatar && !expanded && !isTask" ~style="{padding: '0px 8px', order: (!isTask && !isSender) ? 2 : 0}">
             <div flex></div>
             <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
         </div>
-        <div class="card" shadow :flex="expanded || compact || isTask" vertical ~style="cardLayoutStyle" @tap="onCardTap($event)">
+        <div class="card" shadow :flex="expanded || compact" vertical ~style="cardLayoutStyle" @tap="onCardTap($event)">
             <div class="title" no-flex light horizontal ~if="!(expanded && bodyHeader)" style="justify-content: space-between; align-items: center;">
                 <item-node auto-run :icon-size :$item="$file" :label="fileLabel" :hide-icon="isText || !!missingTargetPath" hide-history-time>
                     <span class="file-time" ~if="fileTime">{{fileTime}}</span>
                 </item-node>
-                <oda-button ~if="!compact && !isOperationLog && !missingTargetPath" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
+                <oda-button ~if="!compact && !isOperationLog && !missingTargetPath && hasPreview" :icon-size :icon="expanderIcon" :error="expanded" @tap="expanded = !expanded"></oda-button>
             </div>
             <div class="preview missing-file-box" ~if="!expanded && missingTargetPath" horizontal style="align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px;">
                 <div horizontal style="align-items: center; gap: 8px; min-width: 0; color: var(--error-color, #dc2626);">
@@ -124,8 +131,8 @@ ODA({is: 'chat-item',
                 </div>
                 <oda-button ~if="isAdminRole" class="delete-log-btn" error-invert icon="icons:delete" :icon-size="16" label="Удалить лог" title="Удалить запись лога об отсутствующем файле" @tap.stop="deleteMissingLog($event)" style="border-radius: 6px; padding: 3px 10px; scale: 1; flex-shrink: 0;"></oda-button>
             </div>
-            <div class="preview" ~if="!expanded && !missingTargetPath && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
-            <div class="preview" ~if="!expanded && !missingTargetPath && !$file && !hasTargetFilePath && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
+            <div class="preview" ~if="!compact && !expanded && !missingTargetPath && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
+            <div class="preview" ~if="!compact && !expanded && !missingTargetPath && !$file && !hasTargetFilePath && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
             <div header ~if="!expanded && !missingTargetPath && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
@@ -221,10 +228,11 @@ ODA({is: 'chat-item',
         if (this.isTask) {
             return {
                 order: 1,
-                marginLeft: '48px',
-                marginRight: '48px',
-                width: 'auto',
-                maxWidth: 'calc(100% - 96px)',
+                marginLeft: 'auto',
+                marginRight: 'auto',
+                width: '100%',
+                maxWidth: 'min(820px, 100%)',
+                boxSizing: 'border-box',
             };
         }
         if (this.isSender) {
@@ -501,6 +509,9 @@ ODA({is: 'chat-item',
     _labelForItem(path, file) {
         if (String(path || '').includes('/history/'))
             return CORE.historyEntryLabel(path);
+        const ext = String(file?.ext || this.ext || '').toLowerCase();
+        if (this.compact && !['task', 'ics', 'eml'].includes(ext))
+            return file?.DATA?.label || file?.id || String(path || '').split('/').pop() || '';
         return this._nameFromDataFile(file);
     },
     async _labelForLog(body) {
@@ -517,6 +528,9 @@ ODA({is: 'chat-item',
         return (await this._nameFromDataFile(await this.$file)) || body.ext || '';
     },
     async _nameFromDataFile(file) {
+        const ext = String(file?.ext || '').toLowerCase();
+        if (!['task', 'ics', 'eml'].includes(ext))
+            return file?.DATA?.label || file?.id || file?.ext || '';
         if (!file?.load)
             return file?.ext || '';
         try {
@@ -529,7 +543,18 @@ ODA({is: 'chat-item',
     },
     async loadPreview($file) {
         if (!$file) {
-            this.hasPreview = true;
+            this.hasPreview = !this.compact;
+            this.previewIsReady = true;
+            this.render();
+            return;
+        }
+        const ext = String($file?.ext || this.ext || '').toLowerCase();
+        if (this.compact || !CHAT_PREVIEW_EXTS.has(ext)) {
+            this.hasPreview = false;
+            this.previewTag = 'item-node';
+            this.previousElementSibling?.invalidate?.('hideAvatar');
+            this.previewIsReady = true;
+            this.render();
             return;
         }
         try {

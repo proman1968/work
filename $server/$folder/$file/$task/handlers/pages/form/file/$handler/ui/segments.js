@@ -19,9 +19,10 @@ export function segmentsOf(items, streams = {}, nested = false) {
         const text = liveText(it.content, s?.content).trim();
         const reasoning = liveText(it.reasoning, s?.reasoning).trim();
         const tools = it.tools || [];
-        for (const t of tools)
-            if (t.status === 'ok' && ['write', 'append', 'edit', 'write_table', 'generate_image'].includes(t.name) && t.path)
+        for (const t of tools) {
+            if (t.status === 'ok' && t.path && (t.snapshot || ['write', 'append', 'edit', 'write_table', 'generate_image', 'create_office_file', 'export_pdf', 'export_presentation', 'render_doc', 'save_skill'].includes(t.name)))
                 artifacts.set(t.path, t.snapshot || null);
+        }
         if (text) {
             group = null;
             out.push({ kind: 'assistant', id: it.id, item: it, artifacts: new Map(artifacts) });

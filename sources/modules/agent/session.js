@@ -573,6 +573,10 @@ export async function prompt(file, params = {}) {
     const voice = params.voice === true || params.voice === 'true';
     const interrupt = params.interrupt === true || params.interrupt === 'true';
     const spokenText = typeof params.spokenText === 'string' ? params.spokenText.trim() : undefined;
+    if (params.location && typeof params.location === 'object')
+        body.location = params.location;
+    if (params.tz || params.location?.tz)
+        body.tz = String(params.tz || params.location.tz);
     if (s.running) {
         const w = body.waiting;
         if (w && s.waiters.has(w.call) && !scheduled) {
@@ -659,8 +663,10 @@ export async function prompt(file, params = {}) {
         // voice: реплика продиктована — агент отвечает первым абзацем для озвучки (VOICE_NOTE), клиент его читает вслух
         body.voice = voice;
         body.items.push({ id: genId(), type: 'user', time: Date.now(), content: text, ...(voice ? { voice: true } : {}), ...(attachments.length ? { attachments } : {}) });
-        if (!body.title)
-            body.title = text.split('\n')[0].slice(0, 80);
+        if (!body.title) {
+            const fallbackTitle = attachments.map(a => a?.name || String(a?.path || '').split('/').pop()).filter(Boolean).join(', ');
+            body.title = (text.split('\n')[0] || fallbackTitle).slice(0, 80);
+        }
     }
     if (params.location && typeof params.location === 'object')
         body.location = params.location;

@@ -167,22 +167,26 @@ export function levelOf(rmsValue, gain = 6) {
 
 /** Микрофон → фразы. onLevel(level), onEvent('start'|'barge'|'pause'|'cancel'), onUtterance(ArrayBuffer WAV). */
 export class MicCapture {
-    constructor({ onLevel, onEvent, onUtterance, speaking }) {
-        Object.assign(this, { onLevel, onEvent, onUtterance, speaking });
-        // С включённым WebRTC echoCancellation/noiseSuppression: чувствительный порог перебивания (120 мс, плавное затухание на согласных)
+    constructor({ onLevel, onEvent, onUtterance, speaking, canListen }) {
+        Object.assign(this, { onLevel, onEvent, onUtterance, speaking, canListen });
+        // Устойчивый к шорохам и эху динамиков детектор речи
         this.vad = new Vad({
-            minSpeechMs: 160,
-            endSilenceMs: 550,
-            startMs: 60,
-            absMin: 0.012,
-            ratio: 2.4,
-            bargeFactor: 1.5,
-            bargeMs: 120,
-            bargeDecay: 0.35,
+            minSpeechMs: 320,
+            endSilenceMs: 650,
+            startMs: 120,
+            absMin: 0.022,
+            ratio: 3.0,
+            bargeFactor: 2.8,
+            bargeMs: 350,
+            bargeDecay: 0.6,
         });
         this.muted = false;
+        this.suspended = false;
         this._chunks = null;
         this._pauseFired = false;
+        this._lastSpeechDurationMs = 0;
+        this._lastPeakRms = 0;
+        this._currentPeakRms = 0;
     }
     async start() {
         this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -199,8 +203,17 @@ export class MicCapture {
         this.node = node;
         const preroll = [];
         node.onaudioprocess = e => {
-            if (this.muted)
+            if (this.muted || this.suspended || (this.canListen && !this.canListen())) {
+                if (this._chunks || this.vad.state !== 'idle' || this.vad.bargeAcc > 0) {
+                    this._chunks = null;
+                    this._pauseFired = false;
+                    this._currentPeakRms = 0;
+                    this.vad.reset();
+                }
+                preroll.length = 0;
+                this.onLevel?.(0);
                 return;
+            }
             const block = new Float32Array(e.inputBuffer.getChannelData(0));
             const dt = block.length / this.ctx.sampleRate * 1000;
             const level = rms(block);
@@ -209,23 +222,33 @@ export class MicCapture {
             if (ev === 'start' || ev === 'barge') {
                 this._chunks = [...preroll, block];
                 this._pauseFired = false;
+                this._currentPeakRms = level;
                 this.onEvent?.(ev);
             }
             else if (this._chunks) {
                 this._chunks.push(block);
+                if (level > this._currentPeakRms)
+                    this._currentPeakRms = level;
                 if (this.vad.silenceMs === 0)
                     this._pauseFired = false;
-                else if (this.vad.silenceMs >= 380 && !this._pauseFired && (this.vad.speechMs - this.vad.silenceMs) >= this.vad.minSpeechMs) {
+                else if (this.vad.silenceMs >= 420 && !this._pauseFired && (this.vad.speechMs - this.vad.silenceMs) >= this.vad.minSpeechMs) {
                     this._pauseFired = true;
                     this.onEvent?.('pause', { silenceMs: this.vad.silenceMs, speechMs: this.vad.speechMs });
                 }
                 if (ev === 'end' || ev === 'cancel') {
                     const done = this._chunks;
+                    const peakRms = this._currentPeakRms;
                     this._chunks = null;
                     this._pauseFired = false;
+                    this._currentPeakRms = 0;
                     if (ev === 'end') {
                         const merged = done.length === 1 ? done[0] : (() => { const m = new Float32Array(done.reduce((n, c) => n + c.length, 0)); let o = 0; for (const c of done) { m.set(c, o); o += c.length; } return m; })();
-                        this.onUtterance?.(encodeWav([resample(merged, this.ctx.sampleRate)], SAMPLE_RATE));
+                        this._lastSpeechDurationMs = Math.round(merged.length / this.ctx.sampleRate * 1000);
+                        this._lastPeakRms = peakRms;
+                        this.onUtterance?.(encodeWav([resample(merged, this.ctx.sampleRate)], SAMPLE_RATE), {
+                            durationMs: this._lastSpeechDurationMs,
+                            peakRms,
+                        });
                     }
                     else
                         this.onEvent?.('cancel');
@@ -233,7 +256,7 @@ export class MicCapture {
             }
             if (!this._chunks) {
                 preroll.push(block);
-                if (preroll.length > 10)
+                if (preroll.length > 8)
                     preroll.shift();
             }
         };
@@ -244,28 +267,38 @@ export class MicCapture {
     /** Досрочно завершить и отправить текущую записываемую фразу (при раннем подхвате реплики). */
     flushUtterance() {
         const done = this._chunks;
+        const peakRms = this._currentPeakRms;
         this._chunks = null;
         this._pauseFired = false;
+        this._currentPeakRms = 0;
         this.vad.reset();
         if (!done?.length || !this.ctx)
             return false;
         const merged = done.length === 1 ? done[0] : (() => { const m = new Float32Array(done.reduce((n, c) => n + c.length, 0)); let o = 0; for (const c of done) { m.set(c, o); o += c.length; } return m; })();
-        this.onUtterance?.(encodeWav([resample(merged, this.ctx.sampleRate)], SAMPLE_RATE));
+        const durationMs = Math.round(merged.length / this.ctx.sampleRate * 1000);
+        this.onUtterance?.(encodeWav([resample(merged, this.ctx.sampleRate)], SAMPLE_RATE), { durationMs, peakRms });
         return true;
     }
     /** Сбросить текущую недосказанную запись (когда ИИ сам перебил человека). */
     discardUtterance() {
         this._chunks = null;
         this._pauseFired = false;
+        this._currentPeakRms = 0;
         this.vad.reset();
+    }
+    setSuspended(v) {
+        this.suspended = !!v;
+        if (this.suspended) {
+            this.discardUtterance();
+            this.onLevel?.(0);
+        }
+        this.stream?.getAudioTracks?.().forEach(t => { t.enabled = !this.muted && !this.suspended; });
     }
     setMuted(v) {
         this.muted = !!v;
-        if (this.muted) {
-            this._chunks = null;
-            this._pauseFired = false;
-            this.vad.reset();
-        }
+        if (this.muted)
+            this.discardUtterance();
+        this.stream?.getAudioTracks?.().forEach(t => { t.enabled = !this.muted && !this.suspended; });
     }
     stop() {
         this._chunks = null;
@@ -283,21 +316,24 @@ export class LevelMeter {
         if (typeof onLevelOrOpts === 'function') {
             this.onLevel = onLevelOrOpts;
             this.speaking = null;
+            this.canListen = null;
             this.onBarge = null;
         }
         else {
             this.onLevel = onLevelOrOpts?.onLevel || null;
             this.speaking = onLevelOrOpts?.speaking || null;
+            this.canListen = onLevelOrOpts?.canListen || null;
             this.onBarge = onLevelOrOpts?.onBarge || null;
         }
         this.vad = new Vad({
-            bargeFactor: 1.5,
-            bargeMs: 120,
-            absMin: 0.012,
-            ratio: 2.4,
-            bargeDecay: 0.35,
+            bargeFactor: 2.8,
+            bargeMs: 350,
+            absMin: 0.022,
+            ratio: 3.0,
+            bargeDecay: 0.6,
         });
         this.muted = false;
+        this.suspended = false;
     }
     async start() {
         this.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -309,8 +345,11 @@ export class LevelMeter {
         this.ctx.createMediaStreamSource(this.stream).connect(analyser);
         const buf = new Float32Array(analyser.fftSize);
         this.timer = setInterval(() => {
-            if (this.muted)
+            if (this.muted || this.suspended || (this.canListen && !this.canListen())) {
+                if (this.vad.state !== 'idle' || this.vad.bargeAcc > 0)
+                    this.vad.reset();
                 return this.onLevel?.(0);
+            }
             analyser.getFloatTimeDomainData(buf);
             const r = rms(buf);
             this.onLevel?.(levelOf(r));
@@ -319,11 +358,17 @@ export class LevelMeter {
                 this.onBarge?.();
         }, 50);
     }
+    setSuspended(v) {
+        this.suspended = !!v;
+        if (this.suspended)
+            this.vad.reset();
+        this.stream?.getAudioTracks().forEach(t => { t.enabled = !this.muted && !this.suspended; });
+    }
     setMuted(v) {
         this.muted = !!v;
         if (this.muted)
             this.vad.reset();
-        this.stream?.getAudioTracks().forEach(t => { t.enabled = !this.muted; });
+        this.stream?.getAudioTracks().forEach(t => { t.enabled = !this.muted && !this.suspended; });
     }
     stop() {
         clearInterval(this.timer);
@@ -475,6 +520,7 @@ export class Speaker extends EventTarget {
             this.currentChunk = text;
             this.chunkStartedAt = Date.now();
             this.playing = true;
+            this.dispatchEvent(new CustomEvent('playing'));
             await (blob ? this._playBlob(blob, gen) : this._speakBrowser(text, gen));
             this.playing = false;
             if (gen === this.gen) {
@@ -614,12 +660,19 @@ export class VoiceController extends EventTarget {
         this.interimText = '';
         this.seq = 0;
         this._echoUntil = 0;
+        this._awaitingReply = false;
+        this._sawRunningSinceSubmit = false;
+        this._submittedAt = 0;
         this.speaker = new Speaker({ fetchWav: null });
-        this.speaker.addEventListener('start', () => { this._pauseBrowserStt(true); this.setState('speaking'); });
+        this.speaker.addEventListener('start', () => { this._pauseBrowserStt(true); });
+        this.speaker.addEventListener('playing', () => {
+            this._awaitingReply = false;
+            this._pauseBrowserStt(true);
+            this.setState('speaking');
+        });
         this.speaker.addEventListener('end', e => {
             if (!e.detail?.cancelled || e.detail?.reason !== 'barge')
                 this._echoUntil = Date.now() + ECHO_GUARD_MS;
-            this._pauseBrowserStt(false);
             this._afterSpeech();
         });
         this.speaker.addEventListener('level', e => this.dispatchEvent(new CustomEvent('speechlevel', { detail: e.detail })));
@@ -642,11 +695,48 @@ export class VoiceController extends EventTarget {
     get look() {
         return this.cfg.dot || null;
     }
+    /**
+     * Разрешена ли обработка речи с микрофона в текущий момент:
+     * - пока модель думает и готовит ответ (recognizing / thinking или задача запущена и ещё не начала говорить вслух) — речь с микрофона НЕ обрабатывается;
+     * - как только модель начала отвечать вслух (speaker.playing === true) — микрофон слушает в режиме перебивания (barge-in);
+     * - в свободном ожидании (listening / hearing) — штатная запись промпта.
+     */
+    isMicListening() {
+        if (!this.on || this.muted || this.state === 'paused' || this.state === 'recognizing' || this.state === 'thinking')
+            return false;
+        if (this._awaitingReply && !this.speaker.playing)
+            return false;
+        if (this.state === 'hearing')
+            return true;
+        if (this.speaker.playing)
+            return globalThis.localStorage?.workVoiceBarge !== '0';
+        if (Date.now() < this._echoUntil)
+            return false;
+        if (this.speaker.busy || this.shell?.status === 'running')
+            return false;
+        return this.state === 'listening';
+    }
     setState(s) {
         if (this.state === s)
             return;
         debug('состояние', this.state, '→', s);
         this.state = s;
+        if (s === 'recognizing' || s === 'thinking' || s === 'paused' || s === 'off') {
+            this.mic?.setSuspended?.(true);
+            this.meter?.setSuspended?.(true);
+            this._pauseBrowserStt(true);
+            this.dispatchEvent(new CustomEvent('level', { detail: 0 }));
+        }
+        else if (s === 'speaking') {
+            this.mic?.setSuspended?.(false);
+            this.meter?.setSuspended?.(false);
+            this._pauseBrowserStt(true);
+        }
+        else if ((s === 'listening' || s === 'hearing') && !this.muted && !this.speaker.busy) {
+            this.mic?.setSuspended?.(false);
+            this.meter?.setSuspended?.(false);
+            this._pauseBrowserStt(false);
+        }
         this.dispatchEvent(new CustomEvent('state', { detail: s }));
     }
     _hasWebSpeech() {
@@ -810,6 +900,7 @@ export class VoiceController extends EventTarget {
     // --- запись и распознавание ---
     async _startMic() {
         this.mic = new MicCapture({
+            canListen: () => this.isMicListening(),
             // перебивание: пока реально звучит голос ИИ (playing) и если не отключено
             speaking: () => this.speaker.playing && globalThis.localStorage?.workVoiceBarge !== '0',
             onLevel: l => this.dispatchEvent(new CustomEvent('level', { detail: l })),
@@ -817,16 +908,15 @@ export class VoiceController extends EventTarget {
                 if (ev === 'barge')
                     this._onUserBargeIn();
                 else if (ev === 'start') {
-                    // если агент говорил, загружал звук или ещё думал/стримил — начало голоса человека сразу прерывает его
-                    if (this.speaker.busy || this.shell?.status === 'running')
+                    if (this.speaker.playing)
                         this._onUserBargeIn();
-                    else
+                    else if (this.isMicListening())
                         this.setState('hearing');
                 }
                 else if (ev === 'cancel')
                     this.setState('listening');
             },
-            onUtterance: wav => this._transcribe(wav),
+            onUtterance: (wav, meta) => this._transcribe(wav, meta),
         });
         await this.mic.start();
     }
@@ -834,6 +924,7 @@ export class VoiceController extends EventTarget {
     async _startMeter() {
         try {
             this.meter = new LevelMeter({
+                canListen: () => this.isMicListening(),
                 onLevel: l => this.dispatchEvent(new CustomEvent('level', { detail: l })),
                 speaking: () => this.speaker.playing && globalThis.localStorage?.workVoiceBarge !== '0',
                 onBarge: () => this._onUserBargeIn(),
@@ -846,24 +937,36 @@ export class VoiceController extends EventTarget {
             this.meter = null;
         }
     }
-    async _transcribe(wav) {
+    async _transcribe(wav, meta = {}) {
+        const wasBarge = !!this._bargeActive;
+        this._awaitingReply = true;
         this.setState('recognizing');
         try {
             const target = this.item || (await WORK.get_item('/'));
             const res = await target.fetch('voice_transcribe', { language: 'ru', _: ++this.seq }, wav);
             const text = String(res?.text || '').trim();
-            if (!text) {
-                this.setState('listening');
+            // Отсекаем типичные галлюцинации ASR на тишине/шорохах и короткие односложные шумы («Ну.», «Нет.», «Приложение.» на слабом сигнале)
+            const norm = text.replace(/[.!,?…—-]+$/g, '').trim().toLowerCase();
+            const isAsrHallucination = /^(субтитры|редактор субтитров|продолжение следует|спасибо за просмотр|подписывайтесь)/i.test(norm)
+                || ((meta.durationMs > 0 && meta.durationMs < 950 && (meta.peakRms || 0) < 0.045) && /^(нет|ну|ага|угу|мм|ээ|а|о|приложение)$/.test(norm))
+                || (wasBarge && /^(ну|мм|ээ|а|о)$/.test(norm));
+            if (!text || isAsrHallucination) {
+                debug('отброшен шумовой фрагмент ASR:', JSON.stringify(text), meta);
+                this._awaitingReply = false;
+                this._bargeActive = false;
+                this.setState(this.shell?.status === 'running' ? 'thinking' : 'listening');
                 return;
             }
             const check = await target?.fetch?.('voice_interim', { text, pauseMs: 400 }).catch(() => null);
             if (check?.interject && check?.text) {
+                this._awaitingReply = false;
                 this.aiBargeIn(check.text);
                 return;
             }
             await this.submit(text);
         }
         catch (e) {
+            this._awaitingReply = false;
             this.setState('listening');
             this.shell.toast?.('Не удалось распознать речь: ' + String(e?.message || e).slice(0, 120));
         }
@@ -880,8 +983,8 @@ export class VoiceController extends EventTarget {
         this._sttFails = 0;
         rec.onstart = () => { this._sttRunning = true; this._sttFails = 0; };
         rec.onresult = e => {
-            // собственная речь агента и 0,6 с после неё — эхо динамиков, а не реплика человека
-            if (this._sttPaused || this.speaker.busy || Date.now() < this._echoUntil)
+            // собственная речь агента, 0,6 с после неё (эхо) и фаза обдумывания ответа — игнорируются
+            if (this._sttPaused || this.speaker.busy || !this.isMicListening() || Date.now() < this._echoUntil)
                 return;
             let interimText = '';
             for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -897,12 +1000,8 @@ export class VoiceController extends EventTarget {
                 }
             }
             if (interimText) {
-                if (this.state === 'listening') {
-                    if (this.speaker.busy || this.shell?.status === 'running')
-                        this._onUserBargeIn();
-                    else
-                        this.setState('hearing');
-                }
+                if (this.state === 'listening')
+                    this.setState('hearing');
                 this._checkInterimSpeech(interimText, 0);
                 clearTimeout(this._interimTimer);
                 this._interimTimer = setTimeout(() => {
@@ -995,6 +1094,9 @@ export class VoiceController extends EventTarget {
         if (this.speaker.busy)
             this.speaker.cancel('barge');
         this.speaker.resetSpoken();
+        this._awaitingReply = true;
+        this._sawRunningSinceSubmit = false;
+        this._submittedAt = Date.now();
         this.setState('thinking');
         this.dispatchEvent(new CustomEvent('heard', { detail: text }));
         if (typeof this.shell?.sendVoiceText === 'function') {
@@ -1072,11 +1174,22 @@ export class VoiceController extends EventTarget {
             }
         }
         const running = data.status === 'running';
+        if (running)
+            this._sawRunningSinceSubmit = true;
         if (this._wasRunning && data.status === 'idle')
             this.dispatchEvent(new CustomEvent('done'));
         this._wasRunning = running;
-        if (!this.speaker.busy && this.state === 'thinking' && data.status !== 'running')
-            this.setState(this.muted ? 'paused' : 'listening');
+        if (running && this.state === 'listening' && !this.speaker.playing) {
+            this.setState('thinking');
+        }
+        else if (!this.speaker.busy && (this.state === 'thinking' || this.state === 'recognizing') && !running) {
+            // Не сбрасываем thinking в listening сразу после submit(), пока сервер ещё создаёт/запускает задачу
+            const justSubmitted = this._awaitingReply && !this._sawRunningSinceSubmit && (Date.now() - this._submittedAt < 5000);
+            if (!justSubmitted) {
+                this._awaitingReply = false;
+                this.setState(this.muted ? 'paused' : 'listening');
+            }
+        }
     }
     /** Пришла дельта стрима: когда первый устный абзац (лид) закрыт — сразу озвучиваем его целиком одним голосом. */
     onDelta(d) {

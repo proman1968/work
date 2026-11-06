@@ -226,4 +226,56 @@ describe('Speaker: очередь', () => {
         assert.equal(bargedEvents.at(-1)?.by, 'ai');
         assert.match(bargedEvents.at(-1)?.text, /счёта 99/);
     });
+
+    it('VoiceController: во время обдумывания ответа (thinking) микрофон не обрабатывает речь, а с началом озвучки (speaking) снова включает запись и перебивание', async () => {
+        const { VoiceController } = await import('../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice.js');
+        const { linkifyWork, workPathLabel } = await import('../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js');
+
+        const sent = [];
+        const shell = {
+            status: 'idle',
+            data: { status: 'idle', items: [] },
+            streams: {},
+            $item: { short: '/USERS/test/1.task', async fetch() { return {}; } },
+            async sendVoiceText(text, opts) {
+                this.status = 'running';
+                this.data.status = 'running';
+                sent.push({ text, opts });
+            },
+        };
+
+        const vc = new VoiceController(shell);
+        vc.state = 'listening';
+        assert.equal(vc.isMicListening(), true, 'до отправки промпта микрофон слушает');
+
+        // После отправки промпта модель думает (state = thinking, status = running, speaker.playing = false)
+        await vc.submit('Дай отчёт по локальной сети');
+        assert.equal(vc.state, 'thinking');
+        assert.equal(vc.isMicListening(), false, 'во время обдумывания ответа речь с микрофона не обрабатывается');
+
+        // Даже если при создании новой задачи первое чтение файла вернуло пустой data со status = undefined/idle — state остаётся thinking
+        vc.onData({ items: [] });
+        assert.equal(vc.state, 'thinking', 'промежуточное чтение пустой задачи при старте не включает микрофон');
+        assert.equal(vc.isMicListening(), false);
+
+        // Когда модель начинает отвечать вслух (speaker.playing = true), микрофон снова активен для перебивания
+        globalThis.Audio = class {
+            play() { setTimeout(() => this.onended?.(), 250); return Promise.resolve(); }
+            pause() {}
+        };
+        vc.speaker.fetchWav = async () => blobOf('ans');
+        vc.speaker.say('Готовлю подробный отчёт по всем найденным устройствам в локальной сети.');
+        await wait(25);
+        assert.equal(vc.speaker.playing, true);
+        assert.equal(vc.state, 'speaking');
+        assert.equal(vc.isMicListening(), true, 'как только модель заговорила, микрофон снова слушает для перебивания');
+
+        // Проверим короткие ссылки на файлы в Markdown (Точка/Имя файла)
+        globalThis.WORK = { USER: { id: 'CA4E097FF6C1D387', label: 'Перепелкин Роман' } };
+        const rawDocx = '/USERS/CA4E097FF6C1D387/$user/task/2026-11-06/.1793948606852.CA4E097FF6C1D387.task/docx/Отчёт по локальной сети 192.168.14.0-24.docx';
+        assert.equal(workPathLabel(rawDocx), 'Перепелкин Роман/Отчёт по локальной сети 192.168.14.0-24.docx');
+        const linked = linkifyWork(`**Файл:** \`${rawDocx}\``);
+        assert.ok(linked.includes('[Перепелкин Роман/Отчёт по локальной сети 192.168.14.0-24.docx]('), 'в Markdown отображается Точка/Имя файла без портянки с цифрами: ' + linked);
+        assert.ok(!linked.includes('[`/USERS/'), 'технический путь не выводится в видимый текст ссылки');
+    });
 });

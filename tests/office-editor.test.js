@@ -257,13 +257,21 @@ describe('локальный офисный пакет WORK (xlsx / docx / pptx 
         assert.equal(parsedPptx.slides[1].title, 'Кто я');
     });
 
-    it('oda-office-editor и инлайн-превью $office: шаблон без <template ~if>, кнопка сохранения в тулбаре и хендлер preview', async () => {
+    it('oda-office-editor и инлайн-превью $office: шаблон без <template ~if>, чистый тулбар без дублирующих кнопок и хендлер preview', async () => {
         const editorSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/$file/$office/handlers/pages/form/file/$handler/file.js'), 'utf-8');
         assert.ok(!/<template\s+~if=/.test(editorSrc), 'в шаблоне oda-office-editor нет <template ~if=...>, скрывавшего сетку в VNode');
         assert.ok(editorSrc.includes('class="office-view-wrap" ~if="kind === \'spreadsheet\'"'), 'режим таблицы обёрнут в flex-контейнер .office-view-wrap');
-        assert.ok(editorSrc.includes('class="tb-btn save-btn" ~if="isChanged"'), 'в тулбаре редактора есть инлайн-кнопка Сохранить');
+        assert.ok(!editorSrc.includes('class="kind-badge"'), 'из тулбара убрана надпись ДОКУМЕНТ WORD / ТАБЛИЦА EXCEL');
+        assert.ok(!editorSrc.includes('openInDesktopOffice()') || !editorSrc.includes('↗ В системном Office'), 'из тулбара убраны дублирующие кнопки Сохранить / В системном Office / Печать / Скачать');
 
         const previewMod = (await import('../$server/$folder/$file/$office/handlers/preview/$handler/preview.js')).default;
         assert.ok(previewMod.template.includes('<oda-office-editor inline flex :$item></oda-office-editor>'), 'инлайн-превью $office монтирует oda-office-editor в режиме inline');
+
+        // Все обработчики @event в шаблоне oda-office-editor компилируются по контракту compileEvent (compiler.js:27) без SyntaxError
+        const eventMatches = [...editorSrc.matchAll(/@[a-zA-Z0-9._-]+="([^"]+)"/g)];
+        assert.ok(eventMatches.length >= 10, 'найдены обработчики событий в шаблоне');
+        for (const [, expr] of eventMatches) {
+            assert.doesNotThrow(() => new Function('$event, $this, $for', `with(this){return (${expr})}`), `обработчик @...="${expr}" должен компилироваться без SyntaxError`);
+        }
     });
 });

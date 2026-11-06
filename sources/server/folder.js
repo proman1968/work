@@ -429,13 +429,14 @@ export class $folder extends $item{
         const deepCollapseTree = (list)=>{
             if(!list) return;
             let result = (list || []).reduce((res, el)=>{
-                // if(el.type === '$handler' && !el.allowUse)
-                //     return res;
                 let old = res.find(f=>f.id === el.id);
                 if(!old)
                     res.push(el);
-                else if(el.items){
-                    old.items.push(...el.items)
+                else {
+                    const mergedItems = [...(old.items || []), ...(el.items || [])];
+                    Object.assign(old, el);
+                    if (mergedItems.length)
+                        old.items = mergedItems;
                 }
                 return res;
             }, [])
@@ -1958,6 +1959,13 @@ export class $folder extends $item{
         if (cls && cls !== this)
             return cls.roles(params);
         return [];
+    }
+    /** Объявленные роли точки делегируются классу-владельцу ($class). */
+    get declared_roles() {
+        const cls = this.$class;
+        if (cls && cls !== this)
+            return cls.declared_roles;
+        return {};
     }
     reset(initiator, opts){
         this[R].cache = {};

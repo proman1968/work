@@ -557,9 +557,19 @@ ODA({is: 'oda-chat',
         if (!text)
             return;
         if (this.taskItem) {
+            let tz = '';
+            try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { /* ignore */ }
+            const geo = await Promise.race([
+                Promise.resolve(this._geo?.()).catch(() => null),
+                new Promise(r => setTimeout(() => r(this._geoFix || null), 150)),
+            ]);
+            const location = (geo && geo.lat != null && geo.lon != null)
+                ? { lat: geo.lat, lon: geo.lon, ...(tz ? { tz } : {}) }
+                : (tz ? { tz } : null);
             const payload = JSON.stringify({
                 prompt: text,
                 attachments: [],
+                ...(location ? { location, ...(tz ? { tz } : {}) } : {}),
                 ...(voice ? { voice: true } : {}),
                 ...(interrupt ? { interrupt: true } : {}),
                 ...(spokenText !== undefined ? { spokenText } : {}),
@@ -590,7 +600,7 @@ ODA({is: 'oda-chat',
         this._sending = true;
 
         try {
-            if (this.isAIMode && text) {
+            if (this.isAIMode) {
                 // экран «создаю задачу» — сразу, до любых запросов: человек видит, что процесс пошёл
                 this.clear();
                 await this._createTask({ text, files: list, draft });
@@ -647,12 +657,40 @@ ODA({is: 'oda-chat',
         this.awaitTask = true;
         const item = this.$pdp.$item;
         try {
-            const name = String(text).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim() || 'task';
+            const rawName = String(text || '').trim() || (files || []).map(f => f?.name).filter(Boolean).join(', ');
+            const name = String(rawName).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || 'task';
             const useVoice = voice || !!this.voiceOn;
-            const body = { name, created: Date.now(), items: [], ...(useVoice ? { voice: true } : {}) };
+            let tz = '';
+            try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { /* ignore */ }
+            this._geo?.();
+            const root = globalThis.top || globalThis;
+            let geo = this._geoFix || root.__workGeoFix || null;
+            if (!geo) {
+                try {
+                    const raw = globalThis.localStorage?.getItem?.('WORK.geo-fix');
+                    if (raw)
+                        geo = JSON.parse(raw);
+                } catch { /* ignore */ }
+            }
+            const location = (geo && geo.lat != null && geo.lon != null)
+                ? { lat: geo.lat, lon: geo.lon, ...(tz ? { tz } : {}) }
+                : (tz ? { tz } : null);
+            const body = {
+                name,
+                ...(text ? {} : { prompt: '' }),
+                created: Date.now(),
+                items: [],
+                ...(location ? { location, ...(tz ? { tz } : {}) } : {}),
+                ...(useVoice ? { voice: true } : {}),
+            };
             if (this.model)
                 body.model = this.model;
-            const params = { encoding: 'utf-8', ...(useVoice ? { voice: true } : {}) };
+            const params = {
+                encoding: 'utf-8',
+                ...(text ? {} : { prompt: '' }),
+                ...(location ? { location: JSON.stringify(location), ...(tz ? { tz } : {}) } : {}),
+                ...(useVoice ? { voice: true } : {}),
+            };
             if (globalThis.WORK?.uid)
                 params.sender = globalThis.WORK.uid;
             const canLookupTask = typeof globalThis.WORK?.get_item === 'function';
@@ -840,8 +878,15 @@ ODA({is: 'oda-chat',
                 finished = true;
                 clearTimeout(timer);
                 this._geoWait = null;
-                if (pos)
+                if (pos) {
                     this._geoFix = pos;
+                    try {
+                        const root = globalThis.top || globalThis;
+                        root.__workGeoFix = pos;
+                        globalThis.__workGeoFix = pos;
+                        globalThis.localStorage?.setItem?.('WORK.geo-fix', JSON.stringify(pos));
+                    } catch { /* ignore */ }
+                }
                 if (denied)
                     this._geoDeniedAt = Date.now();
                 resolve(pos);
@@ -878,7 +923,7 @@ ODA({is: 'chat-ribbon',
                 scroll-behavior: smooth;
                 flex-direction: column-reverse;
                 background: transparent;
-                --chat-card-max: {{ribbonHeight > 0 ? (ribbonHeight * 0.8) + 'px' : 'none'}};
+                --chat-card-max: {{ribbonHeight > 0 ? Math.round(ribbonHeight * 0.9) + 'px' : '90vh'}};
             }
             #ribbon{
                 overflow: visible;

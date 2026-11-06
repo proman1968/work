@@ -15,6 +15,7 @@
 let _uiLoaded = null;
 let _activityOf = null;
 let _pathOfWorkHref = null;
+let _resolveClientLocation = null;
 let _dotStateOfTask = null;
 let _VoiceController = null;
 
@@ -24,7 +25,11 @@ function ensureConsultantUI() {
         import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice-ui.js'),
         import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/voice.js').then(m => { _VoiceController = m.VoiceController; }),
         import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js').then(m => { _activityOf = m.activityOf; }),
-        import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js').then(m => { _pathOfWorkHref = m.pathOfWorkHref; }),
+        import('/$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/util.js').then(m => {
+            _pathOfWorkHref = m.pathOfWorkHref;
+            _resolveClientLocation = m.resolveClientLocation;
+            _resolveClientLocation?.(0)?.catch?.(() => {});
+        }),
         import('/$server/$folder/lib/dot/dot.js'),
         import('/$server/$folder/lib/dot/dot-math.js').then(m => { _dotStateOfTask = m.dotStateOfTask; }),
         import('/$server/$folder/lib/prompt-bar/prompt-bar.js'),
@@ -810,6 +815,7 @@ ODA({
             this.uiReady = true;
             await this._hydrateModel();
             const cabinet = await this._getPersonalCabinet();
+            const location = await _resolveClientLocation?.(200)?.catch?.(() => null);
             const attachments = [];
 
             // Если в текущем диалоге уже есть открытая задача .task — сохраняем вложения в папку этого таска и отправляем реплику
@@ -828,6 +834,7 @@ ODA({
                 const payload = JSON.stringify({
                     prompt: text,
                     attachments,
+                    ...(location ? { location, ...(location.tz ? { tz: location.tz } : {}) } : {}),
                     ...(voice ? { voice: true } : {}),
                     ...(interrupt ? { interrupt: true } : {}),
                     ...(spokenText !== undefined ? { spokenText } : {}),
@@ -840,7 +847,7 @@ ODA({
 
             // Иначе создаём новый .task в личном кабинете пользователя (попадает в личные логи и ленту пользователя)
             this.optimisticUser(text, attachments, voice);
-            const rawTitle = title || text.split('\n')[0] || 'Консультация';
+            const rawTitle = title || text.split('\n')[0] || (files || []).map(f => f?.name).filter(Boolean).join(', ') || 'Консультация';
             const safeName = String(rawTitle).replace(/[<>:"/\\|?*\n\r]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 90) || 'Консультация';
             const body = {
                 name: safeName,
@@ -848,6 +855,7 @@ ODA({
                 prompt: text,
                 created: Date.now(),
                 items: [],
+                ...(location ? { location, ...(location.tz ? { tz: location.tz } : {}) } : {}),
                 ...(voice ? { voice: true } : {}),
             };
             if (this.model)
@@ -863,6 +871,7 @@ ODA({
                 role,
                 sender: WORK.uid || cabinet?.id || '',
                 prompt: text,
+                ...(location ? { location: JSON.stringify(location), ...(location.tz ? { tz: location.tz } : {}) } : {}),
                 ...(voice ? { voice: true } : {}),
             };
             if (files.length)
@@ -979,12 +988,13 @@ ODA({
                             this.streams = s;
                         }
                         this.data = data;
-                        this.status = data.status || 'idle';
                         if (this.items.length)
                             this.optimistic = null;
+                        // Пока новая задача только что создана (items ещё пуст и висит optimistic), сохраняем статус 'running' до старта цикла на сервере
+                        this.status = data.status || (this.optimistic ? 'running' : 'idle');
                         this._lastDelta = Date.now();
                         this._stick();
-                        this._voice?.onData(data);
+                        this._voice?.onData({ ...data, status: this.status });
                         tries = 0;
                     }
                     catch {
@@ -1042,11 +1052,21 @@ ODA({
     },
 
     async openWorkPath(path) {
-        if (!path)
+        const raw = String(path || '').trim();
+        if (!raw)
             return;
-        const item = await WORK.get_item(path);
+        const m = raw.match(/^(.*)\/\.([^/]+)\/history\/[^/]+\/[^/]+$/);
+        const targetPath = m ? m[1] + '/' + m[2] : raw;
+        let item = await WORK.get_item(targetPath);
+        if (Array.isArray(item))
+            item = item.at(-1) || null;
+        if (!item && targetPath !== raw) {
+            item = await WORK.get_item(raw);
+            if (Array.isArray(item))
+                item = item.at(-1) || null;
+        }
         if (!item) {
-            this.toast('Не найден элемент: ' + path);
+            this.toast('Не найден элемент: ' + targetPath);
             return;
         }
         const exec = window.top?.execute || window.execute;

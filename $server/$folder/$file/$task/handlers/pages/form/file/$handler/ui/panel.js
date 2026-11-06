@@ -3,7 +3,7 @@
  * Режим, модель, уровень рассуждения — свойства бара → configure задачи.
  * Во время вопроса агента текст — ответ, во время подтверждения — отказ с комментарием.
  */
-import { findShell, attachmentName, offlineQueuePush, offlineQueue, offlineQueueDrop } from './util.js';
+import { findShell, attachmentName, offlineQueuePush, offlineQueue, offlineQueueDrop, resolveClientLocation } from './util.js';
 
 export const MODES = [
     { id: 'auto', label: 'Авто', icon: 'carbon:flash', hint: 'Рабочие данные — без вопросов; изменения системы и опасные действия — с подтверждением' },
@@ -65,6 +65,7 @@ ODA({ is: 'microchat-panel',
         }
     },
     attached() {
+        resolveClientLocation(0).catch(() => {});
         this.focus();
         // 9.11: офлайн-очередь — сохранённые реплики уходят при возврате сети
         this._onOnline ??= () => this.drainOfflineQueue();
@@ -131,9 +132,11 @@ ODA({ is: 'microchat-panel',
     },
     async dispatch(text, attachments = [], { voice = false, interrupt = false, spokenText } = {}) {
         const shell = findShell(this);
+        const location = await resolveClientLocation(150).catch(() => null);
         const body = JSON.stringify({
             prompt: text,
             attachments,
+            ...(location ? { location, ...(location.tz ? { tz: location.tz } : {}) } : {}),
             ...(voice ? { voice: true } : {}),
             ...(interrupt ? { interrupt: true } : {}),
             ...(spokenText !== undefined ? { spokenText } : {}),

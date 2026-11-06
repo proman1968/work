@@ -101,6 +101,26 @@ export function collectDocs(items, published) {
                 if (Array.isArray(t.items))
                     walkFiles(t.items, true);
             }
+            const ansText = String(it.content || '').trim();
+            if (!nested && !it.error && !it.interrupted && !it.stopped && (it.durationMs || it.finish === 'stop') && ansText.length >= 80 && !(ansText.length < 180 && /\?\s*$/.test(ansText))) {
+                const isStructured = ansText.length >= 160
+                    || /^\s{0,3}#{1,4}\s+\S/m.test(ansText)
+                    || /^\s*\|.+\|\s*$/m.test(ansText)
+                    || /```|~~~/.test(ansText)
+                    || /(?:^|\n)\s*(?:[-*•]|\d+[.)])\s+.+\n\s*(?:[-*•]|\d+[.)])\s+/m.test(ansText);
+                if (isStructured) {
+                    put({
+                        key: 'answer:' + it.id,
+                        kind: 'text',
+                        text: ansText,
+                        title: plainTitle(ansText),
+                        icon: 'carbon:report',
+                        time: it.time,
+                        source: it.id,
+                        subtitle: 'ответ агента',
+                    });
+                }
+            }
         }
     };
     walkFiles(items, false);

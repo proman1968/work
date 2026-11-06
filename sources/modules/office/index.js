@@ -885,6 +885,241 @@ function defaultSlide(idx = 1) {
     };
 }
 
+function parseThemeColors(zip) {
+    const colors = {
+        dk1: '#1e293b',
+        tx1: '#1e293b',
+        lt1: '#ffffff',
+        bg1: '#ffffff',
+        dk2: '#334155',
+        tx2: '#334155',
+        lt2: '#f1f5f9',
+        bg2: '#f1f5f9',
+        accent1: '#2563eb',
+        accent2: '#0d9488',
+        accent3: '#16a34a',
+        accent4: '#9333ea',
+        accent5: '#ea580c',
+        accent6: '#4f46e5',
+    };
+    let themeEntry = null;
+    try {
+        const relsXml = zip.getEntry('ppt/_rels/presentation.xml.rels')?.getData().toString('utf-8') || '';
+        const tm = relsXml.match(/Target="([^"]*theme\d+\.xml)"/i);
+        if (tm) {
+            const tp = tm[1].replace(/^\/+/, '').replace(/^(?!ppt\/)/, 'ppt/');
+            themeEntry = zip.getEntry(tp);
+        }
+    }
+    catch { /* ignore */ }
+    if (!themeEntry)
+        themeEntry = zip.getEntries().find(e => /^ppt\/theme\/theme\d+\.xml$/i.test(e.entryName));
+    if (!themeEntry)
+        return colors;
+    try {
+        const xml = themeEntry.getData().toString('utf-8');
+        const dom = new DOMParser().parseFromString(xml, 'text/xml');
+        const clrScheme = findFirstElement(dom, 'clrScheme');
+        if (!clrScheme)
+            return colors;
+        for (const key of ['dk1', 'lt1', 'dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6']) {
+            const node = findFirstElement(clrScheme, key);
+            if (!node)
+                continue;
+            const srgb = findFirstElement(node, 'srgbClr');
+            const sys = findFirstElement(node, 'sysClr');
+            const val = getAttr(srgb, 'val') || getAttr(sys, 'lastClr');
+            if (val && /^[0-9a-fA-F]{6}$/.test(val))
+                colors[key] = '#' + val.toLowerCase();
+        }
+        colors.tx1 = colors.dk1;
+        colors.bg1 = colors.lt1;
+        colors.tx2 = colors.dk2;
+        colors.bg2 = colors.lt2;
+    }
+    catch { /* ignore */ }
+    return colors;
+}
+
+function resolveColorFromNode(node, themeColors) {
+    if (!node)
+        return '';
+    const noFill = findFirstElement(node, 'noFill');
+    if (noFill && noFill.parentNode === node)
+        return 'transparent';
+    const solid = findFirstElement(node, 'solidFill') || (localTagName(node) === 'solidFill' ? node : null);
+    const grad = !solid ? findFirstElement(node, 'gradFill') : null;
+    const target = solid || grad || node;
+    const srgb = findFirstElement(target, 'srgbClr');
+    if (srgb) {
+        const v = getAttr(srgb, 'val');
+        if (v && /^[0-9a-fA-F]{6}$/.test(v))
+            return '#' + v.toLowerCase();
+    }
+    const sys = findFirstElement(target, 'sysClr');
+    if (sys) {
+        const v = getAttr(sys, 'lastClr');
+        if (v && /^[0-9a-fA-F]{6}$/.test(v))
+            return '#' + v.toLowerCase();
+    }
+    const scheme = findFirstElement(target, 'schemeClr');
+    if (scheme) {
+        const k = getAttr(scheme, 'val');
+        if (k && themeColors[k])
+            return themeColors[k];
+    }
+    return '';
+}
+
+function extractShapeBox(sp, emuPerPxX, emuPerPxY) {
+    const spPr = findFirstElement(sp, 'spPr');
+    const xfrm = spPr ? findFirstElement(spPr, 'xfrm') : findFirstElement(sp, 'xfrm');
+    if (!xfrm)
+        return null;
+    const off = findFirstElement(xfrm, 'off');
+    const extEl = findFirstElement(xfrm, 'ext');
+    if (!off && !extEl)
+        return null;
+    return {
+        x: off ? Math.round((Number(getAttr(off, 'x')) || 0) / emuPerPxX) : null,
+        y: off ? Math.round((Number(getAttr(off, 'y')) || 0) / emuPerPxY) : null,
+        w: extEl ? Math.max(24, Math.round((Number(getAttr(extEl, 'cx')) || 0) / emuPerPxX)) : null,
+        h: extEl ? Math.max(18, Math.round((Number(getAttr(extEl, 'cy')) || 0) / emuPerPxY)) : null,
+    };
+}
+
+function extractLstStyleDefaults(sp, themeColors, fontScale) {
+    const txBody = findFirstElement(sp, 'txBody');
+    const lstStyle = txBody ? findFirstElement(txBody, 'lstStyle') : null;
+    if (!lstStyle)
+        return {};
+    const lvl1 = findFirstElement(lstStyle, 'lvl1pPr') || findFirstElement(lstStyle, 'defPPr');
+    if (!lvl1)
+        return {};
+    const out = {};
+    const algn = getAttr(lvl1, 'algn');
+    if (algn === 'ctr')
+        out.align = 'center';
+    else if (algn === 'r')
+        out.align = 'right';
+    else if (algn === 'l')
+        out.align = 'left';
+    const defRPr = findFirstElement(lvl1, 'defRPr');
+    if (defRPr) {
+        const sz = Number(getAttr(defRPr, 'sz'));
+        if (sz > 0)
+            out.fontSize = Math.max(9, Math.round((sz / 100) * fontScale));
+        if (getAttr(defRPr, 'b') === '1')
+            out.bold = true;
+        if (getAttr(defRPr, 'i') === '1')
+            out.italic = true;
+        const clr = resolveColorFromNode(defRPr, themeColors);
+        if (clr && clr !== 'transparent')
+            out.color = clr;
+    }
+    return out;
+}
+
+function parseSlideLayoutInfo(zip, slideEntryName, emuPerPxX, emuPerPxY, fontScale, themeColors) {
+    const info = { placeholders: new Map(), bgShapes: [], background: '' };
+    const m = slideEntryName.match(/^ppt\/slides\/(slide\d+\.xml)$/i);
+    if (!m)
+        return info;
+    const relEntry = zip.getEntry(`ppt/slides/_rels/${m[1]}.rels`);
+    if (!relEntry)
+        return info;
+    try {
+        const relXml = relEntry.getData().toString('utf-8');
+        const layoutMatch = relXml.match(/Target="([^"]*slideLayout\d+\.xml)"/i);
+        if (!layoutMatch)
+            return info;
+        const layoutPath = layoutMatch[1].replace(/^\/+/, '').replace(/^\.\.\//, 'ppt/');
+        const layoutEntry = zip.getEntry(layoutPath);
+        if (!layoutEntry)
+            return info;
+        const dom = new DOMParser().parseFromString(layoutEntry.getData().toString('utf-8'), 'text/xml');
+        const spList = findAllElements(dom, 'sp');
+        spList.forEach((sp, i) => {
+            const nvPr = findFirstElement(sp, 'nvPr');
+            const ph = nvPr ? findFirstElement(nvPr, 'ph') : null;
+            const box = extractShapeBox(sp, emuPerPxX, emuPerPxY);
+            const spPr = findFirstElement(sp, 'spPr');
+            const fill = resolveColorFromNode(spPr, themeColors);
+            const lstDefaults = extractLstStyleDefaults(sp, themeColors, fontScale);
+            if (ph) {
+                const phType = getAttr(ph, 'type') || 'body';
+                const phIdx = getAttr(ph, 'idx') || '';
+                const rec = { ...box, ...lstDefaults, ...(fill && fill !== 'transparent' ? { fill } : {}) };
+                if (phIdx)
+                    info.placeholders.set(`idx:${phIdx}`, rec);
+                if (!info.placeholders.has(`type:${phType}`))
+                    info.placeholders.set(`type:${phType}`, rec);
+            }
+            else if (box && box.w && box.h && fill && fill !== 'transparent') {
+                info.bgShapes.push({
+                    id: `bg_${i + 1}`,
+                    type: 'text',
+                    decorative: true,
+                    x: Math.max(0, Math.min(950, box.x || 0)),
+                    y: Math.max(0, Math.min(530, box.y || 0)),
+                    w: Math.min(960, box.w),
+                    h: Math.min(540, box.h),
+                    text: '',
+                    fontSize: 14,
+                    bold: false,
+                    italic: false,
+                    align: 'center',
+                    color: '#ffffff',
+                    fill,
+                });
+            }
+        });
+    }
+    catch { /* ignore */ }
+    return info;
+}
+
+function getOrderedSlideEntries(zip) {
+    const allSlides = zip.getEntries().filter(e => /^ppt\/slides\/slide\d+\.xml$/i.test(e.entryName));
+    const presEntry = zip.getEntry('ppt/presentation.xml');
+    const relsEntry = zip.getEntry('ppt/_rels/presentation.xml.rels');
+    if (presEntry && relsEntry) {
+        try {
+            const presXml = presEntry.getData().toString('utf-8');
+            const relsXml = relsEntry.getData().toString('utf-8');
+            const relMap = new Map();
+            for (const rm of relsXml.matchAll(/<Relationship\b[^>]*\bId="([^"]+)"[^>]*\bTarget="([^"]+)"|<Relationship\b[^>]*\bTarget="([^"]+)"[^>]*\bId="([^"]+)"/gi)) {
+                const id = rm[1] || rm[4];
+                const target = (rm[2] || rm[3] || '').replace(/^\/+/, '').replace(/^(?!ppt\/)/, 'ppt/');
+                if (id && target)
+                    relMap.set(id, target);
+            }
+            const ordered = [];
+            const seen = new Set();
+            for (const sm of presXml.matchAll(/<p:sldId\b[^>]*\br:id="([^"]+)"/gi)) {
+                const target = relMap.get(sm[1]);
+                const entry = target ? allSlides.find(e => e.entryName.toLowerCase() === target.toLowerCase()) : null;
+                if (entry && !seen.has(entry.entryName)) {
+                    seen.add(entry.entryName);
+                    ordered.push(entry);
+                }
+            }
+            for (const e of allSlides) {
+                if (!seen.has(e.entryName))
+                    ordered.push(e);
+            }
+            if (ordered.length)
+                return ordered;
+        }
+        catch { /* fallback to numeric sort */ }
+    }
+    return allSlides.sort((a, b) => {
+        const na = Number(a.entryName.match(/\d+/)?.[0] || 0);
+        const nb = Number(b.entryName.match(/\d+/)?.[0] || 0);
+        return na - nb;
+    });
+}
+
 export function parsePresentation(buf, ext = 'pptx') {
     if (!buf || !buf.length || !isZip(buf))
         return { kind: 'presentation', ext, slideWidth: 960, slideHeight: 540, slides: [defaultSlide(1)] };
@@ -915,13 +1150,24 @@ export function parsePresentation(buf, ext = 'pptx') {
         catch { /* fallback to ppt/slides/slideN.xml */ }
     }
 
-    const slideEntries = zip.getEntries()
-        .filter(e => /^ppt\/slides\/slide\d+\.xml$/i.test(e.entryName))
-        .sort((a, b) => {
-            const na = Number(a.entryName.match(/\d+/)?.[0] || 0);
-            const nb = Number(b.entryName.match(/\d+/)?.[0] || 0);
-            return na - nb;
-        });
+    let sldCx = 960 * EMU_PER_PX;
+    let sldCy = 540 * EMU_PER_PX;
+    try {
+        const presXml = zip.getEntry('ppt/presentation.xml')?.getData().toString('utf-8') || '';
+        const szMatch = presXml.match(/<p:sldSz\b[^>]*\bcx="(\d+)"[^>]*\bcy="(\d+)"/i);
+        if (szMatch) {
+            sldCx = Number(szMatch[1]) || sldCx;
+            sldCy = Number(szMatch[2]) || sldCy;
+        }
+    }
+    catch { /* ignore */ }
+
+    const emuPerPxX = sldCx / 960;
+    const emuPerPxY = sldCy / 540;
+    // 1 pt = 4/3 px (96/72); при масштабе холста 960 / (sldCx / 9525) коэффициент 4/3 * 0.75 = 1.0
+    const fontScale = Math.min(1.25, (96 / 72) * ((960 * EMU_PER_PX) / sldCx));
+    const themeColors = parseThemeColors(zip);
+    const slideEntries = getOrderedSlideEntries(zip);
 
     if (!slideEntries.length)
         return { kind: 'presentation', ext, slideWidth: 960, slideHeight: 540, slides: [defaultSlide(1)] };
@@ -929,22 +1175,52 @@ export function parsePresentation(buf, ext = 'pptx') {
     const slides = slideEntries.map((entry, idx) => {
         const slideNum = idx + 1;
         const elements = [];
+        let slideTitle = '';
         try {
+            const layoutInfo = parseSlideLayoutInfo(zip, entry.entryName, emuPerPxX, emuPerPxY, fontScale, themeColors);
+            for (const bgShape of layoutInfo.bgShapes) {
+                elements.push({ ...bgShape, id: `el_${slideNum}_${bgShape.id}` });
+            }
+
             const xml = entry.getData().toString('utf-8');
             const dom = new DOMParser().parseFromString(xml, 'text/xml');
             const spList = findAllElements(dom, 'sp');
 
             spList.forEach((sp, spIdx) => {
+                const nvPr = findFirstElement(sp, 'nvPr');
+                const ph = nvPr ? findFirstElement(nvPr, 'ph') : null;
+                const phType = ph ? (getAttr(ph, 'type') || 'body') : '';
+                const phIdx = ph ? (getAttr(ph, 'idx') || '') : '';
+                const layoutPh = (phIdx && layoutInfo.placeholders.get(`idx:${phIdx}`))
+                    || (phType && layoutInfo.placeholders.get(`type:${phType}`))
+                    || null;
+
+                const spPr = findFirstElement(sp, 'spPr');
+                const ownFill = resolveColorFromNode(spPr, themeColors);
+                const fill = (ownFill && ownFill !== 'transparent') ? ownFill : (layoutPh?.fill || 'transparent');
+
                 const txBody = findFirstElement(sp, 'txBody');
-                if (!txBody)
+                if (!txBody && (!fill || fill === 'transparent'))
                     return;
-                const paragraphs = findAllElements(txBody, 'p');
+
+                let fontSize = layoutPh?.fontSize
+                    || (phType === 'title' || phType === 'ctrTitle' ? Math.round(28 * fontScale)
+                        : (phType === 'subTitle' ? Math.round(18 * fontScale)
+                            : (phType === 'ftr' || phType === 'sldNum' || phType === 'dt' ? 11 : Math.round(15 * fontScale))));
+                let bold = layoutPh?.bold ?? (phType === 'title' || phType === 'ctrTitle');
+                let italic = layoutPh?.italic ?? false;
+                let align = layoutPh?.align ?? (phType === 'ctrTitle' || phType === 'ftr' ? 'center' : (phType === 'sldNum' ? 'right' : 'left'));
+                let color = layoutPh?.color ?? (phType === 'ftr' || phType === 'sldNum' || phType === 'dt' ? '#64748b' : themeColors.tx1 || '#1e293b');
+
+                const ownLst = extractLstStyleDefaults(sp, themeColors, fontScale);
+                if (ownLst.fontSize) fontSize = ownLst.fontSize;
+                if (ownLst.bold !== undefined) bold = ownLst.bold;
+                if (ownLst.italic !== undefined) italic = ownLst.italic;
+                if (ownLst.align) align = ownLst.align;
+                if (ownLst.color) color = ownLst.color;
+
+                const paragraphs = txBody ? findAllElements(txBody, 'p') : [];
                 const lines = [];
-                let fontSize = 22;
-                let bold = false;
-                let italic = false;
-                let align = 'left';
-                let color = '#1e293b';
 
                 for (const p of paragraphs) {
                     const pPr = findFirstElement(p, 'pPr');
@@ -953,6 +1229,8 @@ export function parsePresentation(buf, ext = 'pptx') {
                         align = 'center';
                     else if (algn === 'r')
                         align = 'right';
+                    else if (algn === 'l')
+                        align = 'left';
 
                     const runs = findAllElements(p, 'r');
                     let lineText = '';
@@ -961,50 +1239,60 @@ export function parsePresentation(buf, ext = 'pptx') {
                         if (rPr) {
                             const sz = Number(getAttr(rPr, 'sz'));
                             if (sz > 0)
-                                fontSize = Math.round(sz / 100);
+                                fontSize = Math.max(9, Math.round((sz / 100) * fontScale));
                             if (getAttr(rPr, 'b') === '1')
                                 bold = true;
                             if (getAttr(rPr, 'i') === '1')
                                 italic = true;
-                            const srgb = findFirstElement(rPr, 'srgbClr');
-                            const clrVal = getAttr(srgb, 'val');
-                            if (clrVal && /^[0-9a-fA-F]{6}$/.test(clrVal))
-                                color = '#' + clrVal;
+                            const runClr = resolveColorFromNode(rPr, themeColors);
+                            if (runClr && runClr !== 'transparent')
+                                color = runClr;
                         }
                         const tEl = findFirstElement(r, 't');
                         if (tEl?.textContent)
                             lineText += tEl.textContent;
                     }
-                    if (!runs.length && p.textContent)
-                        lineText = p.textContent;
+                    if (!runs.length) {
+                        const fld = findFirstElement(p, 'fld');
+                        if (fld) {
+                            const fldT = findFirstElement(fld, 't');
+                            if (fldT?.textContent)
+                                lineText = fldT.textContent;
+                        }
+                        else if (p.textContent) {
+                            lineText = p.textContent;
+                        }
+                    }
                     if (lineText)
                         lines.push(lineText);
                 }
 
                 const text = lines.join('\n').trim();
-                const xfrm = findFirstElement(sp, 'xfrm');
-                const off = xfrm ? findFirstElement(xfrm, 'off') : null;
-                const extEl = xfrm ? findFirstElement(xfrm, 'ext') : null;
-                const x = off ? Math.round((Number(getAttr(off, 'x')) || 0) / EMU_PER_PX) : 80;
-                const y = off ? Math.round((Number(getAttr(off, 'y')) || 0) / EMU_PER_PX) : (80 + spIdx * 110);
-                const w = extEl ? Math.max(120, Math.round((Number(getAttr(extEl, 'cx')) || 600 * EMU_PER_PX) / EMU_PER_PX)) : 700;
-                const h = extEl ? Math.max(45, Math.round((Number(getAttr(extEl, 'cy')) || 90 * EMU_PER_PX) / EMU_PER_PX)) : 90;
+                const ownBox = extractShapeBox(sp, emuPerPxX, emuPerPxY);
+                const x = ownBox?.x ?? layoutPh?.x ?? 60;
+                const y = ownBox?.y ?? layoutPh?.y ?? (60 + spIdx * 90);
+                const w = ownBox?.w ?? layoutPh?.w ?? 700;
+                const h = ownBox?.h ?? layoutPh?.h ?? 60;
 
-                if (text) {
+                if (text && (phType === 'title' || phType === 'ctrTitle') && !slideTitle)
+                    slideTitle = text.split('\n')[0].slice(0, 48);
+
+                if (text || (fill && fill !== 'transparent')) {
                     elements.push({
                         id: `el_${slideNum}_${spIdx + 1}`,
                         type: 'text',
-                        x: Math.max(0, Math.min(880, x)),
-                        y: Math.max(0, Math.min(480, y)),
-                        w: Math.min(940, w),
-                        h: Math.min(520, h),
+                        decorative: !text,
+                        x: Math.max(0, Math.min(940, x)),
+                        y: Math.max(0, Math.min(525, y)),
+                        w: Math.min(960 - Math.max(0, x), w),
+                        h: Math.min(540 - Math.max(0, y), h),
                         text,
                         fontSize,
                         bold,
                         italic,
                         align,
                         color,
-                        fill: 'transparent',
+                        fill,
                     });
                 }
             });
@@ -1014,9 +1302,14 @@ export function parsePresentation(buf, ext = 'pptx') {
         if (!elements.length)
             return defaultSlide(slideNum);
 
+        if (!slideTitle) {
+            const firstWithText = elements.find(e => e.text && !e.decorative);
+            slideTitle = firstWithText?.text?.split('\n')[0]?.slice(0, 48) || `Слайд ${slideNum}`;
+        }
+
         return {
             id: `slide_${slideNum}`,
-            title: elements[0]?.text?.split('\n')[0]?.slice(0, 40) || `Слайд ${slideNum}`,
+            title: slideTitle,
             background: '#ffffff',
             notes: '',
             elements,

@@ -15,16 +15,17 @@ import { collectDocs, computeStats, stableDocs, activityOf, taskFiles, computerU
 import { pathOfWorkHref, workHref, extOf } from './ui/util.js';
 
 /**
- * Клик по WORK-ссылке в markdown (событие md-link от oda-markdown-viewer): файл — в доки,
- * класс/папка и клик с Ctrl — форма в новой вкладке (стандартная навигация ссылки). this — шелл.
+ * Клик по WORK-ссылке в markdown (событие md-link от oda-markdown-viewer):
+ * всегда открывает документ/файл/класс через стандартное представление в форме (execute / work-form),
+ * а не в боковой панели доков.
  */
 function onMdLink(e) {
     const { href, ctrl } = e.detail || {};
     const path = !ctrl && pathOfWorkHref(href);
-    if (!path || !extOf(path))
+    if (!path)
         return;
     e.preventDefault();
-    this.openDoc({ kind: 'file', path });
+    this.openWorkPath(path);
 }
 
 export default {
@@ -436,21 +437,22 @@ export default {
     _noticeDocs(before) {
         const resultKeys = (this.data?.results || []).filter(r => r?.snapshot).map(r => 'result:' + r.snapshot);
         const reportKeys = this.docs.filter(d => d.kind === 'text').map(d => d.key);
+        const allResultKeys = [...resultKeys, ...reportKeys];
         const fileKeys = this.files.map(f => f.key);
-        const keys = [...resultKeys, ...reportKeys, ...fileKeys];
+        const keys = [...allResultKeys, ...fileKeys];
         this._docKeys = keys;
         if (!before) {
-            if (resultKeys.length) {
+            if (allResultKeys.length) {
                 this.dockOpen = true;
                 this.dockTab = 'results';
-                this.resultKey = resultKeys.at(-1);
+                this.resultKey = allResultKeys.at(-1);
                 this.resultKeyAt = Date.now();
                 this.freshDocs = 0;
             }
             return;
         }
         const added = keys.filter(k => !before.includes(k));
-        const newResultKeys = added.filter(k => k.startsWith('result:') || k.startsWith('agent:'));
+        const newResultKeys = added.filter(k => k.startsWith('result:') || k.startsWith('agent:') || k.startsWith('answer:'));
         const files = added.map(k => this.files.find(f => f.key === k)).filter(f => f && f.source !== 'user');
         if (!newResultKeys.length && !files.length)
             return;
@@ -635,15 +637,28 @@ export default {
             return '';
         }
     },
-    /** Путь WORK: файл — в доки, иначе форма элемента в новой вкладке. */
-    openWorkPath(path) {
-        const p = String(path || '');
-        if (!p)
+    /** Путь WORK: всегда открывает элемент (включая файлы и документы) в стандартном представлении формы. */
+    async openWorkPath(path) {
+        const raw = String(path || '').trim();
+        if (!raw)
             return;
-        if (extOf(p))
-            this.openDoc({ kind: 'file', path: p });
-        else
-            window.open(workHref(p), '_blank');
+        const targetPath = realPathOfSnapshot(raw) || raw;
+        const exec = window.top?.execute || window.execute;
+        if (typeof exec === 'function') {
+            let item = await WORK.get_item(targetPath);
+            if (Array.isArray(item))
+                item = item.at(-1) || null;
+            if (!item && targetPath !== raw) {
+                item = await WORK.get_item(raw);
+                if (Array.isArray(item))
+                    item = item.at(-1) || null;
+            }
+            if (item) {
+                await exec(item);
+                return;
+            }
+        }
+        window.open(workHref(targetPath), '_blank');
     },
     closeView() {
         this.fire('close-view');

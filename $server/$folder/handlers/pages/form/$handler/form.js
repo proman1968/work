@@ -1007,14 +1007,15 @@ ODA({is: 'work-form',
     },
     get allowSave() {
         void this.focusedStateVersion;
+        const vc = this.view_control;
+        if (vc && typeof vc.allowSave === 'boolean')
+            return vc.allowSave;
         const v = this.view;
         if (!v)
             return false;
         if (typeof v.DATA?.allowSave === 'boolean')
             return v.DATA.allowSave;
-        if (typeof v.allowSave === 'boolean')
-            return v.allowSave;
-        return Boolean(this.view_control?.allowSave);
+        return false;
     },
     get isViewChanged() {
         void this.focusedStateVersion;

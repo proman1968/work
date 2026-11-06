@@ -58,7 +58,7 @@ export default {
             }
             .act:hover { background: var(--accent-soft); }
             .act[main] { background: var(--accent-color); color: var(--accent-back); border-color: transparent; }
-            .body { font-size: small; max-height: 240px; overflow: hidden; -webkit-mask-image: linear-gradient(black 75%, transparent); mask-image: linear-gradient(black 75%, transparent); }
+            .body { font-size: small; max-height: calc(var(--chat-card-max, 88vh) - 96px); overflow-y: auto; }
             .muted { @apply --muted; font-size: small; }
             .files { @apply --vertical; gap: 4px; flex-shrink: 0; }
             .files-head { @apply --muted; font-size: x-small; text-transform: uppercase; letter-spacing: .05em; }
@@ -297,7 +297,7 @@ export default {
     },
     /** Все файлы задачи: ваши вложения и созданное агентом — как на вкладке «Файлы» задачи. */
     get files() { return taskFiles(this.items, this.task?.results || []); },
-    itemOf(f) { return fileItemOf(f.path); },
+    itemOf(f) { return fileItemOf(f.real || f.path); },
     get answerMd() { return linkifyWork(this.answer); },
     get hint() {
         const u = this.items.find(i => i.type === 'user');
