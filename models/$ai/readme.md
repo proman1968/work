@@ -42,3 +42,21 @@
 - `max_tokens` обязателен: берётся `maxOutput` запроса, затем `maxOutput` модели, иначе 8192;
 - в `usage`: `prompt_tokens` = `input + cache_read + cache_creation` (полный размер запроса), `cached_tokens`, `cache_creation_tokens`;
 - `anthropicBeta` у модели — значение заголовка `anthropic-beta`.
+
+## Протокол `halogen` — гибридный контур AMD Ryzen AI 192 ГБ (iGPU + NPU)
+
+`protocol: 'halogen'` (провайдер [`/MODELS/Halogen`](/MODELS/Halogen/$provider/readme.md), подробная документация — [`docs/halogen-provider.md`](/docs/halogen-provider.md)) — универсальный гибридный контур для ПАК WORK на базе **AMD Ryzen™ AI Max+ PRO 495 (192 ГБ Unified Memory, iGPU Radeon 8065S `gfx1151` + Ryzen AI NPU `55 TOPS`)** за единым портом `http://127.0.0.1:8731`:
+
+- **Три режима работы (Универсальный гибрид):**
+  1. **Linux Native (`halogen-native`)** — прямое подключение к контейнеру `ghcr.io/peonist-ai/halogen-flash-server:0.19.1` (`/dev/kfd` + `/dev/accel/accel0`);
+  2. **Windows 11 Hybrid (`llama-server-windows`)** — локальный `llama-server.exe` (ROCm/Vulkan) с Prompt Cache (`--cache-reuse 256`), Speculative Lookup (`--lookup-cache-dynamic`) и сохранением слотов;
+  3. **Встроенный фоллбэк WORK (`work-embedded-fallback`)** — при закрытом порте `:8731` все вызовы `/MODELS/Halogen/*` автоматически обслуживаются встроенным движком `WORK.localStreamChat` и `WORK.halogenFallback`.
+- **Форкинг KV-сессий и догенерация (`streamChat` и `loop.js`):**
+  - основной агент задачи передаёт заголовок `X-Halogen-Keep: work-<task>`, а субагенты — `X-Halogen-From: work-<task>`, стартуя с прогретого KV-кэша родителя без повторного prefill;
+  - `continueFinalMessage: true` включает `continue_final_message: true` + `add_generation_prompt: false` для догенерации обрезанных ответов;
+  - `effort` (`off|low|medium|high|xhigh`) управляет парой `reasoning_effort` + `enable_thinking`, а `timings.cache_n` мапится в `cached_tokens`.
+- **Мультимодальные методы NPU на экземпляре `$ai`:**
+  - `speak()` (`/v1/audio/speech` с нормализацией пресетов `serena` и языка `russian` для `qwen3-tts-1.7b-customvoice`);
+  - `transcribe()` (`/v1/audio/transcriptions` для `qwen3-asr-1.7b`);
+  - `generateImage()` (`/v1/images/generations` для `flux2-klein-4b`);
+  - `embed()` (`/v1/embeddings` для `qwen3-embedding-0.6b`), `rerank()` (`/v1/rerank` для `qwen3-reranker-0.6b`), `decide()` (`/v1/systemone` для `decider-0.8b`).

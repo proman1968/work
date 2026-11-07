@@ -437,6 +437,7 @@ export default {
         <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'hf'}" @tap="activeTab = 'hf'">1. Каталог моделей Hugging Face ({{hfModels.length}})</button>
         <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'dataset'}" @tap="activeTab = 'dataset'">2. Датасеты WORK ({{datasets.length}})</button>
         <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'train'}" @tap="activeTab = 'train'">3. Дообучение (LoRA / SFT / GRPO)</button>
+        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'halogen'}" @tap="openHalogenTab()">4. Контур Halogen (Ryzen AI 192 ГБ: GPU + NPU)</button>
     </div>
 
     <div class="error" ~if="error">{{error}}</div>
@@ -715,8 +716,105 @@ export default {
             </div>
         </div>
     </div>
+
+    <!-- ВКЛАДКА 4: ГИБРИДНЫЙ КОНТУР HALOGEN (AMD RYZEN AI 495 PRO 192 GB: GPU + NPU) -->
+    <div class="workspace" ~if="activeTab === 'halogen'">
+        <div class="panel-left">
+            <div class="sticky-header">
+                <div class="section-title">Универсальный гибридный контур Halogen (:8731 · iGPU Radeon 8065S + Ryzen AI NPU)</div>
+                <div class="model-top">
+                    <div class="model-title-group">
+                        <span class="badge optimal" ~if="halogenState?.online">Сервер :8731 активен</span>
+                        <span class="badge purple" ~if="!halogenState?.online">Встроенный гибридный движок WORK</span>
+                        <strong>{{halogenState?.modeLabel || 'Гибридный контур готов'}}</strong>
+                    </div>
+                    <div class="toolbar">
+                        <button type="button" class="btn" @tap="refreshHalogen()">Проверить :8731</button>
+                        <button type="button" class="btn primary" @tap="downloadHalogenBundleAll()">Скачать весь пакет (GPU + NPU)</button>
+                        <button type="button" class="btn primary" @tap="startHalogenServer()">Запустить локальный сервер</button>
+                    </div>
+                </div>
+                <div class="hw-specs" ~if="halogenState?.memoryPlan">
+                    <span class="hw-chip">Пул KV: <strong>{{halogenState?.cache?.pool?.used || 0}} / {{halogenState.memoryPlan.kvPoolPositions}} tok</strong> ({{halogenState.memoryPlan.kvSlots}} слота)</span>
+                    <span class="hw-chip">Веса Flash: <strong>{{halogenState.memoryPlan.flashWeightsGb}} ГБ</strong> + KV <strong>{{halogenState.memoryPlan.deviceSideGb}} ГБ</strong></span>
+                    <span class="hw-chip">FP8 Lookup Table: <strong>{{halogenState.memoryPlan.lookupTableGb}} ГБ</strong> (в ОЗУ)</span>
+                    <span class="hw-chip">NPU Sidecar: <strong>{{halogenState.memoryPlan.npuSidecarGb}} ГБ</strong></span>
+                    <span class="hw-chip">Свободно под WORK: <strong>~{{halogenState.memoryPlan.hostFreeForWorkGb}} ГБ</strong></span>
+                </div>
+            </div>
+
+            <div class="cards-scroll">
+                <div class="section-title">Матрица моделей /MODELS/Halogen ({{halogenCatalog.length}})</div>
+                <div class="card" ~for="halogenCatalog">
+                    <div class="model-top">
+                        <div class="model-title-group">
+                            <strong>{{$for.item.nodeName}}</strong>
+                            <span class="badge mod">{{$for.item.model}}</span>
+                            <span class="badge purple">{{$for.item.device}}</span>
+                            <span class="badge optimal" ~if="$for.item.weightsDownloaded">Веса на диске ({{$for.item.downloadedFiles?.length || 1}})</span>
+                            <span class="badge warn" ~if="$for.item.activeDownload">Загрузка {{$for.item.activeDownload.progress}}% ({{$for.item.activeDownload.speedMBs}} МБ/с)</span>
+                        </div>
+                        <div class="toolbar">
+                            <span class="badge">~{{$for.item.ramGb}} ГБ · ctx {{$for.item.maxTokens}}</span>
+                            <button type="button" class="btn" ~if="!$for.item.activeDownload" @tap="downloadHalogenModel($for.item.nodeName)">Скачать</button>
+                        </div>
+                    </div>
+                    <div class="progress-track" ~if="$for.item.activeDownload">
+                        <div class="progress-fill" ~style="{width: ($for.item.activeDownload.progress || 0) + '%'}"></div>
+                    </div>
+                    <div class="model-what">{{$for.item.role}}</div>
+                    <div style="font-size:11.5px;opacity:0.85;">Узел WORK: <code>{{$for.item.path}}</code> · Hugging Face: <code>{{$for.item.hfRepo}}</code></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel-right">
+            <div class="section-title" ~if="downloads.length">Очередь загрузки пакета ({{downloads.length}})</div>
+            <div class="card" ~for="downloads">
+                <div class="model-top">
+                    <strong>{{$for.item.repoId}}</strong>
+                    <span class="badge purple">{{$for.item.status}} · {{$for.item.progress}}%</span>
+                </div>
+                <div style="font-size:11.5px;">Файл: {{$for.item.currentFile}} · Скорость: {{$for.item.speedMBs}} МБ/с · Путь: <code>{{$for.item.modelPath}}</code></div>
+                <div class="progress-track">
+                    <div class="progress-fill" ~style="{width: ($for.item.progress || 0) + '%'}"></div>
+                </div>
+                <div class="error" ~if="$for.item.error">{{$for.item.error}}</div>
+                <div class="toolbar" ~if="$for.item.status === 'downloading'">
+                    <button type="button" class="btn danger" @tap="cancelDownload($for.item.id)">Отменить</button>
+                </div>
+            </div>
+
+            <div class="section-title">Команды запуска (Windows 11 Hybrid / Linux Container)</div>
+            <div class="card" ~if="halogenState?.memoryPlan">
+                <div style="font-size:12px;font-weight:700;">Windows 11 (llama-server ROCm/Vulkan + Prompt Cache + Speculative Lookup):</div>
+                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsCommand}}</pre>
+                <div style="font-size:12px;font-weight:700;margin-top:6px;">Linux Native (halogen-flash-server ROCm /dev/kfd + NPU /dev/accel/accel0):</div>
+                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.linuxCommand}}</pre>
+                <div style="font-size:11.5px;opacity:0.85;margin-top:4px;">{{halogenState.memoryPlan.biosRecommendation}}</div>
+            </div>
+
+            <div class="section-title">Снимки KV-сессий субагентов (X-Halogen-Keep / X-Halogen-From)</div>
+            <div class="card" ~if="!halogenHandles.length">
+                <div style="font-size:12px;opacity:0.8;">Активных снимков KV-сессий пока нет. Они создаются автоматически при работе задачи <code>.task</code> и переиспользуются субагентами.</div>
+            </div>
+            <div class="card" ~for="halogenHandles">
+                <div class="model-top">
+                    <strong>{{$for.item.name}}</strong>
+                    <span class="badge purple">Токенов: {{$for.item.tokens}} · Попаданий: {{$for.item.hits || 0}}</span>
+                </div>
+            </div>
+        </div>
+    </div>
     `,
     activeTab: 'hf',
+    halogenState: null,
+    get halogenCatalog() {
+        return this.halogenState?.catalog || [];
+    },
+    get halogenHandles() {
+        return this.halogenState?.handles || [];
+    },
     modalityTabs: MODALITY_TABS,
     capabilityOptions: CAPABILITY_OPTIONS,
     hardware: null,
@@ -770,8 +868,13 @@ export default {
         }).join(' ');
     },
     async attached() {
+        const p = String(this.$item?.path || this.$item?.short || '');
+        if (p === '/MODELS/Halogen' || p.startsWith('/MODELS/Halogen/'))
+            this.activeTab = 'halogen';
         await this.reloadStatus();
         await this.searchHf();
+        if (this.activeTab === 'halogen')
+            await this.refreshHalogen();
     },
     detached() {
         if (this._pollTimer) {
@@ -810,6 +913,11 @@ export default {
             this.datasets = Array.isArray(st?.datasets) ? st.datasets : [];
             this.downloads = Array.isArray(st?.downloads) ? st.downloads : [];
             this.jobs = Array.isArray(st?.jobs) ? st.jobs : [];
+            if (st?.halogen) {
+                this.halogenState = this.halogenState
+                    ? { ...this.halogenState, catalog: st.halogen.catalog, handles: st.halogen.handles }
+                    : st.halogen;
+            }
             if (!this.selectedDataset && this.datasets.length)
                 this.selectedDataset = this.datasets[0];
             this._ensurePolling();
@@ -824,7 +932,7 @@ export default {
                 const wk = w?.WORK;
                 if (!wk?.items)
                     continue;
-                for (const p of ['/MODELS', '/MODELS/Local']) {
+                for (const p of ['/MODELS', '/MODELS/Local', '/MODELS/Halogen']) {
                     const node = wk.items[p];
                     if (node?.[w.R]?.cache)
                         delete node[w.R].cache.items;
@@ -965,6 +1073,63 @@ export default {
                 taskType: 'operation',
                 completion: this.verifySample,
             });
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async openHalogenTab() {
+        this.activeTab = 'halogen';
+        await this.refreshHalogen();
+    },
+    async refreshHalogen() {
+        if (!this.$item)
+            return;
+        try {
+            this.halogenState = await this.$item.fetch('halogen_status');
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async startHalogenServer() {
+        this.error = '';
+        if (!this.$item)
+            return;
+        try {
+            await this.$item.fetch('halogen_start');
+            await this.refreshHalogen();
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async downloadHalogenBundleAll() {
+        this.error = '';
+        if (!this.$item)
+            return;
+        try {
+            await this.$item.fetch('halogen_download_bundle', {
+                token: this.hfToken,
+            });
+            await this.reloadStatus();
+            await this.refreshHalogen();
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async downloadHalogenModel(nodeName) {
+        this.error = '';
+        if (!this.$item || !nodeName)
+            return;
+        try {
+            await this.$item.fetch('halogen_download_bundle', {
+                models: nodeName,
+                token: this.hfToken,
+            });
+            await this.reloadStatus();
+            await this.refreshHalogen();
         }
         catch (e) {
             this.error = String(e?.message || e);

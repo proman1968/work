@@ -193,7 +193,19 @@ async function runLoopCore(opts) {
             await host.save();
             const rawEffort = opts.depth ? opts.effort : (host.effort || opts.effort);
             const turnEffort = resolveTurnEffort(rawEffort, items, turn);
-            const calls = await streamTurn({ llm, host, it, messages, schemas: schemas.length ? schemas : undefined, effort: turnEffort });
+            const forkSupported = Boolean(llm.fork || llm.item?.protocol === 'halogen');
+            const taskKey = forkSupported && opts.ctx?.task?.path
+                ? 'work-' + String(opts.ctx.task.path).replace(/[^a-zA-Z0-9_-]/g, '-').slice(-40)
+                : '';
+            const halogenKeep = taskKey && !opts.depth ? taskKey : undefined;
+            const halogenFrom = taskKey && (opts.depth > 0 || turn > 0) ? taskKey : undefined;
+            const calls = await streamTurn({
+                llm, host, it, messages,
+                schemas: schemas.length ? schemas : undefined,
+                effort: turnEffort,
+                halogenKeep,
+                halogenFrom,
+            });
             // 9.2: стоимость хода по тарифам модели (pricing) + учёт (agent_usage в .index/work.db)
             if (it.usage) {
                 const cost = costOf(it.usage, llm.pricing);
@@ -445,7 +457,7 @@ export function createThinkSplitter(onContent, onReasoning) {
 }
 
 /** Один ход модели: стрим текста/рассуждения, ретраи до первого токена. */
-async function streamTurn({ llm, host, it, messages, schemas, effort }) {
+async function streamTurn({ llm, host, it, messages, schemas, effort, halogenKeep, halogenFrom }) {
     const t0 = Date.now();
     for (let attempt = 0; ; attempt++) {
         let calls = [];
@@ -461,7 +473,7 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
             }
         );
         try {
-            for await (const ch of llm.stream({ messages, tools: schemas, signal: host.signal, effort })) {
+            for await (const ch of llm.stream({ messages, tools: schemas, signal: host.signal, effort, halogenKeep, halogenFrom })) {
                 if (host.signal?.aborted)
                     break;
                 if (typeof ch === 'string') {
@@ -476,6 +488,8 @@ async function streamTurn({ llm, host, it, messages, schemas, effort }) {
                         prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens,
                         ...(ch.cached_tokens ? { cached: ch.cached_tokens } : {}),
                         ...(ch.cache_creation_tokens ? { cacheWrite: ch.cache_creation_tokens } : {}),
+                        ...(ch.timings ? { timings: ch.timings } : {}),
+                        ...(ch.halogen_from ? { halogenFrom: ch.halogen_from } : {}),
                     };
                 // подписанные блоки размышлений (Anthropic): без них следующий шаг цикла инструментов при включённом thinking — ошибка API
                 else if (ch?.type === 'thinking_blocks')

@@ -19,7 +19,7 @@ import * as POLICY from './access/policy.js';
 import * as LINKS from './access/links.js';
 import * as WORKPLACES from './access/workplaces.js';
 import { DATA_METHODS, classHasObjects, classObjectCount, markClassesDirty } from '../data/api.js';
-import { TRAINER_METHODS, localStreamChat } from '../modules/trainer/index.js';
+import { TRAINER_METHODS, localStreamChat, halogenFallback } from '../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../modules/license/index.js';
 import { NOTIFY_METHODS, resolveBotForPoint, sanitizeBotForUi } from '../modules/notify/index.js';
 import { DATA_TYPES } from '../data/classes.js';
@@ -760,6 +760,11 @@ Object.defineProperty($class.prototype, 'messengerBot', {
 });
 Object.defineProperty($class.prototype, 'localStreamChat', {
     value: localStreamChat,
+    writable: true,
+    configurable: true,
+});
+Object.defineProperty($class.prototype, 'halogenFallback', {
+    value: halogenFallback,
     writable: true,
     configurable: true,
 });

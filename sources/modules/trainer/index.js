@@ -33,9 +33,64 @@ import {
     publishTrainedAdapter,
 } from './runner.js';
 import { localStreamChat } from './local-engine.js';
+import {
+    HALOGEN_DEFAULT_PORT,
+    HALOGEN_DEFAULT_BASE_URL,
+    HALOGEN_IMAGE_TAG,
+    HALOGEN_MODELS_CATALOG,
+    HALOGEN_TTS_VOICES,
+    recordHalogenSessionHandle,
+    listHalogenSessionHandles,
+    releaseHalogenSessionHandle,
+    normalizeHalogenTtsPayload,
+    computeHalogenMemoryPlan,
+    probeHalogenServer,
+    startHalogenBackend,
+    stopHalogenBackend,
+    synthesizeFallbackWav,
+    computeFallbackEmbeddings,
+    computeFallbackRerank,
+    computeFallbackDecision,
+    inspectHalogenCatalogWithStatus,
+    downloadHalogenBundle,
+} from './halogen.js';
+
+export const halogenFallback = Object.freeze({
+    normalizeHalogenTtsPayload,
+    synthesizeFallbackWav,
+    computeFallbackEmbeddings,
+    computeFallbackRerank,
+    computeFallbackDecision,
+    recordHalogenSessionHandle,
+    listHalogenSessionHandles,
+    releaseHalogenSessionHandle,
+    probeHalogenServer,
+    computeHalogenMemoryPlan,
+    inspectHalogenCatalogWithStatus,
+    downloadHalogenBundle,
+});
 
 export {
     localStreamChat,
+    HALOGEN_DEFAULT_PORT,
+    HALOGEN_DEFAULT_BASE_URL,
+    HALOGEN_IMAGE_TAG,
+    HALOGEN_MODELS_CATALOG,
+    HALOGEN_TTS_VOICES,
+    recordHalogenSessionHandle,
+    listHalogenSessionHandles,
+    releaseHalogenSessionHandle,
+    normalizeHalogenTtsPayload,
+    computeHalogenMemoryPlan,
+    probeHalogenServer,
+    startHalogenBackend,
+    stopHalogenBackend,
+    synthesizeFallbackWav,
+    computeFallbackEmbeddings,
+    computeFallbackRerank,
+    computeFallbackDecision,
+    inspectHalogenCatalogWithStatus,
+    downloadHalogenBundle,
     CURATED_HF_MODELS,
     MODEL_MODALITIES,
     MODEL_CAPABILITIES,
@@ -75,6 +130,10 @@ export const TRAINER_METHODS = Object.freeze({
                 listLocalModelsAndAdapters(),
                 listWorkDatasets(),
             ]);
+            const halogenPlan = computeHalogenMemoryPlan({
+                totalRamGb: hardware?.totalRamGb >= 120 ? hardware.totalRamGb : 192,
+                platform: hardware?.platform,
+            });
             return {
                 hardware,
                 models: local.models,
@@ -85,7 +144,77 @@ export const TRAINER_METHODS = Object.freeze({
                 modalities: MODEL_MODALITIES,
                 capabilities: Object.values(MODEL_CAPABILITIES),
                 curated: CURATED_HF_MODELS,
+                halogen: {
+                    memoryPlan: halogenPlan,
+                    catalog: inspectHalogenCatalogWithStatus(),
+                    handles: listHalogenSessionHandles(),
+                },
             };
+        },
+    },
+    halogen_status: {
+        level: 'read',
+        fn: async function (p = {}) {
+            const baseUrl = p.baseUrl || this?.baseUrl || this?.DATA?.baseUrl || HALOGEN_DEFAULT_BASE_URL;
+            const [hw, probe] = await Promise.all([
+                detectHardware(),
+                probeHalogenServer(baseUrl),
+            ]);
+            const memoryPlan = computeHalogenMemoryPlan({
+                totalRamGb: Number(p.totalRamGb) || (hw?.totalRamGb >= 120 ? hw.totalRamGb : 192),
+                platform: p.platform || hw?.platform,
+                npuModels: p.npuModels,
+            });
+            return {
+                ...probe,
+                hardware: hw,
+                memoryPlan,
+                catalog: inspectHalogenCatalogWithStatus(),
+            };
+        },
+    },
+    halogen_download_bundle: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const res = await downloadHalogenBundle({
+                models: p.models || p.nodeName || p.model || null,
+                token: p.token || '',
+                waitForCompletion: p.wait === true || p.wait === 'true',
+            });
+            try {
+                const halogenNode = await globalThis.WORK?.get_item?.('/MODELS/Halogen');
+                halogenNode?.reset?.();
+            }
+            catch { /* ignore */ }
+            return res;
+        },
+    },
+    halogen_start: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            return startHalogenBackend({
+                port: Number(p.port) || HALOGEN_DEFAULT_PORT,
+                modelPath: p.modelPath || '',
+            });
+        },
+    },
+    halogen_stop: {
+        level: 'admin',
+        fn: async function () {
+            return stopHalogenBackend();
+        },
+    },
+    halogen_handles: {
+        level: 'read',
+        fn: async function () {
+            return { handles: listHalogenSessionHandles() };
+        },
+    },
+    halogen_release_handle: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const released = releaseHalogenSessionHandle(p.name ?? p.id);
+            return { released, handles: listHalogenSessionHandles() };
         },
     },
     trainer_hf_search: {

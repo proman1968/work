@@ -6,6 +6,8 @@ export default {
     order: 1,
     allowUse($context) {
         const p = String($context?.path || $context?.short || '');
-        return p === '/MODELS/Local' || p.startsWith('/MODELS/Local/') || $context?.protocol === 'local';
+        return p === '/MODELS/Local' || p.startsWith('/MODELS/Local/')
+            || p === '/MODELS/Halogen' || p.startsWith('/MODELS/Halogen/')
+            || $context?.protocol === 'local' || $context?.protocol === 'halogen';
     },
 }

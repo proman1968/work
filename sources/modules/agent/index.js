@@ -149,10 +149,11 @@ export async function llmFor(modelPath) {
         item,
         contextTokens: Number(item.maxTokens) || 32000,
         vision: caps.includes('vision'),
+        fork: caps.includes('fork') || item.protocol === 'halogen',
         // 9.2: тарифы модели ($ за миллион токенов) — карточка MODELS pricing: { input, output }
         pricing: item.pricing && typeof item.pricing === 'object' ? item.pricing : null,
-        stream({ messages, tools, signal, effort }) {
-            /** @type {{ messages: any, temperature?: number, signal?: AbortSignal, tools?: any, maxOutput?: number, effort?: string }} */
+        stream({ messages, tools, signal, effort, halogenKeep, halogenFrom, continueFinalMessage }) {
+            /** @type {{ messages: any, temperature?: number, signal?: AbortSignal, tools?: any, maxOutput?: number, effort?: string, halogenKeep?: string, halogenFrom?: string, continueFinalMessage?: boolean }} */
             const req = { messages, temperature: 0.3, signal };
             if (tools?.length)
                 req.tools = tools;
@@ -160,6 +161,12 @@ export async function llmFor(modelPath) {
                 req.maxOutput = maxOutput;
             if (effort && caps.includes('effort'))
                 req.effort = effort;
+            if (halogenKeep)
+                req.halogenKeep = halogenKeep;
+            if (halogenFrom)
+                req.halogenFrom = halogenFrom;
+            if (continueFinalMessage)
+                req.continueFinalMessage = true;
             return item.streamChat(req);
         },
     };

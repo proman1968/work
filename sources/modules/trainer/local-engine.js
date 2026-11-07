@@ -15,6 +15,7 @@ import { dataStore } from '../../data/api.js';
 import { classesOfType } from '../../data/classes.js';
 import { classSchema } from '../../data/schema.js';
 import { trialBalance } from '../../data/reports.js';
+import { recordHalogenSessionHandle } from './halogen.js';
 
 const money = v => Number(v || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -26,7 +27,16 @@ const _pendingRequests = new Map();
 function resolveWeightsDir(ai, rootDir = process.cwd()) {
     const modelId = String(ai?.id || ai?.label || ai?.model || 'Local-Model').split('/').pop();
     const weightsRel = ai?.weightsDir || ai?.DATA?.weightsDir || `MODELS/Local/${modelId}/#weights`;
-    return path.resolve(rootDir, weightsRel);
+    const primary = path.resolve(rootDir, weightsRel);
+    if (fs.existsSync(primary))
+        return primary;
+    const isHalogen = ai?.protocol === 'halogen' || String(ai?.path || ai?.short || '').startsWith('/MODELS/Halogen/');
+    if (isHalogen) {
+        const fallback06 = path.resolve(rootDir, 'MODELS/Local/Qwen3-0.6B/#weights');
+        if (fs.existsSync(fallback06))
+            return fallback06;
+    }
+    return primary;
 }
 
 function hasSafetensorsAndTokenizer(weightsDir) {
@@ -293,12 +303,21 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
                 proc.stdout?.unref?.();
         }
 
+        const sessionRes = recordHalogenSessionHandle({
+            keep: options?.halogenKeep || options?.sessionKeep,
+            from: options?.halogenFrom || options?.sessionFrom,
+            messages,
+            tokens: inputIds.length,
+        });
+        const cachedTokens = sessionRes.cachedTokens ? Math.min(inputIds.length, sessionRes.cachedTokens) : 0;
+
         yield {
             type: 'usage',
             prompt_tokens: inputIds.length,
             completion_tokens: generatedIds.length,
             total_tokens: inputIds.length + generatedIds.length,
-            cached_tokens: 0,
+            cached_tokens: cachedTokens,
+            ...(sessionRes.fromStatus ? { halogen_from: sessionRes.fromStatus } : {}),
         };
         yield {
             type: 'finish',
@@ -308,6 +327,13 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         return;
     }
 
+    const sessionRes = recordHalogenSessionHandle({
+        keep: options?.halogenKeep || options?.sessionKeep,
+        from: options?.halogenFrom || options?.sessionFrom,
+        messages,
+        tokens: 24,
+    });
+
     // Запасной ответ, если у модели ещё не скачаны файлы .safetensors
     const fallbackText = grounding || 'Локальная модель зарегистрирована, но файлы весов (.safetensors) ещё не загружены.';
     yield fallbackText;
@@ -316,7 +342,8 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         prompt_tokens: 24,
         completion_tokens: 24,
         total_tokens: 48,
-        cached_tokens: 0,
+        cached_tokens: sessionRes.cachedTokens ? Math.min(24, sessionRes.cachedTokens) : 0,
+        ...(sessionRes.fromStatus ? { halogen_from: sessionRes.fromStatus } : {}),
     };
     yield {
         type: 'finish',

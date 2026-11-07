@@ -57,7 +57,10 @@ export default {
         }
         const headers = providerAuthHeaders(ai);
         const tried = [];
-        const urls = [origin + '/api/tags', origin + '/v1/models'];
+        const isHalogen = ai.protocol === 'halogen' || String(ai.path || ai.short || '').startsWith('/MODELS/Halogen');
+        const urls = isHalogen
+            ? [origin + '/v1/models', origin + '/api/tags']
+            : [origin + '/api/tags', origin + '/v1/models'];
         for (const url of urls) {
             tried.push(url);
             try {

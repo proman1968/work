@@ -165,6 +165,22 @@ export const CURATED_HF_MODELS = Object.freeze([
         likes: 1310,
     },
     {
+        id: 'peonist-ai/halogen-qwen3.8-flash-next',
+        author: 'peonist-ai',
+        modelName: 'Qwen3.8-Flash-Next (Halogen Strix Halo / Ryzen AI 495 Pro)',
+        modality: 'llm',
+        format: 'safetensors',
+        paramsB: 180,
+        ramRequiredGb: 89.0,
+        trainRamGb: 138.0,
+        capabilities: ['chat', 'tools', 'thinking', 'coding', 'vision'],
+        whatItDoes: 'Флагманская модель 180B MoE (4.16 bpw + FP8 lookup table) для AMD Ryzen AI Max+ PRO 495 192 GB: 73–94 tok/s decode, 1800 tok/s prefill, первый токен в длинной сессии за 1.6 с',
+        recommendedFor: 'Оптимально для ПАК WORK на AMD Ryzen AI 495 Pro 192 ГБ RAM (/MODELS/Halogen)',
+        tags: ['qwen3', 'qwen3.8', 'halogen', 'strix-halo', 'ryzen-ai', 'gfx1151', 'moe', 'tool-calling', 'vision'],
+        downloads: 128000,
+        likes: 1890,
+    },
+    {
         id: 'Qwen/Qwen3-235B-A22B-GGUF',
         author: 'Qwen',
         modelName: 'Qwen3-235B-A22B MoE',
@@ -817,7 +833,7 @@ export async function inspectHuggingFaceRepo(repoId, {
                             sizeGb: +(size / (1024 ** 3)).toFixed(2),
                             sizeFormatted: formatBytes(size),
                             kind: ext === '.gguf' ? 'gguf'
-                                : ext === '.safetensors' || ext === '.bin' ? 'safetensors'
+                                : ext === '.safetensors' || ext === '.bin' || ext === '.hgn' || ext === '.hnpw' || ext === '.onnx' ? 'safetensors'
                                 : /\b(config|tokenizer|adapter|special_tokens|generation_config|merges|vocab|preprocessor)\b/i.test(name) ? 'config'
                                 : 'other',
                             quant,
@@ -994,6 +1010,8 @@ export async function startHuggingFaceDownload({
     revision = 'main',
     token = '',
     rootDir = process.cwd(),
+    providerFolder = 'Local',
+    targetNodeName = '',
     registerInWork = true,
     waitForCompletion = false,
     fetchImpl = globalThis.fetch,
@@ -1004,15 +1022,18 @@ export async function startHuggingFaceDownload({
     if (!selected.length)
         throw new Error(`В репозитории ${cleanId} не найдено подходящих файлов весов (.gguf / .safetensors)`);
 
-    const folderName = safeModelFolderName(cleanId, quant && selected.some(f => f.kind === 'gguf') ? quant : '');
-    const modelDir = path.join(rootDir, 'MODELS', 'Local', folderName);
+    const safeProvider = String(providerFolder || 'Local').replace(/[<>:"/\\|?*]/g, '-');
+    const folderName = targetNodeName
+        ? String(targetNodeName).replace(/[<>:"/\\|?*]/g, '-')
+        : safeModelFolderName(cleanId, quant && selected.some(f => f.kind === 'gguf') ? quant : '');
+    const modelDir = path.join(rootDir, 'MODELS', safeProvider, folderName);
     const weightsDir = path.join(modelDir, '#weights');
     const primary = selected.find(f => f.name.endsWith('.gguf'))?.name
-        || selected.find(f => f.name.endsWith('.safetensors'))?.name
+        || selected.find(f => f.name.endsWith('.safetensors') || f.name.endsWith('.hgn') || f.name.endsWith('.hnpw'))?.name
         || selected[0]?.name || '';
 
-    // Сначала создаём $ai/class.js, чтобы папка с первой миллисекунды распознавалась сервером как $ai, а не $folder
-    if (registerInWork) {
+    // Сначала создаём $ai/class.js (только для новых узлов в /MODELS/Local), чтобы папка с первой миллисекунды распознавалась сервером как $ai, а не $folder
+    if (registerInWork && safeProvider === 'Local') {
         await registerLocalModelNode({
             rootDir,
             folderName,
@@ -1036,6 +1057,7 @@ export async function startHuggingFaceDownload({
         modality: repoMeta.modality || 'llm',
         capabilities: repoMeta.capabilities || ['chat'],
         revision: String(revision || 'main'),
+        providerFolder: safeProvider,
         folderName,
         weightsDir,
         status: 'downloading',
@@ -1047,7 +1069,7 @@ export async function startHuggingFaceDownload({
         speedMBs: 0,
         startedAt: Date.now(),
         finishedAt: null,
-        modelPath: `/MODELS/Local/${folderName}`,
+        modelPath: `/MODELS/${safeProvider}/${folderName}`,
         error: null,
     };
     _downloads.set(jobId, { job, controller });
@@ -1145,12 +1167,17 @@ export async function startHuggingFaceDownload({
             job.status = controller.signal.aborted ? 'cancelled' : 'failed';
             job.error = String(err?.message || err);
             job.finishedAt = Date.now();
-            // Если ни один файл весов(.gguf / .safetensors) не скачался целиком — убираем недокачанную папку, чтобы она не висела пустой в /MODELS/Local
-            const hasWeights = job.files.some(f => f.done && (f.name.endsWith('.gguf') || f.name.endsWith('.safetensors')));
+            // Если ни один файл весов(.gguf / .safetensors / .hgn / .hnpw) не скачался целиком — убираем недокачанную папку
+            const hasWeights = job.files.some(f => f.done && /\.(gguf|safetensors|hgn|hnpw|bin|onnx)$/i.test(f.name));
             if (!hasWeights) {
-                await fsp.rm(modelDir, { recursive: true, force: true }).catch(() => {});
+                if (safeProvider === 'Local') {
+                    await fsp.rm(modelDir, { recursive: true, force: true }).catch(() => {});
+                }
+                else {
+                    await fsp.rm(weightsDir, { recursive: true, force: true }).catch(() => {});
+                }
                 try {
-                    const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                    const localNode = await globalThis.WORK?.get_item?.(`/MODELS/${safeProvider}`);
                     localNode?.reset?.();
                 }
                 catch { /* ignore */ }

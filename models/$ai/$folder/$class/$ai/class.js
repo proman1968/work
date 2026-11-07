@@ -113,7 +113,9 @@ export default {
         }
         const headers = await getAuthHeaders(ai);
         const tried = [];
-        const urls = [origin + '/api/tags', origin + '/v1/models'];
+        const urls = isHalogenModel(ai)
+            ? [origin + '/v1/models', origin + '/api/tags']
+            : [origin + '/api/tags', origin + '/v1/models'];
         for (const url of urls) {
             tried.push(url);
             try {
@@ -173,6 +175,10 @@ export default {
                 body.max_tokens = cap;
             if (options.stop)
                 body.stop = options.stop;
+            if (options.continueFinalMessage || options.continue_final_message) {
+                body.continue_final_message = true;
+                body.add_generation_prompt = false;
+            }
             applyEffort(body, ai, options);
             if (!isGigachat)
                 body.stream_options = { include_usage: true };
@@ -193,6 +199,7 @@ export default {
         }
 
         const isLocalNode = ai.protocol === 'local' || String(ai.path || ai.short || '').startsWith('/MODELS/Local/');
+        const isHalogenNode = isHalogenModel(ai);
         const primaryFile = String(ai.primaryFile || ai.DATA?.primaryFile || '');
         if ((ai.protocol === 'local' || (isLocalNode && (!ai.baseUrl || primaryFile.endsWith('.safetensors')))) && typeof WORK?.localStreamChat === 'function') {
             yield* WORK.localStreamChat(ai, body, options);
@@ -200,6 +207,12 @@ export default {
         }
 
         const headers = await getAuthHeaders(ai);
+        if (options.halogenKeep || options.sessionKeep)
+            headers['X-Halogen-Keep'] = String(options.halogenKeep || options.sessionKeep);
+        if (options.halogenFrom || options.sessionFrom)
+            headers['X-Halogen-From'] = String(options.halogenFrom || options.sessionFrom);
+        if (options.halogenGuard)
+            headers['X-Halogen-Guard'] = typeof options.halogenGuard === 'string' ? options.halogenGuard : 'watch';
         const url = new URL(isAnthropic ? anthropicUrl(ai.baseUrl) : ai.baseUrl);
         const transport = transportFor(url);
 
@@ -246,7 +259,7 @@ export default {
                 resolve(res);
             });
             req.on('error', (err) => {
-                if (isLocalNode && typeof WORK?.localStreamChat === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                if ((isLocalNode || isHalogenNode) && typeof WORK?.localStreamChat === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
                     resolve({ __localFallback: true });
                     return;
                 }
@@ -293,6 +306,8 @@ export default {
         // Конец ответа: finish_reason и/или [DONE]; без обоих — поток оборвался (цикл агента повторит ход).
         let finishReason = null;
         let sawDone = false;
+        let lastTimings = null;
+        const halogenFromHeader = res?.headers?.['x-halogen-from'] || undefined;
         const parseLine = function* (line) {
             if (!line.startsWith('data:'))
                 return;
@@ -310,6 +325,10 @@ export default {
             }
             if (json.error)
                 throw new Error('LLM ' + body.model + ': ' + (json.error.message || JSON.stringify(json.error)));
+            if (json.timings && typeof json.timings === 'object')
+                lastTimings = json.timings;
+            if (json.halogen_guard)
+                yield { type: 'guard', guard: json.halogen_guard };
             if (json.choices?.[0]?.finish_reason)
                 finishReason = String(json.choices[0].finish_reason);
             const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
@@ -326,8 +345,9 @@ export default {
                 noteCall(0, null, delta.function_call.name, delta.function_call.arguments);
             if (json.usage) {
                 const u = json.usage;
-                // токены, прочитанные из кэша провайдера: OpenAI (prompt_tokens_details.cached_tokens), DeepSeek (prompt_cache_hit_tokens), Anthropic-поля
-                const cached = Number(u.prompt_tokens_details?.cached_tokens ?? u.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cache_read_input_tokens ?? 0) || 0;
+                const timings = json.timings || lastTimings || null;
+                // токены, прочитанные из кэша провайдера: OpenAI (prompt_tokens_details.cached_tokens), DeepSeek (prompt_cache_hit_tokens), Anthropic-поля, Halogen timings.cache_n
+                const cached = Number(u.prompt_tokens_details?.cached_tokens ?? u.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cache_read_input_tokens ?? timings?.cache_n ?? 0) || 0;
                 const cacheWrite = Number(u.cache_creation_input_tokens ?? 0) || 0;
                 // prompt_tokens — ПОЛНЫЙ размер запроса, включая кэш (так его читает цикл агента для решения о сжатии);
                 // Anthropic-поля input_tokens не включают кэш — тогда полный размер = input + чтение + запись кэша
@@ -342,6 +362,9 @@ export default {
                     completion_tokens: completionTokens,
                     total_tokens: totalTokens,
                     cached_tokens: cached,
+                    ...(u.completion_tokens_details ? { completion_tokens_details: u.completion_tokens_details } : {}),
+                    ...(timings ? { timings } : {}),
+                    ...(halogenFromHeader ? { halogen_from: halogenFromHeader } : {}),
                 };
             }
         };
@@ -406,11 +429,22 @@ export default {
             throw new Error('generateImage: некорректный baseUrl: ' + base);
         }
         const headers = await getAuthHeaders(ai);
+        const isHalogen = isHalogenModel(ai);
         let lastErr = '';
-        const jobs = [
-            { url: origin + '/api/generate', body: { model: tag, prompt, stream: false } },
-            { url: origin + '/v1/images/generations', body: { model: tag, prompt, n: 1, response_format: 'b64_json' } },
-        ];
+        const genBody = {
+            model: tag,
+            prompt,
+            n: 1,
+            response_format: 'b64_json',
+            ...(params.size ? { size: String(params.size) } : (isHalogen ? { size: '512x512' } : {})),
+            ...(params.seed != null && Number.isFinite(Number(params.seed)) ? { seed: Math.trunc(Number(params.seed)) } : {}),
+        };
+        const jobs = isHalogen
+            ? [{ url: origin + '/v1/images/generations', body: genBody }]
+            : [
+                { url: origin + '/api/generate', body: { model: tag, prompt, stream: false } },
+                { url: origin + '/v1/images/generations', body: genBody },
+            ];
         for (const job of jobs) {
             try {
                 const data = await httpsPostJson(job.url, headers, job.body, ai, 180000);
@@ -430,6 +464,7 @@ export default {
      * Синтез речи (capabilities `tts`): OpenAI-совместимый POST {origin}/v1/audio/speech → WAV (Buffer).
      * Поля модели: voice ('default'), ttsTask ('VoiceDesign' | 'CustomVoice' | 'Base'), instructions (описание голоса),
      * language ('Russian'). Через шлюз Bifrost task_type/language проходят только с заголовком passthrough.
+     * Для провайдера Halogen (`qwen3-tts-*-customvoice` на NPU) используется чистый контракт Halogen (`serena` / `russian`).
      * @param {object} [params]
      * @param {string} params.text Текст (до 1500 символов)
      * @param {string} [params.instructions] Описание голоса/манеры — перекрывает поле модели
@@ -448,31 +483,64 @@ export default {
             throw new Error('speak: нет model');
         const origin = speechOrigin(params, ai, 'speak');
         const headers = await getAuthHeaders(ai);
-        headers['x-bf-passthrough-extra-params'] = 'true';
-        const body = {
-            model: tag,
-            input: text,
-            voice: String(ai.voice || 'default'),
-            response_format: 'wav',
-            task_type: String(ai.ttsTask || 'VoiceDesign'),
-            language: String(params.language || ai.language || 'Russian'),
-        };
-        const instructions = String(params.instructions || ai.instructions || '').trim();
-        if (instructions)
-            body.instructions = instructions;
-        const seed = Number(params.seed ?? ai.seed ?? 42);
-        if (Number.isFinite(seed))
-            body.seed = Math.trunc(seed);
-        const temperature = Number(params.temperature ?? ai.temperature);
-        if (Number.isFinite(temperature) && temperature > 0)
-            body.temperature = temperature;
-        const topP = Number(params.topP ?? ai.topP);
-        if (Number.isFinite(topP) && topP > 0)
-            body.top_p = topP;
-        const topK = Number(params.topK ?? ai.topK);
-        if (Number.isFinite(topK) && topK > 0)
-            body.top_k = Math.trunc(topK);
-        const buf = await httpsPostBuffer(origin + '/v1/audio/speech', headers, JSON.stringify(body), 'application/json', ai, 90000);
+        const isHalogen = isHalogenModel(ai) || /customvoice/i.test(tag);
+        let body;
+        if (isHalogen && typeof WORK?.halogenFallback?.normalizeHalogenTtsPayload === 'function') {
+            body = WORK.halogenFallback.normalizeHalogenTtsPayload({ ...params, text, model: tag }, ai);
+        }
+        else if (isHalogen) {
+            body = {
+                model: tag,
+                input: text,
+                voice: String(params.voice || ai.voice || 'serena').toLowerCase(),
+                language: String(params.language || ai.language || 'russian').toLowerCase() === 'ru'
+                    ? 'russian'
+                    : String(params.language || ai.language || 'russian').toLowerCase(),
+                response_format: 'wav',
+            };
+            const instructions = String(params.instructions || ai.instructions || '').trim();
+            if (instructions && !/0\.6b/i.test(tag))
+                body.instructions = instructions;
+            const seed = Number(params.seed ?? ai.seed ?? 42);
+            if (Number.isFinite(seed))
+                body.seed = Math.trunc(seed);
+        }
+        else {
+            headers['x-bf-passthrough-extra-params'] = 'true';
+            body = {
+                model: tag,
+                input: text,
+                voice: String(ai.voice || 'default'),
+                response_format: 'wav',
+                task_type: String(ai.ttsTask || 'VoiceDesign'),
+                language: String(params.language || ai.language || 'Russian'),
+            };
+            const instructions = String(params.instructions || ai.instructions || '').trim();
+            if (instructions)
+                body.instructions = instructions;
+            const seed = Number(params.seed ?? ai.seed ?? 42);
+            if (Number.isFinite(seed))
+                body.seed = Math.trunc(seed);
+            const temperature = Number(params.temperature ?? ai.temperature);
+            if (Number.isFinite(temperature) && temperature > 0)
+                body.temperature = temperature;
+            const topP = Number(params.topP ?? ai.topP);
+            if (Number.isFinite(topP) && topP > 0)
+                body.top_p = topP;
+            const topK = Number(params.topK ?? ai.topK);
+            if (Number.isFinite(topK) && topK > 0)
+                body.top_k = Math.trunc(topK);
+        }
+        let buf;
+        try {
+            buf = await httpsPostBuffer(origin + '/v1/audio/speech', headers, JSON.stringify(body), 'application/json', ai, 90000);
+        }
+        catch (err) {
+            if (isHalogen && typeof WORK?.halogenFallback?.synthesizeFallbackWav === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                return WORK.halogenFallback.synthesizeFallbackWav(text);
+            }
+            throw err;
+        }
         if (buf.length < 64 || buf.toString('latin1', 0, 4) !== 'RIFF')
             throw new Error('speak: ответ не WAV: ' + buf.toString('utf-8', 0, 160).replace(/\s+/g, ' '));
         return buf;
@@ -498,14 +566,26 @@ export default {
         const origin = speechOrigin(params, ai, 'transcribe');
         const headers = await getAuthHeaders(ai);
         delete headers['Content-Type'];
-        const form = buildMultipart([
+        const isHalogen = isHalogenModel(ai) || /qwen3-asr/i.test(tag);
+        const parts = [
             { name: 'model', value: tag },
             { name: 'language', value: String(params.language || ai.language || 'ru').slice(0, 8) },
             { name: 'response_format', value: 'json' },
-            { name: 'temperature', value: '0' },
+            ...(isHalogen ? [] : [{ name: 'temperature', value: '0' }]),
+            ...(params.prompt ? [{ name: 'prompt', value: String(params.prompt) }] : []),
             { name: 'file', filename: 'speech.wav', type: 'audio/wav', value: audio },
-        ]);
-        const buf = await httpsPostBuffer(origin + '/v1/audio/transcriptions', headers, form.body, form.type, ai, 90000);
+        ];
+        const form = buildMultipart(parts);
+        let buf;
+        try {
+            buf = await httpsPostBuffer(origin + '/v1/audio/transcriptions', headers, form.body, form.type, ai, 90000);
+        }
+        catch (err) {
+            if (isHalogen && params.fallbackText != null && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                return { text: String(params.fallbackText).trim(), model: tag, fallback: true };
+            }
+            throw err;
+        }
         let data;
         try {
             data = JSON.parse(buf.toString('utf-8'));
@@ -515,7 +595,103 @@ export default {
         }
         return { text: String(data?.text ?? '').trim(), model: tag };
     },
+
+    /**
+     * Векторные эмбеддинги (`POST {origin}/v1/embeddings`, например `qwen3-embedding-0.6b` или `embeddinggemma-2` на NPU).
+     */
+    async embed(params = {}) {
+        const ai = params.$ai || this;
+        const tag = String(params.model || ai.model || 'qwen3-embedding-0.6b').trim();
+        const input = params.input ?? params.text ?? params.post ?? '';
+        const origin = speechOrigin(params, ai, 'embed');
+        const headers = await getAuthHeaders(ai);
+        const body = {
+            model: tag,
+            input: Array.isArray(input) ? input : [String(input)],
+            ...(params.dimensions ? { dimensions: Number(params.dimensions) } : {}),
+            ...(params.encoding_format ? { encoding_format: String(params.encoding_format) } : {}),
+            ...(params.prompt_name ? { prompt_name: String(params.prompt_name) } : {}),
+        };
+        try {
+            return await httpsPostJson(origin + '/v1/embeddings', headers, body, ai, 30000);
+        }
+        catch (err) {
+            if ((isHalogenModel(ai) || ai.protocol === 'local') && typeof WORK?.halogenFallback?.computeFallbackEmbeddings === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                return WORK.halogenFallback.computeFallbackEmbeddings(body.input, { dimensions: body.dimensions, model: tag });
+            }
+            throw err;
+        }
+    },
+
+    /**
+     * Семантический реранкинг документов (`POST {origin}/v1/rerank`, например `qwen3-reranker-0.6b` на NPU).
+     */
+    async rerank(params = {}) {
+        const ai = params.$ai || this;
+        const tag = String(params.model || ai.model || 'qwen3-reranker-0.6b').trim();
+        const query = String(params.query || '').trim();
+        const documents = Array.isArray(params.documents) ? params.documents : [];
+        const origin = speechOrigin(params, ai, 'rerank');
+        const headers = await getAuthHeaders(ai);
+        const body = {
+            model: tag,
+            query,
+            documents,
+            ...(params.top_n || params.topN ? { top_n: Number(params.top_n || params.topN) } : {}),
+            return_documents: params.return_documents ?? params.returnDocuments ?? true,
+            ...(params.instruction ? { instruction: String(params.instruction) } : {}),
+        };
+        try {
+            return await httpsPostJson(origin + '/v1/rerank', headers, body, ai, 30000);
+        }
+        catch (err) {
+            if ((isHalogenModel(ai) || ai.protocol === 'local') && typeof WORK?.halogenFallback?.computeFallbackRerank === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                return WORK.halogenFallback.computeFallbackRerank({
+                    query,
+                    documents,
+                    topN: body.top_n || 0,
+                    returnDocuments: body.return_documents,
+                    model: tag,
+                });
+            }
+            throw err;
+        }
+    },
+
+    /**
+     * Быстрые однопроходные решения System One (`POST {origin}/v1/systemone`, `decider-0.8b` / `d3-lite` на NPU).
+     */
+    async decide(params = {}) {
+        const ai = params.$ai || this;
+        const tag = String(params.model || ai.model || 'decider-0.8b').trim();
+        const origin = speechOrigin(params, ai, 'decide');
+        const headers = await getAuthHeaders(ai);
+        const body = {
+            model: tag,
+            state: params.state ?? '',
+            questions: params.questions || {},
+            ...(Array.isArray(params.images) && params.images.length ? { images: params.images } : {}),
+        };
+        try {
+            return await httpsPostJson(origin + '/v1/systemone', headers, body, ai, 15000);
+        }
+        catch (err) {
+            if ((isHalogenModel(ai) || ai.protocol === 'local') && typeof WORK?.halogenFallback?.computeFallbackDecision === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                return WORK.halogenFallback.computeFallbackDecision({
+                    state: body.state,
+                    questions: body.questions,
+                    model: tag,
+                });
+            }
+            throw err;
+        }
+    },
 };
+
+function isHalogenModel(ai) {
+    const p = String(ai?.path || ai?.short || '');
+    return ai?.protocol === 'halogen' || p.startsWith('/MODELS/Halogen/');
+}
 
 function speechOrigin(params, ai, who) {
     const base = String(ai.baseUrl || ai.DATA?.baseUrl || '').trim();
@@ -525,7 +701,7 @@ function speechOrigin(params, ai, who) {
         const u = new URL(base);
         const prefix = u.pathname
             .replace(/\/+$/, '')
-            .replace(/\/v1\/(?:chat\/completions|audio\/(?:speech|transcriptions)|images\/generations|models)$/i, '')
+            .replace(/\/v1\/(?:chat\/completions|audio\/(?:speech|transcriptions)|images\/generations|embeddings|rerank|systemone|models)$/i, '')
             .replace(/\/v1$/i, '');
         return u.origin + prefix;
     }
@@ -619,10 +795,18 @@ function applyEffort(body, ai, options = {}) {
         return;
     const off = effort === 'off' || effort === false;
     const native = ai.protocol === 'ollama' || /\/api\/chat\b/.test(String(ai.baseUrl || ''));
-    if (native)
+    if (native) {
         body.think = off ? false : (effort === true ? true : effort);
-    else
+    }
+    else if (isHalogenModel(ai)) {
         body.reasoning_effort = off ? 'none' : (effort === true ? 'medium' : effort);
+        body.enable_thinking = !off;
+        if (Number(options.maxThinkingTokens) > 0)
+            body.max_thinking_tokens = Math.trunc(Number(options.maxThinkingTokens));
+    }
+    else {
+        body.reasoning_effort = off ? 'none' : (effort === true ? 'medium' : effort);
+    }
 }
 
 /**
