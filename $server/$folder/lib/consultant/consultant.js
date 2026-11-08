@@ -74,6 +74,127 @@ const STATUS_LABELS = {
     limit: { label: 'Лимит шагов', icon: 'carbon:warning' },
 };
 
+export const CONSULTANT_PROMPT_CATEGORIES = Object.freeze([
+    { id: 'all', label: 'Все', icon: 'icons:apps' },
+    { id: 'accounting', label: 'Учёт и отчёты', icon: 'carbon:data-table' },
+    { id: 'org', label: 'Оргструктура и права', icon: 'odant:structure' },
+    { id: 'docs', label: 'Документы и задачи', icon: 'enterprise:calendar' },
+    { id: 'system', label: 'Конструктор и ИИ', icon: 'icons:build' },
+]);
+
+export const CONSULTANT_PROMPTS = Object.freeze([
+    // Сценарий 1: Оргструктура и рабочие места (BOSS, ROLES, USERS, GUESTS)
+    {
+        id: 'org-overview',
+        category: 'org',
+        scenario: 1,
+        icon: 'odant:structure',
+        label: 'Какие организации, подразделения и модули доступны в системе?',
+        prompt: 'Покажи структуру организаций (/ORGANIZATIONS), их подразделений ($structure) и подключённых модулей (/MODULES) в системе.',
+    },
+    {
+        id: 'org-audit-access',
+        category: 'org',
+        scenario: 1,
+        icon: 'icons:supervisor-account',
+        label: 'Аудит ролей BOSS и рабочих мест (ROLES / USERS / GUESTS)',
+        prompt: 'Проведи аудит настроек безопасности по организациям и подразделениям: кто назначен руководителем (BOSS), какие рабочие места (ROLES) созданы, где назначены групповые субъекты USERS и GUESTS и какие ссылки LINKS им выданы.',
+    },
+    {
+        id: 'org-setup-unit',
+        category: 'org',
+        scenario: 1,
+        icon: 'icons:add',
+        label: 'Развернуть подразделение и настроить рабочие места',
+        prompt: 'Помоги создать новое подразделение в организации, настроить рабочие места (ROLES), назначить сотрудников и привязать ссылки LINKS на справочники, операции и счета.',
+    },
+    // Сценарий 2: Справочники, импорт и качество данных
+    {
+        id: 'cat-summary',
+        category: 'accounting',
+        scenario: 2,
+        icon: 'carbon:data-table',
+        label: 'Сводка по справочникам и операциям учёта',
+        prompt: 'Покажи сводку по основным справочникам и последним операциям в учёте.',
+    },
+    {
+        id: 'cat-quality',
+        category: 'accounting',
+        scenario: 2,
+        icon: 'carbon:checkmark-outline',
+        label: 'Проверить справочники на дубликаты и пустые реквизиты',
+        prompt: 'Проверь основные справочники организации (Контрагенты, Номенклатура, Сотрудники, Договоры) на дубликаты, пустые обязательные поля и ошибки заполнения.',
+    },
+    // Сценарий 3: Хозяйственные операции, проведение и сторно
+    {
+        id: 'op-register',
+        category: 'accounting',
+        scenario: 3,
+        icon: 'carbon:task-complete',
+        label: 'Зарегистрировать и провести хозяйственную операцию',
+        prompt: 'Помоги зарегистрировать новую хозяйственную операцию: покажи доступные классы операций в OPERATIONS, их обязательные поля и аналитики.',
+    },
+    // Сценарий 4: 4-шаговый анализ по счетам (Ведомость -> Обороты -> Анализ -> Проводки)
+    {
+        id: 'acc-sheet-balance',
+        category: 'accounting',
+        scenario: 4,
+        icon: 'carbon:report',
+        label: 'Оборотно-сальдовая ведомость и проверка баланса',
+        prompt: 'Сформируй оборотно-сальдовую ведомость (report kind=sheet) по регистру учёта за активный период, покажи остатки и обороты по счетам и проверь сходимость баланса.',
+    },
+    {
+        id: 'acc-turnovers',
+        category: 'accounting',
+        scenario: 4,
+        icon: 'carbon:analytics',
+        label: 'Анализ оборотов и задолженности по субконто (60, 62, 51, 41)',
+        prompt: 'Проанализируй обороты и конечное сальдо по ключевым счетам (51 Расчётные счета, 60 Поставщики, 62 Покупатели, 41 Товары) в разрезе аналитик.',
+    },
+    // Сценарий 5: Коллаборация, поручения и офисные документы
+    {
+        id: 'docs-feed-summary',
+        category: 'docs',
+        scenario: 5,
+        icon: 'icons:question-answer',
+        label: 'Сводка событий, сообщений и задач в ленте',
+        prompt: 'Сделай сводку последних событий, сообщений, файлов и проведённых операций по ленте за последние дни.',
+    },
+    {
+        id: 'docs-office-export',
+        category: 'docs',
+        scenario: 5,
+        icon: 'files-color:s-xlsx',
+        label: 'Сформировать отчёт в Excel (.xlsx) или Word (.docx)',
+        prompt: 'Сформируй управленческий отчёт или выгрузку в таблицу Excel (.xlsx) либо документ Word (.docx) по данным учёта организации.',
+    },
+    {
+        id: 'docs-delegate-task',
+        category: 'docs',
+        scenario: 5,
+        icon: 'carbon:send-alt',
+        label: 'Поставить поручение сотруднику со сроком исполнения',
+        prompt: 'Помоги оформить и отправить поручение сотруднику через ленту подразделения с указанием получателя и срока исполнения (deadline).',
+    },
+    // Сценарий 6 и 7: Конструктор классов, БД, локальный ИИ и федерация
+    {
+        id: 'sys-builder-guide',
+        category: 'system',
+        scenario: 6,
+        icon: 'icons:build',
+        label: 'Как добавить поле/аналитику в класс и настроить форму объекта?',
+        prompt: 'Объясни и покажи на примере текущей конфигурации, как добавить новое поле или аналитику в класс (METADATA.FIELDS / ANALYTICS) и настроить раскладку карточки объекта в 12-колоночной сетке.',
+    },
+    {
+        id: 'sys-local-ai',
+        category: 'system',
+        scenario: 7,
+        icon: 'carbon:machine-learning-model',
+        label: 'Модели ИИ и дообучение на данных организации (/MODELS)',
+        prompt: 'Какие модели ИИ сейчас подключены в /MODELS (включая /MODELS/Local и /MODELS/Halogen) и как собрать датасет организации для локального дообучения LoRA / SFT / GRPO?',
+    },
+]);
+
 export default {
     imports: 'oda//button, oda//icon',
 };
@@ -308,6 +429,44 @@ ODA({
                 border-color: var(--accent-color);
                 background: var(--accent-soft);
             }
+            .prompt-cats {
+                @apply --horizontal;
+                flex-wrap: wrap;
+                gap: 4px;
+                margin-bottom: 2px;
+            }
+            .prompt-cat-pill {
+                @apply --horizontal;
+                align-items: center;
+                gap: 4px;
+                padding: 3px 8px;
+                border-radius: 999px;
+                font-size: 11px;
+                font-weight: 600;
+                border: 1px solid var(--subtle-border);
+                background: var(--content-background);
+                color: var(--muted-color);
+                cursor: pointer;
+                white-space: nowrap;
+            }
+            .prompt-cat-pill:hover {
+                border-color: var(--accent-color);
+                color: var(--content-color);
+            }
+            .prompt-cat-pill[active] {
+                border-color: var(--accent-color);
+                background: var(--accent-soft);
+                color: var(--accent-color);
+            }
+            .prompts-panel {
+                @apply --vertical;
+                gap: 6px;
+                padding: 8px 10px;
+                border-bottom: 1px solid var(--subtle-border);
+                background: var(--subtle-background);
+                max-height: 280px;
+                overflow-y: auto;
+            }
             .working {
                 @apply --horizontal;
                 align-items: center;
@@ -375,6 +534,7 @@ ODA({
             <button class="dialog-btn" no-flex ~if="uiReady && canVoice" :on="voiceOn" :title="voiceOn ? 'Выключить живой голосовой диалог' : 'Живой голосовой диалог (с взаимным перебиванием)'" :aria-pressed="voiceOn ? 'true' : 'false'" @tap="toggleVoice()">
                 <work-voice-bars :on="voiceOn"></work-voice-bars>
             </button>
+            <oda-button no-flex icon="icons:lightbulb" :icon-size="16" title="Типовые сценарии и промпты" @tap="togglePrompts"></oda-button>
             <oda-button no-flex icon="carbon:recently-viewed" :icon-size="16" title="Мои консультации (из личных логов)" @tap="toggleHistory"></oda-button>
             <oda-button no-flex icon="icons:question-answer" :icon-size="16" title="Открыть ленту пользователя" @tap="openUserFeed"></oda-button>
             <oda-button no-flex ~if="taskItem" icon="box:i-expand" :icon-size="15" title="Открыть задачу полностью" @tap="openFullTask"></oda-button>
@@ -385,6 +545,25 @@ ODA({
             <oda-icon no-flex icon="icons:dashboard" :icon-size="14"></oda-icon>
             <span class="ctx-label" :title="activeFormSummary.path">Форма: <b>{{activeFormSummary.label}}</b></span>
             <button class="ctx-ask-btn" @tap="askCurrentForm" title="Задать Консультанту вопрос по открытой форме">Спросить по форме</button>
+        </div>
+
+        <div class="prompts-panel" no-flex ~if="showPrompts && hasMessages">
+            <div class="history-head">
+                <span>Типовые сценарии и промпты</span>
+                <oda-button icon="carbon:close" :icon-size="14" @tap="showPrompts = false"></oda-button>
+            </div>
+            <div class="prompt-cats">
+                <button class="prompt-cat-pill" ~for="promptCategories" :active="promptCategory === $for.item.id" @tap="promptCategory = $for.item.id">
+                    <oda-icon no-flex :icon="$for.item.icon" :icon-size="12"></oda-icon>
+                    <span>{{$for.item.label}}</span>
+                </button>
+            </div>
+            <div class="quick-chips">
+                <button class="quick-chip" ~for="filteredPrompts" @tap="sendQuickQuestion($for.item.prompt)">
+                    <oda-icon no-flex :icon="$for.item.icon" :icon-size="15"></oda-icon>
+                    <span>{{$for.item.label}}</span>
+                </button>
+            </div>
         </div>
 
         <div class="history-panel" no-flex ~if="showHistory">
@@ -408,20 +587,28 @@ ODA({
                         <span>ИИ-чат «Консультант»</span>
                     </div>
                     <div class="welcome-text">
-                        Задайте любой вопрос по работе в системе, структуре данных или учёту, либо нажмите кнопку <b>«Консультант»</b> в шапке открытой формы. Все вопросы сохраняются как задачи в ваших личных логах и отображаются в вашей ленте.
+                        Задайте вопрос по работе в системе, структуре данных или учёту, выберите один из типовых сценариев ниже либо нажмите кнопку <b>«?»</b> в шапке открытой формы. Все диалоги сохраняются как задачи в ваших личных логах.
                     </div>
-                    <div class="quick-chips">
-                        <button class="quick-chip" ~if="activeFormSummary" @tap="askCurrentForm">
-                            <oda-icon icon="icons:dashboard" :icon-size="15"></oda-icon>
+                    <div class="quick-chips" ~if="activeFormSummary">
+                        <button class="quick-chip" @tap="askCurrentForm">
+                            <oda-icon no-flex icon="icons:dashboard" :icon-size="15"></oda-icon>
                             <span>Что сейчас открыто в форме «{{activeFormSummary.label}}»?</span>
                         </button>
-                        <button class="quick-chip" @tap="sendQuickQuestion('Какие организации, подразделения и модули доступны в системе?')">
-                            <oda-icon icon="odant:structure" :icon-size="15"></oda-icon>
-                            <span>Какие организации и модули доступны в системе?</span>
+                        <button class="quick-chip" ~if="contextSecondaryPrompt" @tap="sendQuickQuestion(contextSecondaryPrompt.prompt)">
+                            <oda-icon no-flex :icon="contextSecondaryPrompt.icon" :icon-size="15"></oda-icon>
+                            <span>{{contextSecondaryPrompt.label}}</span>
                         </button>
-                        <button class="quick-chip" @tap="sendQuickQuestion('Покажи сводку по основным справочникам и последним операциям в учёте.')">
-                            <oda-icon icon="carbon:data-table" :icon-size="15"></oda-icon>
-                            <span>Сводка по справочникам и операциям учёта</span>
+                    </div>
+                    <div class="prompt-cats">
+                        <button class="prompt-cat-pill" ~for="promptCategories" :active="promptCategory === $for.item.id" @tap="promptCategory = $for.item.id">
+                            <oda-icon no-flex :icon="$for.item.icon" :icon-size="12"></oda-icon>
+                            <span>{{$for.item.label}}</span>
+                        </button>
+                    </div>
+                    <div class="quick-chips">
+                        <button class="quick-chip" ~for="filteredPrompts" @tap="sendQuickQuestion($for.item.prompt)">
+                            <oda-icon no-flex :icon="$for.item.icon" :icon-size="15"></oda-icon>
+                            <span>{{$for.item.label}}</span>
                         </button>
                     </div>
                 </div>
@@ -464,6 +651,8 @@ ODA({
     model: { $def: '', $save: true },
     toastText: '',
     showHistory: false,
+    showPrompts: false,
+    promptCategory: 'all',
     recentTasks: [],
     activeFormContext: null,
     activeFormSummary: null,
@@ -475,6 +664,58 @@ ODA({
         },
     },
 
+    get promptCategories() {
+        return CONSULTANT_PROMPT_CATEGORIES;
+    },
+    get filteredPrompts() {
+        const cat = this.promptCategory || 'all';
+        if (cat === 'all')
+            return CONSULTANT_PROMPTS;
+        return CONSULTANT_PROMPTS.filter(p => p.category === cat);
+    },
+    get contextSecondaryPrompt() {
+        const ctx = this.activeFormSummary;
+        if (!ctx?.path)
+            return null;
+        const t = ctx.type || '';
+        const lbl = ctx.label || ctx.path;
+        if (t === '$account' || t === '$register') {
+            return {
+                icon: 'carbon:analytics',
+                label: `Проанализировать обороты и сальдо «${lbl}»`,
+                prompt: `Проанализируй обороты, аналитики и конечное сальдо по «${lbl}» (${ctx.path}) за активный период.`,
+            };
+        }
+        if (t === '$catalog' || t === '$virtual') {
+            return {
+                icon: 'carbon:checkmark-outline',
+                label: `Проверить качество данных в «${lbl}»`,
+                prompt: `Проверь справочник «${lbl}» (${ctx.path}) на дубликаты, пустые обязательные поля и покажи статистику объектов.`,
+            };
+        }
+        if (t === '$operation') {
+            return {
+                icon: 'carbon:task-complete',
+                label: `Помочь создать или проверить операцию «${lbl}»`,
+                prompt: `Покажи схему операции «${lbl}» (${ctx.path}), её проводки и последние зарегистрированные документы.`,
+            };
+        }
+        if (t === '$structure' || t === '$base') {
+            return {
+                icon: 'icons:supervisor-account',
+                label: `Проверить роли BOSS, рабочие места и ленту «${lbl}»`,
+                prompt: `Покажи настройки ролей BOSS, рабочих мест (ROLES / USERS / GUESTS), привязанных ссылок LINKS и последние события в «${lbl}» (${ctx.path}).`,
+            };
+        }
+        if (t === '$ai' || t === '$provider') {
+            return {
+                icon: 'carbon:machine-learning-model',
+                label: `Параметры модели и локальное дообучение «${lbl}»`,
+                prompt: `Опиши возможности модели/провайдера «${lbl}» (${ctx.path}) и параметры локального инференса и дообучения.`,
+            };
+        }
+        return null;
+    },
     get canVoice() {
         return !!(navigator.mediaDevices?.getUserMedia || window.SpeechRecognition || window.webkitSpeechRecognition);
     },
@@ -737,11 +978,23 @@ ODA({
         this.status = 'idle';
         this.groupOpen = {};
         this.showHistory = false;
+        this.showPrompts = false;
         this.refreshFormContext();
         this.async(() => this.$('work-prompt-bar')?.focusInput?.(), 50);
     },
 
+    togglePrompts() {
+        if (!this.hasMessages) {
+            this.showHistory = false;
+            return;
+        }
+        this.showPrompts = !this.showPrompts;
+        if (this.showPrompts)
+            this.showHistory = false;
+    },
+
     async sendQuickQuestion(text) {
+        this.showPrompts = false;
         this.value = text;
         await this.send();
     },
@@ -1098,8 +1351,10 @@ ODA({
 
     async toggleHistory() {
         this.showHistory = !this.showHistory;
-        if (this.showHistory)
+        if (this.showHistory) {
+            this.showPrompts = false;
             await this.loadRecentTasks();
+        }
     },
 
     async loadRecentTasks() {

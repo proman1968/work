@@ -246,6 +246,13 @@ await test('Консультант ИИ: переключатель ИИ в пр
         type: '$file',
         load: async () => JSON.stringify({ name: ctx.title, prompt: ctx.prompt, status: 'running', items: [{ id: '1', type: 'user', content: ctx.prompt, time: Date.now() }] }),
     });
+    assert(Array.isArray(consEl.promptCategories) && consEl.promptCategories.length === 5, 'рубрики типовых сценариев Консультанта');
+    assert(Array.isArray(consEl.filteredPrompts) && consEl.filteredPrompts.length >= 12, 'все типовые промпты Консультанта');
+    consEl.promptCategory = 'accounting';
+    assert(consEl.filteredPrompts.every(p => p.category === 'accounting'), 'фильтрация типовых промптов по рубрике Учёт и отчёты');
+    consEl.promptCategory = 'all';
+    consEl.activeFormSummary = { path: '/ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/51', label: '51 Расчётные счета', type: '$account' };
+    assert(consEl.contextSecondaryPrompt?.label.includes('51 Расчётные счета'), 'контекстный промпт по счёту');
     consEl._getPersonalCabinet = async () => fakeCabinet;
     consEl._hydrateModel = async () => { consEl.model = '/MODELS/odant/Qwen3.8 27b'; };
     try {

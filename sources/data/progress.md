@@ -1,6 +1,13 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [14:00, 08.11] Типовые сценарии использования платформы WORK, документация `docs/use-cases.md`, навык ИИ `work-scenarios` и рубрикатор типовых промптов «Консультанта» (`docs/use-cases.md`, `$server/$folder/$class/ai/skills/{work-scenarios,readme}.md`, `$server/$folder/lib/consultant/consultant.js`, `$server/$folder/handlers/pages/form/$handler/form.js`):
+  - **Документация и база знаний ИИ:**
+    1. Разработано руководство **`docs/use-cases.md`** с 7 сквозными сценариями использования платформы WORK (развёртывание организации и рабочих мест `BOSS`/`USER`/`USERS`/`GUESTS`, ведение и импорт справочников, хозяйственные операции и сторно, 4-шаговый анализ по счетам `sheet` → `turnovers` → `analysis` → `postings`/`journal`, коллаборация и локальный офисный пакет `oda-office-editor`, конструирование классов и форм, локальный ИИ `/MODELS/Local` и `/MODELS/Halogen` + федерация `/NODES`).
+    2. Добавлен глобальный навык **`$server/$folder/$class/ai/skills/work-scenarios.md`**, ориентирующий агента и Консультанта по формам, ролям и инструментам всех 7 сценариев.
+  - **Типовые промпты в ИИ-чате «Консультант» (`consultant.js`, `form.js`):**
+    1. В `item-consultant` добавлены рубрикатор категорий (`CONSULTANT_PROMPT_CATEGORIES`: *«Все»*, *«Учёт и отчёты»*, *«Оргструктура и права»*, *«Документы и задачи»*, *«Конструктор и ИИ»*) и каталог из 12 готовых типовых промптов (`CONSULTANT_PROMPTS`) по всем сценариям, кнопка вызова панели промптов (`icons:lightbulb`) в шапке Консультанта и динамический контекстный промпт (`contextSecondaryPrompt`) под тип открытой формы.
+    2. В `buildConsultantContext()` (`form.js`) добавлены предметные подсказки для авто-вопроса по кнопке `?` в зависимости от активного представления (`sheet`, `turnovers`, `analysis`, `postings`, `journal`, `objects`, `object`, `virtual`, `staff`, `builder`, `database`, `trainer`).
 - [12:00, 08.11] Единая модель ролей `BOSS` и `USER`, псевдо-субъекты `USERS` и `GUESTS` на рабочих местах, отказ от кнопки переключения ролей и автостарт веб-приложения (`sources/server/access/{policy,workplaces,links}.js`, `sources/server/class/security.js`, `sources/server/{class,folder,handler,server,node}.js`, `sources/host/{auth-methods,http-server}.js`, `sources/client/{folder,class}.js`, `staff.js`, `users.js`, `form.js`, `role.js`):
   - **Схлопывание `ADMIN` + `BOSS` → `BOSS` и упразднение роли `GUEST`:**
     1. В `BASE_ROLES` и `$class.ROLES` оставлены две базовые роли: **`BOSS`** (руководитель/владелец точки и её поддерева) и **`USER`** (исполнитель).

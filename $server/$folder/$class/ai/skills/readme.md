@@ -23,6 +23,7 @@ requires: system          # необязательно: system | sandbox — в�
 
 | Навык | Назначение |
 |---|---|
+| [`work-scenarios`](work-scenarios.md) | типовые сценарии работы в WORK (оргструктура, рабочие места, учёт, 4-шаговый анализ счетов, документы, ИИ) |
 | [`office-documents`](office-documents.md) | PDF/DOCX/XLSX: чтение, шаблоны, отчёты, настоящий PDF из HTML, презентации PDF из слайдов |
 | [`orchestration`](orchestration.md) | несколько агентов: декомпозиция, параллельные чтения, записи в изолированных ветках (branch), сбор результата |
 | [`doc-from-template`](doc-from-template.md) | документ по шаблону docx/md/html из объекта или данных |
