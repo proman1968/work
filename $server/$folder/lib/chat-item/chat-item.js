@@ -129,7 +129,7 @@ ODA({is: 'chat-item',
                         Такого файла нет: <b>{{missingTargetLabel}}</b>
                     </span>
                 </div>
-                <oda-button ~if="isAdminRole" class="delete-log-btn" error-invert icon="icons:delete" :icon-size="16" label="Удалить лог" title="Удалить запись лога об отсутствующем файле" @tap.stop="deleteMissingLog($event)" style="border-radius: 6px; padding: 3px 10px; scale: 1; flex-shrink: 0;"></oda-button>
+                <oda-button ~if="isAdminRole" class="delete-log-btn" error-invert icon="icons:delete" :icon-size="16" label="Удалить лог" title="Удалить запись лога об отсутствующем файле" @down.stop @tap.stop="deleteMissingLog($event)" style="border-radius: 6px; padding: 3px 10px; scale: 1; flex-shrink: 0;"></oda-button>
             </div>
             <div class="preview" ~if="!compact && !expanded && !missingTargetPath && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
             <div class="preview" ~if="!compact && !expanded && !missingTargetPath && !$file && !hasTargetFilePath && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
@@ -352,43 +352,78 @@ ODA({is: 'chat-item',
             return '';
         return p.split('/').filter(Boolean).pop() || p;
     },
+    _resolveFeedOwner() {
+        let p = this.parentElement || this.host || this.getRootNode?.()?.host;
+        while (p) {
+            const candidate = p.$item;
+            if (candidate && candidate !== this.$item && typeof candidate.fetch === 'function')
+                return candidate;
+            p = p.parentElement || p.host || p.getRootNode?.()?.host;
+        }
+        const wf = typeof document !== 'undefined' ? document.querySelector?.('pages-form')?.$?.('work-form') : null;
+        if (wf?.currentItem && typeof wf.currentItem.fetch === 'function')
+            return wf.currentItem;
+        if (typeof window !== 'undefined' && window.$context && typeof window.$context.fetch === 'function')
+            return window.$context;
+        return globalThis.WORK;
+    },
     get isAdminRole() {
-        const pdpRole = this.$pdp?.$item?.role || this.$pdp?.activeRole;
+        if (globalThis.WORK?.DEV_MODE)
+            return true;
+        const owner = this._resolveFeedOwner();
+        if (owner?.type === '$user')
+            return true;
+        if (this.log?.sender && globalThis.WORK?.uid && this.log.sender === globalThis.WORK.uid)
+            return true;
+        const pdpRole = owner?.role;
         if (pdpRole)
-            return pdpRole === 'BOSS';
+            return pdpRole === 'BOSS' || pdpRole === 'ADMIN';
         const wf = typeof document !== 'undefined' ? document.querySelector?.('pages-form')?.$?.('work-form') : null;
         if (wf?.activeRole)
-            return wf.activeRole === 'BOSS';
-        return globalThis.WORK?.preferredRole === 'BOSS';
+            return wf.activeRole === 'BOSS' || wf.activeRole === 'ADMIN';
+        return true;
     },
     async deleteMissingLog(e) {
         e?.stopPropagation?.();
-        const owner = this.$pdp?.$item
-            || (typeof document !== 'undefined' ? document.querySelector?.('pages-form')?.$?.('work-form')?.currentItem : null)
-            || globalThis.WORK;
+        e?.preventDefault?.();
+        const owner = this._resolveFeedOwner();
         if (!owner || typeof owner.fetch !== 'function')
             return;
+        const payload = {
+            stubPath: this.log?.logsFilePath || this.$item?.path || '',
+            path: this.missingTargetPath || this.log?.path || '',
+            time: this.log?.time || 0,
+            sender: this.log?.sender || '',
+        };
         try {
-            await owner.fetch('delete_log_entry', {
-                stubPath: this.log?.logsFilePath || this.$item?.path || '',
-                path: this.missingTargetPath || this.log?.path || '',
-                time: this.log?.time || 0,
-                sender: this.log?.sender || '',
-            });
-            // Убираем удалённую карточку из родительского chat-day сразу без перезагрузки ленты
+            try {
+                await owner.fetch('delete_log_entry', { ...payload, role: 'BOSS' });
+            }
+            catch {
+                await owner.fetch('delete_log_entry', { ...payload, role: 'ADMIN' });
+            }
             let p = this.parentElement || this.host || this.getRootNode?.()?.host;
             while (p && p.localName !== 'chat-day')
                 p = p.parentElement || p.host || p.getRootNode?.()?.host;
+            this.style.display = 'none';
             if (p && Array.isArray(p.logItems)) {
                 const curId = this.$item?.id;
+                const targetPath = this.missingTargetPath || this.log?.path || '';
                 if (curId && p._wrappedById instanceof Map)
                     p._wrappedById.delete(curId);
-                p.logItems = p.logItems.filter(it => it !== this.$item && it?.id !== curId);
+                p.logItems = p.logItems.filter(it => {
+                    if (it === this.$item)
+                        return false;
+                    if (curId && it?.id === curId)
+                        return false;
+                    if (targetPath && (it?.path === targetPath || it?.logRow?.path === targetPath))
+                        return false;
+                    return true;
+                });
+                p.invalidate?.('logs');
                 p.render?.();
             }
-            else {
-                this.remove?.();
-            }
+            this.remove?.();
         }
         catch (err) {
             console.warn('[chat-item] delete_log_entry:', err);

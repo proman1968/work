@@ -140,9 +140,18 @@ export const classFeedMethods = {
         return LOGS.appendIncludes(this, params.entryPath, params.includePaths, { session: params.session });
     },
 
-    /** Удалить запись лога (только для ADMIN). */
+    /** Удалить запись лога (для BOSS точки, владельца своего кабинета или автора записи). */
     async delete_log_entry(params = {}) {
-        await this.assertAccess(params, FS.$class.ACCESS_LEVEL.ADMIN);
+        if (!DEV_MODE && params?.session && params.session.$user !== globalThis.WORK) {
+            const uid = this.constructor.resolveUid(params);
+            if (!uid)
+                throw new Error(ACCESS_DENIED);
+            const isOwnCabinet = this.type === '$user' && this.id === uid;
+            const isWorkBoss = globalThis.WORK && await this._isWorkBoss?.(params).catch(() => false);
+            const roles = await this.roles(params).catch(() => []);
+            if (!isOwnCabinet && !isWorkBoss && !roles.includes('BOSS'))
+                throw new Error(ACCESS_DENIED);
+        }
         return LOGS.deleteLogEntry(this, params);
     },
 

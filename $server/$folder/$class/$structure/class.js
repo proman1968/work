@@ -6,11 +6,10 @@ export default {
         sql_update_row: 'admin',
         sql_insert_row: 'admin',
         sql_delete_row: 'admin',
-        delete_log_entry: 'admin',
+        delete_log_entry: 'write',
     },
 
     async delete_log_entry(params = {}) {
-        await this.assertAccess(params, 'BOSS');
         const { pathToFileURL } = await import('node:url');
         const path = await import('node:path');
         const LOGS = await import(pathToFileURL(path.join(process.cwd(), 'sources/server/logs.js')).href);

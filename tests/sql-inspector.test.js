@@ -221,7 +221,8 @@ describe('Инспектор и редактор SQL-баз (sql-inspector + for
 
         const chatItemSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/lib/chat-item/chat-item.js'), 'utf-8');
         assert.ok(chatItemSrc.includes('Такого файла нет:'), 'chat-item должен выводить плашку об отсутствующем целевом файле');
-        assert.ok(chatItemSrc.includes('deleteMissingLog'), 'chat-item должен иметь кнопку удаления осиротевшего лога для ADMIN');
+        assert.ok(chatItemSrc.includes('deleteMissingLog'), 'chat-item должен иметь кнопку удаления осиротевшего лога');
+        assert.ok(chatItemSrc.includes('_resolveFeedOwner'), 'chat-item должен находить владельца ленты с методом fetch в обход своего дескриптора $item');
 
         const { saveDataLogRow, deleteLogEntry, loadBodies } = await import('../sources/server/logs.js');
         const fakeStorage = { path: '/USERS/__test_orphan_user__', id: '__test_orphan_user__', type: '$user' };

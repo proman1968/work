@@ -729,14 +729,14 @@ export async function deleteLogEntry(storage, params = {}) {
         }
         if (targetPath) {
             const normTarget = targetPath.startsWith('/') ? targetPath : '/' + targetPath;
-            const r2 = db.prepare('DELETE FROM logs WHERE path = ? OR path = ?').run(targetPath, normTarget);
+            const r2 = db.prepare('DELETE FROM logs WHERE path = ? OR path = ? OR body LIKE ?').run(targetPath, normTarget, `%${normTarget}%`);
             deleted += Number(r2?.changes) || 0;
         }
         if (time > 0 && sender) {
             const r3 = db.prepare('DELETE FROM logs WHERE time = ? AND sender = ?').run(time, sender);
             deleted += Number(r3?.changes) || 0;
         }
-        else if (time > 0 && !stubPath && !targetPath) {
+        else if (time > 0) {
             const fp = feedPathOf(storage);
             const r4 = db.prepare('DELETE FROM logs WHERE feed_path = ? AND time = ?').run(fp, time);
             deleted += Number(r4?.changes) || 0;
