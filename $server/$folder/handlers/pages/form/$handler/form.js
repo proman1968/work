@@ -970,14 +970,8 @@ ODA({is: 'work-form',
             await this.openInForm(targetItem, clsNav, { skipEnsureCurrent: isInitial });
         }
     },
-    async _applyRoleColor(item, role) {
-        if (!item || !role)
-            return;
-        try {
-            const declared = await item.fetch('declared_roles');
-            const color = declared?.[role]?.color || 'indigo';
-            document.documentElement?.style?.setProperty('--main-color', color);
-        } catch { /* цвет по умолчанию */ }
+    async _applyRoleColor() {
+        document.documentElement?.style?.removeProperty('--main-color');
     },
     _mountSeq: 0,
     formTabs: [],
