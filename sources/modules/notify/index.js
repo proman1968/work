@@ -525,7 +525,7 @@ export async function getPointMemberUids(point, { roles = null } = {}) {
             continue;
         if (Array.isArray(val)) {
             for (const id of val) {
-                if (typeof id === 'string' && id && id !== 'GUEST')
+                if (typeof id === 'string' && id && !WORKPLACES.isPseudoUser(id))
                     uids.add(id);
             }
         }
@@ -533,7 +533,7 @@ export async function getPointMemberUids(point, { roles = null } = {}) {
 
     if (!filterRoles || filterRoles.has('USER') || filterRoles.has('ROLES')) {
         for (const id of WORKPLACES.placeUserIds(sec)) {
-            if (typeof id === 'string' && id && id !== 'GUEST')
+            if (typeof id === 'string' && id && !WORKPLACES.isPseudoUser(id))
                 uids.add(id);
         }
     }
@@ -545,7 +545,7 @@ export async function getPointMemberUids(point, { roles = null } = {}) {
  * Найти все точки ($base / $structure), к которым пользователь формально привязан в #security.
  */
 export async function findUserPoints(uid) {
-    if (!uid || uid === 'GUEST')
+    if (!uid || WORKPLACES.isPseudoUser(uid))
         return [];
     const root = process.cwd();
     const orgsRoot = path.join(root, 'ORGANIZATIONS');

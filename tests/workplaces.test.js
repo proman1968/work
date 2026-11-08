@@ -29,7 +29,7 @@ const FIELDS = `METADATA: { FIELDS: [{ id: 'name', required: true }] }`;
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-links-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     write('$server/$folder/$file/$data/class.js', `export default { isDataFile: true, METADATA: { FIELDS: [{ id: 'name' }] } }`);
@@ -143,7 +143,7 @@ describe('подразделения: ссылки #security', () => {
 
     it('каркас подразделений (isStructureAncestor) и скрытие MODULES от обычного сотрудника', async () => {
         write('ORGANIZATIONS/$domain/class.js', `export default { label: 'Организации' }`);
-        write('ORGANIZATIONS/ORG1/$base/class.js', `export default { label: 'Орг 1', '#security': { ADMIN: ['${ADMIN}'] } }`);
+        write('ORGANIZATIONS/ORG1/$base/class.js', `export default { label: 'Орг 1', '#security': { BOSS: ['${ADMIN}'] } }`);
         write('ORGANIZATIONS/ORG1/MODULES/$domain/class.js', `export default { label: 'Модули' }`);
         write('ORGANIZATIONS/ORG1/MODULES/Reg/$module/class.js', `export default { label: 'Учёт' }`);
         write('ORGANIZATIONS/ORG1/MODULES/Reg/ITEMS/$catalog/class.js', `export default { label: 'Номенклатура', ${FIELDS} }`);
@@ -151,7 +151,7 @@ describe('подразделения: ссылки #security', () => {
             '#security': { ROLES: [{ id: 'keeper', label: 'Кладовщик', USERS: ['${USER2}'],
                 LINKS: [{ id: '/ORGANIZATIONS/ORG1/MODULES/Reg/ITEMS', access: 'read' }] }] } }`);
         write('ORGANIZATIONS/ORG1/secret_dept/$structure/class.js', `export default { label: 'Секретный отдел',
-            '#security': { ADMIN: ['${ADMIN}'] } }`);
+            '#security': { BOSS: ['${ADMIN}'] } }`);
         globalThis.WORK.reset();
         const LINKS = await import('../sources/server/access/links.js');
         LINKS.reset();
@@ -172,8 +172,37 @@ describe('подразделения: ссылки #security', () => {
         assert.equal(await regMod.canSee(regMod, as(USER2)), false, 'сам $module скрыт от обычного сотрудника');
         assert.equal(await items.canSee(items, as(USER2)), true, 'прилинкованный класс внутри модуля доступен по ссылке рабочего места');
 
-        // Администратор видит и MODULES, и все подразделения
+        // Руководитель (BOSS) видит и MODULES, и все подразделения
         assert.equal(await org1.canSee(mods, as(ADMIN)), true);
         assert.equal(await org1.canSee(secDept, as(ADMIN)), true);
+    });
+
+    it('псевдо-субъекты USERS и GUESTS на рабочих местах (ROLES)', async () => {
+        write('ORGANIZATIONS/ORG1/public_portal/$structure/class.js', `export default { label: 'Витрина',
+            '#security': { ROLES: [
+                { id: 'visitors', label: 'Посетители', USERS: ['GUESTS'],
+                    LINKS: [{ id: '/ORGANIZATIONS/ORG1/MODULES/Reg/ITEMS', access: 'read' }] },
+                { id: 'all_staff', label: 'Все сотрудники', USERS: ['USERS'],
+                    LINKS: [{ id: '/OTHER', access: 'write' }] }
+            ] } }`);
+        globalThis.WORK.reset();
+        (await WORK.get_item('/ORGANIZATIONS/ORG1'))?.reset();
+        const LINKS = await import('../sources/server/access/links.js');
+        LINKS.reset();
+
+        const portal = await WORK.get_item('/ORGANIZATIONS/ORG1/public_portal');
+        const items = await WORK.get_item('/ORGANIZATIONS/ORG1/MODULES/Reg/ITEMS');
+        const other = await WORK.get_item('/OTHER');
+        const anon = { session: {} };
+
+        // Неавторизованный гость получает роль USER на витрине через GUESTS и доступ read к ITEMS
+        assert.deepEqual(await portal.roles(anon), ['USER']);
+        assert.equal(await items.data_access(anon), 'read');
+        assert.equal(await other.data_access(anon), null, 'место с USERS гостю недоступно');
+
+        // Любой вошедший пользователь (даже NOBODY) получает доступ и к месту GUESTS, и к месту USERS
+        assert.deepEqual(await portal.roles(as(NOBODY)), ['USER']);
+        assert.equal(await items.data_access(as(NOBODY)), 'read');
+        assert.equal(await other.data_access(as(NOBODY)), 'write');
     });
 });

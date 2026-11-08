@@ -35,7 +35,7 @@ export async function register(args, ctx) {
     const services = await WORK.get_item('/SERVICES');
     if (!services) throw new Error('Нет /SERVICES');
     let root = await services.get_item('LAN');
-    const params = { session: ctx.session, role: 'ADMIN' };
+    const params = { session: ctx.session, role: 'BOSS' };
     if (!root) {
         await services.create({ ...params, id: 'LAN', type: '$service', post: 'export default { label: "Локальная сеть", enabled: true }' });
         services.reset();

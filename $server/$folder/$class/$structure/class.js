@@ -10,7 +10,7 @@ export default {
     },
 
     async delete_log_entry(params = {}) {
-        await this.assertAccess(params, 'ADMIN');
+        await this.assertAccess(params, 'BOSS');
         const { pathToFileURL } = await import('node:url');
         const path = await import('node:path');
         const LOGS = await import(pathToFileURL(path.join(process.cwd(), 'sources/server/logs.js')).href);

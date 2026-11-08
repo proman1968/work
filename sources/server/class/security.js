@@ -124,7 +124,7 @@ export const classSecurityMethods = {
 
     /** Назначен ли uid на прикладную роль (#security.ROLES) этого подразделения. */
     async _isPlaceMember(uid) {
-        if (!uid || !(await this._isStructure()))
+        if (!(await this._isStructure()))
             return false;
         return WORKPLACES.isPlaceMember(this.DATA?.['#security'], uid);
     },
@@ -139,13 +139,16 @@ export const classSecurityMethods = {
     /** Получить список ролей текущего пользователя в классе. */
     async roles(params = {}) {
         const uid = this.constructor.resolveUid(params);
-        if (!uid)
-            return [];
         await this.init;
         const declared = this._declaredRolesSync();
+        if (!uid) {
+            if (WORKPLACES.matchesUserList(this._roleIds('USER', declared), null) || await this._isPlaceMember(null))
+                return ['USER'];
+            return [];
+        }
         const roles = [];
         for (const id of Object.keys(declared)) {
-            if (this._roleIds(id, declared).includes(uid)) {
+            if (WORKPLACES.matchesUserList(this._roleIds(id, declared), uid)) {
                 roles.push(id);
                 continue;
             }
@@ -181,10 +184,10 @@ export const classSecurityMethods = {
     /** Роль назначена пользователю в этой точке (а не унаследована сверху). */
     async hasLocalRole(params = {}, role = params.role) {
         const uid = this.constructor.resolveUid(params);
-        if (!uid || !role)
+        if (!role)
             return false;
         await this.init;
-        return this._roleIds(role).includes(uid)
+        return WORKPLACES.matchesUserList(this._roleIds(role), uid)
             || (role === this.constructor.ROLES.USER && await this._isPlaceMember(uid));
     },
 
@@ -216,8 +219,8 @@ export const classSecurityMethods = {
         const sec = this.DATA?.['#security'];
         const { common, places } = WORKPLACES.normalizeSecurity(sec);
         const roles = await this.roles(params).catch(() => []);
-        const admin = DEV_MODE || roles.includes('ADMIN') || await this._isWorkAdmin(params).catch(() => false);
-        if (!roles.length && !admin)
+        const boss = DEV_MODE || roles.includes('BOSS') || await this._isWorkBoss(params).catch(() => false);
+        if (!roles.length && !boss)
             return [];
         const uid = this.constructor.resolveUid(params);
         const rank = { read: 1, write: 2, admin: 3 };
@@ -229,7 +232,7 @@ export const classSecurityMethods = {
             else
                 eff.set(id, { access, via: [...new Set([...(cur?.via || []), ...via])] });
         };
-        if (admin) {
+        if (boss) {
             for (const l of common)
                 add(l.id, l.access === 'write' ? 'admin' : 'read', [null]);
             for (const { node, trail } of WORKPLACES.walkPlaces(places)) {
@@ -241,7 +244,7 @@ export const classSecurityMethods = {
         else {
             for (const l of common)
                 add(l.id, l.access, [null]);
-            for (const [id, e] of WORKPLACES.placeLinksFor(sec, uid, { bossAll: roles.includes('BOSS') }))
+            for (const [id, e] of WORKPLACES.placeLinksFor(sec, uid, { bossAll: false }))
                 add(id, e.access, e.via);
         }
         return this._linkTrie(eff);
@@ -498,20 +501,23 @@ export const classSecurityMethods = {
     /** Видимость элемента (чтение). */
     async canSee(item, params = {}) {
         if (DEV_MODE) return true;
-        const users = this.DATA['#security']?.USER;
-        if (Array.isArray(users) && users.includes('GUEST')) return true;
+        const users = this.DATA?.['#security']?.USER;
+        if (Array.isArray(users) && (users.includes('GUEST') || users.includes('GUESTS'))) return true;
         if (!item || typeof item !== 'object') return true;
 
         const uid = this.constructor.resolveUid(params);
-        if (!uid)
-            return this._isSystemPath(item);
-        if (params.session?.principal?.kind === 'node') {
-            if (this.principalId === uid)
-                return item === this || this.areaOf(item).kind === POLICY.AREA.LOGS;
-        }
-        else if (this.id === uid) return true;
-        if (globalThis.WORK && await this._isWorkAdmin(params))
+        if (!uid && this._isSystemPath(item))
             return true;
+        if (uid) {
+            if (params.session?.principal?.kind === 'node') {
+                await this.init;
+                if (this.principalId === uid)
+                    return item === this || this.areaOf(item).kind === POLICY.AREA.LOGS;
+            }
+            else if (this.id === uid) return true;
+            if (globalThis.WORK && await this._isWorkBoss(params))
+                return true;
+        }
         if (this._isSystemItem(item))
             return true;
         const roles = await this.roles(params);
@@ -519,7 +525,7 @@ export const classSecurityMethods = {
             || item?.type === '$module'
             || (this.type === '$domain' && this.id === 'MODULES')
             || (item?.type === '$domain' && item?.id === 'MODULES');
-        if (isModNode && !roles.includes(this.constructor.ROLES.ADMIN) && !(await this.allAdmins).some(u => u?.id === uid))
+        if (isModNode && !roles.includes(this.constructor.ROLES.BOSS) && !(uid && (await this.allBosses).some(u => u?.id === uid)))
             return false;
         if (await LINKS.grants(this, item, params))
             return true;
@@ -529,11 +535,11 @@ export const classSecurityMethods = {
             const parent = this.$parent;
             if (parent && await parent.canSee(item, params))
                 return true;
-            return this._visibleViaFeed(uid, item);
+            return uid ? this._visibleViaFeed(uid, item) : false;
         }
         if (this._readableByRoles(item, roles, uid))
             return true;
-        return this._visibleViaFeed(uid, item);
+        return uid ? this._visibleViaFeed(uid, item) : false;
     },
 
     /** Показано пользователю записью в его ленте (path/includes). */
@@ -546,7 +552,7 @@ export const classSecurityMethods = {
         }
     },
 
-    /** Право записи (требует params.role). */
+    /** Право записи (при отсутствии params.role использует сильнейшую роль пользователя в точке). */
     async canWrite(item, params = {}) {
         if (DEV_MODE) return true;
         if (!item || typeof item !== 'object') return false;
@@ -559,19 +565,18 @@ export const classSecurityMethods = {
             || POLICY.isAgentControlPath(target, this.path);
         if (this.id === uid && params.session?.principal?.kind !== 'node' && !protectedTarget)
             return true;
-        if (globalThis.WORK && await this._isWorkAdmin(params))
+        if (globalThis.WORK && await this._isWorkBoss(params))
             return true;
         if (this._isSystemItem(item))
             return false;
-        const role = params.role;
-        if (!role) return false;
         const roles = await this.roles(params);
-        if (!roles.includes(role))
+        const role = params.role || roles[0] || '';
+        if (!role || !roles.includes(role))
             return false;
         const declared = this._declaredRolesSync();
-        if (role !== this.constructor.ROLES.ADMIN && protectedTarget)
+        if (role !== this.constructor.ROLES.BOSS && protectedTarget)
             return false;
-        const local = this._roleIds(role, declared).includes(uid)
+        const local = WORKPLACES.matchesUserList(this._roleIds(role, declared), uid)
             || (role === this.constructor.ROLES.USER && await this._isPlaceMember(uid));
         const targetArea = rel && item.path === this.meta_folder?.path
             ? POLICY.areaOfPath(target, this.path, Object.keys(declared))
@@ -586,7 +591,7 @@ export const classSecurityMethods = {
         return LINKS.grantsWrite(this, params);
     },
 
-    /** Единая проверка доступа (бросает при отказе): read → canSee, write → canWrite, ADMIN → ADMIN точки. */
+    /** Единая проверка доступа (бросает при отказе): read → canSee, write → canWrite, BOSS → BOSS точки или корня. */
     async assertAccess(params = {}, level = this.constructor.ACCESS_LEVEL.READ, folder) {
         if (DEV_MODE) return;
         if (!params?.session) return;
@@ -596,8 +601,8 @@ export const classSecurityMethods = {
         const ROLES = this.constructor.ROLES;
         if (!uid && level !== L.READ)
             throw new Error(ACCESS_DENIED);
-        const roleIsAdmin = !params.role || params.role === ROLES.ADMIN;
-        if (roleIsAdmin && globalThis.WORK && await this._isWorkAdmin(params))
+        const roleIsBoss = !params.role || params.role === ROLES.BOSS;
+        if (roleIsBoss && globalThis.WORK && await this._isWorkBoss(params))
             return;
         switch (level) {
             case L.READ:
@@ -608,12 +613,17 @@ export const classSecurityMethods = {
                 if (!(await this.canWrite(folder || this, params)))
                     throw new Error(ACCESS_DENIED);
                 break;
-            case L.ADMIN:
-                if (params.role && params.role !== ROLES.ADMIN)
+            case L.BOSS:
+            case 'ADMIN': {
+                if (params.role && params.role !== ROLES.BOSS)
                     throw new Error(ACCESS_DENIED);
-                if (globalThis.WORK && await this._isWorkAdmin(params))
+                if (globalThis.WORK && await this._isWorkBoss(params))
+                    return;
+                const roles = await this.roles(params).catch(() => []);
+                if (roles.includes(ROLES.BOSS))
                     return;
                 throw new Error(ACCESS_DENIED);
+            }
             default:
                 throw new Error(ACCESS_DENIED);
         }
@@ -633,10 +643,15 @@ export const classSecurityMethods = {
         return result;
     },
 
-    /** Проверка ADMIN на корневом WORK. */
-    async _isWorkAdmin(params = {}) {
+    /** Проверка BOSS на корневом WORK. */
+    async _isWorkBoss(params = {}) {
         if (!globalThis.WORK) return false;
-        return globalThis.WORK !== this && await globalThis.WORK.roles?.(params).then(r => r.includes(this.constructor.ROLES.ADMIN));
+        return globalThis.WORK !== this && await globalThis.WORK.roles?.(params).then(r => r.includes(this.constructor.ROLES.BOSS));
+    },
+
+    /** @deprecated алиас _isWorkBoss */
+    async _isWorkAdmin(params = {}) {
+        return this._isWorkBoss(params);
     },
 
     /** Системный путь ($server, sources, oda, корень WORK). */
@@ -705,14 +720,11 @@ export const classSecurityMethods = {
         const { role, inherited } = params;
         const ROLES = this.constructor.ROLES;
         switch (role) {
-            case ROLES.ADMIN:
-                return inherited ? this.allAdmins : this.admins;
             case ROLES.BOSS:
+            case 'ADMIN':
                 return inherited ? this.allBosses : this.bosses;
             case ROLES.USER:
                 return this.users;
-            case ROLES.GUEST:
-                return this.guests;
         }
         if (role && (await this.declared_roles)[role])
             return this._localRole(role);
@@ -731,7 +743,7 @@ export const classSecurityMethods = {
             const usersRoot = await globalThis.WORK.$users;
             const result = [];
             for (const id of ids) {
-                if (id === 'GUEST') continue;
+                if (WORKPLACES.isPseudoUser(id)) continue;
                 const user = await usersRoot.get_item('//' + id);
                 if (user)
                     result.push(user);
@@ -745,11 +757,11 @@ export const classSecurityMethods = {
     },
 
     get guests() {
-        return this._localRole(this.constructor.ROLES.GUEST);
+        return Promise.resolve([]);
     },
 
     get admins() {
-        return this._localRole(this.constructor.ROLES.ADMIN);
+        return this.bosses;
     },
 
     get bosses() {
@@ -757,11 +769,7 @@ export const classSecurityMethods = {
     },
 
     get allAdmins() {
-        return Promise.all([Promise.resolve(this.$parent?.allAdmins), this._localRole(this.constructor.ROLES.ADMIN)])
-            .then(([parents, local]) => {
-                const seen = new Set((parents || []).map(u => u?.id));
-                return [...(parents || []), ...local.filter(u => !seen.has(u.id))];
-            });
+        return this.allBosses;
     },
 
     get allBosses() {
@@ -774,16 +782,14 @@ export const classSecurityMethods = {
 
     get assignedUsers() {
         return Promise.all([
-            Promise.resolve(this.allAdmins),
             Promise.resolve(this.allBosses),
             Promise.resolve(this.users),
-            Promise.resolve(this.guests),
             Promise.resolve(this.declared_roles).then(declared => Promise.all(
                 Object.keys(declared)
                     .filter(id => !POLICY.BASE_ORDER.includes(id))
                     .map(id => this._localRole(id)))),
-        ]).then(([admins, bosses, users, guests, custom]) => {
-            const all = [...admins, ...bosses, ...users, ...guests, ...custom.flat()];
+        ]).then(([bosses, users, custom]) => {
+            const all = [...bosses, ...users, ...custom.flat()];
             const seen = new Set();
             return all.filter(u => {
                 if (!u?.id || seen.has(u.id))

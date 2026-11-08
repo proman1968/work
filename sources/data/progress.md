@@ -1,6 +1,17 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [12:00, 08.11] Единая модель ролей `BOSS` и `USER`, псевдо-субъекты `USERS` и `GUESTS` на рабочих местах, отказ от кнопки переключения ролей и автостарт веб-приложения (`sources/server/access/{policy,workplaces,links}.js`, `sources/server/class/security.js`, `sources/server/{class,folder,handler,server,node}.js`, `sources/host/{auth-methods,http-server}.js`, `sources/client/{folder,class}.js`, `staff.js`, `users.js`, `form.js`, `role.js`):
+  - **Схлопывание `ADMIN` + `BOSS` → `BOSS` и упразднение роли `GUEST`:**
+    1. В `BASE_ROLES` и `$class.ROLES` оставлены две базовые роли: **`BOSS`** (руководитель/владелец точки и её поддерева) и **`USER`** (исполнитель).
+    2. `BOSS` точки обладает полными правами чтения и записи внутри своей точки и ниже по дереву (включая системные метаданные `class.js`, `#secret`, конструктор `builder`, свойства `editor`, управление штатом `staff` и БД организации `database`), а операции уровня хоста (`npm`, `/MODULES`, `/NODES`, перезапуск сервера, ОС/сеть агента) проверяют `BOSS` корневого `WORK` (`_isWorkBoss`).
+    3. Первый зарегистрированный пользователь автоматически назначается `BOSS` всего `WORK` (`ensureBootstrapBoss` в `sources/host/auth-methods.js`).
+  - **Групповые псевдо-субъекты `USERS` и `GUESTS` на рабочих местах (`ROLES`):**
+    1. В `workplaces.js` (`matchesUserList`, `memberTrailKeys`, `isOpenToGuests`) и `security.js` (`roles`, `canSee`, `canWrite`) добавлена поддержка назначения на рабочие места (`ROLES[i].USERS`) псевдо-пользователей **`USERS`** (все вошедшие пользователи) и **`GUESTS`** (все внешние посетители, включая анонимных).
+    2. В `form/staff` (`staff.js`) и `item-users` (`users.js`) убрана секция `ADMIN` и добавлен выбор `👥 Все пользователи (USERS)` и `🌐 Все гости (GUESTS)` при назначении на рабочее место.
+  - **Отказ от кнопки переключения ролей и автостарт браузера:**
+    1. Из шапки `work-form` (`form.js`), контекстного меню (`popover.js`) и `item-role` (`role.js`) убран переключатель ролей; представления (`VIEW`) и методы определяются автоматически по ролям пользователя в открытой точке, а `BOSS` всегда видит логи той точки, в которую он смотрит (`chatSource`).
+    2. В `startServers` (`sources/host/http-server.js`) добавлено автоматическое открытие `${LOCAL_ORIGIN}/` в системном браузере при интерактивном старте сервера (`shouldAutoOpenBrowser`, пропускается в тестах и при `WORK_NO_BROWSER=1`).
 - [10:30, 07.11] Универсальный гибридный провайдер `/MODELS/Halogen` для ПАК WORK на базе AMD Ryzen™ AI Max+ PRO 495 · 192 ГБ Unified Memory (`sources/modules/trainer/halogen.js`, `MODELS/Halogen/**`, `MODELS/$ai/$folder/$class/$ai/class.js`, `loop.js`, `trainer.js`, `tests/halogen-provider.test.js`):
   - **Дерево провайдера `/MODELS/Halogen` и матрица моделей (iGPU Radeon 8065S `gfx1151` + Ryzen AI NPU `55 TOPS` на порту `8731`):**
     1. Создан провайдер `/MODELS/Halogen` (`$provider`, `protocol: 'halogen'`, `baseUrl: 'http://127.0.0.1:8731/v1/chat/completions'`) и 8 преднастроенных узлов `$ai`: основная модель `Qwen3.8-Flash-Next` (`halogen-qwen3.8-flash-next`, 262k контекст, `chat`, `stream`, `tools`, `vision`, `effort`, `fork`) и 7 сопроцессорных NPU-моделей (`Qwen3.5-2B-NPU` для `compactModel`, `Qwen3-ASR-NPU` для `sttModel`, `Qwen3-TTS-NPU` для `ttsModel`, `Flux2-Klein-NPU` для `imageModel`, `Qwen3-Embedding-NPU`, `Qwen3-Reranker-NPU`, `Decider-NPU`).

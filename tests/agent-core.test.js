@@ -645,7 +645,7 @@ describe('окружение: слои ai/, system, навыки, субаген
     it('роль USER в system: запрет искать os_/net_ и поручать их субагенту', async () => {
         const place = await WORK.get_item('/BOX');
         const sys = await (await createEnv({ place, host: { mode: 'auto' }, role: 'USER' })).makeSystem();
-        assert.match(sys, /запустить в роли ADMIN/);
+        assert.match(sys, /запустить в роли BOSS/);
         assert.match(sys, /os_\*\/net_\*\/shell у тебя нет в списке/);
         assert.match(sys, /не поручай такую работу субагенту/);
     });

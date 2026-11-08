@@ -317,10 +317,11 @@ WORK.authEvents ??= (typeof EventTarget !== 'undefined') ? new EventTarget() : n
  * пересчитывается через item.syncRole().
  */
 WORK.ROLE_KEY = 'work-role';
+WORK.preferredRole = '';
 try {
-    WORK.preferredRole ??= globalThis.localStorage?.getItem(WORK.ROLE_KEY) || '';
+    globalThis.localStorage?.removeItem(WORK.ROLE_KEY);
 }
-catch { WORK.preferredRole ??= ''; }
+catch {}
 WORK.setPreferredRole = function (role) {
     role = String(role || '');
     WORK.preferredRole = role;

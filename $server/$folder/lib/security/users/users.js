@@ -90,10 +90,8 @@ export default {
     },
     get securityKey() {
         switch (this.role) {
-            case 'BOSS':  return 'BOSS';
-            case 'ADMIN': return 'ADMIN';
-            case 'GUEST': return 'GUEST';
-            default:      return 'USER';
+            case 'BOSS': return 'BOSS';
+            default:     return 'USER';
         }
     },
     get _sourceUsers() {
@@ -104,7 +102,7 @@ export default {
         const roleIds = this.$item.DATA?.roleIds?.[this.securityKey];
         if (Array.isArray(roleIds) && typeof WORK?.usersByIds === 'function')
             return WORK.usersByIds(roleIds).then(l => (l || []).filter(Boolean));
-        const attrName = this.securityKey === 'BOSS' ? 'bosses' : (this.securityKey === 'ADMIN' ? 'admins' : (this.securityKey === 'GUEST' ? 'guests' : 'users'));
+        const attrName = this.securityKey === 'BOSS' ? 'bosses' : 'users';
         return Promise.resolve(this.$item?.[attrName]).then(list => Array.isArray(list) ? list : []);
     },
     /** Пользователи рабочего места: поиск узла по trail в places() владельца. */
@@ -117,7 +115,19 @@ export default {
             const node = this._findPlace(d?.places, String(this.place).split('/').filter(Boolean));
             if (!node)
                 return [];
-            return WORK.usersByIds(node.users || []).then(l => (l || []).filter(Boolean));
+            const rawIds = Array.isArray(node.users) ? node.users : [];
+            const pseudo = [];
+            const realIds = [];
+            for (const id of rawIds) {
+                if (id === 'USERS')
+                    pseudo.push({ id: 'USERS', label: 'Все пользователи (USERS)', icon: 'icons:supervisor-account' });
+                else if (id === 'GUESTS' || id === 'GUEST')
+                    pseudo.push({ id: 'GUESTS', label: 'Все гости (GUESTS)', icon: 'icons:language' });
+                else if (id)
+                    realIds.push(id);
+            }
+            const real = realIds.length ? await WORK.usersByIds(realIds).then(l => (l || []).filter(Boolean)) : [];
+            return [...pseudo, ...real];
         }
         catch {
             return [];
@@ -164,6 +174,27 @@ export default {
             },
         }];
         if (canEdit) {
+            if (this.place) {
+                for (const p of [
+                    { id: 'USERS', label: 'Все пользователи (USERS)', icon: 'icons:supervisor-account' },
+                    { id: 'GUESTS', label: 'Все гости (GUESTS)', icon: 'icons:language' },
+                ]) {
+                    const assigned = currentIds.has(p.id);
+                    items.push({
+                        icon: assigned ? 'icons:check' : p.icon,
+                        label: (assigned ? 'Снять: ' : 'Назначить: ') + p.label,
+                        execute: async () => {
+                            if (assigned)
+                                await this.suspendUser(p);
+                            else
+                                await this.assignUser(p);
+                            this.availableUsers = undefined;
+                            owner.reset?.();
+                            owner.fire?.('changed', { value: null });
+                        },
+                    });
+                }
+            }
             try {
                 const uRoot = (await WORK.get_item('/USERS')) || (await WORK.get_item('/users'));
                 const all = (await uRoot?.items) || [];

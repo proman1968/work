@@ -51,23 +51,21 @@ export class $class extends $folder {
     static safeNodeName = safeNodeName;
 
     /** Базовые роли (прикладные объявляются в `ROLES` class.js, см. declared_roles). */
-    static ROLES = { ADMIN: 'ADMIN', BOSS: 'BOSS', USER: 'USER', GUEST: 'GUEST' };
+    static ROLES = { BOSS: 'BOSS', USER: 'USER' };
 
     /** @deprecated Зона = имя роли (папка роли в метапапке), вне зон — SYSTEM. См. access/policy.js. */
-    static ZONES = { SYSTEM: 'SYSTEM', MANAGEMENT: 'BOSS', WORK: 'USER', GUESTS: 'GUEST' };
+    static ZONES = { SYSTEM: 'SYSTEM', MANAGEMENT: 'BOSS', WORK: 'USER' };
 
     /** @deprecated Зона роли = папка с именем роли. */
     static ZONES_MAP = {
-        [$class.ROLES.ADMIN]: $class.ZONES.SYSTEM,
         [$class.ROLES.BOSS]: $class.ZONES.MANAGEMENT,
         [$class.ROLES.USER]: $class.ZONES.WORK,
-        [$class.ROLES.GUEST]: $class.ZONES.GUESTS,
     };
 
     static POLICY = POLICY;
 
     /** Уровни доступа к методам. */
-    static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', ADMIN: 'ADMIN' };
+    static ACCESS_LEVEL = { READ: 'read', WRITE: 'write', BOSS: 'BOSS', ADMIN: 'BOSS' };
 
     /** Проверить, что путь childPath находится внутри parentPath. */
     static isPathInside(childPath, parentPath) {
@@ -115,12 +113,12 @@ export class $class extends $folder {
             },
             get roleIds() {
                 const out = {};
-                for (const role of [$class.ROLES.ADMIN, $class.ROLES.BOSS, $class.ROLES.USER, $class.ROLES.GUEST])
-                    out[role] = this._roleIds(role).filter(id => id !== 'GUEST');
+                for (const role of [$class.ROLES.BOSS, $class.ROLES.USER])
+                    out[role] = this._roleIds(role).filter(id => !WORKPLACES.isPseudoUser(id));
                 if (out.USER) {
                     const seen = new Set(out.USER);
                     for (const u of WORKPLACES.placeUserIds(this.DATA?.['#security']))
-                        if (u !== 'GUEST' && !seen.has(u)) {
+                        if (!WORKPLACES.isPseudoUser(u) && !seen.has(u)) {
                             seen.add(u);
                             out.USER.push(u);
                         }
@@ -392,7 +390,7 @@ export class $class extends $folder {
         const post = 'export default ' + this.constructor.toScript(ownObj) + '\n';
         await this.meta_folder.save_file({
             ...params,
-            role: $class.ROLES.ADMIN,
+            role: $class.ROLES.BOSS,
             filename: 'class.js',
             post,
             ignore_save_logs: true,

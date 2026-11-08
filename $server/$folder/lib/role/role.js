@@ -17,7 +17,7 @@ export default {
         return Promise.resolve(this.$item?.selectableRoles).then(r => Array.isArray(r) ? r : []);
     },
     get showSelector() {
-        return Promise.resolve(this.roles).then(r => r.length > 1);
+        return false;
     },
     get roleIcon() {
         return this.getRoleIcon(this.itemRole);
@@ -30,10 +30,8 @@ export default {
                 return declared[role].icon;
         } catch { /* ниже — встроенные */ }
         return {
-            ADMIN: 'fontawesome:s-user-shield',
             BOSS: 'fontawesome:s-user-tie',
             USER: 'fontawesome:s-user-pen',
-            GUEST: 'fontawesome:s-user',
         }[role] || '';
     },
     iconSize: 24,

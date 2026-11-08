@@ -1778,10 +1778,10 @@ export class $folder extends $item{
         const owner = this.$owner || this.$class;
         if (!owner)
             return false;
-        if (await owner._isWorkAdmin?.(params))
+        if (await owner._isWorkBoss?.(params))
             return true;
         const roles = await owner.roles(params);
-        return roles.includes('ADMIN');
+        return roles.includes('BOSS');
     }
 
     /** Нормализовать имя и подпапку записи из пользовательского ввода (params.filename / params.folder). */

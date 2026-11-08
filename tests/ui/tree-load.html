@@ -59,13 +59,13 @@ await test('$class.users/bosses: из roleIds без запроса, без role
     try {
         const proto = CORE.$class.prototype;
         const withIds = {
-            DATA: { roleIds: { ADMIN: [], BOSS: ['b1'], USER: ['u1'], GUEST: [] } },
+            DATA: { roleIds: { BOSS: ['b1'], USER: ['u1'] } },
             fetch: (m) => { fetched.push(m); return Promise.resolve([]); },
             _roleUsers: proto._roleUsers,
         };
         eq((await getter(proto, 'users').call(withIds)).map(u => u.id), ['u1']);
         eq((await getter(proto, 'bosses').call(withIds)).map(u => u.id), ['b1']);
-        eq(await getter(proto, 'admins').call(withIds), []);
+        eq((await getter(proto, 'admins').call(withIds)).map(u => u.id), ['b1']);
         eq(fetched, [], 'запросов нет');
         const legacy = { DATA: {}, fetch: (m) => { fetched.push(m); return Promise.resolve(['x']); }, _roleUsers: proto._roleUsers };
         eq(await getter(proto, 'users').call(legacy), ['x']);
@@ -349,8 +349,8 @@ await test('Проводник: порядок вкладок [контекст,
 
     ci.senderId = 'u1';
     ci.log = { ext: 'task', path: '/ORG/1.u1.task' };
-    eq(ci.cardLayoutStyle.marginLeft, '48px', 'карточка таска — по центру с отступом слева 48px');
-    eq(ci.cardLayoutStyle.marginRight, '48px', 'карточка таска — по центру с отступом справа 48px');
+    eq(ci.cardLayoutStyle.marginLeft, 'auto', 'карточка таска — по центру (marginLeft=auto)');
+    eq(ci.cardLayoutStyle.marginRight, 'auto', 'карточка таска — по центру (marginRight=auto)');
 });
 
 window.__done = true;

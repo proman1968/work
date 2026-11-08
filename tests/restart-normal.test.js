@@ -36,7 +36,7 @@ function sessionOf(uid) {
 before(async () => {
     prevCwd = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-restart-'));
-    write('$server/class.js', `export default { label: 'RESTART', '#security': { ADMIN: ['${ADMIN}'], USER: ['${USER}'] } }`);
+    write('$server/class.js', `export default { label: 'RESTART', '#security': { BOSS: ['${ADMIN}'], USER: ['${USER}'] } }`);
     write('$server/$folder/class.js', `export default {}`);
     write('$server/$folder/$class/class.js', `export default {}`);
     write('$server/$folder/$file/class.js', `export default {}`);

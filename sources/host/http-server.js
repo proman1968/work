@@ -1,6 +1,7 @@
 import * as http from 'node:http';
 import * as http2 from 'node:http2';
 import * as fs from 'node:fs';
+import { spawn } from 'node:child_process';
 import process from 'node:process';
 import * as mime from 'mime-types';
 import * as zlib from 'node:zlib';
@@ -179,14 +180,43 @@ function onListenError(port, err) {
     throw err;
 }
 
+export function shouldAutoOpenBrowser(env = process.env, execArgv = process.execArgv, argv = process.argv) {
+    if (env.WORK_OPEN_BROWSER === '1' || env.WORK_OPEN_BROWSER === 'true')
+        return true;
+    if (env.WORK_NO_BROWSER === '1' || env.WORK_OPEN_BROWSER === '0' || env.WORK_TEST || env.CI || env.NODE_TEST_CONTEXT)
+        return false;
+    if (Array.isArray(execArgv) && execArgv.some(a => a === '--test' || a.startsWith('--test-')))
+        return false;
+    if (Array.isArray(argv) && argv.some(a => /[\\/]tests[\\/]/i.test(String(a)) || /\.test\.m?js$/i.test(String(a))))
+        return false;
+    return true;
+}
+
+export function openBrowser(url) {
+    try {
+        if (process.platform === 'win32') {
+            const cp = spawn('cmd', ['/c', 'start', '""', url], { detached: true, stdio: 'ignore', windowsHide: true });
+            cp.unref?.();
+        }
+        else if (process.platform === 'darwin') {
+            const cp = spawn('open', [url], { detached: true, stdio: 'ignore' });
+            cp.unref?.();
+        }
+        else {
+            const cp = spawn('xdg-open', [url], { detached: true, stdio: 'ignore' });
+            cp.unref?.();
+        }
+    }
+    catch { /* ignore */ }
+}
+
 export function startServers(requestHandler) {
     const httpServer = http.createServer(requestHandler);
     httpServer.on('error', (err) => onListenError(PORT, err));
     httpServer.listen({ port: PORT }, () => {
         console.log(`Server running at ${LOCAL_ORIGIN}/`);
-        console.log('Server running at http://localhost:8001/oda/components/structure/form/index.html');
-        console.log('Server running at http://localhost:8001/oda/components/table/index.html');
-        console.log('Server running at http://localhost:8001/torus/binnet/test-ui/index.html?tab=lab');
+        if (shouldAutoOpenBrowser())
+            openBrowser(`${LOCAL_ORIGIN}/`);
     });
 
     let httpsServer;

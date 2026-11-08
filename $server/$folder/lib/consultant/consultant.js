@@ -863,7 +863,7 @@ ODA({
             if (contextPath)
                 body.contextPath = contextPath;
 
-            const role = (WORK.preferredRole && ['ADMIN', 'BOSS', 'USER'].includes(WORK.preferredRole))
+            const role = (WORK.preferredRole && ['BOSS', 'USER'].includes(WORK.preferredRole))
                 ? WORK.preferredRole
                 : 'USER';
             const saveParams = {

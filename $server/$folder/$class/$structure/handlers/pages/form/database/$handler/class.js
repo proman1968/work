@@ -1,7 +1,7 @@
 export default {
     icon: 'carbon:data-base',
     label: 'База данных',
-    roles: ['ADMIN'],
+    roles: ['BOSS'],
     order: 4,
     allowUse($context) {
         return $context?.type === '$server' || $context?.type === '$base';

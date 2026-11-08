@@ -187,7 +187,10 @@ export const authMethods = {
 
         const $users = await this.$users;
         const users = await $users.items;
-        const isFirstUser = users.length === 0;
+        await WORK.init;
+        const existingUserIds = new Set((users || []).map(u => u?.id).filter(Boolean));
+        const currentBosses = Array.isArray(WORK?.DATA?.['#security']?.BOSS) ? WORK.DATA['#security'].BOSS : [];
+        const isFirstUser = users.length === 0 || !currentBosses.some(id => existingUserIds.has(id));
         let $user_item = await $users._get_next_item(uid, CORE.$user);
         credentials.keys = $user_item.keys || {};
         credentials.keys[time] = publicKey;
@@ -213,7 +216,7 @@ export const authMethods = {
         audit('register', { params, keys: Object.keys(credentials.keys).length });
 
         if (isFirstUser) {
-            await ensureBootstrapAdmin(uid, params);
+            await ensureBootstrapBoss(uid, params);
         }
 
         $server.broadcastAuthChangedToSession(session, { uid, reason: 'register' });
@@ -286,8 +289,8 @@ export const authMethods = {
                 audit('login_fail', { uid, params });
                 throw new Error("login failed");
             }
-            const rootAdmins = Array.isArray(WORK?.DATA?.['#security']?.ADMIN) ? WORK.DATA['#security'].ADMIN : [];
-            const isAdmin = rootAdmins.includes(uid);
+            const rootBosses = Array.isArray(WORK?.DATA?.['#security']?.BOSS) ? WORK.DATA['#security'].BOSS : [];
+            const isAdmin = rootBosses.includes(uid);
             assertWorkplaceAvailableForLogin(uid, {
                 sessions: $server.sessions,
                 currentSsid: session.ssid,
@@ -353,15 +356,16 @@ export const authMethods = {
 };
 
 /**
- * Первый зарегистрированный пользователь добавляется в WORK.#security.
+ * Первый зарегистрированный пользователь становится BOSS всего WORK.
  * @param {string} uid
  * @param {{}} params
  */
-async function ensureBootstrapAdmin(uid, params = {}) {
+async function ensureBootstrapBoss(uid, params = {}) {
     await WORK.init;
     const data = await WORK.DATA;
     data['#security'] ??= {};
-    for (const k of ['ADMIN', 'BOSS', 'USER']) {
+    delete data['#security'].ADMIN;
+    for (const k of ['BOSS', 'USER']) {
         data['#security'][k] ??= [];
         data['#security'][k].add(uid);
     }

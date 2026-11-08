@@ -8,7 +8,7 @@ export const base = {
     [`USERS/${U.user}/$user/class.js`]: `export default { label: 'Иванов Иван' }`,
     [`USERS/${U.petrov}/$user/class.js`]: `export default { label: 'Петров Пётр' }`,
     [`USERS/${U.admin}/$user/class.js`]: `export default { label: 'Админ' }`,
-    '$server/class.js': `export default { label: 'EVAL', '#security': { ADMIN: ['${U.admin}'] } }`,
+    '$server/class.js': `export default { label: 'EVAL', '#security': { BOSS: ['${U.admin}'] } }`,
     'ORG/$base/class.js': `export default { label: 'ООО Ромашка', '#security': { BOSS: ['${U.boss}'], USER: ['${U.user}', '${U.petrov}'] } }`,
     'ORG/$base/readme.md': '# ООО Ромашка\nОтчёты кладутся в папку «Отчёты». Поручения — через ленту с получателями и сроком.',
 };

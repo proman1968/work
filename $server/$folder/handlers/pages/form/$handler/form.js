@@ -199,7 +199,7 @@ ODA({is: 'work-form',
         <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px; margin: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
-                <item-node-explorer no-flex :$item="currentItem" show-role></item-node-explorer>
+                <item-node-explorer no-flex :$item="currentItem"></item-node-explorer>
                 <div flex></div>
                 <oda-button id="consultantBtn" shadow icon="icons:help" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
@@ -944,18 +944,6 @@ ODA({is: 'work-form',
                 targetItem = loaded;
         }
         const isObjectAction = Boolean(nav?.view === 'object' || nav?.create || nav?.id || nav?.copyFrom);
-        if ((isObjectAction || nav?.view === 'objects') && this._appliedRole === 'ADMIN') {
-            this._initializingItem = true;
-            try {
-                this._appliedRole = 'USER';
-                this._appliedRoleItem = root;
-                root.role = 'USER';
-                this._applyRoleColor(root, 'USER');
-            }
-            finally {
-                this._initializingItem = false;
-            }
-        }
         if (this._appliedRole)
             targetItem.role = this._appliedRole;
         else

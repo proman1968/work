@@ -342,9 +342,9 @@ async function readClass(p) {
         declared = await cls.declared_roles;
         for (const role of Object.keys(declared))
             for (const uid of cls._roleIds?.(role, declared) || [])
-                if (uid !== 'GUEST')
+                if (uid !== 'GUEST' && uid !== 'GUESTS' && uid !== 'USERS')
                     assignments.push({ role, uid });
-        const custom = Object.keys(declared).filter(r => !['ADMIN', 'BOSS', 'USER', 'GUEST'].includes(r));
+        const custom = Object.keys(declared).filter(r => !['BOSS', 'USER'].includes(r));
         if (custom.length)
             lines.push('Роли: ' + custom.map(r => declared[r].label || r).join(', '));
     }

@@ -544,7 +544,7 @@ export class $node extends $class {
         if (this.DATA.status !== 'active')
             throw new Error('Узел не активен: ' + (this.DATA.status || 'pending'));
         const declared = await this.declared_roles;
-        if (!declared[as] || ['ADMIN', 'BOSS'].includes(as))
+        if (!declared[as] || as === 'BOSS')
             throw new Error('Роль «' + as + '» не объявлена узлом');
         if (!this._roleIds(as, declared).includes(uid)) {
             const { audit } = await import('./access/audit.js');

@@ -3,5 +3,6 @@ export default {
     icon: 'icons:build',
     label: 'Конструктор',
     allowSave: true,
-    roles: ['ADMIN']
+    order: 20,
+    roles: ['BOSS']
 }

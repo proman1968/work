@@ -54,14 +54,14 @@ const httpCall = (item, method, params) => {
 before(async () => {
     prevCwd = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-sec-'));
-    write('$server/class.js', `export default { label: 'SEC', '#security': { ADMIN: ['${ROOTADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'SEC', '#security': { BOSS: ['${ROOTADMIN}'] } }`);
     write('$server/$folder/class.js', `export default {}`);
     write('$server/$folder/$class/class.js', `export default {}`);
     write('$server/$folder/$file/class.js', `export default {}`);
     for (const rel of ['$server/$folder/$file/$task/class.js', '$server/$folder/$file/$data/class.js',
         'MODELS/$ai/class.js', 'MODELS/$ai/$folder/$class/$ai/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
-    write('BOX/$class/class.js', `export default { label: 'BOX', '#security': { USER: ['${ALICE}', '${VICTIM}'], ADMIN: ['${BOXADMIN}'] } }`);
+    write('BOX/$class/class.js', `export default { label: 'BOX', '#security': { USER: ['${ALICE}', '${VICTIM}'], BOSS: ['${BOXADMIN}'] } }`);
     write('MODELS/$class/class.js', `export default {}`);
     write('BOX/$class/#secret/ok.json', '{"ok": 1}');
     for (const uid of [ALICE, VICTIM, BOXADMIN, ROOTADMIN])
@@ -136,7 +136,7 @@ describe('R3/R4 save_file: путь файла — только из формы 
     it('R4: файл данных (.data) с path в JSON-теле отклоняется', async () => {
         const box = await WORK.get_item('/BOX');
         // файлы данных — область DATA: пишет ADMIN класса;rights проверяются до разбора тела
-        await assert.rejects(httpCall(box, 'save_file', { session: await sessionOf(BOXADMIN), role: 'ADMIN', filename: 'x.data', post: evil() }), /форм|JSON-объект/);
+        await assert.rejects(httpCall(box, 'save_file', { session: await sessionOf(BOXADMIN), role: 'BOSS', filename: 'x.data', post: evil() }), /форм|JSON-объект/);
         assert.equal(fs.existsSync(path.join(tmp, 'BOX/DATA/x.data')), false, 'файл данных создан из JSON-тела');
     });
 });

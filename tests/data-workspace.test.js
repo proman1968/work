@@ -144,7 +144,7 @@ describe('db_workspace: метод класса', () => {
     before(async () => {
         prev = process.cwd();
         tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-data-workspace-'));
-        write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
+        write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
         for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
             write(p + '/class.js', 'export default {}');
         for (const uid of [ADMIN, SELLER, STRANGER])
@@ -155,7 +155,7 @@ describe('db_workspace: метод класса', () => {
         cls('DATA/OPERATIONS', '$operation', `{ label: 'Операции', icon: 'icons:ops' }`);
         cls('DATA/OPERATIONS/SALE', '$operation', `{ label: 'Продажа' }`);
         cls('DATA/CATALOGS', '$catalog', `{ label: 'Справочники' }`);
-        cls('BASE/ORG', '$structure', `{ label: 'Организация', '#security': { ADMIN: ['${ADMIN}'] } }`);
+        cls('BASE/ORG', '$structure', `{ label: 'Организация', '#security': { BOSS: ['${ADMIN}'] } }`);
         cls('BASE/ORG/SALES', '$structure', `{ label: 'Продажи', '#security': { ROLES: [
             { id: 'seller', label: 'Продавец', USERS: ['${SELLER}'], LINKS: [{ id: '/DATA/OPERATIONS', access: 'write', scope: 'own' }] }] } }`);
         cls('BASE/ORG/BUY', '$structure', `{ label: 'Закупки' }`);

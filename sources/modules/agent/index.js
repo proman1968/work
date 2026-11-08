@@ -310,8 +310,8 @@ export const VOICE_NOTE = `# Голосовой режим
  * @returns {Promise<any>} env: { place, session, config, hooks, agents, skills, role, … }
  */
 export async function createEnv({ place, session, host, tz, location, role, voice } = {}) {
-    // ОС и сеть — администратору, работающему в роли ADMIN (или без выбранной роли: REST, расписание)
-    const system = async () => (!role || role === 'ADMIN') && await systemAllowed(session);
+    // ОС и сеть — руководителю WORK, работающему в роли BOSS (или без выбранной роли: REST, расписание)
+    const system = async () => (!role || role === 'BOSS') && await systemAllowed(session);
     const [config, hooks, allAgents, allSkills, baseSystem, caps, privatePlace] = await Promise.all([
         loadConfig(place),
         loadHooks(place),
@@ -458,7 +458,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
             parts.push(ENV_GUIDE);
             if (role)
                 parts.push('Ты работаешь в роли ' + role + ' (выбрана пользователем для этой задачи): файлы пишутся в зону этой роли, права — этой роли'
-                    + (role === 'ADMIN' ? '.' : '; действия администратора недоступны — если они нужны, скажи пользователю, что задачу нужно запустить в роли ADMIN. '
+                    + (role === 'BOSS' ? '.' : '; действия руководителя (BOSS) недоступны — если они нужны, скажи пользователю, что задачу нужно запустить в роли BOSS. '
                         + 'Инструментов os_*/net_*/shell у тебя нет в списке: не ищи их в дереве и не поручай такую работу субагенту — сразу объясни ограничение.'));
             if (await system())
                 parts.push('ОС и сеть: os_* работают с файловой системой СЕРВЕРА WORK вне дерева WORK; net_* — с его локальной сетью. Начинай с os_info/net_info. net_discover ищет объявления, net_scan — порты, net_probe уточняет протокол. Открытый порт не подтверждает вид сервиса. net_register создаёт коннектор в /SERVICES/LAN; назначай доступ через роли класса. Файлы WORK читай и сохраняй WORK-инструментами. shell — полноценная команда ОС с правами процесса, ограничения roots/deny файловых инструментов на неё не распространяются.');

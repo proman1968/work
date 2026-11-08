@@ -68,7 +68,7 @@ before(async () => {
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-sec-'));
     for (const u of [ADMIN, USER, BOSS])
         keys[u] = rsa();
-    write('$server/class.js', `export default { label: 'SEC', '#security': { ADMIN: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'SEC', '#security': { BOSS: ['${ADMIN}'] } }`);
     write('$server/$folder/class.js', `export default {}`);
     write('$server/$folder/$class/class.js', `export default {}`);
     write('$server/$folder/$file/class.js', `export default {}`);
@@ -218,7 +218,7 @@ describe('шлюз методов', () => {
         assert.match(bare.text, /Доступ запрещён/);
         const ok = await req(target, { cookie: user, method: 'POST', body: 'x', headers: { 'content-type': 'text/plain' } });
         assert.equal(ok.status, 200, ok.text);
-        assert.ok(fs.existsSync(path.join(tmp, 'ORG/DEPT/$class/USER/text/csrf.md')));
+        assert.ok(fs.existsSync(path.join(tmp, 'ORG/DEPT/$class/text/csrf.md')));
     });
 });
 
@@ -231,7 +231,6 @@ describe('запись: пути и исполняемое', () => {
         const name = await req('/ORG/DEPT?save_file&filename=../../../../$server/class.js&role=USER', { cookie: user, method: 'POST', body: 'export default {}', headers: { 'content-type': 'text/plain' } });
         assert.ok(!fs.readFileSync(path.join(tmp, '$server/class.js'), 'utf-8').startsWith('export default {}'), 'корневой class.js не перезаписан ' + name.text);
         assert.match(fs.readFileSync(path.join(tmp, 'ORG/DEPT/$class/class.js'), 'utf-8'), /USER:/);
-        assert.ok(fs.existsSync(path.join(tmp, 'ORG/DEPT/$class/USER/text/class.js')), 'файл лёг в зону пользователя как обычный файл');
     });
 
     it('в своей зоне нельзя создать $-папку с class.js (исполнение кода)', async () => {
@@ -612,8 +611,8 @@ describe('http-сервер: маршруты до дерева и отдача 
         const text = await res.text();
         assert.equal(res.status, 200, text);
         assert.match(text, /multipart-сообщение/);
-        // файл из формы сохранён в зону роли (вложенная text/) с исходным содержимым
-        const saved = path.join(tmp, 'ORG', 'DEPT', '$class', 'USER', 'text', 'up-multipart.txt');
+        // файл из формы сохранён в единое хранилище точки (вложенная text/) с исходным содержимым
+        const saved = path.join(tmp, 'ORG', 'DEPT', '$class', 'text', 'up-multipart.txt');
         assert.ok(fs.existsSync(saved), 'файл загрузки сохранён');
         assert.equal(fs.readFileSync(saved, 'utf-8'), 'содержимое загруженного multipart');
     });

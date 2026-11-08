@@ -57,7 +57,7 @@ export function setAdminCheck(fn) {
     adminCheck = fn;
 }
 
-/** Пользователь сессии — администратор WORK (ADMIN в корне дерева). */
+/** Пользователь сессии — руководитель корневого WORK (BOSS в корне дерева). */
 export async function isAdmin(session) {
     if (session?.principal?.kind === 'node')
         return false;
@@ -67,7 +67,7 @@ export async function isAdmin(session) {
         return false;
     try {
         const roles = await globalThis.WORK?.roles?.({ session });
-        return Array.isArray(roles) && roles.includes('ADMIN');
+        return Array.isArray(roles) && roles.includes('BOSS');
     }
     catch {
         return false;

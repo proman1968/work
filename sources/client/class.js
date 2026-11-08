@@ -60,13 +60,13 @@ export class $class extends $folder{
         return Promise.resolve(WORK.usersByIds(ids));
     }
     get admins(){
-        return this._roleUsers('ADMIN', 'admins');
+        return this._roleUsers('BOSS', 'bosses');
     }
     get bosses(){
         return this._roleUsers('BOSS', 'bosses');
     }
     get allAdmins(){
-        return this.fetch('allAdmins');
+        return this.allBosses;
     }
     get allBosses(){
         return this.fetch('allBosses');
@@ -75,7 +75,7 @@ export class $class extends $folder{
         return this._roleUsers('USER', 'users');
     }
     get guests(){
-        return this._roleUsers('GUEST', 'guests');
+        return Promise.resolve([]);
     }
     import(){
         const url = (this.short || '/') + '?load' + `&version=${this.__version}`;

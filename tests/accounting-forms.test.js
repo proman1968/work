@@ -1313,7 +1313,7 @@ describe('архитектура представлений формы (VIEW п�
         assert.equal(postingsMeta.order, 3);
     });
 
-    it('фильтрация списка VIEW (handlers //form) строго соответствует активной роли (ADMIN / BOSS / USER)', async () => {
+    it('фильтрация списка VIEW (handlers //form) строго соответствует роли (BOSS / USER)', async () => {
         await import('../sources/reactor.js');
         const { $server } = await import('../sources/server/server.js');
         const prevWork = globalThis.WORK;
@@ -1331,12 +1331,10 @@ describe('архитектура представлений формы (VIEW п�
                     .map(i => i.id);
             };
 
-            assert.deepEqual(await viewsOf(reg, 'ADMIN'), ['builder'], 'Журнал проводок: у ADMIN только конфигуратор');
-            assert.deepEqual(await viewsOf(reg, 'BOSS'), ['folder', 'journal', 'sheet'], 'Журнал проводок: у BOSS файлы и отчёты (без builder)');
+            assert.deepEqual(await viewsOf(reg, 'BOSS'), ['builder', 'folder', 'journal', 'sheet'], 'Журнал проводок: у BOSS отчёты, файлы и конфигуратор');
             assert.deepEqual(await viewsOf(reg, 'USER'), ['journal', 'sheet'], 'Журнал проводок: у USER рабочие виды без folder и builder');
 
-            assert.deepEqual(await viewsOf(acc, 'ADMIN'), ['builder', 'editor'], 'Счёт: у ADMIN только конфигуратор и свойства');
-            assert.deepEqual(await viewsOf(acc, 'BOSS'), ['turnovers', 'analysis', 'postings', 'folder'], 'Счёт: у BOSS Обороты, Анализ, Проводки и Файлы');
+            assert.deepEqual(await viewsOf(acc, 'BOSS'), ['turnovers', 'analysis', 'postings', 'builder', 'editor', 'folder'], 'Счёт: у BOSS Обороты, Анализ, Проводки, Конструктор, Свойства и Файлы');
             assert.deepEqual(await viewsOf(acc, 'USER'), ['turnovers', 'analysis', 'postings'], 'Счёт: у USER Обороты, Анализ, Проводки');
 
             const accBossRoot = await acc.handlers({ path: '//form', role: 'BOSS' });
@@ -1346,8 +1344,7 @@ describe('архитектура представлений формы (VIEW п�
                 .map(i => i.id);
             assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
 
-            assert.deepEqual(await viewsOf(sales, 'ADMIN'), ['builder', 'chat', 'messengers', 'staff'], 'Подразделение: у ADMIN конструктор, чат, мессенджеры и настройка ролей/мест');
-            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'folder', 'search'], 'Подразделение: у BOSS чат, файлы и поиск');
+            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['builder', 'calendar', 'chat', 'email', 'folder', 'messengers', 'search', 'staff'], 'Подразделение: у BOSS все управленческие и рабочие виды');
             assert.deepEqual(await viewsOf(sales, 'USER'), ['calendar', 'chat', 'email'], 'Подразделение: у USER рабочие инструменты');
         }
         finally {

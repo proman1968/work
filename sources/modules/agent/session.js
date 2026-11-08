@@ -440,8 +440,8 @@ async function assertTaskOwner(file, params) {
     const uid = String(params?.session?.uid || '').toUpperCase();
     if (uid === owner)
         return;
-    // админ WORK может вмешиваться в любую задачу (роли корня; assertAccess на самом WORK всегда отказывает)
-    if (await WORK.roles?.({ session: params?.session }).then(r => r?.includes?.('ADMIN')).catch(() => false))
+    // руководитель WORK может вмешиваться в любую задачу (роли корня; assertAccess на самом WORK всегда отказывает)
+    if (await WORK.roles?.({ session: params?.session }).then(r => r?.includes?.('BOSS')).catch(() => false))
         return;
     throw new Error('Доступ запрещён: задача принадлежит ' + owner);
 }

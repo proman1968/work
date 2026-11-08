@@ -85,13 +85,12 @@ describe('policy: чистые правила', () => {
         assert.equal(POLICY.canRead(R.USER, { kind: 'logs' }), false, 'USER не видит ленту точки');
         assert.equal(POLICY.canRead(R.USER, { kind: 'logs' }, { ownEntry: true }), true, 'но видит свои записи');
         assert.equal(POLICY.canRead(R.BOSS, zone('USER')), true, 'BOSS видит всё');
-        assert.equal(POLICY.canRead(R.BOSS, { kind: 'secret' }), false, 'кроме секретов');
-        assert.equal(POLICY.canRead(R.ADMIN, { kind: 'secret' }), true);
+        assert.equal(POLICY.canRead(R.BOSS, { kind: 'secret' }), true, 'BOSS видит и секреты');
         assert.equal(POLICY.canRead(R.CUSTOMER, zone('CUSTOMER')), true, 'прикладная роль — как USER');
         assert.equal(POLICY.canWrite(R.USER, zone('USER'), { local: true }), true);
         assert.equal(POLICY.canWrite(R.USER, { kind: 'system' }, { local: true }), false);
-        assert.equal(POLICY.canWrite(R.BOSS, zone('BOSS'), { local: false }), false, 'BOSS пишет только где назначен');
-        assert.equal(POLICY.canWrite(R.ADMIN, { kind: 'system' }), true);
+        assert.equal(POLICY.canWrite(R.BOSS, zone('BOSS'), { local: false }), true, 'BOSS пишет в своей точке и ниже');
+        assert.equal(POLICY.canWrite(R.BOSS, { kind: 'system' }), true);
     });
 
     it('normalizeRoles: базовые + прикладные, мусор отбрасывается', () => {
@@ -103,7 +102,7 @@ describe('policy: чистые правила', () => {
         assert.equal(R.BOSS.label, 'Шеф');
         assert.deepEqual(R.BOSS.principals, ['user'], 'системные роли — только пользователи');
         assert.equal(R.lower, undefined);
-        assert.ok(POLICY.isSystemRole('ADMIN') && POLICY.isSystemRole('BOSS') && !POLICY.isSystemRole('CUSTOMER'));
+        assert.ok(POLICY.isSystemRole('BOSS') && !POLICY.isSystemRole('USER') && !POLICY.isSystemRole('CUSTOMER'));
     });
 });
 
@@ -123,13 +122,13 @@ describe('ядро: canSee / canWrite по модели', () => {
         assert.equal(await dept.canSee(order, p), false, 'унаследованная зона BOSS закрыта');
     });
 
-    it('BOSS вышестоящей точки видит всё ниже, но пишет только где назначен', async () => {
+    it('BOSS вышестоящей точки видит и меняет всё ниже по дереву', async () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         const org = await WORK.get_item('/ORG');
         assert.deepEqual(await dept.roles(as('b1')), ['BOSS'], 'BOSS наследуется вниз');
         assert.equal(await dept.canSee(await dept.meta_folder.get_item('USER/work.md'), as('b1')), true);
         const deptBoss = await dept.meta_folder._get_next_item('BOSS', FS.$folder);
-        assert.equal(await dept.canWrite(deptBoss, as('b1', 'BOSS')), false, 'в отделе не назначен');
+        assert.equal(await dept.canWrite(deptBoss, as('b1', 'BOSS')), true, 'BOSS родителя управляет и дочерним отделом');
         const orgBoss = await org.meta_folder._get_next_item('BOSS', FS.$folder);
         assert.equal(await org.canWrite(orgBoss, as('b1', 'BOSS')), true, 'в ORG назначен');
         const orgDist = await org.meta_folder.get_item('$folder/BOSS/order.md');

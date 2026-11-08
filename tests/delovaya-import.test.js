@@ -223,7 +223,7 @@ describe('Архивация $base и развёртывание из архив
 
         const orgsDomain = await WORK.get_item('/ORGANIZATIONS');
         assert.ok(orgsDomain, 'Домен /ORGANIZATIONS должен существовать');
-        const domainMethods = await orgsDomain.handlers({ path: '/methods', role: 'ADMIN' });
+        const domainMethods = await orgsDomain.handlers({ path: '/methods', role: 'BOSS' });
         const restoreHandler = (domainMethods?.items || []).find(i => i.id === 'restore');
         assert.ok(restoreHandler, 'У /ORGANIZATIONS должен быть хендлер restore');
         assert.equal(restoreHandler.label, 'Загрузить из архива');

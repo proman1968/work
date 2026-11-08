@@ -10,7 +10,7 @@ import { beforeWrite, recordWrite } from '../../undo.js';
 import { FS } from '../../../../server/index.js';
 import * as GATEWAY from '../../../../server/access/gateway.js';
 
-const ROLE_ORDER = ['ADMIN', 'BOSS', 'USER', 'GUEST'];
+const ROLE_ORDER = ['BOSS', 'USER'];
 const READ_LINES = 2000;
 const LINE_MAX = 2000;
 
@@ -95,9 +95,9 @@ export async function roleOrder(item, session, ctx) {
     const active = ctx?.role;
     if (!active)
         return [undefined, ...own];
-    if (active === 'ADMIN')
-        return [undefined, 'ADMIN', ...own.filter(r => r !== 'ADMIN')];
-    return [active, ...own.filter(r => r !== active && r !== 'ADMIN')];
+    if (active === 'BOSS' || active === 'ADMIN')
+        return [undefined, 'BOSS', ...own.filter(r => r !== 'BOSS')];
+    return [active, ...own.filter(r => r !== active && r !== 'BOSS')];
 }
 
 /**
@@ -120,9 +120,11 @@ export async function callAs(item, method, params, ctx, roleFirst, opts = {}) {
         await item.init;
     if (typeof item?.[method] !== 'function')
         throw new Error('у ' + (item?.path || '?') + ' нет метода ' + method);
-    // явная роль тоже не выходит за роль задачи (кроме ADMIN-задачи)
-    if (roleFirst === 'ADMIN' && ctx?.role && ctx.role !== 'ADMIN')
-        throw new Error('Доступ запрещён: задача выполняется в роли ' + ctx.role + ', действие требует ADMIN');
+    // явная роль тоже не выходит за роль задачи (кроме BOSS-задачи)
+    if ((roleFirst === 'BOSS' || roleFirst === 'ADMIN') && ctx?.role && ctx.role !== 'BOSS' && ctx.role !== 'ADMIN')
+        throw new Error('Доступ запрещён: задача выполняется в роли ' + ctx.role + ', действие требует BOSS');
+    if (roleFirst === 'ADMIN')
+        roleFirst = 'BOSS';
     const roles = roleFirst ? [roleFirst] : await roleOrder(item, session, ctx);
     let lastErr;
     for (const role of roles) {

@@ -103,7 +103,7 @@ export default {
         <div class="card">
             <div class="card-header">
                 <oda-icon :icon="$item?.icon || 'odant:structure'" icon-size="24"></oda-icon>
-                <span>{{$item?.label || $item?.id}} — Руководство и администрирование</span>
+                <span>{{$item?.label || $item?.id}} — Руководство подразделения</span>
             </div>
 
             <div class="role-row">
@@ -113,23 +113,9 @@ export default {
                     <span>{{userLabel($for.item)}}</span>
                     <span ~if="canEdit" class="rm" title="Снять руководителя" @tap="removeRoleUser('BOSS', $for.item)">×</span>
                 </div>
-                <span ~if="!bossList.length" class="muted">не назначен</span>
+                <span ~if="!bossList.length" class="muted">не назначен (наследуется сверху)</span>
                 <select ~if="canEdit" @change="addRoleUser('BOSS', $event)">
                     <option value="">+ Назначить руководителя…</option>
-                    <option ~for="allUsers" :value="$for.item.id">{{$for.item.label}} ({{$for.item.id}})</option>
-                </select>
-            </div>
-
-            <div class="role-row">
-                <span class="role-title">Администратор (ADMIN):</span>
-                <div class="user-chip" ~for="adminList">
-                    <oda-icon icon="icons:verified-user" icon-size="14"></oda-icon>
-                    <span>{{userLabel($for.item)}}</span>
-                    <span ~if="canEdit" class="rm" title="Снять администратора" @tap="removeRoleUser('ADMIN', $for.item)">×</span>
-                </div>
-                <span ~if="!adminList.length" class="muted">не назначен (наследуется сверху)</span>
-                <select ~if="canEdit" @change="addRoleUser('ADMIN', $event)">
-                    <option value="">+ Назначить администратора…</option>
                     <option ~for="allUsers" :value="$for.item.id">{{$for.item.label}} ({{$for.item.id}})</option>
                 </select>
             </div>
@@ -168,6 +154,8 @@ export default {
                     <span ~if="!$for.item.users.length" class="muted">сотрудники не назначены</span>
                     <select ~if="canEdit" @change="addPlaceUser($for.item.trail, $event)">
                         <option value="">+ Назначить сотрудника…</option>
+                        <option value="USERS">👥 Все пользователи (USERS)</option>
+                        <option value="GUESTS">🌐 Все гости (GUESTS)</option>
                         <option ~for="allUsers" :value="$for.$for.item.id">{{$for.$for.item.label}} ({{$for.$for.item.id}})</option>
                     </select>
                 </div>
@@ -222,9 +210,6 @@ export default {
     get bossList() {
         return Array.isArray(this.security?.BOSS) ? this.security.BOSS : [];
     },
-    get adminList() {
-        return Array.isArray(this.security?.ADMIN) ? this.security.ADMIN : [];
-    },
     get flatPlaces() {
         const out = [];
         const walk = (roles, prefix = '', depth = 0) => {
@@ -247,6 +232,10 @@ export default {
         return out;
     },
     userLabel(uid) {
+        if (uid === 'USERS')
+            return '👥 Все пользователи (USERS)';
+        if (uid === 'GUESTS' || uid === 'GUEST')
+            return '🌐 Все гости (GUESTS)';
         return this.userMap?.[uid] || uid;
     },
     classTitle(path) {

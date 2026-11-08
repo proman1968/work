@@ -300,39 +300,34 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
     it('members({role}) читает #security, без role — дедуплицированные все', async () => {
         write('USERS/u1/$user/class.js', `export default { label: 'U1' }`);
         write('MBOX/$class/class.js',
-            `export default { label: 'MBOX', '#security': { ADMIN: ['u1'], USER: ['u1'] } }`);
+            `export default { label: 'MBOX', '#security': { BOSS: ['u1'], USER: ['u1'] } }`);
         WORK.reset();
 
         const mbox = await WORK.get_item('/MBOX');
-        const admins = await mbox.members({ role: 'ADMIN' });
-        assert.equal(admins.length, 1, 'один ADMIN из #security');
-        assert.equal(admins[0].id, 'u1');
+        const bosses = await mbox.members({ role: 'BOSS' });
+        assert.equal(bosses.length, 1, 'один BOSS из #security');
+        assert.equal(bosses[0].id, 'u1');
 
         const users = await mbox.members({ role: 'USER' });
         assert.equal(users[0]?.id, 'u1');
 
-        const bosses = await mbox.members({ role: 'BOSS' });
-        assert.deepEqual(bosses, [], 'BOSS не назначен');
-
-        const inherited = await mbox.members({ role: 'ADMIN', inherited: true });
-        assert.ok(inherited.some(u => u.id === 'u1'), 'inherited включает собственного админа');
+        const inherited = await mbox.members({ role: 'BOSS', inherited: true });
+        assert.ok(inherited.some(u => u.id === 'u1'), 'inherited включает собственного босса');
 
         const all = await mbox.members();
         assert.equal(all.length, 1, 'один пользователь во всех ролях — дедупликация по id');
     });
 
-    it('members по массивам ADMINS/BOSSES, без role — все роли', async () => {
+    it('members по массивам BOSS/USER, без role — все роли', async () => {
         write('USERS/u2/$user/class.js', `export default { label: 'U2' }`);
         write('MBOX2/$class/class.js',
-            `export default { label: 'MBOX2', '#security': { ADMIN: ['u1', 'u2'], BOSS: ['u1'], USER: ['u2'] } }`);
+            `export default { label: 'MBOX2', '#security': { BOSS: ['u1', 'u2'], USER: ['u2'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
         const mbox2 = await WORK.get_item('/MBOX2');
-        const admins = await mbox2.members({ role: 'ADMIN' });
-        assert.deepEqual(admins.map(u => u.id).sort(), ['u1', 'u2'], 'несколько ADMINS — массив');
         const bosses = await mbox2.members({ role: 'BOSS' });
-        assert.deepEqual(bosses.map(u => u.id), ['u1'], 'BOSSES — массив');
+        assert.deepEqual(bosses.map(u => u.id).sort(), ['u1', 'u2'], 'несколько BOSS — массив');
         const all = await mbox2.members();
         assert.deepEqual(all.map(u => u.id).sort(), ['u1', 'u2'], 'дедупликация по id');
     });
@@ -349,31 +344,26 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         assert.deepEqual(users, [], 'литерал GUEST не попадает в назначенных');
     });
 
-    it('admins/bosses — локальные, allAdmins/allBosses — с наследованием', async () => {
+    it('bosses — локальные, allBosses — с наследованием', async () => {
         write('ORG/$class/class.js',
-            `export default { label: 'ORG', '#security': { ADMIN: ['u1'], BOSS: ['u1'] } }`);
+            `export default { label: 'ORG', '#security': { BOSS: ['u1'] } }`);
         write('ORG/DEPT/$class/class.js',
-            `export default { label: 'DEPT', '#security': { ADMIN: ['u2'], BOSS: ['u2'], USER: ['u2'] } }`);
+            `export default { label: 'DEPT', '#security': { BOSS: ['u2'], USER: ['u2'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
         const dept = await WORK.get_item('/ORG/DEPT');
-        const admins = await dept.admins;
-        assert.deepEqual(admins.map(u => u.id), ['u2'], 'admins — только локальные, без наследования');
         const bosses = await dept.bosses;
         assert.deepEqual(bosses.map(u => u.id), ['u2'], 'bosses — только локальные, без наследования');
 
-        const allAdmins = await dept.allAdmins;
-        assert.deepEqual(allAdmins.map(u => u.id), ['u1', 'u2'], 'allAdmins — родитель + локальные');
         const allBosses = await dept.allBosses;
         assert.deepEqual(allBosses.map(u => u.id), ['u1', 'u2'], 'allBosses — родитель + локальные');
 
         const roles = await dept.roles({ session: { uid: 'u1' } });
-        assert.ok(roles.includes('ADMIN'), 'родительский админ присутствует в ролях дочернего');
         assert.ok(roles.includes('BOSS'), 'родительский босс присутствует в ролях дочернего');
 
-        const inherited = await dept.members({ role: 'ADMIN', inherited: true });
-        assert.deepEqual(inherited.map(u => u.id), ['u1', 'u2'], 'members({inherited}) — все админы');
+        const inherited = await dept.members({ role: 'BOSS', inherited: true });
+        assert.deepEqual(inherited.map(u => u.id), ['u1', 'u2'], 'members({inherited}) — все боссы');
 
         const all = await dept.members();
         assert.deepEqual(all.map(u => u.id).sort(), ['u1', 'u2'], 'members() — все назначенные с дедупликацией');
@@ -395,39 +385,37 @@ describe('словарь API: members / assertAccess / work_zone / find_item', (
         }
     });
 
-    it('GUESTS: роль, единое хранилище, члены по #security.GUESTS', async () => {
+    it('прикладная роль из ROLES class.js: единое хранилище, члены по #security', async () => {
         write('USERS/u3/$user/class.js', `export default { label: 'U3' }`);
         write('GUESTBOX/$class/class.js',
-            `export default { label: 'GUESTBOX', '#security': { GUEST: ['u3'] } }`);
+            `export default { label: 'GUESTBOX', ROLES: { PARTNER: { label: 'Партнёр' } }, '#security': { PARTNER: ['u3'] } }`);
         WORK.reset();
         (await WORK.$users).reset();
 
         const gbox = await WORK.get_item('/GUESTBOX');
-        const guests = await gbox.guests;
-        assert.deepEqual(guests.map(u => u.id), ['u3'], 'guests читает #security.GUESTS');
-        const members = await gbox.members({ role: 'GUEST' });
-        assert.deepEqual(members.map(u => u.id), ['u3'], 'members({role: GUEST})');
+        const members = await gbox.members({ role: 'PARTNER' });
+        assert.deepEqual(members.map(u => u.id), ['u3'], 'members({role: PARTNER})');
         const roles = await gbox.roles({ session: { uid: 'u3' } });
-        assert.deepEqual(roles, ['GUEST'], 'roles гостя — только GUEST');
-        const zone = await gbox.work_zone({ role: 'GUEST' });
+        assert.deepEqual(roles, ['PARTNER'], 'roles партнёра — только PARTNER');
+        const zone = await gbox.work_zone({ role: 'PARTNER' });
         assert.equal(zone.path.replaceAll('\\', '/'), gbox.meta_folder.path.replaceAll('\\', '/'), 'единое хранилище метапапки');
         const all = await gbox.assignedUsers;
-        assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает гостей');
+        assert.deepEqual(all.map(u => u.id), ['u3'], 'assignedUsers включает прикладные роли');
     });
 
-    it('GUEST видит систему и зону GUEST, но не зону USER; пишет только в GUEST', async () => {
+    it('PARTNER видит систему и зону PARTNER, но не зону USER; пишет только в PARTNER', async () => {
         const gbox = await WORK.get_item('/GUESTBOX');
-        const guests = await gbox.meta_folder._get_next_item('GUEST', FS.$folder);
+        const partners = await gbox.meta_folder._get_next_item('PARTNER', FS.$folder);
         const work = await gbox.meta_folder._get_next_item('USER', FS.$folder);
         const handlers = await gbox.meta_folder._get_next_item('handlers', FS.$folder);
-        const params = { session: { uid: 'u3' }, role: 'GUEST' };
+        const params = { session: { uid: 'u3' }, role: 'PARTNER' };
 
         assert.equal(await gbox.canSee(gbox, params), true, 'видит свой класс');
-        assert.equal(await gbox.canSee(guests, params), true, 'видит зону GUEST');
+        assert.equal(await gbox.canSee(partners, params), true, 'видит зону PARTNER');
         assert.equal(await gbox.canSee(handlers, params), true, 'видит систему точки');
         assert.equal(await gbox.canSee(work, params), false, 'не видит зону USER');
 
-        assert.equal(await gbox.canWrite(guests, params), true, 'пишет в GUEST');
+        assert.equal(await gbox.canWrite(partners, params), true, 'пишет в PARTNER');
         assert.equal(await gbox.canWrite(work, params), false, 'не пишет в USER');
         assert.equal(await gbox.canWrite(handlers, params), false, 'не пишет в систему');
     });

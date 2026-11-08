@@ -168,17 +168,17 @@ export function rewriteRemoteDataResult(res, nodePrefix) {
 export async function resolveMountRoles(nodeRoot, params = {}) {
     await nodeRoot.init;
     const declared = nodeRoot._declaredRolesSync();
-    const nonSystemRoles = Object.keys(declared).filter(r => r !== 'ADMIN' && r !== 'BOSS');
+    const nonSystemRoles = Object.keys(declared).filter(r => r !== 'BOSS');
     const grantRoles = (nodeRoot.DATA?.remote?.grants || [])
         .map(g => g?.role)
-        .filter(r => r && r !== 'ADMIN' && r !== 'BOSS');
+        .filter(r => r && r !== 'BOSS');
 
     const uid = nodeRoot.constructor.resolveUid(params);
     const isAdmin = DEV_MODE
         || !params?.session
         || params.session.$user === globalThis.WORK
-        || (await nodeRoot._isWorkAdmin(params).catch(() => false))
-        || (await nodeRoot.roles(params).catch(() => [])).includes('ADMIN');
+        || (await nodeRoot._isWorkBoss?.(params).catch(() => false))
+        || (await nodeRoot.roles(params).catch(() => [])).includes('BOSS');
 
     if (isAdmin) {
         return [...new Set([...grantRoles, ...nonSystemRoles, 'USER'])];
@@ -188,7 +188,8 @@ export async function resolveMountRoles(nodeRoot, params = {}) {
 
     const assigned = [];
     for (const r of [...new Set([...grantRoles, ...nonSystemRoles])]) {
-        if (nodeRoot._roleIds(r, declared).includes(uid) || nodeRoot._roleIds(r, declared).includes('GUEST'))
+        const list = nodeRoot._roleIds(r, declared);
+        if (list.includes(uid) || list.includes('USERS') || list.includes('GUESTS') || list.includes('GUEST'))
             assigned.push(r);
     }
     if (!assigned.includes('USER') && await nodeRoot._isPlaceMember(uid))

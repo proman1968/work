@@ -38,7 +38,7 @@ function write(rel, content) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-assist-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     // типы файлов данных проекта: лента (.logs) — запись дня, а не обычный файл
@@ -166,9 +166,9 @@ describe('отчёты и права', () => {
         await assert.rejects(tool('access').run({ path: '/ORG/$class/BOSS/plan.md' }, as('ZZ00000000000009')), /Доступ запрещён/);
     });
 
-    it('assign: только ADMIN; меняет #security своего слоя без наследуемого', async () => {
-        await assert.rejects(tool('assign').run({ path: '/ORG', role: 'USER', add: ['Иванова Пётр'] }, as(BOSS)), /Доступ запрещён/);
-        const res = await tool('assign').run({ path: '/ORG', role: 'USER', add: ['Иванова Пётр'], remove: [IVAN] }, as(ADMIN));
+    it('assign: только BOSS; меняет #security своего слоя без наследуемого', async () => {
+        await assert.rejects(tool('assign').run({ path: '/ORG', role: 'USER', add: ['Иванова Пётр'] }, as(IVAN)), /Доступ запрещён/);
+        const res = await tool('assign').run({ path: '/ORG', role: 'USER', add: ['Иванова Пётр'], remove: [IVAN] }, as(BOSS));
         assert.match(res, new RegExp(PETR));
         const text = fs.readFileSync(path.join(tmp, 'ORG/$class/class.js'), 'utf-8');
         assert.match(text, new RegExp(PETR));
@@ -387,7 +387,7 @@ describe('роль задачи', () => {
         const org = await tool('write').run({ path: '/ORG/итог.md', content: 'x' }, ctx);
         assert.match(org, /\/ORG\/\$class\/text\//, 'точка — единое хранилище $class без подпапок ролей');
         // в ADMIN-задаче — то же единое хранилище
-        const adm = await tool('write').run({ path: '/USERS/' + ADMIN + '/work/a.md', content: 'x' }, { ...as(ADMIN), role: 'ADMIN' });
+        const adm = await tool('write').run({ path: '/USERS/' + ADMIN + '/work/a.md', content: 'x' }, { ...as(ADMIN), role: 'BOSS' });
         assert.match(adm, /\/\$user\/text\//);
         // действия администратора в роли USER — отказ с объяснением
         await assert.rejects(tool('assign').run({ path: '/ORG', role: 'USER', add: [IVAN] }, ctx), /роли USER/);
@@ -399,7 +399,7 @@ describe('роль задачи', () => {
         // инструменты ОС/сети — только в роли ADMIN
         const asUser = await createEnv({ place: WORK, session: { uid: ADMIN }, role: 'USER' });
         assert.ok(!(await asUser.makeTools()).some(t => t.system));
-        const asAdmin = await createEnv({ place: WORK, session: { uid: ADMIN }, role: 'ADMIN' });
+        const asAdmin = await createEnv({ place: WORK, session: { uid: ADMIN }, role: 'BOSS' });
         assert.ok((await asAdmin.makeTools()).some(t => t.system));
     });
 });

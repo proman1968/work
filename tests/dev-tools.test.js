@@ -56,7 +56,7 @@ before(async () => {
     await fsp.mkdir(tempRoot, { recursive: true });
     tmp = await fsp.mkdtemp(path.join(tempRoot, 'dev-tools-'));
     root = path.join(tmp, 'work');
-    write(path.join(root, '$server/class.js'), `export default { '#security': { ADMIN: ['admin'] } }`);
+    write(path.join(root, '$server/class.js'), `export default { '#security': { BOSS: ['admin'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(path.join(root, p, 'class.js'), 'export default {}');
     write(path.join(root, 'BOX/$class/class.js'), `export default { label: 'К', '#security': { USER: ['${UID}'] } }`);
@@ -74,7 +74,7 @@ before(async () => {
     write(path.join(root, 'SRC/other.ts'), 'const helloWorld = 1;\nconst other = 2;\n');
     // R15 (8.38): таблица для читателей чужих файлов
     write(path.join(root, 'BOX/doc/table.csv'), 'имя,возраст\nАнна,30\n');
-    write(path.join(root, 'PRIV/$class/class.js'), `export default { label: 'Ч', '#security': { ADMIN: ['admin'] } }`);
+    write(path.join(root, 'PRIV/$class/class.js'), `export default { label: 'Ч', '#security': { BOSS: ['admin'] } }`);
     write(path.join(root, 'PRIV/x.md'), 'здесь HIDDENWORD\n');
     write(path.join(root, `USERS/${UID}/$user/class.js`), `export default { label: 'U' }`);
     write(path.join(root, `USERS/${UID}/$user/#secret/notes.md`), 'мой HIDDENWORD в заметках\n');

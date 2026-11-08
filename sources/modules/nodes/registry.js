@@ -125,7 +125,7 @@ export async function fetchCard(origin, { trusted = false } = {}) {
 function rolesFrom(card) {
     const out = {};
     for (const r of card?.roles || [])
-        if (/^[A-Z][A-Z0-9_]*$/.test(r?.id || '') && !['ADMIN', 'BOSS'].includes(r.id))
+        if (/^[A-Z][A-Z0-9_]*$/.test(r?.id || '') && r.id !== 'BOSS')
             out[r.id] = { label: r.label || r.id };
     return out;
 }

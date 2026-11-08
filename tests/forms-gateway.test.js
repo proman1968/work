@@ -30,7 +30,7 @@ function write(rel, content) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-gw-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Исполнитель']])

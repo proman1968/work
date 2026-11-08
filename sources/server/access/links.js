@@ -121,8 +121,6 @@ export async function linkLevel(cls, params = {}) {
     if (NO_LINK_TYPES.has(cls.type))
         return null;
     const uid = cls.constructor.resolveUid(params);
-    if (!uid)
-        return null;
     let best = null;
     for (const { structure, place, access } of await covering(cls.path)) {
         let g;
@@ -137,10 +135,6 @@ export async function linkLevel(cls, params = {}) {
         const roles = await g.roles(params).catch(() => []);
         if (!roles.length)
             continue;
-        if (roles.includes('ADMIN')) {
-            best = takeRank(best, access === 'write' ? 'admin' : 'read');
-            continue;
-        }
         const sec = g.DATA?.['#security'];
         if (place) {
             if (WORKPLACES.memberTrailKeys(sec, uid).includes(place))
@@ -151,7 +145,7 @@ export async function linkLevel(cls, params = {}) {
                 best = takeRank(best, 'read');
         }
         else {
-            best = takeRank(best, access);
+            best = takeRank(best, roles.includes('BOSS') && access === 'write' ? 'admin' : access);
         }
     }
     return best;
@@ -171,20 +165,18 @@ export async function dataAccess(cls, params = {}) {
 export async function directAccess(cls, params = {}) {
     let best = null;
     const uid = cls.constructor.resolveUid(params);
-    if (uid) {
-        const roles = await cls.roles(params);
-        const declared = cls._declaredRolesSync();
-        for (const r of roles) {
-            const d = declared[r];
-            if (!d)
-                continue;
-            if (r === 'ADMIN')
-                best = takeRank(best, 'admin');
-            else if (r !== 'BOSS' && cls._roleIds(r, declared).includes(uid))
-                best = takeRank(best, 'write');
-            else
-                best = takeRank(best, 'read');
-        }
+    const roles = await cls.roles(params);
+    const declared = cls._declaredRolesSync();
+    for (const r of roles) {
+        const d = declared[r];
+        if (!d)
+            continue;
+        if (r === 'BOSS')
+            best = takeRank(best, 'admin');
+        else if (WORKPLACES.matchesUserList(cls._roleIds(r, declared), uid))
+            best = takeRank(best, 'write');
+        else
+            best = takeRank(best, 'read');
     }
     return best;
 }
@@ -216,7 +208,7 @@ export async function scopeLinks(cls, params = {}) {
         return [];
     const uid = cls.constructor.resolveUid(params);
     const p = String(cls.path || '');
-    if (!uid || !p.startsWith('/'))
+    if (!p.startsWith('/'))
         return [];
     const out = [];
     const seen = new Map();
@@ -240,10 +232,6 @@ export async function scopeLinks(cls, params = {}) {
         if (!s)
             continue;
         const base = { structure: e.structure, place: e.place, id: e.id, scope: e.scope ?? null, places: s.places, labels: s.labels };
-        if (s.roles.includes('ADMIN')) {
-            out.push({ ...base, access: e.access === 'write' ? 'admin' : 'read', relation: 'admin' });
-            continue;
-        }
         if (!e.place || s.places.includes(e.place))
             out.push({ ...base, access: e.access, relation: 'member' });
         else if (WORKPLACES.isAncestorPlaceMember(s.sec, uid, e.place))

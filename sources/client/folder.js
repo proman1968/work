@@ -12,7 +12,7 @@ import { $item } from '../core.js';
 export function effectiveRole(mine = [], order = [], preferred = '') {
     mine = Array.isArray(mine) ? [...new Set(mine)] : [];
     if (!mine.length)
-        return 'GUEST';
+        return 'USER';
     const selectable = mine.includes('USER') ? mine : [...mine, 'USER'];
     if (preferred && selectable.includes(preferred))
         return preferred;
@@ -99,8 +99,8 @@ export class $folder extends $item {
         if (this.DATA?.declaredRoles && typeof this.DATA.declaredRoles === 'object')
             return Promise.resolve(Object.keys(this.DATA.declaredRoles));
         return this._roleOrder ??= Promise.resolve(this.fetch('declared_roles'))
-            .then(d => (d && typeof d === 'object' ? Object.keys(d) : ['ADMIN', 'BOSS', 'USER', 'GUEST']))
-            .catch(() => ['ADMIN', 'BOSS', 'USER', 'GUEST']);
+            .then(d => (d && typeof d === 'object' ? Object.keys(d) : ['BOSS', 'USER']))
+            .catch(() => ['BOSS', 'USER']);
     }
     /**
      * Роли для переключателя: свои + USER, чтобы смотреть глазами исполнителя
@@ -163,11 +163,15 @@ export class $folder extends $item {
     get roles() {
         return Promise.resolve(this.fetch('roles')).then(roles => Array.isArray(roles) ? roles : []);
     }
-    /** Проверка роли администратора (в режиме отладки сервера — true для всех). */
-    get isAdmin() {
+    /** Проверка роли руководителя BOSS (в режиме отладки сервера — true для всех). */
+    get isBoss() {
         if (WORK?.DEV_MODE)
             return Promise.resolve(true);
-        return Promise.resolve(this.roles).then(roles => roles.includes('ADMIN'));
+        return Promise.resolve(this.roles).then(roles => roles.includes('BOSS'));
+    }
+    /** @deprecated алиас isBoss */
+    get isAdmin() {
+        return this.isBoss;
     }
     get expanded() {
         return false

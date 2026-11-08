@@ -25,7 +25,7 @@ function write(rel, content) {
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-flags-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
         write(p + '/class.js', 'export default {}');
     for (const uid of [ADMIN, BOSS, USER1, USER2])
@@ -61,8 +61,8 @@ describe('флаги строки дерева', () => {
     it('roleIds: uid по ролям, литерал GUEST отброшен; без назначений — пустые массивы', async () => {
         const withR = await WORK.get_item('/WITH');
         const without = await WORK.get_item('/WITHOUT');
-        assert.deepEqual((await withR.info({})).roleIds, { ADMIN: [], BOSS: [BOSS], USER: [USER1, USER2], GUEST: [] });
-        assert.deepEqual((await without.info({})).roleIds, { ADMIN: [], BOSS: [], USER: [], GUEST: [] });
+        assert.deepEqual((await withR.info({})).roleIds, { BOSS: [BOSS], USER: [USER1, USER2] });
+        assert.deepEqual((await without.info({})).roleIds, { BOSS: [], USER: [] });
         const root = await WORK.get_item('/');
         const list = JSON.parse(JSON.stringify(await root.items));
         assert.deepEqual(list.find(i => i.id === 'WITH').roleIds.USER, [USER1, USER2], 'в списке @items');

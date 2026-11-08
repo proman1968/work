@@ -574,7 +574,7 @@ export class $server extends $class {
         if (!uid)
             throw new Error('Доступ запрещён');
         const roles = await this.roles(params).catch(() => []);
-        if (!roles.includes('ADMIN'))
+        if (!roles.includes('BOSS'))
             throw new Error('Доступ запрещён');
         if (!DEV_MODE)
             throw new Error('Сервер уже работает в обычном режиме');

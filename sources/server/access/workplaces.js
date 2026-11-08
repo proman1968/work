@@ -2,21 +2,58 @@
  * Прикладные роли подразделения ($structure и наследники: $base, $server).
  * Хранятся в `#security` класса:
  *   '#security': {
- *       ADMIN: [...], BOSS: [...], USER: [...], GUEST: [...],
+ *       BOSS: [...], USER: [...],
  *       LINKS: [{ id: '/ПУТЬ', access: 'read'|'write', scope?: 'own'|'place'|'unit'|'all' }],   // общие ссылки — всем назначенным
  *       ROLES: [{ id, label?, icon?, USERS: [...], LINKS: [...], ROLES: [...] }],  // дерево должностей
  *   }
+ * Псевдо-пользователи в `USERS`:
+ *  - 'USERS'  — все зарегистрированные (вошедшие) пользователи;
+ *  - 'GUESTS' — все внешние посетители (включая неавторизованных).
  * Правила:
  *  - у прикладной роли нет зоны-папки и нет id системной роли (любой регистр, уникален в классе);
  *  - назначение на любую прикладную роль делает пользователя участником (USER) подразделения;
  *  - ссылка места действует своим access для его участников;
  *  - вышестоящее место видит ссылки вложенных мест, но только на чтение;
- *  - BOSS структуры видит ссылки всех мест на чтение.
+ *  - BOSS структуры видит и администрирует ссылки всех мест.
  * Чистые функции поверх объекта `#security` (без ввода-вывода).
  */
 
 /** Имена метапапок типов-структур (в них лежит class.js подразделения). */
 export const STRUCTURE_META_NAMES = Object.freeze(['$structure', '$base', '$server']);
+
+/** Групповые псевдо-субъекты для назначения на рабочие места и в USER. */
+export const PSEUDO_USERS = Object.freeze({
+    USERS: 'USERS',
+    GUESTS: 'GUESTS',
+});
+
+/** Проверка, является ли идентификатор групповым псевдо-субъектом. */
+export function isPseudoUser(id) {
+    return id === 'USERS' || id === 'GUESTS' || id === 'GUEST';
+}
+
+/** Сопоставление субъекта uid (или null для гостя) со списком назначенных USERS. */
+export function matchesUserList(list, uid) {
+    if (!Array.isArray(list) || !list.length)
+        return false;
+    if (list.includes('GUESTS') || list.includes('GUEST'))
+        return true;
+    if (!uid)
+        return false;
+    if (list.includes('USERS'))
+        return true;
+    return list.includes(uid);
+}
+
+/** Открыта ли точка для неавторизованных гостей (через USER или любое рабочее место ROLES). */
+export function isOpenToGuests(security) {
+    if (!security || typeof security !== 'object')
+        return false;
+    if (matchesUserList(security.USER, null))
+        return true;
+    const { places } = normalizeSecurity(security);
+    return walkPlaces(places).some(({ node }) => matchesUserList(node.USERS, null));
+}
 
 const RANK = { read: 1, write: 2 };
 
@@ -96,13 +133,11 @@ export function trailKey(trail) {
     return trail.join('/');
 }
 
-/** Пути (trail) мест, на которые назначен uid. */
+/** Пути (trail) мест, на которые назначен uid (с учётом псевдо-субъектов USERS и GUESTS). */
 export function memberTrailKeys(security, uid) {
-    if (!uid)
-        return [];
     const { places } = normalizeSecurity(security);
     return walkPlaces(places)
-        .filter(({ node }) => node.USERS.includes(uid))
+        .filter(({ node }) => matchesUserList(node.USERS, uid))
         .map(({ trail }) => trailKey(trail));
 }
 

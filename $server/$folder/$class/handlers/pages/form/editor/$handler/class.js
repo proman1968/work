@@ -3,8 +3,9 @@ export default {
     icon: 'editor:mode-edit',
     label: 'Свойства',
     allowSave: true,
-    /** Редактор свойств класса — только роль ADMIN. */
-    roles: ['ADMIN'],
+    order: 21,
+    /** Редактор свойств класса — только роль BOSS. */
+    roles: ['BOSS'],
     /**
      * Редактор — только элементам с полями (STATIC, иначе FIELDS —
      * как $fields клиента: STATIC при наличии, иначе FIELDS).

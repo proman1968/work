@@ -187,7 +187,7 @@ ODA({is: 'form-chat',
                     if (!p) continue;
                     const pLabel = p.label || p.id || '';
                     for (const u of p.users || []) {
-                        if (u && u !== 'GUEST') {
+                        if (u && u !== 'GUEST' && u !== 'GUESTS' && u !== 'USERS') {
                             uidSet.add(u);
                             if (pLabel && !placeLabels.has(u))
                                 placeLabels.set(u, pLabel);
@@ -209,10 +209,10 @@ ODA({is: 'form-chat',
             const roleIds = $item.DATA?.roleIds || {};
             for (const [roleKey, list] of Object.entries(roleIds)) {
                 for (const u of list || []) {
-                    if (u && u !== 'GUEST') {
+                    if (u && u !== 'GUEST' && u !== 'GUESTS' && u !== 'USERS') {
                         uidSet.add(u);
                         if (!placeLabels.has(u))
-                            placeLabels.set(u, roleKey === 'BOSS' ? 'Руководитель (BOSS)' : (roleKey === 'ADMIN' ? 'Администратор' : 'Сотрудник'));
+                            placeLabels.set(u, roleKey === 'BOSS' ? 'Руководитель (BOSS)' : 'Сотрудник');
                     }
                 }
             }

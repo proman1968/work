@@ -118,7 +118,7 @@ describe('регистрация: первый пользователь', () => 
         assert.ok(fs.existsSync(path.join(tmp, 'USERS', first.uid, '$user', 'icon.png')), 'иконка записана');
         // первый пользователь назначен во все базовые роли WORK (#security создан с нуля)
         const data = await WORK.DATA;
-        for (const role of ['ADMIN', 'BOSS', 'USER'])
+        for (const role of ['BOSS', 'USER'])
             assert.ok(data['#security']?.[role]?.includes(first.uid), role + ' включает первого');
     });
 
@@ -128,7 +128,7 @@ describe('регистрация: первый пользователь', () => 
         const u = await (await WORK.$users).get_item('//' + second.uid);
         assert.equal(u.DATA.label, EMAIL2, 'пустые имя/фамилия — метка из email');
         const data = await WORK.DATA;
-        assert.ok(!data['#security']?.ADMIN?.includes(second.uid), 'второй не назначается администратором');
+        assert.ok(!data['#security']?.BOSS?.includes(second.uid), 'второй не назначается руководителем');
     });
 });
 

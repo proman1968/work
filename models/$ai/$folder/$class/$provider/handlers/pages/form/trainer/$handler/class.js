@@ -2,7 +2,7 @@
 export default {
     icon: 'carbon:machine-learning-model',
     label: 'Обучение',
-    roles: ['ADMIN', 'BOSS'],
+    roles: ['BOSS'],
     order: 1,
     allowUse($context) {
         const p = String($context?.path || $context?.short || '');

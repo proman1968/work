@@ -266,11 +266,11 @@ describe('Локальный ИИ-контур: адаптация под реа
                 assert.ok(!textOut.includes('Домен организаций (/ORGANIZATIONS)'), 'на "Привет" модель отвечает живым текстом, а не зашитым шаблоном');
             }
 
-            const localHandlers = await localProvider.handlers({ path: '//form', role: 'ADMIN' });
+            const localHandlers = await localProvider.handlers({ path: '//form', role: 'BOSS' });
             const localViewIds = (localHandlers?.items || []).filter(i => i.usable !== false).map(i => i.id);
             assert.ok(localViewIds.includes('trainer'), 'на /MODELS/Local доступна вкладка Unsloth / HF (trainer)');
 
-            const gigaHandlers = await gigaProvider.handlers({ path: '//form', role: 'ADMIN' });
+            const gigaHandlers = await gigaProvider.handlers({ path: '//form', role: 'BOSS' });
             const gigaViewIds = (gigaHandlers?.items || []).filter(i => i.usable !== false).map(i => i.id);
             assert.ok(!gigaViewIds.includes('trainer'), 'на облачном /MODELS/GigaChat вкладка trainer скрыта');
         }

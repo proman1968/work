@@ -41,7 +41,7 @@ const item = p => WORK.get_item(p);
 before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-data-api-'));
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file', '$server/$folder/$class/$domain', '$server/$folder/$class/$module', '$server/$folder/$class/$structure'])
         write(p + '/class.js', 'export default {}');
     for (const [uid, label] of [[ADMIN, 'Админ'], [USER1, 'Продавец'], [NOBODY, 'Чужой']])

@@ -227,7 +227,7 @@ export async function buildContexts(point, params = {}) {
         let ids = await cls.roles(params);
         if (!ids.length) {
             if (await isOpenAccess(cls))
-                ids = ['GUEST'];
+                ids = ['USER'];
             else if (!cls.hasAssignments?.() && cls.$parent) {
                 // точка без назначений — действуют права ближайшей назначенной выше
                 // (как pass-through в canSee): её роли, но область этой точки
@@ -304,7 +304,7 @@ export async function buildContexts(point, params = {}) {
 async function isOpenAccess(cls) {
     await cls.init;
     const users = cls.DATA?.['#security']?.USER;
-    return Array.isArray(users) && users.includes('GUEST');
+    return Array.isArray(users) && (users.includes('GUEST') || users.includes('GUESTS'));
 }
 
 /** Вес слоя: собственный/ближний выше унаследованного. */

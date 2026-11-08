@@ -15,7 +15,7 @@ process.env.WORK_PORT = String(free);
 
 await import('../sources/reactor.js');
 const { $server } = await import('../sources/server/server.js');
-const { createRequestHandler, startServers } = await import('../sources/host/http-server.js');
+const { createRequestHandler, startServers, shouldAutoOpenBrowser } = await import('../sources/host/http-server.js');
 const { describe, it, before, after } = await import('node:test');
 const assert = (await import('node:assert/strict')).default;
 const fs = (await import('node:fs')).default;
@@ -64,5 +64,11 @@ describe('startServers', () => {
         const nope = await fetch(base + 'nope');
         assert.equal(nope.status, 400, nope.status + '');
         assert.match(await nope.text(), /not found/);
+    });
+
+    it('shouldAutoOpenBrowser: включён при интерактивном старте run.mjs, выключен в тестах и при WORK_NO_BROWSER=1', () => {
+        assert.equal(shouldAutoOpenBrowser({}, [], ['node', 'run.mjs']), true);
+        assert.equal(shouldAutoOpenBrowser({ WORK_NO_BROWSER: '1' }, [], ['node', 'run.mjs']), false);
+        assert.equal(shouldAutoOpenBrowser({}, ['--test'], ['node', 'tests/http-start.test.js']), false);
     });
 });

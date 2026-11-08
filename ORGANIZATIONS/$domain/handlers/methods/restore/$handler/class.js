@@ -30,7 +30,7 @@ function pickZipFile() {
 export default {
     icon: 'icons:file-upload',
     label: 'Загрузить из архива',
-    roles: ['ADMIN', 'BOSS'],
+    roles: ['BOSS'],
     button: true,
     isButton: true,
     order: 1,

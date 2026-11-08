@@ -378,9 +378,10 @@ function reportAccount(db, cls, ref) {
 async function fullAccess(item, p, write) {
     if (!p?.session || DEV_MODE || p.session.$user === globalThis.WORK)
         return true;
-    if (!write && item.DATA?.['#security']?.USER?.includes('GUEST'))
+    const users = item.DATA?.['#security']?.USER;
+    if (!write && Array.isArray(users) && (users.includes('GUEST') || users.includes('GUESTS')))
         return true;
-    if (await item._isWorkAdmin(p).catch(() => false))
+    if (await item._isWorkBoss?.(p).catch(() => false))
         return true;
     const level = await (await linksModule()).directAccess(item, p).catch(() => null);
     return write ? level === 'write' || level === 'admin' : level != null;
@@ -393,7 +394,7 @@ async function fullAccess(item, p, write) {
 async function scopeOf(item, p, db, cls, write) {
     const full = await fullAccess(item, p, write);
     const uid = item.constructor.resolveUid?.(p);
-    const links = uid ? await (await linksModule()).scopeLinks(item, p).catch(() => []) : [];
+    const links = await (await linksModule()).scopeLinks(item, p).catch(() => []);
     return { full, links, grants: full ? null : scopeGrants(db, cls, links, { uid, write }) };
 }
 
@@ -813,8 +814,8 @@ export const DATA_METHODS = Object.freeze({
                 g = g.at(-1);
             await g?.init;
             const roles = await g?.roles(p).catch(() => []) ?? [];
-            const admin = DEV_MODE || p.session?.$user === globalThis.WORK || roles.includes('ADMIN')
-                || await g?._isWorkAdmin(p).catch(() => false) || false;
+            const admin = DEV_MODE || p.session?.$user === globalThis.WORK || roles.includes('BOSS')
+                || await g?._isWorkBoss?.(p).catch(() => false) || false;
             units.push({ ...c, parent: c.cid === root.cid ? null : c.parent, roles, admin, security: g?.DATA?.['#security'] });
         }
         return buildWorkspace(db, { units, uid: item.constructor.resolveUid?.(p) ?? null });

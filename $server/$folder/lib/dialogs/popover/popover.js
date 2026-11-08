@@ -36,12 +36,11 @@ export default {
                 this.removeAttribute('role-theme');
             }
         },
-        // заголовок-навигатор по $item — светлый потомок в слоте title оболочки;
-        // showRole — смена роли прямо из меню
+        // заголовок-навигатор по $item — светлый потомок в слоте title оболочки
         _titleExplorer($item) {
             this.querySelector(':scope > item-node-explorer[slot="title"]')?.remove();
             if ($item)
-                this.appendChild(ODA.createElement('item-node-explorer', { slot: 'title', $item, deep: this.TITLE?.deep ?? 0, showRole: true }));
+                this.appendChild(ODA.createElement('item-node-explorer', { slot: 'title', $item, deep: this.TITLE?.deep ?? 0 }));
         }
     }
 }

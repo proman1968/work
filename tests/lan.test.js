@@ -41,7 +41,7 @@ before(async () => {
     await fsp.mkdir(tempRoot, { recursive: true });
     tmp = await fsp.mkdtemp(path.join(tempRoot, 'lan-test-'));
     write('#system/os.json', JSON.stringify(cfg));
-    write('$server/class.js', `export default { '#security': { ADMIN: ['admin'] } }`);
+    write('$server/class.js', `export default { '#security': { BOSS: ['admin'] } }`);
     write('$server/$folder/class.js', 'export default {}');
     write('$server/$folder/$class/class.js', 'export default {}');
     write('$server/$folder/$class/$service/class.js', 'export default {}');

@@ -142,7 +142,7 @@ before(async () => {
     await new Promise(r => partnerServer.listen(0, '127.0.0.1', r));
     partnerOrigin = `http://127.0.0.1:${partnerServer.address().port}`;
 
-    write('$server/class.js', `export default { label: 'WORK', '#security': { ADMIN: ['${ADMIN}'] } }`);
+    write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
     for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file', '$server/$folder/$class/$structure', '$server/$folder/$class/$domain'])
         write(p + '/class.js', 'export default {}');
 

@@ -14,7 +14,7 @@ describe('$class secrets', () => {
         delete process.env.dev;
         globalThis.WORK = {
             async roles(p) {
-                return p?.session?.uid === adminUid ? ['ADMIN'] : [];
+                return p?.session?.uid === adminUid ? ['BOSS'] : [];
             },
         };
         return Promise.resolve(fn()).finally(() => {
@@ -70,7 +70,7 @@ describe('$class secrets', () => {
             const log = await item.save_secret({
                 filename: 'testmodule.json',
                 session,
-                role: 'ADMIN',
+                role: 'BOSS',
                 post: body,
                 encoding: 'utf-8',
             });
@@ -79,7 +79,7 @@ describe('$class secrets', () => {
             assert.equal(JSON.parse(fs.readFileSync(secretFile, 'utf-8')).value, 42);
             assert.ok(log?.path?.includes('#secret'), 'log.path указывает на #secret history');
             assert.ok(log.path.includes('history'), 'есть history-снимок');
-            const data = await item.read_secret({ filename: 'testmodule.json', session, role: 'ADMIN' });
+            const data = await item.read_secret({ filename: 'testmodule.json', session, role: 'BOSS' });
             assert.equal(data.value, 42);
         }
         finally {
@@ -95,7 +95,7 @@ describe('$class secrets', () => {
             fs.mkdirSync(legacyDir, { recursive: true });
             fs.writeFileSync(path.join(legacyDir, 'email.json'), JSON.stringify({ mailboxes: { 'a@b.c': {} } }));
             const session = { uid: 'admin1', $user: { id: 'admin1' } };
-            const data = await item.read_secret({ filename: 'email.json', session, role: 'ADMIN' });
+            const data = await item.read_secret({ filename: 'email.json', session, role: 'BOSS' });
             assert.deepEqual(Object.keys(data.mailboxes), ['a@b.c']);
         }
         finally {
@@ -147,11 +147,11 @@ describe('$class secrets', () => {
             const item = makeItem(tmp);
             const session = { uid: 'admin1', $user: { id: 'admin1' } };
             await assert.rejects(
-                () => item.save_secret({ session, role: 'ADMIN', post: '{}' }),
+                () => item.save_secret({ session, role: 'BOSS', post: '{}' }),
                 /Не указано имя файла/
             );
             await assert.rejects(
-                () => item.save_secret({ filename: 'x.json', session, role: 'ADMIN' }),
+                () => item.save_secret({ filename: 'x.json', session, role: 'BOSS' }),
                 /Не указано тело файла/
             );
         }

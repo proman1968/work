@@ -355,11 +355,11 @@ ODA({is: 'chat-item',
     get isAdminRole() {
         const pdpRole = this.$pdp?.$item?.role || this.$pdp?.activeRole;
         if (pdpRole)
-            return pdpRole === 'ADMIN';
+            return pdpRole === 'BOSS';
         const wf = typeof document !== 'undefined' ? document.querySelector?.('pages-form')?.$?.('work-form') : null;
         if (wf?.activeRole)
-            return wf.activeRole === 'ADMIN';
-        return globalThis.WORK?.preferredRole === 'ADMIN';
+            return wf.activeRole === 'BOSS';
+        return globalThis.WORK?.preferredRole === 'BOSS';
     },
     async deleteMissingLog(e) {
         e?.stopPropagation?.();

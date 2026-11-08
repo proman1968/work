@@ -45,13 +45,13 @@ export const access = {
                     assigned: local, inherited,
                 });
             }
-            const open = (point.DATA?.['#security']?.USER || []).includes('GUEST');
+            const open = (point.DATA?.['#security']?.USER || []).some(u => u === 'GUEST' || u === 'GUESTS');
             return JSON.stringify({
                 path: target.path, point: point.path || '/', area,
                 openToAll: open || undefined,
                 yourRoles: await point.roles({ session: ctx?.session }),
                 roles: rows,
-                note: 'Плюс видят: WORK ADMIN (всё), владельцы лент, в которых есть запись с этим путём (receivers). Системные пути /$server, /sources, /oda видны всем.',
+                note: 'Плюс видят: WORK BOSS (всё), владельцы лент, в которых есть запись с этим путём (receivers). Системные пути /$server, /sources, /oda видны всем.',
             }, null, 1);
         },
     };
@@ -111,7 +111,7 @@ export const assign = {
                 filename: 'class.js',
                 post: 'export default ' + FS.$class.toScript(copy),
                 message: 'роль ' + role.id + ': ' + [add.length ? '+' + add.join(',') : '', remove.size ? '−' + [...remove].join(',') : ''].filter(Boolean).join(' '),
-            }, ctx, 'ADMIN');
+            }, ctx, 'BOSS');
             cls.reset();
             return 'роль ' + role.id + ' в ' + cls.path + ': ' + (sec[role.id].join(', ') || 'никого');
         },
@@ -149,9 +149,14 @@ export const escalate = {
             await point.init;
             const pick = async list => (await list || []).map(u => u.id).filter(id => id && id !== uid);
             let to = await pick(point.bosses), whom = 'руководитель ' + (point.path || '/');
-            if (!to.length) { to = await pick(point.allBosses); whom = 'вышестоящий руководитель'; }
-            if (!to.length) { to = await pick(point.allAdmins); whom = 'администратор'; }
-            if (!to.length) { to = await pick(WORK.admins); whom = 'администратор WORK'; }
+            if (!to.length) {
+                for (let p = point.$parent; p && p !== WORK && !to.length; p = p.$parent) {
+                    if (p instanceof FS.$class)
+                        to = await pick(p.bosses);
+                }
+                whom = 'вышестоящий руководитель';
+            }
+            if (!to.length) { to = await pick(WORK.bosses); whom = 'руководитель WORK'; }
             if (!to.length)
                 throw new Error('escalate: не найден ответственный за ' + (point.path || '/'));
             let cab = await (await WORK.$users).get_item('//' + uid);

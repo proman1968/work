@@ -215,7 +215,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         }
 
         // Представление form/trainer доступно на /MODELS/Halogen
-        const handlers = await provider.handlers({ path: '//form', role: 'ADMIN' });
+        const handlers = await provider.handlers({ path: '//form', role: 'BOSS' });
         const viewIds = (handlers?.items || []).filter(i => i.usable !== false).map(i => i.id);
         assert.ok(viewIds.includes('trainer'), 'на /MODELS/Halogen доступна вкладка trainer');
     });
