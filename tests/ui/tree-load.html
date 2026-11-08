@@ -253,6 +253,17 @@ await test('Консультант ИИ: переключатель ИИ в пр
     consEl.promptCategory = 'all';
     consEl.activeFormSummary = { path: '/ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/51', label: '51 Расчётные счета', type: '$account' };
     assert(consEl.contextSecondaryPrompt?.label.includes('51 Расчётные счета'), 'контекстный промпт по счёту');
+    consEl.style.cssText = 'position: fixed; top: 0; left: 0; width: 340px; height: 500px;';
+    document.body.appendChild(consEl);
+    await new Promise(r => setTimeout(r, 150));
+    const hostRect = consEl.getBoundingClientRect();
+    const bottomEl = consEl.$('.bottom');
+    assert(!!bottomEl, 'панель ввода (.bottom) отрендерена сразу при монтировании');
+    const bottomRect = bottomEl.getBoundingClientRect();
+    assert(bottomRect.height > 30, 'панель промпта имеет ненулевую высоту: ' + bottomRect.height);
+    assert(bottomRect.bottom <= hostRect.bottom + 2, 'панель промпта прижата к низу и не вытеснена за пределы экрана (' + bottomRect.bottom + ' <= ' + hostRect.bottom + ')');
+    consEl.remove();
+
     consEl._getPersonalCabinet = async () => fakeCabinet;
     consEl._hydrateModel = async () => { consEl.model = '/MODELS/odant/Qwen3.8 27b'; };
     try {

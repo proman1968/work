@@ -198,9 +198,9 @@ ODA({is: 'app-layout-drawer',
         <div :vertical="mobile" :horizontal="!mobile" ~show="(!mobile && showTabs) || !closed" class="drawer" flex>
             <app-tabs ~if="showTabs" accent-invert no-flex :buttons :items :horizontal="mobile" ::focused-index></app-tabs>
             <div horizontal header flex style="overflow: hidden; min-height: 0;">
-                <div flex vertical style="overflow: auto; min-height: 0;" ~show="!closed">
+                <div flex vertical style="overflow: hidden; min-height: 0;" ~show="!closed">
                     <slot name="title" horizontal></slot>
-                    <slot id="slot" @slotchange="_onSlotchange" flex vertical style="min-height: 0;"></slot>
+                    <slot id="slot" @slotchange="_onSlotchange" flex vertical style="min-height: 0; overflow: hidden;"></slot>
                 </div>
             </div>
         </div>

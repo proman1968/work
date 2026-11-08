@@ -75,11 +75,11 @@ const STATUS_LABELS = {
 };
 
 export const CONSULTANT_PROMPT_CATEGORIES = Object.freeze([
-    { id: 'all', label: 'Все', icon: 'icons:apps' },
+    { id: 'all', label: 'Все', icon: 'carbon:apps' },
     { id: 'accounting', label: 'Учёт и отчёты', icon: 'carbon:data-table' },
     { id: 'org', label: 'Оргструктура и права', icon: 'odant:structure' },
     { id: 'docs', label: 'Документы и задачи', icon: 'enterprise:calendar' },
-    { id: 'system', label: 'Конструктор и ИИ', icon: 'icons:build' },
+    { id: 'system', label: 'Конструктор и ИИ', icon: 'carbon:tools' },
 ]);
 
 export const CONSULTANT_PROMPTS = Object.freeze([
@@ -181,7 +181,7 @@ export const CONSULTANT_PROMPTS = Object.freeze([
         id: 'sys-builder-guide',
         category: 'system',
         scenario: 6,
-        icon: 'icons:build',
+        icon: 'carbon:tools',
         label: 'Как добавить поле/аналитику в класс и настроить форму объекта?',
         prompt: 'Объясни и покажи на примере текущей конфигурации, как добавить новое поле или аналитику в класс (METADATA.FIELDS / ANALYTICS) и настроить раскладку карточки объекта в 12-колоночной сетке.',
     },
@@ -196,17 +196,20 @@ export const CONSULTANT_PROMPTS = Object.freeze([
 ]);
 
 export default {
-    imports: 'oda//button, oda//icon',
+    imports: 'oda//button, oda//icon, ~/lib//prompt-bar.js',
 };
 
 ODA({
     is: 'item-consultant',
-    imports: 'oda//button, oda//icon',
+    imports: 'oda//button, oda//icon, ~/lib//prompt-bar.js',
     template: /*html*/`
         <style>
             :host {
                 @apply --vertical;
                 @apply --flex;
+                flex: 1 1 0%;
+                height: 100%;
+                max-height: 100%;
                 width: 100%;
                 max-width: 100%;
                 min-width: 0;
@@ -375,6 +378,8 @@ ODA({
             .scroller {
                 @apply --vertical;
                 @apply --flex;
+                flex: 1 1 0%;
+                height: 0;
                 overflow-y: auto;
                 overflow-x: hidden;
                 min-height: 0;
@@ -394,7 +399,7 @@ ODA({
                 border-radius: 10px;
                 background: var(--subtle-background);
                 border: 1px solid var(--subtle-border);
-                margin: auto 0;
+                margin: 0;
             }
             .welcome-title {
                 @apply --horizontal;
@@ -478,6 +483,7 @@ ODA({
             .bottom {
                 @apply --vertical;
                 @apply --no-flex;
+                flex-shrink: 0;
                 padding: 6px 8px 8px;
                 border-top: 1px solid var(--subtle-border);
                 background: var(--content-background);
@@ -534,9 +540,9 @@ ODA({
             <button class="dialog-btn" no-flex ~if="uiReady && canVoice" :on="voiceOn" :title="voiceOn ? 'Выключить живой голосовой диалог' : 'Живой голосовой диалог (с взаимным перебиванием)'" :aria-pressed="voiceOn ? 'true' : 'false'" @tap="toggleVoice()">
                 <work-voice-bars :on="voiceOn"></work-voice-bars>
             </button>
-            <oda-button no-flex icon="icons:lightbulb" :icon-size="16" title="Типовые сценарии и промпты" @tap="togglePrompts"></oda-button>
+            <oda-button no-flex icon="carbon:idea" :icon-size="16" title="Типовые сценарии и промпты" @tap="togglePrompts"></oda-button>
             <oda-button no-flex icon="carbon:recently-viewed" :icon-size="16" title="Мои консультации (из личных логов)" @tap="toggleHistory"></oda-button>
-            <oda-button no-flex icon="icons:question-answer" :icon-size="16" title="Открыть ленту пользователя" @tap="openUserFeed"></oda-button>
+            <oda-button no-flex icon="carbon:chat" :icon-size="16" title="Открыть ленту пользователя" @tap="openUserFeed"></oda-button>
             <oda-button no-flex ~if="taskItem" icon="box:i-expand" :icon-size="15" title="Открыть задачу полностью" @tap="openFullTask"></oda-button>
             <oda-button no-flex icon="carbon:add" :icon-size="18" title="Новый вопрос (новая задача)" @tap="startNewChat"></oda-button>
         </div>
@@ -622,7 +628,7 @@ ODA({
             </div>
         </div>
 
-        <div class="bottom" ~if="uiReady">
+        <div class="bottom" no-flex>
             <oda-button class="down" ~if="hasMessages && !pinned && !needsHuman" icon="carbon:arrow-down" :icon-size="18" title="К последнему" @tap="toBottom"></oda-button>
             <oda-button class="down attn" ~if="hasMessages && !pinned && needsHuman" accent-invert icon="carbon:arrow-down" :icon-size="16" label="Агент ждёт вас" title="Перейти к вопросу или разрешению" @tap="toBottom"></oda-button>
             <microchat-voice ~if="voiceOn"></microchat-voice>
@@ -777,6 +783,11 @@ ODA({
     },
 
     attached() {
+        ensureConsultantUI().then(() => {
+            this.uiReady = true;
+            this._hydrateModel();
+            this.refreshFormContext();
+        });
         this._mdLinkHandler ??= e => {
             const { href, ctrl } = e.detail || {};
             const path = !ctrl && _pathOfWorkHref?.(href);
