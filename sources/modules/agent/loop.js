@@ -52,28 +52,67 @@ export const VOLATILE_HEAD = '[Служебный контекст среды н
 
 const DEEP_TASK_RE = /(?:проанализируй|разработай|напиши\s+код|исправь|почему\s+не|сверь|составь\s+план|сравни|рассчитай|пересчитай|архитектур|рефактор|оптимизируй|миграци|отлад|найди\s+ошибк|сделай\s+отч[её]т|сформируй)/iu;
 const HIGH_TASK_RE = /(?:архитектур|рефактор|миграци|спроектируй|полн(?:ый|ую)\s+аудит|комплексн|многошагов|почему\s+падает|найди\s+причину)/iu;
+const EFFORT_RANK = { off: 0, none: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
+
+/**
+ * Подобрать ближайшее допустимое для модели значение effort из списка её `efforts`.
+ */
+export function pickAllowedEffort(effort, allowedEfforts) {
+    if (effort == null || effort === '')
+        return effort;
+    const list = Array.isArray(allowedEfforts)
+        ? allowedEfforts.map(s => String(s || '').trim()).filter(Boolean)
+        : String(allowedEfforts || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+    if (!list.length)
+        return effort;
+    const norm = effort === false ? 'off' : (effort === true ? 'medium' : String(effort).trim());
+    if (list.includes(norm))
+        return norm;
+    if ((norm === 'off' || norm === 'none') && list.includes('none'))
+        return 'none';
+    if ((norm === 'off' || norm === 'none') && list.includes('off'))
+        return 'off';
+    const targetRank = EFFORT_RANK[norm] ?? 2;
+    let best = list[0];
+    let bestDiff = Infinity;
+    for (const item of list) {
+        const r = EFFORT_RANK[item] ?? 2;
+        const diff = Math.abs(r - targetRank);
+        if (diff < bestDiff || (diff === bestDiff && targetRank >= 3 && r > (EFFORT_RANK[best] ?? 2))) {
+            best = item;
+            bestDiff = diff;
+        }
+    }
+    return best;
+}
 
 /**
  * Автоматический выбор уровня рассуждения на ход (если модель сама ещё не задала его через todo_write / task):
- * - Если явно задан 'off', 'low', 'medium' или 'high' — возвращаем как есть.
- * - Если не задан — оцениваем сложность последнего поручения:
- *   • сложная архитектура / рефакторинг / отладка / большое ТЗ → 'high';
- *   • анализ, расчёты, код, отчёты или работа с вложениями → 'medium';
- *   • обычные запросы и рабочие шаги → 'low' (не выключаем в 'off', чтобы модель с инструментами удерживала инструкции system.md).
+ * - Если явно задан ('off', 'low', 'medium', 'high', 'xhigh') — приводим к списку допустимых уровней модели (`allowedEfforts`).
+ * - Если не задан — оцениваем сложность последнего поручения и также приводим к списку `allowedEfforts` модели.
  */
-export function resolveTurnEffort(effort, items, turn = 0) {
-    if (effort === 'off' || effort === false || effort === 'low' || effort === 'medium' || effort === 'high')
-        return effort;
-    const lastUser = [...(items || [])].reverse().find(i => i?.type === 'user');
-    if (!lastUser)
-        return 'low';
-    const hasAttachments = Array.isArray(lastUser.attachments) && lastUser.attachments.length > 0;
-    const text = String(lastUser.content || '').trim();
-    if (HIGH_TASK_RE.test(text) || text.length > 900)
-        return 'high';
-    if (hasAttachments || text.length > 220 || DEEP_TASK_RE.test(text))
-        return 'medium';
-    return 'low';
+export function resolveTurnEffort(effort, items, turn = 0, allowedEfforts = null) {
+    let chosen;
+    if (effort === 'off' || effort === false || effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh') {
+        chosen = effort === false ? 'off' : effort;
+    }
+    else {
+        const lastUser = [...(items || [])].reverse().find(i => i?.type === 'user');
+        if (!lastUser) {
+            chosen = 'low';
+        }
+        else {
+            const hasAttachments = Array.isArray(lastUser.attachments) && lastUser.attachments.length > 0;
+            const text = String(lastUser.content || '').trim();
+            if (HIGH_TASK_RE.test(text))
+                chosen = 'high';
+            else if (hasAttachments || text.length > 220 || DEEP_TASK_RE.test(text))
+                chosen = 'medium';
+            else
+                chosen = 'low';
+        }
+    }
+    return pickAllowedEffort(chosen, allowedEfforts);
 }
 
 /**
@@ -192,7 +231,7 @@ async function runLoopCore(opts) {
             items.push(it);
             await host.save();
             const rawEffort = opts.depth ? opts.effort : (host.effort || opts.effort);
-            const turnEffort = resolveTurnEffort(rawEffort, items, turn);
+            const turnEffort = resolveTurnEffort(rawEffort, items, turn, llm.efforts);
             const forkSupported = Boolean(llm.fork || llm.item?.protocol === 'halogen');
             const taskKey = forkSupported && opts.ctx?.task?.path
                 ? 'work-' + String(opts.ctx.task.path).replace(/[^a-zA-Z0-9_-]/g, '-').slice(-40)

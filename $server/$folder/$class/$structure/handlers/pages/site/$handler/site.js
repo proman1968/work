@@ -230,7 +230,7 @@ export default {
             history.replaceState(null, '', '#' + loc);
     },
     async ready() {
-        await Promise.all([this.units, this.groups, this.links]).catch(() => {});
+        await Promise.all([this.units, this.links]).catch(() => {});
         this.loaded = true;
         if (this.$item)
             this.emitLocation();

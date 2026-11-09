@@ -86,7 +86,35 @@ export function normalizeRule(rule = {}) {
         const every = Math.round(Number(rule.every));
         if (!Number.isFinite(every) || every < MIN_EVERY_MIN || every > 7 * 24 * 60)
             throw new Error('every: от ' + MIN_EVERY_MIN + ' минут до недели');
-        return { every, ...extra };
+        const out = { every, ...extra };
+        if (rule.at != null && String(rule.at).trim() !== '') {
+            const m = String(rule.at).trim().match(/^(\d{1,2}):(\d{2})$/);
+            if (!m || +m[1] > 23 || +m[2] > 59)
+                throw new Error('at: время ЧЧ:ММ');
+            out.at = m[1].padStart(2, '0') + ':' + m[2];
+        }
+        if (rule.date != null && String(rule.date).trim() !== '') {
+            const dm = String(rule.date).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            if (!dm || +dm[2] < 1 || +dm[2] > 12 || +dm[3] < 1 || +dm[3] > 31)
+                throw new Error('date: дата YYYY-MM-DD, например 2026-10-20');
+            out.date = dm[0];
+        }
+        if (rule.until != null && String(rule.until).trim() !== '') {
+            const u = String(rule.until).trim();
+            const um = u.match(/^(\d{1,2}):(\d{2})$/);
+            if (um) {
+                if (+um[1] > 23 || +um[2] > 59)
+                    throw new Error('until: время ЧЧ:ММ или ISO дата-время');
+                out.until = um[1].padStart(2, '0') + ':' + um[2];
+            }
+            else {
+                const ut = Date.parse(u);
+                if (!Number.isFinite(ut))
+                    throw new Error('until: время ЧЧ:ММ или ISO дата-время');
+                out.until = new Date(ut).toISOString();
+            }
+        }
+        return out;
     }
     // 9.8: календарная дата — конкретный день (однократно), ежемесячно или ежегодно
     if (rule.date != null) {
@@ -120,8 +148,47 @@ export function nextRun(rule, tz, from = Date.now()) {
         const t = Date.parse(rule.once);
         return t > from ? t : null;
     }
-    if (rule.every)
-        return from + rule.every * 60_000;
+    if (rule.every) {
+        const step = rule.every * 60_000;
+        let next;
+        let anchorLocal = null;
+        if (rule.at) {
+            const nowLocal = local(from, tz);
+            const [y, mo, d] = rule.date ? rule.date.split('-').map(Number) : [nowLocal.y, nowLocal.m, nowLocal.d];
+            const [hh, mm] = rule.at.split(':').map(Number);
+            anchorLocal = { y, m: mo, d };
+            const startMs = utcOf(y, mo, d, hh, mm, tz);
+            if (from < startMs)
+                next = startMs;
+            else
+                next = startMs + (Math.floor((from - startMs) / step) + 1) * step;
+        }
+        else {
+            next = from + step;
+            if (rule.date) {
+                const [y, mo, d] = rule.date.split('-').map(Number);
+                anchorLocal = { y, m: mo, d };
+                const dayStart = utcOf(y, mo, d, 0, 0, tz);
+                if (next < dayStart)
+                    next = dayStart;
+            }
+        }
+        const effectiveUntil = rule.until || (rule.date ? '23:59' : null);
+        if (effectiveUntil) {
+            let untilMs;
+            const um = String(effectiveUntil).match(/^(\d{2}):(\d{2})$/);
+            if (um) {
+                const base = anchorLocal || local(from, tz);
+                untilMs = utcOf(base.y, base.m, base.d, +um[1], +um[2], tz) + 59_999;
+            }
+            else {
+                untilMs = Date.parse(effectiveUntil);
+            }
+            if (Number.isFinite(untilMs) && next > untilMs)
+                return null;
+        }
+        return next;
+    }
     // 9.8: календарная дата — конкретный день / ежемесячно / ежегодно
     if (rule.date) {
         const [y, mo, dRaw] = rule.date.split('-').map(Number);
@@ -172,8 +239,19 @@ export function describeRule(rule) {
     const suffix = rule.scope === 'department' ? ' [по подразделению]' : '';
     if (rule.once)
         return 'однократно ' + rule.once + suffix;
-    if (rule.every)
-        return 'каждые ' + rule.every + ' мин' + suffix;
+    if (rule.every) {
+        let desc = 'каждые ' + rule.every + ' мин';
+        if (rule.at)
+            desc += ' с ' + rule.at;
+        const untilStr = rule.until || (rule.date ? '23:59' : '');
+        if (rule.date && untilStr)
+            desc += ' (' + rule.date.split('-').reverse().join('.') + ' до ' + untilStr + ')';
+        else if (rule.date)
+            desc += ' (' + rule.date.split('-').reverse().join('.') + ')';
+        else if (untilStr)
+            desc += ' до ' + untilStr;
+        return desc + suffix;
+    }
     if (rule.date) {
         if (rule.repeat === 'monthly')
             return 'ежемесячно ' + Number(rule.date.slice(8)) + '-го в ' + rule.at + suffix;
@@ -282,17 +360,32 @@ async function defaultRunner(r) {
         if (!file || typeof file.prompt !== 'function')
             throw new Error('нет задачи ' + r.task);
     }
-    // сессия владельца (внутренняя, без cookie): те же права, что при ручном сообщении
-    const session = { uid: r.uid, $user: user, principal: Object.freeze({ kind: 'user', id: r.uid }), scheduled: true, sockets: {}, send() {} };
+    // сессия владельца (внутренняя, без cookie): те же права, что при ручном сообщении;
+    // события стрима пробрасываем во все живые WS-сессии владельца, чтобы открытый чат сразу видел ответ
+    const sendToUser = (msg) => {
+        const sessions = WORK?.constructor?.sessions || {};
+        for (const s of Object.values(sessions)) {
+            if (s?.uid === r.uid && typeof s.send === 'function') {
+                try { s.send(msg); } catch { /* ignore */ }
+            }
+        }
+    };
+    const session = { uid: r.uid, $user: user, principal: Object.freeze({ kind: 'user', id: r.uid }), scheduled: true, sockets: {}, send: sendToUser };
     await file.assertAccess({ session }, 'read');
+    const { getBody, idle } = await import('./session.js');
+    const beforeBody = await getBody(file).catch(() => null);
+    const prevCount = Array.isArray(beforeBody?.items) ? beforeBody.items.length : 0;
     const stamp = new Date().toLocaleString('ru-RU', { timeZone: r.tz || undefined });
     const res = await file.prompt({ session, prompt: '[по расписанию «' + r.label + '», ' + stamp + ']\n' + r.prompt });
     try {
-        const { notifyScheduledRun } = await import('../notify/index.js');
-        const rawBody = typeof file.load === 'function' ? await file.load().catch(() => null) : null;
+        const finBody = !res?.queued ? await idle(file).catch(() => null) : null;
+        const rawBody = finBody || (typeof file.load === 'function' ? await file.load().catch(() => null) : null);
         const parsed = typeof rawBody === 'string' ? JSON.parse(rawBody) : rawBody;
-        const lastAssistant = [...(parsed?.items || [])].reverse().find(i => i.type === 'assistant' && i.content && !i.error);
+        const newItems = Array.isArray(parsed?.items) ? parsed.items.slice(prevCount) : [];
+        const lastAssistant = [...newItems].reverse().find(i => i.type === 'assistant' && i.content && !i.error)
+            || [...(parsed?.items || [])].reverse().find(i => i.type === 'assistant' && i.content && !i.error);
         const answer = String(lastAssistant?.content || res?.answer || r.prompt || '').trim();
+        const { notifyScheduledRun } = await import('../notify/index.js');
         await notifyScheduledRun({ schedule: r, file, answer });
     }
     catch (e) {

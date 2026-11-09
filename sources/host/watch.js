@@ -9,7 +9,7 @@ import path from 'node:path';
 import { FS } from '../server/index.js';
 import { markClassesDirty } from '../data/api.js';
 
-const ROOTS = ['$server', 'sources', 'oda', 'MODELS', 'SERVICES', 'BASE', 'DATA', 'MARKET', 'PAAS', 'NODES', 'SUPPORT'];
+const ROOTS = ['$server', 'sources', 'oda', 'MODULES', 'ORGANIZATIONS', 'MODELS', 'SERVICES', 'BASE', 'DATA', 'MARKET', 'PAAS', 'NODES', 'SUPPORT'];
 // DATA/INDEX — данные и производные агрегаты: их каждая запись объекта/проводки пишет в *.json,
 // и без этого исключения сброс кэшей поднимался бы на каждую проводку (холодные запросы у всех клиентов).
 // Но это только зона внутри метапапки ($тип/DATA, $тип/INDEX): корневой класс /DATA под правило не попадает.

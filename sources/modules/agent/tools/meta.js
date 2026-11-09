@@ -113,8 +113,8 @@ export const metaTools = [
                 },
                 effort: {
                     type: 'string',
-                    enum: ['off', 'low', 'medium', 'high'],
-                    description: 'Уровень твоих рассуждений на следующие ходы по сложности задачи: off (простые действия), low (обычная работа), medium (анализ/сверка/код), high (сложная архитектура/отладка)',
+                    enum: ['off', 'low', 'medium', 'high', 'xhigh'],
+                    description: 'Уровень твоих рассуждений на следующие ходы по сложности задачи: off (простые действия), low (обычная работа), medium (анализ/сверка/код), high/xhigh (сложная архитектура/отладка)',
                 },
             },
             required: ['todos'],
@@ -124,7 +124,7 @@ export const metaTools = [
                 .filter(t => t && t.content)
                 .map(t => ({ content: String(t.content), status: TODO_STATUS.includes(t.status) ? t.status : 'pending' }));
             ctx.host.setTodos?.(todos);
-            if (args.effort && ['off', 'low', 'medium', 'high'].includes(String(args.effort))) {
+            if (args.effort && ['off', 'low', 'medium', 'high', 'xhigh'].includes(String(args.effort))) {
                 const eff = String(args.effort);
                 ctx.host.setEffort?.(eff);
                 try { ctx.host.effort = eff; } catch { /* getter-only on makeHost */ }
@@ -172,7 +172,9 @@ export const metaTools = [
             await host.save();
             const res = await host.wait({ kind: 'question', item: turn.id, call: entry.id, question: args.question }) || {};
             entry.status = 'running';
-            if (res.values && typeof res.values === 'object') {
+            if (res.content)
+                entry.answer = String(res.content).trim();
+            if (res.values && typeof res.values === 'object' && Object.keys(res.values).length) {
                 entry.values = res.values;
                 return 'Ответ (форма):\n' + Object.entries(res.values).map(([k, v]) => '- ' + k + ': ' + (Array.isArray(v) ? v.join(', ') : v)).join('\n')
                     + (res.content ? '\nКомментарий: ' + res.content : '');
@@ -196,8 +198,8 @@ export const metaTools = [
                 prompt: { type: 'string', description: 'Полное поручение: цель, контекст, что вернуть' },
                 effort: {
                     type: 'string',
-                    enum: ['off', 'low', 'medium', 'high'],
-                    description: 'Уровень рассуждений субагента по сложности подзадачи: off (простая выборка), low (поиск и сводка), medium (анализ, сверка, код), high (сложная архитектура/отладка)',
+                    enum: ['off', 'low', 'medium', 'high', 'xhigh'],
+                    description: 'Уровень рассуждений субагента по сложности подзадачи: off (простая выборка), low (поиск и сводка), medium (анализ, сверка, код), high/xhigh (сложная архитектура/отладка)',
                 },
             },
             required: ['prompt'],
@@ -213,7 +215,7 @@ export const metaTools = [
                 throw new Error('нет субагента «' + name + '». Есть: ' + [...env.agents.keys()].join(', '));
             const entry = ctx.entry;
             entry.agent = name;
-            const effort = ['off', 'low', 'medium', 'high'].includes(String(args.effort || ''))
+            const effort = ['off', 'low', 'medium', 'high', 'xhigh'].includes(String(args.effort || ''))
                 ? String(args.effort)
                 : (def.meta.effort ? String(def.meta.effort) : undefined);
             if (effort)
@@ -233,7 +235,7 @@ export const metaTools = [
                 taintedFrom: ctx.tainted || [],
                 hooks: ctx.hooks, // правила организации действуют и на субагента: иначе их обходило бы делегирование
                 // субагент работает в той же роли задачи (и тех же правах), что и основной агент
-                ctx: { session: ctx.session, place: ctx.place, env, role: ctx.role, task: ctx.task, tz: ctx.tz },
+                ctx: { session: ctx.session, place: ctx.place, contextPath: ctx.contextPath, env, role: ctx.role, task: ctx.task, tz: ctx.tz },
                 loadImage: env.loadImage,
                 effort,
                 maxTurns: Number(def.meta.maxTurns) || 40,
@@ -258,8 +260,8 @@ export const metaTools = [
             description: { type: 'string', description: 'Название задачи для человека' },
             effort: {
                 type: 'string',
-                enum: ['off', 'low', 'medium', 'high'],
-                description: 'Уровень рассуждений субагента по сложности задачи (off | low | medium | high)',
+                enum: ['off', 'low', 'medium', 'high', 'xhigh'],
+                description: 'Уровень рассуждений субагента по сложности задачи (off | low | medium | high | xhigh)',
             },
         }, required: ['agent', 'prompt'] },
         async run(args, ctx) {
@@ -290,7 +292,7 @@ export const metaTools = [
                 throw new Error('agent_start: в зоне роли уже ' + existing + ' дочерних задач (потолок ' + max
                     + ') — останови ненужные (agent_stop) или используй разовых субагентов (task)');
             const name = String(args.description || args.agent).slice(0, 80);
-            const effort = ['off', 'low', 'medium', 'high'].includes(String(args.effort || ''))
+            const effort = ['off', 'low', 'medium', 'high', 'xhigh'].includes(String(args.effort || ''))
                 ? String(args.effort)
                 : (def.meta.effort ? String(def.meta.effort) : undefined);
             const body = { name, title: name, created: Date.now(), items: [], version: 2, status: 'idle', mode: parentMode,

@@ -14,7 +14,7 @@
  */
 import { log } from '../../log.js';
 import { clip } from '../../util.js';
-import { mustItem, loadText, callAs } from '../work/common.js';
+import { mustItem, loadText, callAs, checkContextCone } from '../work/common.js';
 import { ctxRun } from '../sandbox.js';
 import { FS } from '../../../../server/index.js';
 import { loadSandboxConfig } from '../../../sandbox/config.js';
@@ -74,6 +74,8 @@ export async function* walkItems(root, deadline, ctx) {
             if (!k?.id || k.id === 'node_modules')
                 continue;
             if (k.id[0] === '#' || k.id[0] === '.')
+                continue;
+            if (!checkContextCone(k.path, ctx).ok)
                 continue;
             if (seen.has(k.path))
                 continue;

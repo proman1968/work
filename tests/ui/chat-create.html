@@ -235,6 +235,83 @@ await test('SQL-логи подразделения (logs mode: bodies с logsFi
     finally { restore(); host.remove(); }
 });
 
+await test('при наличии старой задачи («Гранит») в ленте создание новой задачи не раскрывает старую ни во время save_file, ни после обновления логов', async () => {
+    stubGeolocation({ getCurrentPosition() {} });
+    const OLD_PATH = '/BASE/$base/USER/task/' + TODAY + '/1791000000000.U1.task';
+    const NEW_PATH = '/BASE/$base/USER/task/' + TODAY + '/1791000000005.U1.task';
+    const oldLogRow = {
+        day: TODAY,
+        logsFilePath: `/BASE/$base/logs/${TODAY}/1791000000000.U1.logs`,
+        time: 1791000000000,
+        sender: 'U1',
+        content: JSON.stringify({ name: 'Гранит', items: [] }),
+        path: OLD_PATH,
+        type: '$file',
+        ext: 'task',
+    };
+    const newLogRow = {
+        day: TODAY,
+        logsFilePath: `/BASE/$base/logs/${TODAY}/1791000000005.U1.logs`,
+        time: 1791000000005,
+        sender: 'U1',
+        content: JSON.stringify({ name: 'Новый запрос', items: [] }),
+        path: NEW_PATH,
+        type: '$file',
+        ext: 'task',
+    };
+    let serverLogs = [oldLogRow];
+    const gate = {};
+    const calls = [];
+    const oldTask = fakeTask(calls);
+    Object.assign(oldTask, { id: '1791000000000.U1.task', path: OLD_PATH, short: OLD_PATH, name: '1791000000000.U1.task' });
+    const newTask = fakeTask(calls);
+    Object.assign(newTask, { id: '1791000000005.U1.task', path: NEW_PATH, short: NEW_PATH, name: '1791000000005.U1.task' });
+
+    WORK.get_item = async p => {
+        if (p === OLD_PATH) return oldTask;
+        if (p === NEW_PATH) return newTask;
+        return null;
+    };
+
+    const { host, chat } = await mountChat({
+        calls,
+        saveImpl: () => new Promise(r => {
+            gate.release = () => {
+                serverLogs = [oldLogRow, newLogRow];
+                r({ logFullPath: NEW_PATH.slice(1) });
+            };
+        }),
+    });
+    host.$item.fetch = async (method) => method === 'logs' ? serverLogs.map(x => ({ ...x })) : null;
+
+    try {
+        const day = await waitFor(() => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY), 'chat-day сегодня');
+        await day._onLogsChangedRun();
+        const oldCardBefore = await waitFor(() => [...day.$$('chat-item')].find(c => c._identityOfItem?.(c.$item) === 'task:1791000000000.U1.task'), 'карточка Гранит');
+        eq(oldCardBefore.expanded, false, 'Гранит изначально свёрнут');
+
+        chat.value = 'Новый запрос';
+        const sending = chat.send();
+        await sleep(30);
+
+        // Во время полёта save_file срабатывает обновление логов — старая задача «Гранит» НЕ должна раскрыться!
+        await day._onLogsChangedRun();
+        const expandedDuringSave = [...day.$$('chat-item')].filter(c => c.expanded);
+        eq(expandedDuringSave.length, 0, 'пока save_file в полёте, ни одна старая задача не раскрылась');
+
+        // Завершаем save_file и проверяем, что раскрылась ТОЛЬКО новая задача, а после прихода лога с сервера «Гранит» остаётся свёрнутым
+        gate.release();
+        await sending;
+        await day._onLogsChangedRun();
+
+        const cardsAfter = [...day.$$('chat-item')];
+        const expandedAfter = cardsAfter.filter(c => c.expanded);
+        eq(expandedAfter.length, 1, 'раскрыта ровно одна карточка');
+        eq(expandedAfter[0]._identityOfItem(expandedAfter[0].$item), 'task:1791000000005.U1.task', 'раскрыта именно новая задача, а не Гранит');
+    }
+    finally { restore(); host.remove(); }
+});
+
 window.__done = true;
 </script>
 </body>

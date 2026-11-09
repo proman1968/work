@@ -7,6 +7,10 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { runLoop, maybeCompact, estimateContext, toMessages, COMPACT_AT, USAGE_TRUST_MIN } from '../sources/modules/agent/loop.js';
 import { estimateTokens } from '../sources/modules/agent/util.js';
+import { contextConeOf, checkContextCone, assertContextCone, workTools, accountingTools } from '../sources/modules/agent/tools/work.js';
+import { inVerticalCone } from '../sources/modules/rag/scope.js';
+import { createEnv } from '../sources/modules/agent/index.js';
+import { $server } from '../sources/server/server.js';
 
 const host = (extra = {}) => ({ mode: 'auto', signal: new AbortController().signal, allowed: new Set(), async save() {}, emit() {}, ...extra });
 const PARAMS = { type: 'object', properties: {} };
@@ -182,5 +186,107 @@ describe('runLoop: сжатие срабатывает по usage ответа �
         const items2 = [user('u1', 'привет', 1000)];
         await runLoop({ llm: scripted([{ text: 'ок' }]), system: 'S', items: items2, tools: [], host: host() });
         assert.equal('cached' in items2.at(-1).usage, false);
+    });
+});
+
+describe('вертикальный конус контекста: только вниз (дочерние) или вверх (уровень WORK), без переходов влево-вправо', () => {
+    it('contextConeOf / checkContextCone / inVerticalCone: корень WORK, организация и подразделение', () => {
+        // 1. В контексте всего WORK ('/' или '/ORGANIZATIONS') ограничений на организации нет — все они внизу
+        assert.equal(contextConeOf('/'), null);
+        assert.equal(contextConeOf('/ORGANIZATIONS'), null);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Деловая сфера', { place: { path: '/' } }).ok, true);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Маслоторг', { place: { path: '/ORGANIZATIONS' } }).ok, true);
+        assert.equal(inVerticalCone('/ORGANIZATIONS/Деловая сфера', '/'), true);
+
+        // 2. В контексте организации ООО «Бизнес Интер Софт»
+        const orgCtx = { place: { path: '/ORGANIZATIONS/Бизнес Интер Софт' } };
+        assert.deepEqual(contextConeOf(orgCtx), ['ORGANIZATIONS', 'Бизнес Интер Софт']);
+        // Вниз (дочерние подразделения и учётные модули своей организации) — разрешено
+        assert.equal(checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт/Бухгалтерия', orgCtx).ok, true);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт/MODULES/Register/OPERATIONS', orgCtx).ok, true);
+        assert.equal(inVerticalCone('/ORGANIZATIONS/Бизнес Интер Софт/Бухгалтерия', orgCtx.place.path), true);
+        // Вверх (предки и общие модули уровня WORK) — разрешено
+        assert.equal(checkContextCone('/ORGANIZATIONS', orgCtx).ok, true);
+        assert.equal(checkContextCone('/ORGANIZATIONS/$domain/readme.md', orgCtx).ok, true);
+        assert.equal(checkContextCone('/', orgCtx).ok, true);
+        assert.equal(checkContextCone('/MODULES/Register/OPERATIONS', orgCtx).ok, true);
+        assert.equal(inVerticalCone('/MODULES/Register', orgCtx.place.path), true);
+        // Влево-вправо (соседние организации «Деловая сфера» и «Маслоторг», включая обход через ..) — запрещено
+        const cross1 = checkContextCone('/ORGANIZATIONS/Деловая сфера', orgCtx);
+        assert.equal(cross1.ok, false);
+        assert.match(cross1.reason, /Выход за рамки контекста организации «Бизнес Интер Софт»/);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Маслоторг/MODULES/Register', orgCtx).ok, false);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт/../Деловая сфера', orgCtx).ok, false);
+        assert.equal(inVerticalCone('/ORGANIZATIONS/Деловая сфера', orgCtx.place.path), false);
+        assert.equal(inVerticalCone('/ORGANIZATIONS/Маслоторг/MODULES/Register', orgCtx.place.path), false);
+
+        // 3. В контексте подразделения «Бухгалтерия» внутри ООО «Бизнес Интер Софт»
+        const deptCtx = { place: { path: '/ORGANIZATIONS/Бизнес Интер Софт/Бухгалтерия' } };
+        assert.deepEqual(contextConeOf(deptCtx), ['ORGANIZATIONS', 'Бизнес Интер Софт', 'Бухгалтерия']);
+        // Вниз (внутри своего подразделения) и вверх (к своей организации, её MODULES и WORK) — разрешено
+        assert.equal(checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт/Бухгалтерия/Отдел расчётов', deptCtx).ok, true);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт', deptCtx).ok, true);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт/$base/readme.md', deptCtx).ok, true);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт/MODULES/Register/REGISTER/51', deptCtx).ok, true);
+        assert.equal(inVerticalCone('/ORGANIZATIONS/Бизнес Интер Софт/MODULES/Register', deptCtx.place.path), true);
+        // Влево-вправо (соседнее подразделение той же организации или другая организация) — запрещено
+        const crossDept = checkContextCone('/ORGANIZATIONS/Бизнес Интер Софт/Кадры и делопроизводство', deptCtx);
+        assert.equal(crossDept.ok, false);
+        assert.match(crossDept.reason, /Выход за рамки контекста подразделения/);
+        assert.equal(checkContextCone('/ORGANIZATIONS/Деловая сфера/Бухгалтерия', deptCtx).ok, false);
+        assert.equal(inVerticalCone('/ORGANIZATIONS/Бизнес Интер Софт/Кадры и делопроизводство', deptCtx.place.path), false);
+    });
+
+    it('инструменты ls / read / find_objects и system-промпт соблюдают конус контекста', async () => {
+        globalThis.WORK ??= new $server();
+        await WORK.init;
+        const lsTool = workTools.find(t => t.name === 'ls');
+        const readTool = workTools.find(t => t.name === 'read');
+        const findObjectsTool = accountingTools.find(t => t.name === 'find_objects');
+
+        const bis = await WORK.get_item('/ORGANIZATIONS/Бизнес Интер Софт');
+        const bisBuh = await WORK.get_item('/ORGANIZATIONS/Бизнес Интер Софт/accounting');
+        assert.ok(bis && bisBuh, 'демо-организация Бизнес Интер Софт присутствует в дереве');
+
+        const orgCtx = { place: bis, session: { $user: WORK } };
+        // ls('/ORGANIZATIONS') из контекста «Бизнес Интер Софт» видит только «Бизнес Интер Софт»
+        const lsOrgsFromBis = await lsTool.run({ path: '/ORGANIZATIONS' }, orgCtx);
+        assert.match(lsOrgsFromBis, /Бизнес Интер Софт\//);
+        assert.doesNotMatch(lsOrgsFromBis, /Деловая сфера\//);
+        assert.doesNotMatch(lsOrgsFromBis, /Маслоторг\//);
+
+        // Попытка прочитать или запросить объекты из «Деловой сферы» и «Маслоторга» блокируется
+        await assert.rejects(
+            () => readTool.run({ path: '/ORGANIZATIONS/Деловая сфера' }, orgCtx),
+            /Выход за рамки контекста организации «Бизнес Интер Софт»/,
+        );
+        await assert.rejects(
+            () => findObjectsTool.run({ path: '/ORGANIZATIONS/Деловая сфера/MODULES/Register/OPERATIONS', search: 'вода' }, orgCtx),
+            /Выход за рамки контекста организации «Бизнес Интер Софт»/,
+        );
+
+        // Из контекста подразделения «accounting» («Бухгалтерия») ls организации видит accounting и MODULES, но не соседние отделы
+        const deptCtx = { place: bisBuh, session: { $user: WORK } };
+        const lsBisFromBuh = await lsTool.run({ path: '/ORGANIZATIONS/Бизнес Интер Софт' }, deptCtx);
+        assert.match(lsBisFromBuh, /accounting\//);
+        assert.match(lsBisFromBuh, /MODULES\//);
+        assert.doesNotMatch(lsBisFromBuh, /\bhr\//);
+        assert.doesNotMatch(lsBisFromBuh, /\bdevelopment\//);
+        await assert.rejects(
+            () => readTool.run({ path: '/ORGANIZATIONS/Бизнес Интер Софт/hr' }, deptCtx),
+            /Выход за рамки контекста подразделения/,
+        );
+
+        // А из контекста корневого WORK ('/') доступны все организации
+        const rootCtx = { place: WORK, session: { $user: WORK } };
+        const lsOrgsFromRoot = await lsTool.run({ path: '/ORGANIZATIONS' }, rootCtx);
+        assert.match(lsOrgsFromRoot, /Бизнес Интер Софт\//);
+        assert.match(lsOrgsFromRoot, /Деловая сфера\//);
+        assert.match(lsOrgsFromRoot, /Маслоторг\//);
+
+        // В makeSystemParts(place = bis) явно прописаны границы контекста организации
+        const env = await createEnv({ place: bis, session: { $user: WORK }, host: host() });
+        const { stable } = await env.makeSystemParts();
+        assert.match(stable, /Границы контекста: организация «Бизнес Интер Софт»/);
     });
 });

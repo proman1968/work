@@ -470,6 +470,7 @@ ODA({is: 'oda-chat',
         if (this._sending)
             return;
         this.awaitTask = false;
+        this._awaitingLogExpand = false;
     },
     async _onPromptKey(e){
         e = e?.detail instanceof Event ? e.detail : e;
@@ -649,12 +650,31 @@ ODA({is: 'oda-chat',
         }
         this.$('#ribbon').scrollDown = true;
     },
+    _collectKnownLogKeys() {
+        const ribbon = this.$('#ribbon');
+        const known = new Set();
+        for (const d of ribbon?.$$?.('chat-day') || []) {
+            for (const it of d.logItems || []) {
+                if (it?.id)
+                    known.add(String(it.id));
+                const tk = taskKeyOf(it?.logRow?.path || it?.path || it?.id);
+                if (tk)
+                    known.add(tk);
+            }
+        }
+        return known;
+    },
     /**
      * Создание задачи: экран «создаю» → вложения → сохранение → явный запуск агента → карточка открыта по пути из ответа.
      * resume — задача уже создана (повтор запуска после сбоя), второй не создаётся.
      */
     async _createTask({ text, files, draft, voice = false }) {
         this.awaitTask = true;
+        this._awaitingLogExpand = false;
+        this._awaitTaskPath = '';
+        this._awaitTaskKey = '';
+        this._awaitKnown = this._collectKnownLogKeys();
+        clearTimeout(this._awaitTimer);
         const item = this.$pdp.$item;
         try {
             const rawName = String(text || '').trim() || (files || []).map(f => f?.name).filter(Boolean).join(', ');
@@ -739,13 +759,14 @@ ODA({is: 'oda-chat',
                 }
             }
             else {
-                this.awaitTask = false;
+                this.awaitTask = true;
                 this._awaitNewTask('');
             }
         }
         catch (err) {
             console.warn('[chat] создание задачи', err);
             this.awaitTask = false;
+            this._awaitingLogExpand = false;
             ODA.showMessage?.('Не удалось отправить: ' + (err?.message || err));
             this.value = draft.value;
             this.files = draft.files;
@@ -778,10 +799,16 @@ ODA({is: 'oda-chat',
                 throw new Error('нет файла задачи: ' + path);
             await dayEl.adoptTask(file);
             this.awaitTask = false;
+            this._awaitingLogExpand = false;
+            this._awaitTaskPath = '';
+            this._awaitTaskKey = '';
+            this._awaitKnown = null;
+            clearTimeout(this._awaitTimer);
         }
         catch (err) {
             console.warn('[chat] открыть созданную задачу напрямую не вышло — ждём запись ленты:', err?.message || err);
-            this._awaitKnown = new Set((ribbon?.$$?.('chat-day') || []).flatMap(d => (d.logItems || []).map(i => String(i?.id || ''))));
+            if (!this._awaitKnown?.size)
+                this._awaitKnown = this._collectKnownLogKeys();
             this.awaitTask = true;
             this._awaitNewTask(path);
         }
@@ -842,6 +869,7 @@ ODA({is: 'oda-chat',
         }
         this._awaitTaskPath = String(path || '');
         this._awaitTaskKey = taskKeyOf(path);
+        this._awaitingLogExpand = true;
         // Ретрай: вызываем _expandCreatedTask на всех видимых днях (найдёт по времени).
         for (const el of ribbon?.$$?.('chat-day') || [])
             el?._expandCreatedTask?.();
@@ -850,6 +878,7 @@ ODA({is: 'oda-chat',
             if (!this.awaitTask)
                 return;
             this.awaitTask = false;
+            this._awaitingLogExpand = false;
             this._awaitTaskPath = '';
             this._awaitTaskKey = '';
             this._awaitKnown = null;
@@ -1172,10 +1201,57 @@ ODA({is: 'chat-day',
     logItems: [],
     _logsFolder: null,
     _logsInit: false,
+    _logsInitPromise: null,
     _logsListenersHooked: false,
     _dayFolderHooked: false,
+    _expandedTaskKey: '',
+    _logItemTime(f) {
+        if (!f)
+            return 0;
+        if (Number.isFinite(f._sortTime) && f._sortTime > 0)
+            return f._sortTime;
+        const rowTime = Number(f.logRow?.time || f.DATA?.logRow?.time || 0);
+        if (rowTime > 0)
+            return rowTime;
+        const idPrefix = parseInt(String(f.id || '').split('.')[0], 10);
+        if (idPrefix > 0)
+            return idPrefix;
+        const pathMatch = String(f.path || '').match(/\/(\d{10,16})\.[^/]+$/);
+        if (pathMatch)
+            return parseInt(pathMatch[1], 10) || 0;
+        return 0;
+    },
     _sortLogFiles(files){
-        return files.slice().sort((a, b) => a.id < b.id ? -1 : 1);
+        return files.slice().sort((a, b) => {
+            const ta = this._logItemTime(a);
+            const tb = this._logItemTime(b);
+            if (ta && tb && ta !== tb)
+                return ta - tb;
+            return String(a?.id || '') < String(b?.id || '') ? -1 : 1;
+        });
+    },
+    _isMatchingTaskItem(it, key, fileId = '') {
+        if (!it)
+            return false;
+        if (fileId && it.id === fileId)
+            return true;
+        if (!key)
+            return false;
+        return taskKeyOf(it.logRow?.path || it.path || it.id) === key
+            || String(it.id || '').replace(/\.logs$/i, '.task') === key;
+    },
+    _syncExpandedTaskCard() {
+        const key = this._expandedTaskKey;
+        const cards = [...(this.$$('chat-item') || [])];
+        if (!key)
+            return;
+        for (const c of cards) {
+            const match = this._isMatchingTaskItem(c.$item, key);
+            if (match && !c.expanded)
+                c.expanded = true;
+            else if (!match && c.expanded)
+                c.expanded = false;
+        }
     },
     async _dedupeLogFiles(files){
         const seen = new Set();
@@ -1213,21 +1289,29 @@ ODA({is: 'chat-day',
      * журнала. Резолвится, когда форма задачи нарисована (до этого чат держит экран «создаю задачу»).
      */
     async adoptTask(file) {
+        if (!this._logsInit)
+            this._ensureLogsInit();
+        if (this._logsInitPromise)
+            await Promise.race([this._logsInitPromise, sleep(400)]).catch(() => {});
         const key = taskKeyOf(file.path) || String(file.id);
+        if (!file._sortTime)
+            file._sortTime = this._logItemTime(file) || Date.now();
+        this._expandedTaskKey = key;
         (this._adopted ??= new Map()).set(key, file);
-        const isSameTask = it => it && (
-            it.id === file.id
-            || taskKeyOf(it.logRow?.path || it.path) === key
-            || String(it.id || '').replace(/\.logs$/i, '.task') === key
-        );
+        const isSameTask = it => this._isMatchingTaskItem(it, key, file.id);
         const filtered = (this.logItems || []).filter(it => !isSameTask(it));
         this.logItems = this._sortLogFiles([...filtered, file]);
         this.expanded = true;
         this.render();
         this._scrollRibbonDown();
         for (let i = 0; i < 60; i++) {
-            const card = [...(this.$$('chat-item') || [])].find(el => isSameTask(el.$item));
+            const allCards = [...(this.$$('chat-item') || [])];
+            const card = allCards.find(el => isSameTask(el.$item));
             if (card) {
+                for (const other of allCards) {
+                    if (other !== card && other.expanded)
+                        other.expanded = false;
+                }
                 card.expanded = true;
                 for (let j = 0; j < 30; j++) {
                     if (card.$('.body > *')?.data)
@@ -1301,7 +1385,7 @@ ODA({is: 'chat-day',
      */
     async _expandCreatedTask(file) {
         const chat = this.$pdp.$pdp;
-        if (!chat?.awaitTask)
+        if (!chat?.awaitTask || !chat?._awaitingLogExpand)
             return;
         const day = taskDayOf(chat._awaitTaskPath);
         if (day && this.day !== day)
@@ -1317,25 +1401,40 @@ ODA({is: 'chat-day',
             }
         };
         let hit = null;
+        let hitRow = null;
         for (const f of file ? [file] : this.logItems) {
             if (want.known.has(String(f?.id || '')))
                 continue;
-            if (isCreatedTask(f, await loadRow(f), want)) {
+            const row = await loadRow(f);
+            const rowKey = taskKeyOf(row?.path || f?.path || f?.id);
+            if (rowKey && want.known.has(rowKey))
+                continue;
+            if (isCreatedTask(f, row, want)) {
                 hit = f;
+                hitRow = row;
                 break;
             }
         }
         if (!hit)
             return;
+        const hitKey = taskKeyOf(hitRow?.path || hit?.path || hit?.id) || String(hit.id || '').replace(/\.logs$/i, '.task');
+        if (hitKey)
+            this._expandedTaskKey = hitKey;
         // день мог быть свёрнут, карточка рисуется после render — ждём её появления
         if (!this.expanded)
             this.expanded = true;
         this.render();
         for (let i = 0; i < 30; i++) {
-            const card = [...this.$$('chat-item')].find(el => el.$item?.id === hit.id);
+            const allCards = [...this.$$('chat-item')];
+            const card = allCards.find(el => el.$item?.id === hit.id || (hitKey && this._isMatchingTaskItem(el.$item, hitKey)));
             if (card) {
+                for (const other of allCards) {
+                    if (other !== card && other.expanded)
+                        other.expanded = false;
+                }
                 card.expanded = true;
                 chat.awaitTask = false;
+                chat._awaitingLogExpand = false;
                 chat._awaitTaskPath = '';
                 chat._awaitTaskKey = '';
                 chat._awaitKnown = null;
@@ -1356,6 +1455,7 @@ ODA({is: 'chat-day',
             if (!sameList) {
                 this.logItems = items;
                 this.render();
+                this._syncExpandedTaskCard();
                 if (items.length > prevLen)
                     this._scrollRibbonDown();
             }
@@ -1371,10 +1471,10 @@ ODA({is: 'chat-day',
     },
     _ensureLogsInit() {
         if (this._logsInit)
-            return;
+            return this._logsInitPromise;
         this._logsInit = true;
         this._wasInit = true;
-        Promise.resolve(this.logsSource).then(async source => {
+        this._logsInitPromise = Promise.resolve(this.logsSource).then(async source => {
             if (!source)
                 return;
             if (!this._logsListenersHooked) {
@@ -1387,12 +1487,14 @@ ODA({is: 'chat-day',
             }
             this.logItems = await this._fetchLogFiles();
             this.render();
+            this._syncExpandedTaskCard();
             this._scrollRibbonDown();
             await this._expandCreatedTask();
         }).catch(e => {
             console.warn('[chat-day] logs', e.message);
             this._logsInit = false;
         });
+        return this._logsInitPromise;
     },
     get logs() {
         this._ensureLogsInit();

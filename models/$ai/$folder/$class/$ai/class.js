@@ -28,6 +28,7 @@ export default {
         maxTokens: 4096,   // лимит контекста (usage / info)
         maxOutput: 4096,   // лимит ответа: не путать с maxTokens — иначе Qwen 262k уезжает в max_tokens и думает минутами
         capabilities: ['chat', 'stream'],
+        efforts: [],       // допустимые уровни рассуждений конкретной модели (например ['low', 'medium', 'xhigh'])
         effort: '',
     },
     METADATA: {
@@ -72,9 +73,13 @@ export default {
             type: 'String',
             placeholder: 'chat, stream, effort',
         }, {
+            id: 'efforts',
+            type: 'String',
+            placeholder: 'low, medium, high',
+        }, {
             id: 'effort',
             type: 'String',
-            placeholder: 'off | low | medium | high',
+            placeholder: 'off | low | medium | high | xhigh',
         }, {
             id: 'functionCalling',
             type: 'Boolean',
@@ -784,16 +789,62 @@ function hasCap(ai, name) {
     return String(c || '').split(/[\s,]+/).filter(Boolean).includes(name);
 }
 
+const EFFORT_RANK = { off: 0, none: 0, low: 1, medium: 2, high: 3, xhigh: 4, max: 5 };
+
+function parseModelEfforts(ai) {
+    const raw = ai?.efforts ?? ai?.DATA?.efforts;
+    if (!raw)
+        return [];
+    const list = Array.isArray(raw) ? raw : String(raw).split(/[\s,]+/);
+    return list.map(s => String(s || '').trim()).filter(Boolean);
+}
+
+/**
+ * Подобрать ближайшее допустимое для данной модели значение effort из списка её `efforts`
+ * (например, для модели с `efforts: ['low', 'medium', 'xhigh']` запрос `'high'` превращается в `'xhigh'`, а `'off'` — в `'low'`).
+ */
+export function resolveModelEffort(effort, allowedEfforts) {
+    if (effort == null || effort === '')
+        return effort;
+    const list = Array.isArray(allowedEfforts)
+        ? allowedEfforts.map(s => String(s || '').trim()).filter(Boolean)
+        : String(allowedEfforts || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+    if (!list.length)
+        return effort;
+    const norm = effort === false ? 'off' : (effort === true ? 'medium' : String(effort).trim());
+    if (list.includes(norm))
+        return norm;
+    if ((norm === 'off' || norm === 'none') && list.includes('none'))
+        return 'none';
+    if ((norm === 'off' || norm === 'none') && list.includes('off'))
+        return 'off';
+    const targetRank = EFFORT_RANK[norm] ?? 2;
+    let best = list[0];
+    let bestDiff = Infinity;
+    for (const item of list) {
+        const r = EFFORT_RANK[item] ?? 2;
+        const diff = Math.abs(r - targetRank);
+        if (diff < bestDiff || (diff === bestDiff && targetRank >= 3 && r > (EFFORT_RANK[best] ?? 2))) {
+            best = item;
+            bestDiff = diff;
+        }
+    }
+    return best;
+}
+
 /**
  * Передача уровня рассуждений (effort), выбранного ядром агента или моделью, в протокол провайдера.
+ * Выбирает значение строго из списка `efforts`, объявленного у класса модели.
  */
 function applyEffort(body, ai, options = {}) {
     if (!hasCap(ai, 'effort') || !('effort' in options))
         return;
-    const effort = options.effort;
-    if (effort == null || effort === '')
+    const rawEffort = options.effort;
+    if (rawEffort == null || rawEffort === '')
         return;
-    const off = effort === 'off' || effort === false;
+    const allowed = parseModelEfforts(ai);
+    const effort = allowed.length ? resolveModelEffort(rawEffort, allowed) : rawEffort;
+    const off = effort === 'off' || effort === 'none' || effort === false;
     const native = ai.protocol === 'ollama' || /\/api\/chat\b/.test(String(ai.baseUrl || ''));
     if (native) {
         body.think = off ? false : (effort === true ? true : effort);

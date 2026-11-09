@@ -223,16 +223,6 @@ export default {
                             </div>
                         </div>
                     </section>
-                    <section ~if="groups?.length">
-                        <h2>Должностные группы</h2>
-                        <div class="grid">
-                            <div class="card" ~for="groups" @tap="openNode($for.item)">
-                                <item-icon :$item="$for.item" :icon-size="32"></item-icon>
-                                <div class="name">{{$for.item.label}}</div>
-                                <span class="chip">группа</span>
-                            </div>
-                        </div>
-                    </section>
                 </div>
             </div>
             <iframe ~for="frames" ~show="!isHome && currentHref === $for.item.href" :src="$for.item.href"></iframe>

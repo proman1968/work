@@ -19,6 +19,7 @@
 import http from 'node:http';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import {
     PAK_PRODUCT,
     SLA_TIERS,
@@ -32,12 +33,16 @@ import {
     calculatePartnerDiscount,
     calculatePartnerEconomics,
     calculateRegionPartnerQuota,
+    PUBLIC_OFERTA,
 } from './catalog.js';
 import { LicenseStore } from './store.js';
 import { YooKassaService } from './yookassa.js';
 import { SupportBotsHub } from './bots.js';
 import { LicenseServerAiAgent } from './agent.js';
 import { renderLandingPage, renderSandboxPaymentPage } from './landing.js';
+import { renderAdminPage } from './admin.js';
+
+const DEFAULT_DATA_DIR = fileURLToPath(new URL('../data', import.meta.url));
 
 async function readJsonBody(req, maxBytes = 1024 * 1024) {
     const chunks = [];
@@ -72,16 +77,17 @@ const STATIC_ASSETS = Object.freeze({
     '/assets/russia-regions.json': { file: 'russia-regions.json', type: 'application/json; charset=utf-8' },
     '/assets/landing.css': { file: 'landing.css', type: 'text/css; charset=utf-8' },
     '/assets/landing.js': { file: 'landing.js', type: 'text/javascript; charset=utf-8' },
+    '/assets/admin.js': { file: 'admin.js', type: 'text/javascript; charset=utf-8' },
 });
 const assetCache = new Map();
 let assetVersionCache = '';
 
-/** Версия статики для сброса кэша браузера: короткий хеш стилей и скрипта витрины. */
+/** Версия статики для сброса кэша браузера: короткий хеш стилей и скриптов витрины/админки. */
 function assetVersion() {
     if (assetVersionCache && !process.env.WORK_DEV)
         return assetVersionCache;
     const hash = crypto.createHash('sha1');
-    for (const file of ['landing.css', 'landing.js'])
+    for (const file of ['landing.css', 'landing.js', 'admin.js'])
         hash.update(fs.readFileSync(new URL(file, ASSETS_DIR)));
     assetVersionCache = hash.digest('hex').slice(0, 10);
     return assetVersionCache;
@@ -109,7 +115,11 @@ function sendHtml(res, status, html) {
 }
 
 export function createLicenseServerApp(options = {}) {
-    const store = options.store || new LicenseStore({ dataDir: options.dataDir || './data' });
+    const store = options.store || new LicenseStore({
+        dataDir: options.dataDir || DEFAULT_DATA_DIR,
+        adminLogin: options.adminLogin,
+        adminPassword: options.adminPassword,
+    });
     let bots = null;
     const yookassa = options.yookassa || new YooKassaService({
         store,
@@ -137,13 +147,51 @@ export function createLicenseServerApp(options = {}) {
         fetchImpl: options.fetchImpl,
     });
 
+    function extractBearerToken(req, body = null, url = null) {
+        const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
+        const xAdmin = String(req.headers['x-admin-token'] || req.headers['x-admin-key'] || '').trim();
+        return authHeader || xAdmin || body?.adminToken || body?.sessionKey || url?.searchParams?.get('sessionKey') || '';
+    }
+
+    function ensureCustomerOferta(req, body = {}) {
+        const tok = extractBearerToken(req, body);
+        let user = store.findUserBySessionKey(tok);
+        if (user && user.ofertaAccepted)
+            return user;
+
+        // Если в запросе переданы реквизиты и явное согласие с офертой (ofertaAccepted: true) — регистрируем и подписываем ПЭП
+        if (body.ofertaAccepted === true) {
+            const email = body.email || body.customer?.email || 'client@odant-work.ru';
+            const companyName = body.companyName || body.customer?.name || 'Организация ODANT-WORK';
+            const inn = body.inn || body.customer?.inn || '';
+            user = store.registerOrLoginUser({
+                email,
+                companyName,
+                inn,
+                name: body.signerName || body.contactPerson || companyName,
+                licenseId: body.licenseId || '',
+                ofertaAccepted: true,
+            });
+            return user;
+        }
+
+        // Если это прямой M2M-запрос с привязанного ПАК WORK (переданы hwid и nodeFingerprint)
+        if (body.hwid && body.nodeFingerprint)
+            return { hwid: body.hwid, ofertaAccepted: true };
+
+        const err = new Error('Любые действия по заказам, оплате и резервированию франшизы доступны только после регистрации и подписания публичной оферты ODANT-WORK (ПЭП)');
+        err.statusCode = 403;
+        err.code = 'OFERTA_REQUIRED';
+        throw err;
+    }
+
     async function handler(req, res) {
         try {
             if (req.method === 'OPTIONS') {
                 res.writeHead(204, {
                     'Access-Control-Allow-Origin': '*',
                     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-                    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+                    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Admin-Token, X-Admin-Key',
                 });
                 res.end();
                 return;
@@ -155,22 +203,29 @@ export function createLicenseServerApp(options = {}) {
             const url = new URL(req.url || '/', reqOrigin);
             const pathname = url.pathname;
 
-            // 1. Главная страница лендинга work.odant.org и панель администратора (/admin)
-            if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html' || pathname === '/admin')) {
+            // 1. Главная страница публичной витрины work.odant.org (без админки)
+            if (req.method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
                 return sendHtml(res, 200, renderLandingPage({
                     publicKey: store.authorityKeys.publicKey,
                     regions: store.listRegionsWithQuotas(),
                     assetVersion: assetVersion(),
-                    initialStage: pathname === '/admin' ? 'admin' : '',
                 }));
             }
 
-            // 1.1 Статика лендинга: логотип ODANT, стили, клиентский скрипт и контуры субъектов РФ
+            // 1.0 Отдельная страница защищённой админ-панели (/admin)
+            if (req.method === 'GET' && (pathname === '/admin' || pathname === '/admin/')) {
+                return sendHtml(res, 200, renderAdminPage({
+                    publicKey: store.authorityKeys.publicKey,
+                    assetVersion: assetVersion(),
+                }));
+            }
+
+            // 1.1 Статика: логотип ODANT, стили, клиентские скрипты и контуры субъектов РФ
             if (req.method === 'GET' && STATIC_ASSETS[pathname]) {
                 return sendStaticAsset(res, STATIC_ASSETS[pathname]);
             }
 
-            // 2. Каталог ПАК, тарифов SLA и партнёрской франшизы
+            // 2. Каталог ПАК, тарифов SLA, партнёрской франшизы и публичной оферты
             if (req.method === 'GET' && pathname === '/api/catalog') {
                 return sendJson(res, 200, {
                     product: PAK_PRODUCT,
@@ -179,20 +234,31 @@ export function createLicenseServerApp(options = {}) {
                     franchiseProgram: FRANCHISE_PROGRAM,
                     regions: store.listRegionsWithQuotas(),
                     trainingTracks: PARTNER_TRAINING_TRACKS,
+                    oferta: PUBLIC_OFERTA,
                     authorityPublicKey: store.authorityKeys.publicKey,
                 });
             }
 
-            // 2.0 Вход / регистрация пользователя (для доступа к разделу докупки пользовательских лицензий)
+            if (req.method === 'GET' && pathname === '/api/oferta') {
+                return sendJson(res, 200, PUBLIC_OFERTA);
+            }
+
+            // 2.0 Вход / регистрация пользователя и подписание публичной оферты ПЭП
             if (req.method === 'POST' && (pathname === '/api/auth/login' || pathname === '/api/auth/register')) {
                 const body = await readJsonBody(req);
                 const user = store.registerOrLoginUser(body);
                 return sendJson(res, 200, user);
             }
 
+            if (req.method === 'POST' && pathname === '/api/auth/accept-oferta') {
+                const body = await readJsonBody(req);
+                const key = extractBearerToken(req, body, url) || body.email || '';
+                const user = store.acceptUserOferta(key, body);
+                return sendJson(res, 200, user);
+            }
+
             if (req.method === 'GET' && pathname === '/api/auth/me') {
-                const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
-                const key = url.searchParams.get('sessionKey') || authHeader;
+                const key = extractBearerToken(req, null, url);
                 const user = store.findUserBySessionKey(key);
                 if (!user)
                     return sendJson(res, 401, { authenticated: false });
@@ -238,10 +304,16 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, result);
             }
 
-            // 2.6 Резервирование региональной франшизы с оплатой невозвратного залога 100 000 ₽ через ЮKassa
+            // 2.6 Резервирование региональной франшизы с оплатой невозвратного залога 100 000 ₽ через ЮKassa (только после регистрации и подписания оферты)
             if (req.method === 'POST' && pathname === '/api/partners/reserve') {
                 const body = await readJsonBody(req);
-                const reserved = store.reserveFranchiseSlot(body);
+                const user = ensureCustomerOferta(req, body);
+                const reserved = store.reserveFranchiseSlot({
+                    ...body,
+                    companyName: body.companyName || user?.companyName || '',
+                    inn: body.inn || user?.inn || '',
+                    email: body.email || user?.email || '',
+                });
                 const payment = await yookassa.createPaymentForOrder(reserved.order, { originOverride: reqOrigin });
                 return sendJson(res, 200, {
                     ...payment,
@@ -254,9 +326,10 @@ export function createLicenseServerApp(options = {}) {
             // 2.7 Собственный ИИ-агент лицензионного сервера ODANT-WORK
             if (req.method === 'POST' && pathname === '/api/agent/chat') {
                 const body = await readJsonBody(req);
-                const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
-                const user = store.findUserBySessionKey(body.sessionKey || authHeader);
-                const reply = await agent.chat({ message: body.message || body.text || '', history: body.history || [], user });
+                const tok = extractBearerToken(req, body, url);
+                const isAdmin = store.verifyAdminToken(tok);
+                const user = store.findUserBySessionKey(body.sessionKey || tok);
+                const reply = await agent.chat({ message: body.message || body.text || '', history: body.history || [], user, isAdmin });
                 return sendJson(res, 200, reply);
             }
 
@@ -266,7 +339,7 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, calculateOrderQuote(body));
             }
 
-            // 4. Выпуск базовой лицензии ПАК (5 вечных мест + 1 год поддержки)
+            // 4. Выпуск базовой лицензии ПАК (10 вечных мест + 1 год поддержки Enterprise)
             if (req.method === 'POST' && pathname === '/api/license/issue') {
                 const body = await readJsonBody(req);
                 const summary = store.issueOrUpdateLicense(body);
@@ -294,10 +367,20 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, summary);
             }
 
-            // 7. Оформление заказа и создание платежа в ЮKassa
+            // 7. Оформление заказа и создание платежа в ЮKassa (только после регистрации и подписания оферты)
             if (req.method === 'POST' && pathname === '/api/orders/checkout') {
                 const body = await readJsonBody(req);
-                const order = store.createOrder(body);
+                const user = ensureCustomerOferta(req, body);
+                const order = store.createOrder({
+                    ...body,
+                    licenseId: body.licenseId || user?.licenseId || '',
+                    customer: {
+                        name: body.customer?.name || user?.companyName || '',
+                        inn: body.customer?.inn || user?.inn || '',
+                        email: body.customer?.email || user?.email || '',
+                        phone: body.customer?.phone || user?.phone || '',
+                    },
+                });
                 const payment = await yookassa.createPaymentForOrder(order, { originOverride: reqOrigin });
                 return sendJson(res, 200, {
                     ...payment,
@@ -352,8 +435,35 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, ticket);
             }
 
-            // 12. Обзор для панели управления
+            // 12. Авторизация и защищённое API панели администратора (/admin)
+            if (req.method === 'POST' && pathname === '/api/admin/login') {
+                const body = await readJsonBody(req);
+                try {
+                    const session = store.loginAdmin(body);
+                    return sendJson(res, 200, session);
+                }
+                catch (err) {
+                    return sendJson(res, 401, { authenticated: false, error: err?.message || 'Ошибка авторизации администратора' });
+                }
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/logout') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                return sendJson(res, 200, store.logoutAdmin(tok));
+            }
+
+            if (req.method === 'GET' && pathname === '/api/admin/me') {
+                const tok = extractBearerToken(req, null, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { authenticated: false });
+                return sendJson(res, 200, { authenticated: true, login: store.adminLogin });
+            }
+
             if (req.method === 'GET' && pathname === '/api/admin/overview') {
+                const tok = extractBearerToken(req, null, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
                 return sendJson(res, 200, {
                     licenses: store.listLicenses(),
                     tickets: store.listTickets(),
@@ -361,13 +471,33 @@ export function createLicenseServerApp(options = {}) {
                     partners: store.listPartners(),
                     reservations: Object.values(store.state.reservations || {}),
                     regions: store.listRegionsWithQuotas(),
+                    users: store.listUsers(),
                 });
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/admin/orders/') && pathname.endsWith('/cancel')) {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const orderId = decodeURIComponent(pathname.slice('/api/admin/orders/'.length, -'/cancel'.length));
+                return sendJson(res, 200, store.cancelOrder(orderId));
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/admin/tickets/') && pathname.endsWith('/close')) {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const ticketId = decodeURIComponent(pathname.slice('/api/admin/tickets/'.length, -'/close'.length));
+                return sendJson(res, 200, store.closeTicket(ticketId));
             }
 
             return sendJson(res, 404, { error: 'Not Found', path: pathname });
         }
         catch (err) {
-            return sendJson(res, 400, { error: err?.message || String(err) });
+            const status = Number(err?.statusCode) || 400;
+            return sendJson(res, status, { error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) });
         }
     }
 

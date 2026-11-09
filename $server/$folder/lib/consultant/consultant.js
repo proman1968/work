@@ -549,7 +549,7 @@ ODA({
 
         <div class="ctx-bar" no-flex ~if="activeFormSummary">
             <oda-icon no-flex icon="icons:dashboard" :icon-size="14"></oda-icon>
-            <span class="ctx-label" :title="activeFormSummary.path">Форма: <b>{{activeFormSummary.label}}</b></span>
+            <span class="ctx-label" :title="activeFormSummary.path">Форма: <b>{{activeFormSummary.label}}{{activeFormSummary.focusSubject ? ' · ' + activeFormSummary.focusSubject : ''}}</b></span>
             <button class="ctx-ask-btn" @tap="askCurrentForm" title="Задать Консультанту вопрос по открытой форме">Спросить по форме</button>
         </div>
 
@@ -1032,10 +1032,11 @@ ODA({
         const title = String(ctx.title || ('Консультация: ' + (ctx.label || ctx.path || 'Форма'))).trim();
 
         // Если уже открыта задача ровно по этому же запросу и она ещё выполняется — не дублируем
-        if (this.taskItem && this.busy && this._lastContextKey && this._lastContextKey === (ctx.path + ':' + (ctx.viewId || ''))) {
+        const nextKey = (ctx.path || '') + ':' + (ctx.viewId || '') + ':' + (ctx.focusSubject || '');
+        if (this.taskItem && this.busy && this._lastContextKey && this._lastContextKey === nextKey) {
             return this.taskItem;
         }
-        this._lastContextKey = (ctx.path || '') + ':' + (ctx.viewId || '');
+        this._lastContextKey = nextKey;
         this.startNewChat();
         this.activeFormContext = ctx;
         this.activeFormSummary = ctx;

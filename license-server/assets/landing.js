@@ -15,11 +15,15 @@
     let currentUser = null;
     let currentStage = 'product';
     let selectedCode = null;
+    let pendingAuthAction = null;
 
     async function api(path, body, method) {
+        const headers = {};
+        if (body) headers['Content-Type'] = 'application/json';
+        if (currentUser?.sessionKey) headers['Authorization'] = 'Bearer ' + currentUser.sessionKey;
         const res = await fetch(path, {
             method: method || (body ? 'POST' : 'GET'),
-            headers: body ? { 'Content-Type': 'application/json' } : undefined,
+            headers: Object.keys(headers).length ? headers : undefined,
             body: body ? JSON.stringify(body) : undefined,
         });
         let data = {};
@@ -27,6 +31,10 @@
         if (!res.ok)
             throw new Error(data.error || ('Ошибка ' + res.status));
         return data;
+    }
+
+    function isUserReadyForOrders() {
+        return Boolean(currentUser && currentUser.ofertaAccepted);
     }
 
     /* ================= Тема ================= */
@@ -53,22 +61,20 @@
         ind.style.width = active.offsetWidth + 'px';
     }
     function switchStage(id, { scroll = true } = {}) {
-        if (id === 'addons' && !currentUser) { openAuth(); return; }
+        if (id === 'addons' && !isUserReadyForOrders()) {
+            requireAuthAndOferta(() => switchStage('addons'));
+            return;
+        }
         if (!$('#stage-' + id)) id = 'product';
         currentStage = id;
         document.body.setAttribute('data-stage', id);
         $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.stage === id));
         $$('.stage').forEach(s => s.classList.toggle('active', s.id === 'stage-' + id));
-        const admBtn = $('#btnAdminTop');
-        if (admBtn) {
-            admBtn.classList.toggle('btn-primary', id === 'admin');
-            admBtn.classList.toggle('btn-ghost', id !== 'admin');
-        }
         moveIndicator();
         const active = $('.tab.active');
         if (active) active.scrollIntoView({ block: 'nearest', inline: 'center', behavior: reduceMotion ? 'auto' : 'smooth' });
         if (history.replaceState) {
-            const url = id === 'product' ? '/' : (id === 'admin' && location.pathname === '/admin' ? '/admin' : '/#' + id);
+            const url = id === 'product' ? '/' : '/#' + id;
             history.replaceState(null, '', url);
         }
         if (scroll) window.scrollTo({ top: 0, behavior: reduceMotion ? 'auto' : 'smooth' });
@@ -76,7 +82,6 @@
         observeReveals();
         if (id === 'agents') playConsultantMock();
         if (id === 'franchise') requestAnimationFrame(() => MAP.ready && applyView());
-        if (id === 'admin') refreshRegistry();
     }
     window.switchStage = switchStage;
 
@@ -124,46 +129,198 @@
         card.style.setProperty('--my', (e.clientY - r.top) + 'px');
     }, { passive: true });
 
-    /* ================= Авторизация ================= */
-    function openAuth() { $('#authModal').classList.add('open'); setTimeout(() => $('#authEmail').focus(), 50); }
-    function closeAuth() { $('#authModal').classList.remove('open'); }
+    /* ================= Авторизация и подписание публичной оферты (ПЭП) ================= */
+    function openAuth(hintMsg = '') {
+        if ($('#authErrorMsg')) $('#authErrorMsg').textContent = hintMsg || '';
+        if ($('#btnLogoutModal')) $('#btnLogoutModal').style.display = currentUser ? '' : 'none';
+        $('#authModal').classList.add('open');
+        setTimeout(() => $('#authEmail')?.focus(), 50);
+    }
+    function closeAuth() {
+        $('#authModal').classList.remove('open');
+        if ($('#authErrorMsg')) $('#authErrorMsg').textContent = '';
+    }
+    function openOfertaModal() {
+        $('#ofertaModal')?.classList.add('open');
+    }
+    function closeOfertaModal() {
+        $('#ofertaModal')?.classList.remove('open');
+    }
+    function requireAuthAndOferta(actionFn, prefill = {}) {
+        if (isUserReadyForOrders()) {
+            if (typeof actionFn === 'function') actionFn();
+            return true;
+        }
+        pendingAuthAction = typeof actionFn === 'function' ? actionFn : null;
+        if (prefill.companyName && $('#authCompany')) $('#authCompany').value = prefill.companyName;
+        if (prefill.inn && $('#authInn')) $('#authInn').value = prefill.inn;
+        if (prefill.email && $('#authEmail')) $('#authEmail').value = prefill.email;
+        openAuth('Для оформления заказа, оплаты или резервирования франшизы зарегистрируйтесь и подпишите договор-оферту (ПЭП).');
+        return false;
+    }
+
     async function performLogin() {
+        const errBox = $('#authErrorMsg');
+        if (errBox) errBox.textContent = '';
+        const email = $('#authEmail')?.value.trim() || '';
+        const companyName = $('#authCompany')?.value.trim() || '';
+        const inn = $('#authInn')?.value.trim() || '';
+        const signer = $('#authSigner')?.value.trim() || '';
+        const licenseId = $('#authLicId')?.value.trim() || '';
+        const ofertaChecked = Boolean($('#authOfertaCheck')?.checked);
+
+        if (!email || !email.includes('@')) {
+            if (errBox) errBox.textContent = 'Укажите корректный корпоративный email.';
+            return;
+        }
+        if (!companyName || !inn) {
+            if (errBox) errBox.textContent = 'Укажите наименование организации и ИНН.';
+            return;
+        }
+        if (!ofertaChecked) {
+            if (errBox) errBox.textContent = 'Для продолжения необходимо ознакомиться с условиями Публичной оферты и поставить отметку о подписании ПЭП.';
+            return;
+        }
+
         try {
-            const data = await api('/api/auth/login', {
-                email: $('#authEmail').value.trim(),
-                companyName: $('#authCompany').value.trim(),
-                licenseId: $('#authLicId').value.trim(),
+            const data = await api('/api/auth/register', {
+                email,
+                companyName,
+                inn,
+                name: signer || companyName,
+                licenseId,
+                ofertaAccepted: true,
             });
             currentUser = data;
             try { localStorage.setItem('odant_work_session', data.sessionKey); } catch { /* приватный режим */ }
             onAuthenticated();
             closeAuth();
-            switchStage('addons');
+            const nextAction = pendingAuthAction;
+            pendingAuthAction = null;
+            if (typeof nextAction === 'function') {
+                nextAction();
+            }
+            else {
+                switchStage('addons');
+            }
         }
         catch (err) {
-            alert(err.message);
+            if (errBox) errBox.textContent = err.message;
         }
     }
+
+    function performLogout() {
+        currentUser = null;
+        pendingAuthAction = null;
+        try { localStorage.removeItem('odant_work_session'); } catch { /* ignore */ }
+        $('#tileAddons').style.display = 'none';
+        $('#btnAuthText').textContent = 'Войти / Регистрация';
+        if ($('#btnLogoutModal')) $('#btnLogoutModal').style.display = 'none';
+        updateOfertaBanners();
+        updateClientSupportCard();
+        closeAuth();
+        if (currentStage === 'addons') switchStage('product');
+        moveIndicator();
+    }
+
     async function restoreSession() {
         let key = '';
         try { key = localStorage.getItem('odant_work_session') || ''; } catch { /* приватный режим */ }
-        if (!key) return;
+        if (!key) {
+            updateOfertaBanners();
+            updateClientSupportCard();
+            return;
+        }
         try {
             const data = await api('/api/auth/me?sessionKey=' + encodeURIComponent(key));
-            if (data.authenticated) {
+            if (data.authenticated && data.user) {
                 currentUser = { ...data.user, sessionKey: key };
                 onAuthenticated();
-                if (location.hash === '#addons') switchStage('addons', { scroll: false });
+                if (location.hash === '#addons' && isUserReadyForOrders()) switchStage('addons', { scroll: false });
             }
         }
         catch { /* сессия устарела */ }
+        updateOfertaBanners();
+        updateClientSupportCard();
     }
+
+    function updateOfertaBanners() {
+        const ready = isUserReadyForOrders();
+        $$('[data-oferta-banner]').forEach(box => {
+            box.classList.toggle('signed', ready);
+            if (ready) {
+                box.innerHTML = `
+                    <div>
+                        <span class="tag ok">✓ Договор-оферта подписан ПЭП</span>
+                        <div style="margin-top:6px;font-size:13.5px">
+                            Организация: <b>${esc(currentUser.companyName)}</b> (ИНН ${esc(currentUser.inn || '—')}) · Подписант: <b>${esc(currentUser.ofertaSignerName || currentUser.name || '—')}</b> · Штамп ПЭП: <code>${esc(currentUser.ofertaSignatureId || 'PEP')}</code>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-ghost btn-sm" data-action="open-oferta">Текст оферты</button>
+                        <button class="btn btn-ghost btn-sm" data-action="auth">Профиль</button>
+                    </div>`;
+            }
+            else {
+                box.innerHTML = `
+                    <div>
+                        <span class="tag">Требуется регистрация и акцепт оферты</span>
+                        <div style="margin-top:6px;font-size:13.5px;color:var(--text-2)">
+                            Любые действия по заказу комплекса, докупке лицензий, оплате через ЮKassa и резервированию региональной франшизы выполняются после регистрации и подписания Публичного договора-оферты (ПЭП).
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-ghost btn-sm" data-action="open-oferta">Читать оферту</button>
+                        <button class="btn btn-primary btn-sm" data-action="auth">Войти и подписать оферту</button>
+                    </div>`;
+            }
+        });
+    }
+
+    function updateClientSupportCard() {
+        const box = $('#clientLicenseBox');
+        if (!box) return;
+        if (!currentUser || !currentUser.license) {
+            box.textContent = 'Войдите в личный кабинет и подпишите договор-оферту, чтобы получить код привязки вашего комплекса к ботам MAX, Telegram и VK.';
+            return;
+        }
+        const lic = currentUser.license;
+        const bindCode = lic.support?.bindCode || lic.licenseId;
+        box.textContent = [
+            `Организация: ${currentUser.companyName} (ИНН ${currentUser.inn || '—'})`,
+            `Оферта ПЭП: ${currentUser.ofertaAccepted ? ('подписана · ' + (currentUser.ofertaSignatureId || '')) : 'ожидает подписания'}`,
+            `Лицензия ПАК: ${lic.licenseId}`,
+            `Код привязки мессенджер-бота: ${bindCode}`,
+            `Команда для чата MAX / Telegram / VK: /bind ${bindCode}`,
+            `Рабочие места: ${lic.totalSeats} (${lic.baseSeats} вечных + ${lic.addonSeats} годовых)`,
+            `Уровень поддержки SLA: ${lic.support?.tierName || 'Enterprise'} (${lic.support?.reactionLabel || 'до 15 мин'})`,
+            `Остаток обращений: ${lic.support?.ticketsRemaining ?? 0} из ${lic.support?.ticketsQuota ?? 0}`,
+        ].join('\n');
+    }
+
     function onAuthenticated() {
         if (!currentUser) return;
-        $('#tileAddons').style.display = '';
+        $('#tileAddons').style.display = isUserReadyForOrders() ? '' : 'none';
         $('#btnAuthText').textContent = currentUser.companyName || currentUser.email;
-        $('#inpLicId').value = currentUser.licenseId || '';
-        $('#userBadgeBox').innerHTML = `${esc(currentUser.companyName)} · лицензия <b>${esc(currentUser.licenseId)}</b>`;
+        if ($('#inpLicId')) $('#inpLicId').value = currentUser.licenseId || '';
+        if ($('#authEmail')) $('#authEmail').value = currentUser.email || '';
+        if ($('#authCompany')) $('#authCompany').value = currentUser.companyName || '';
+        if ($('#authInn') && currentUser.inn) $('#authInn').value = currentUser.inn;
+        if ($('#authSigner') && (currentUser.ofertaSignerName || currentUser.name)) $('#authSigner').value = currentUser.ofertaSignerName || currentUser.name;
+        if ($('#authLicId')) $('#authLicId').value = currentUser.licenseId || '';
+        if ($('#authOfertaCheck')) $('#authOfertaCheck').checked = Boolean(currentUser.ofertaAccepted);
+        if ($('#inpPakOrg') && currentUser.companyName) $('#inpPakOrg').value = currentUser.companyName;
+        if ($('#inpPakInn') && currentUser.inn) $('#inpPakInn').value = currentUser.inn;
+        if ($('#inpPakEmail') && currentUser.email) $('#inpPakEmail').value = currentUser.email;
+        if ($('#inpPartnerCompany') && currentUser.companyName) $('#inpPartnerCompany').value = currentUser.companyName;
+        if ($('#inpPartnerInn') && currentUser.inn) $('#inpPartnerInn').value = currentUser.inn;
+        if ($('#inpPartnerEmail') && currentUser.email) $('#inpPartnerEmail').value = currentUser.email;
+        if ($('#botText') && currentUser.license?.support?.bindCode && $('#botText').value === '/start') {
+            $('#botText').value = '/bind ' + currentUser.license.support.bindCode;
+        }
+        $('#userBadgeBox').innerHTML = `${esc(currentUser.companyName)} (ИНН ${esc(currentUser.inn || '—')}) · лицензия <b>${esc(currentUser.licenseId)}</b> · ПЭП <code>${esc(currentUser.ofertaSignatureId || '—')}</code>`;
+        updateOfertaBanners();
+        updateClientSupportCard();
         moveIndicator();
         recalcAddons();
     }
@@ -231,10 +388,19 @@
         $('#lblPakBreakdown').innerHTML = lines(rows);
     }
     async function submitBasePakOrder() {
+        if (!isUserReadyForOrders()) {
+            requireAuthAndOferta(() => submitBasePakOrder(), {
+                companyName: $('#inpPakOrg')?.value.trim(),
+                inn: $('#inpPakInn')?.value.trim(),
+                email: $('#inpPakEmail')?.value.trim(),
+            });
+            return;
+        }
         const st = $('#pakOrderStatus');
         st.textContent = 'Формируем счёт ЮKassa…';
         try {
             const data = await api('/api/orders/checkout', {
+                sessionKey: currentUser?.sessionKey || '',
                 includeBasePak: true,
                 tier: segValue('segPakTier'),
                 addonSeats: Number($('#inpPakExtraSeats').value) || 0,
@@ -242,15 +408,20 @@
                 customer: { name: $('#inpPakOrg').value.trim(), inn: $('#inpPakInn').value.trim(), email: $('#inpPakEmail').value.trim() },
             });
             st.innerHTML = `Счёт <b>${esc(data.orderId)}</b> сформирован, лицензия <b>${esc(data.licenseId)}</b>. <a href="${esc(data.confirmationUrl)}" target="_blank" rel="noopener">Перейти к оплате →</a>`;
-            refreshRegistry();
+            refreshCatalogRegions();
         }
         catch (err) { st.textContent = err.message; }
     }
     async function submitAddonOrder() {
+        if (!isUserReadyForOrders()) {
+            requireAuthAndOferta(() => submitAddonOrder());
+            return;
+        }
         const st = $('#orderStatus');
         st.textContent = 'Формируем счёт ЮKassa…';
         try {
             const data = await api('/api/orders/checkout', {
+                sessionKey: currentUser?.sessionKey || '',
                 includeBasePak: false,
                 tier: segValue('segTier'),
                 addonSeats: Number($('#inpSeats').value) || 1,
@@ -259,7 +430,7 @@
                 customer: { name: currentUser?.companyName || '', inn: currentUser?.inn || '', email: currentUser?.email || '' },
             });
             st.innerHTML = `Заказ <b>${esc(data.orderId)}</b> на <b>${rub(data.amountRub)}</b>. <a href="${esc(data.confirmationUrl)}" target="_blank" rel="noopener">Перейти к оплате →</a>`;
-            refreshRegistry();
+            refreshCatalogRegions();
         }
         catch (err) { st.textContent = err.message; }
     }
@@ -641,10 +812,19 @@
         code = code || selectedCode;
         if (!code) return;
         selectRegion(code);
+        if (!isUserReadyForOrders()) {
+            requireAuthAndOferta(() => reserveRegionFranchise(code), {
+                companyName: $('#inpPartnerCompany')?.value.trim(),
+                inn: $('#inpPartnerInn')?.value.trim(),
+                email: $('#inpPartnerEmail')?.value.trim(),
+            });
+            return;
+        }
         const msg = $('#partnerActionMsg');
         msg.textContent = 'Оформляем резерв и счёт на залог…';
         try {
             const data = await api('/api/partners/reserve', {
+                sessionKey: currentUser?.sessionKey || '',
                 regionCode: code,
                 companyName: $('#inpPartnerCompany').value.trim(),
                 inn: $('#inpPartnerInn').value.trim(),
@@ -655,283 +835,47 @@
             renderRegionsTable();
             selectRegion(code);
             msg.innerHTML = `Квота в субъекте «${esc(data.reservation.regionName)}» закреплена за вами (резерв <b>${esc(data.reservation.reservationId)}</b>). <a href="${esc(data.confirmationUrl)}" target="_blank" rel="noopener">Оплатить залог ${rub(data.amountRub)} →</a>`;
-            refreshRegistry();
+            refreshCatalogRegions();
         }
         catch (err) { msg.textContent = err.message; }
     }
     window.reserveRegionFranchise = reserveRegionFranchise;
 
-    /* ================= Поддержка ================= */
+    /* ================= Поддержка и синхронизация квот ================= */
     async function sendBot() {
         const box = $('#botReplyBox');
         try {
             const data = await api('/api/bots/' + $('#botChannel').value + '/webhook', {
-                chat_id: $('#botChatId').value.trim(), text: $('#botText').value, user_name: 'Клиент ODANT-WORK',
+                chat_id: $('#botChatId').value.trim(),
+                text: $('#botText').value,
+                user_name: currentUser?.companyName || 'Клиент ODANT-WORK',
             });
             box.textContent = data.reply || data.result?.reply || JSON.stringify(data, null, 2);
         }
         catch (err) { box.textContent = err.message; }
-        refreshRegistry();
-    }
-    async function createDemoPak() {
-        try {
-            const lic = await api('/api/license/issue', { customer: { name: 'ООО «Маслоторг»', inn: '7701234567', email: 'admin@maslotorg.ru' } });
-            if (lic.licenseId) $('#botText').value = '/bind ' + lic.licenseId;
-        }
-        catch { /* показываем реестр как есть */ }
-        refreshRegistry();
-    }
-    let lastAdminData = null;
-
-    async function refreshRegistry() {
-        let data;
-        try { data = await api('/api/admin/overview'); }
-        catch { return; }
-        lastAdminData = data;
-        if (Array.isArray(data.regions) && data.regions.length) {
-            data.regions.forEach(mergeRegion);
-            paintMap();
-            renderRegionsTable();
-            if (selectedCode) selectRegion(selectedCode);
-        }
-        const out = [];
-        out.push(`Лицензии (${data.licenses?.length || 0})`);
-        for (const l of data.licenses || [])
-            out.push(`  ${l.licenseId} · ${l.customer?.name || '—'} · мест ${l.totalSeats} (${l.baseSeats ?? 10} вечных + ${l.addonSeats}) · ${l.support?.tierName || ''}`);
-        out.push('', `Резервы франшиз (${data.reservations?.length || 0})`);
-        for (const r of data.reservations || [])
-            out.push(`  ${r.reservationId} · ${r.regionName} · ${r.companyName} · залог ${r.depositPaid ? 'оплачен' : 'ожидает оплаты'}`);
-        out.push('', `Обращения (${data.tickets?.length || 0})`);
-        for (const t of data.tickets || [])
-            out.push(`  ${t.ticketId} [${String(t.channel).toUpperCase()}] ${t.tierName}: ${t.messages?.[0]?.text || ''}`);
-        if ($('#registryBox')) $('#registryBox').textContent = out.join('\n');
-        renderAdminPanel(data);
-    }
-
-    function fmtDate(ms) {
-        if (!ms) return '—';
-        try { return new Date(ms).toLocaleDateString('ru-RU'); } catch { return '—'; }
-    }
-
-    function renderAdminPanel(data = {}) {
-        const licenses = data.licenses || [];
-        const orders = data.orders || [];
-        const partners = data.partners || [];
-        const reservations = data.reservations || [];
-        const tickets = data.tickets || [];
-
-        const totalSeats = licenses.reduce((s, l) => s + (l.totalSeats || 0), 0);
-        const paidOrders = orders.filter(o => o.status === 'paid');
-        const pendingOrders = orders.filter(o => o.status === 'pending');
-        const paidRub = paidOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
-        const pendingRub = pendingOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
-        const openTickets = tickets.filter(t => t.status !== 'answered' && t.status !== 'closed');
-
-        if ($('#admStatLic')) {
-            $('#admStatLic').textContent = String(licenses.length);
-            $('#admStatLicSub').textContent = `лицензий ПАК · ${totalSeats} активных мест`;
-            $('#admStatPaid').textContent = rub(paidRub);
-            $('#admStatPaidSub').textContent = `оплачено заказов: ${paidOrders.length}`;
-            $('#admStatPending').textContent = rub(pendingRub);
-            $('#admStatPendingSub').textContent = `ожидают оплаты: ${pendingOrders.length}`;
-            $('#admStatPartners').textContent = `${partners.length} / ${reservations.length}`;
-            $('#admStatTickets').textContent = String(openTickets.length);
-            $('#admStatTicketsSub').textContent = `открытых из ${tickets.length} обращений`;
-        }
-
-        if ($('#admLicensesBody')) {
-            $('#admLicensesBody').innerHTML = licenses.map(l => `<tr>
-                <td><b>${esc(l.licenseId)}</b><div class="small muted">Код бота: <code>${esc(l.bindingCode || l.licenseId)}</code></div></td>
-                <td><b>${esc(l.customer?.name || '—')}</b><div class="small muted">ИНН ${esc(l.customer?.inn || '—')} · ${esc(l.customer?.email || '—')}</div></td>
-                <td><code>${esc(l.boundHwid || 'не привязан')}</code><div class="small muted">${esc((l.boundNodeFingerprint || '').slice(0, 18) || 'ожидает синхронизации')}</div></td>
-                <td class="num"><b>${l.totalSeats}</b> <span class="muted">(${l.baseSeats ?? 10} вечн. + ${l.addonSeats || 0} доп.)</span></td>
-                <td><span class="tag ok">${esc(l.support?.tierName || 'Enterprise')}</span><div class="small muted">до ${fmtDate(l.support?.expiresAt)}</div></td>
-                <td><button class="btn btn-ghost btn-sm" data-cert="${esc(l.licenseId)}">Сертификат JSON</button></td>
-            </tr>`).join('') || '<tr><td colspan="6" class="muted">Лицензий пока нет — нажмите «+ Демо-лицензия ПАК»</td></tr>';
-        }
-
-        if ($('#admOrdersBody')) {
-            $('#admOrdersBody').innerHTML = orders.map(o => {
-                const stTag = o.status === 'paid' ? 'ok' : (o.status === 'canceled' ? 'bad' : '');
-                const stLabel = o.status === 'paid' ? 'оплачен' : (o.status === 'canceled' ? 'отменён' : 'ожидает оплаты');
-                return `<tr>
-                    <td><b>${esc(o.orderId)}</b><div class="small muted">${esc(o.paymentId || '—')}</div></td>
-                    <td><b>${esc(o.tierName || o.kind || 'Заказ')}</b><div class="small muted">${o.includeBasePak ? 'Комплекс ПАК' : (o.kind === 'franchise_reservation' ? 'Залог франшизы' : `Доп. места: ${o.addonSeats || 0} × ${o.years || 1} г.`)}</div></td>
-                    <td><b>${esc(o.customer?.name || '—')}</b><div class="small muted">ИНН ${esc(o.customer?.inn || '—')}</div></td>
-                    <td class="num"><b>${rub(o.amountRub)}</b>${o.volumeDiscountPercent ? `<div class="small" style="color:var(--ok)">скидка −${o.volumeDiscountPercent}%</div>` : ''}</td>
-                    <td><span class="tag ${stTag}">${stLabel}</span></td>
-                    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-                        ${o.status === 'pending' ? `<button class="btn btn-ok btn-sm" data-pay-order="${esc(o.orderId)}">Провести оплату</button>` : ''}
-                        <a class="btn btn-ghost btn-sm" href="/pay/sandbox/${encodeURIComponent(o.orderId)}" target="_blank" rel="noopener">Песочница</a>
-                    </div></td>
-                </tr>`;
-            }).join('') || '<tr><td colspan="6" class="muted">Заказов пока нет</td></tr>';
-        }
-
-        if ($('#admPartnersBody')) {
-            const resRows = reservations.map(r => `<tr>
-                <td><b>${esc(r.reservationId)}</b><div class="small muted">Резерв франшизы</div></td>
-                <td><b>${esc(r.regionName)}</b> <span class="muted">(${esc(r.regionCode)})</span></td>
-                <td><b>${esc(r.companyName)}</b><div class="small muted">ИНН ${esc(r.inn || '—')} · ${esc(r.email || '—')}</div></td>
-                <td>Паушальный взнос <b>${rub(r.franchiseFeeRub)}</b><div class="small muted">Залог ${rub(r.nonRefundableDepositRub || r.depositAmountRub || D.franchise.reservationDepositRub)} · полная оплата за 1 год</div></td>
-                <td><span class="tag ${r.depositPaid ? 'ok' : ''}">${r.depositPaid ? 'залог оплачен' : 'ждёт оплаты залога'}</span></td>
-                <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-                    ${!r.depositPaid && r.orderId ? `<button class="btn btn-ok btn-sm" data-pay-order="${esc(r.orderId)}">Оплатить залог</button>` : ''}
-                    ${!r.convertedToPartnerId ? `<button class="btn btn-primary btn-sm" data-activate-res="${esc(r.reservationId)}">Активировать партнёра</button>` : `<span class="small muted">Партнёр ${esc(r.convertedToPartnerId)}</span>`}
-                </div></td>
-            </tr>`);
-            const partRows = partners.map(p => `<tr>
-                <td><b>${esc(p.partnerId)}</b><div class="small muted">Действующий партнёр</div></td>
-                <td><b>${esc(p.regionName)}</b> <span class="muted">(${esc(p.regionCode)})</span></td>
-                <td><b>${esc(p.companyName)}</b><div class="small muted">ИНН ${esc(p.inn || '—')}</div></td>
-                <td>Скидка <b>${p.discountPercent}%</b> · ${esc(p.statusLevel)}<div class="small muted">Продажи: ${rub(p.annualSalesRub || 0)}</div></td>
-                <td><span class="tag ok">сертификатов: ${(p.certifiedSpecialists || []).length}</span></td>
-                <td><button class="btn btn-ghost btn-sm" data-certify-partner="${esc(p.partnerId)}">+ Аттестовать инженера</button></td>
-            </tr>`);
-            $('#admPartnersBody').innerHTML = [...resRows, ...partRows].join('') || '<tr><td colspan="6" class="muted">Резервов и партнёров пока нет — выберите субъект во вкладке «Франшиза»</td></tr>';
-        }
-
-        if ($('#admTicketsBody')) {
-            $('#admTicketsBody').innerHTML = tickets.map(t => {
-                const msgs = (t.messages || []).map(m => `<div class="small"><b>${esc(m.role === 'engineer' ? (m.author || 'Инженер') : (t.userName || 'Клиент'))}:</b> ${esc(m.text)}</div>`).join('');
-                return `<tr>
-                    <td><b>${esc(t.ticketId)}</b><div><span class="tag">${esc(String(t.channel || '').toUpperCase())}</span></div></td>
-                    <td><b>${esc(t.userName || t.chatId)}</b><div class="small muted">Лицензия: ${esc(t.licenseId || 'не привязана')}</div></td>
-                    <td><span class="tag ok">${esc(t.tierName || 'Start')}</span><div class="small muted">реакция ≤ ${t.slaReactionMinutes || 480} мин</div></td>
-                    <td style="white-space:normal;max-width:360px">${msgs}</td>
-                    <td>
-                        <div style="display:flex;gap:6px">
-                            <input type="text" id="reply-${esc(t.ticketId)}" placeholder="Ответ инженера…" style="min-width:190px;padding:7px 10px;font-size:12.5px">
-                            <button class="btn btn-primary btn-sm" data-reply-ticket="${esc(t.ticketId)}">Ответить</button>
-                        </div>
-                    </td>
-                </tr>`;
-            }).join('') || '<tr><td colspan="5" class="muted">Обращений пока нет — отправьте сообщение через «Консоль бота» во вкладке «Поддержка»</td></tr>';
-        }
-    }
-
-    async function adminIssueLicense() {
-        const st = $('#admIssueStatus');
-        st.textContent = 'Выпускаем сертификат…';
-        try {
-            const lic = await api('/api/license/issue', {
-                hwid: $('#admLicHwid').value.trim(),
-                customer: {
-                    name: $('#admLicOrg').value.trim(),
-                    inn: $('#admLicInn').value.trim(),
-                    email: $('#admLicEmail').value.trim(),
-                },
-            });
-            st.textContent = `Выпущена лицензия ${lic.licenseId} (${lic.totalSeats} мест, подпись Ed25519)`;
-            refreshRegistry();
-        }
-        catch (err) { st.textContent = err.message; }
-    }
-
-    async function adminConfirmOrder(orderId) {
-        const order = (lastAdminData?.orders || []).find(o => o.orderId === orderId);
-        if (!order) return;
-        await api('/api/payments/yookassa/webhook', {
-            type: 'notification',
-            event: 'payment.succeeded',
-            object: {
-                id: order.paymentId,
-                status: 'succeeded',
-                amount: { value: Number(order.amountRub || 0).toFixed(2), currency: 'RUB' },
-                metadata: { orderId: order.orderId, licenseId: order.licenseId || '', reservationId: order.reservationId || '' },
-            },
-        });
-        refreshRegistry();
-    }
-
-    async function adminActivateReservation(reservationId) {
-        const r = (lastAdminData?.reservations || []).find(x => x.reservationId === reservationId);
-        if (!r) return;
-        try {
-            await api('/api/partners/register', {
-                reservationId: r.reservationId,
-                regionCode: r.regionCode,
-                companyName: r.companyName,
-                inn: r.inn,
-                email: r.email,
-                franchiseFeePaid: true,
-            });
-            refreshRegistry();
-        }
-        catch (err) { alert(err.message); }
-    }
-
-    async function adminCertifyPartner(partnerId) {
-        try {
-            await api('/api/partners/certify', {
-                partnerId,
-                specialistName: 'Ведущий инженер ПАК',
-                specialistEmail: 'engineer@partner.ru',
-                trackCode: 'TRK-PAK-HW',
-                examScore: 96,
-            });
-            refreshRegistry();
-        }
-        catch (err) { alert(err.message); }
-    }
-
-    async function adminReplyTicket(ticketId) {
-        const inp = document.getElementById('reply-' + ticketId);
-        const text = inp?.value.trim();
-        if (!text) return;
-        await api('/api/tickets/' + encodeURIComponent(ticketId) + '/reply', {
-            engineerName: 'Дежурный инженер ODANT',
-            text,
-        });
-        inp.value = '';
-        refreshRegistry();
-    }
-
-    function openCertModal(licenseId) {
-        const lic = (lastAdminData?.licenses || []).find(l => l.licenseId === licenseId);
-        if (!lic) return;
-        $('#certTitle').textContent = `Сертификат ${lic.licenseId}`;
-        $('#certSub').textContent = `${lic.customer?.name || ''} · Ed25519 (WORK-LIC-v1)`;
-        $('#certJsonBox').textContent = JSON.stringify(lic.certificate || lic, null, 2);
-        $('#certModal').classList.add('open');
-    }
-
-    function switchAdminTab(tab = 'all') {
-        $$('[data-adm-tab]').forEach(b => b.classList.toggle('on', b.dataset.admTab === tab));
-        const ws = $('#adminWorkspace');
-        if (ws) ws.classList.toggle('only-agent', tab === 'agent');
-        $$('[data-adm-sec]').forEach(sec => {
-            sec.style.display = (tab === 'all' || tab === sec.dataset.admSec) ? '' : 'none';
-        });
-        if (tab === 'agent') setTimeout(() => $('#admAiInput')?.focus(), 50);
-    }
-
-    async function sendAdminAi(text) {
-        const inp = $('#admAiInput');
-        text = (text ?? inp?.value ?? '').trim();
-        if (!text) return;
-        if (inp) inp.value = '';
-        const box = $('#admAiMessages');
-        if (!box) return;
-        box.insertAdjacentHTML('beforeend', `<div class="msg me">${esc(text)}</div><div class="msg bot" id="admAiTyping"><span class="typing"><i></i><i></i><i></i></span></div>`);
-        box.scrollTop = box.scrollHeight;
-        let data;
-        try { data = await api('/api/agent/chat', { message: text, sessionKey: currentUser?.sessionKey || '' }); }
-        catch (err) { data = { reply: err.message, actions: [] }; }
-        $('#admAiTyping')?.remove();
-        box.insertAdjacentHTML('beforeend', `<div class="msg bot">${md(data.reply || '')}</div>`);
-        box.scrollTop = box.scrollHeight;
-        for (const act of data.actions || []) {
-            if (act.type === 'refresh_admin') {
-                refreshRegistry();
+        if (currentUser?.sessionKey) {
+            try {
+                const me = await api('/api/auth/me?sessionKey=' + encodeURIComponent(currentUser.sessionKey));
+                if (me.authenticated && me.user) {
+                    currentUser = { ...me.user, sessionKey: currentUser.sessionKey };
+                    updateClientSupportCard();
+                }
             }
-            else if (act.type === 'admin_tab' && act.tab) {
-                switchAdminTab(act.tab);
-            }
-            else if (act.type === 'select_region' && act.regionCode) {
-                selectRegion(act.regionCode, { zoom: true, scrollTable: false });
+            catch { /* ignore */ }
+        }
+    }
+
+    async function refreshCatalogRegions() {
+        try {
+            const data = await api('/api/catalog');
+            if (Array.isArray(data.regions) && data.regions.length) {
+                data.regions.forEach(mergeRegion);
+                paintMap();
+                renderRegionsTable();
+                if (selectedCode) selectRegion(selectedCode);
             }
         }
+        catch { /* ignore */ }
     }
 
     /* ================= ИИ-агент лицензионного центра ================= */
@@ -962,21 +906,24 @@
         box.insertAdjacentHTML('beforeend', `<div class="msg bot">${md(data.reply || '')}</div>`);
         box.scrollTop = box.scrollHeight;
         for (const act of data.actions || []) {
-            if (act.type === 'refresh_admin') {
-                refreshRegistry();
-            }
-            else if (act.type === 'select_region') {
+            if (act.type === 'select_region') {
                 switchStage('franchise');
                 setTimeout(() => selectRegion(act.regionCode, { zoom: true, scrollTable: true }), 80);
             }
-            else if (act.type === 'prefill_calculator' && currentUser) {
+            else if (act.type === 'prefill_calculator' && isUserReadyForOrders()) {
                 $$('#segTier button').forEach(b => b.classList.toggle('on', b.dataset.tier === act.tier));
                 if (act.years) $('#inpYears').value = act.years;
                 syncSeats(act.seats);
                 switchStage('addons');
             }
-            else if (act.type === 'switch_stage' && act.stage) {
-                switchStage(act.stage === 'addons' && !currentUser ? 'pricing' : act.stage);
+            else if (act.type === 'open_auth') {
+                openAuth();
+            }
+            else if (act.type === 'open_oferta') {
+                openOfertaModal();
+            }
+            else if (act.type === 'switch_stage' && act.stage && act.stage !== 'admin') {
+                switchStage(act.stage === 'addons' && !isUserReadyForOrders() ? 'pricing' : act.stage);
             }
         }
     }
@@ -1146,16 +1093,9 @@
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-stage],[data-action],[data-reserve],[data-bot],[data-ask],[data-adm-ask],[data-adm-tab],[data-district],[data-cert],[data-pay-order],[data-activate-res],[data-certify-partner],[data-reply-ticket],th[data-sort],#regionsTableBody tr');
+            const el = e.target.closest('[data-stage],[data-action],[data-reserve],[data-bot],[data-ask],[data-district],th[data-sort],#regionsTableBody tr');
             if (!el) return;
             if (el.matches('[data-reserve]')) { e.stopPropagation(); reserveRegionFranchise(el.dataset.reserve); return; }
-            if (el.matches('[data-adm-tab]')) { switchAdminTab(el.dataset.admTab); return; }
-            if (el.matches('[data-adm-ask]')) { sendAdminAi(el.dataset.admAsk); return; }
-            if (el.matches('[data-cert]')) { openCertModal(el.dataset.cert); return; }
-            if (el.matches('[data-pay-order]')) { adminConfirmOrder(el.dataset.payOrder); return; }
-            if (el.matches('[data-activate-res]')) { adminActivateReservation(el.dataset.activateRes); return; }
-            if (el.matches('[data-certify-partner]')) { adminCertifyPartner(el.dataset.certifyPartner); return; }
-            if (el.matches('[data-reply-ticket]')) { adminReplyTicket(el.dataset.replyTicket); return; }
             if (el.matches('#regionsTableBody tr')) { selectRegion(el.dataset.code, { zoom: true }); $('#mapBox').scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return; }
             if (el.matches('th[data-sort]')) {
                 SORT.dir = SORT.key === el.dataset.sort ? -SORT.dir : (el.dataset.sort === 'name' || el.dataset.sort === 'district' ? 1 : -1);
@@ -1168,23 +1108,32 @@
             if (el.matches('[data-ask]')) { sendAi(el.dataset.ask); return; }
             if (el.dataset.stage) { e.preventDefault(); switchStage(el.dataset.stage); return; }
             switch (el.dataset.action) {
-                case 'auth': if (currentUser) switchStage('addons'); else openAuth(); break;
+                case 'auth': openAuth(); break;
                 case 'auth-close': closeAuth(); break;
                 case 'login': performLogin(); break;
-                case 'addons': e.preventDefault(); if (currentUser) switchStage('addons'); else openAuth(); break;
+                case 'logout': performLogout(); break;
+                case 'open-oferta': e.preventDefault(); openOfertaModal(); break;
+                case 'oferta-close': closeOfertaModal(); break;
+                case 'accept-from-oferta':
+                    closeOfertaModal();
+                    if ($('#authOfertaCheck')) $('#authOfertaCheck').checked = true;
+                    openAuth();
+                    break;
+                case 'addons':
+                    e.preventDefault();
+                    if (isUserReadyForOrders()) switchStage('addons');
+                    else requireAuthAndOferta(() => switchStage('addons'));
+                    break;
                 case 'pick-tier':
                     $$('#segTier button').forEach(b => b.classList.toggle('on', b.dataset.tier === el.dataset.tier));
                     recalcAddons();
-                    if (currentUser) switchStage('addons'); else openAuth();
+                    if (isUserReadyForOrders()) switchStage('addons');
+                    else requireAuthAndOferta(() => switchStage('addons'));
                     break;
                 case 'order-pak': submitBasePakOrder(); break;
                 case 'order-addons': submitAddonOrder(); break;
                 case 'reserve-selected': reserveRegionFranchise(selectedCode); break;
                 case 'bot-send': sendBot(); break;
-                case 'registry': refreshRegistry(); break;
-                case 'demo-pak': createDemoPak(); break;
-                case 'adm-issue-lic': adminIssueLicense(); break;
-                case 'adm-ai-send': sendAdminAi(); break;
                 case 'cert-close': $('#certModal')?.classList.remove('open'); break;
                 case 'cert-copy':
                     navigator.clipboard?.writeText($('#certJsonBox')?.textContent || '');
@@ -1193,21 +1142,21 @@
                 case 'ai-send': sendAi(); break;
             }
         });
-        $('#authModal').addEventListener('click', (e) => { if (e.target.id === 'authModal') closeAuth(); });
+        $('#authModal')?.addEventListener('click', (e) => { if (e.target.id === 'authModal') closeAuth(); });
+        $('#ofertaModal')?.addEventListener('click', (e) => { if (e.target.id === 'ofertaModal') closeOfertaModal(); });
         $('#certModal')?.addEventListener('click', (e) => { if (e.target.id === 'certModal') $('#certModal').classList.remove('open'); });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { closeAuth(); $('#certModal')?.classList.remove('open'); toggleAi(false); }
+            if (e.key === 'Escape') { closeAuth(); closeOfertaModal(); $('#certModal')?.classList.remove('open'); toggleAi(false); }
         });
-        $('#authModal').addEventListener('keydown', (e) => { if (e.key === 'Enter') performLogin(); });
-        $('#aiInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAi(); });
-        $('#admAiInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAdminAi(); });
-        $('#botText').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBot(); });
-        $('#rngAddonSeats').addEventListener('input', (e) => syncSeats(e.target.value));
-        $('#inpSeats').addEventListener('input', (e) => syncSeats(e.target.value));
-        $('#inpYears').addEventListener('input', recalcAddons);
-        $('#inpPakExtraSeats').addEventListener('input', recalcBaseOrder);
-        $('#rngPartnerSales').addEventListener('input', recalcPartner);
-        $('#inpRegionFilter').addEventListener('input', renderRegionsTable);
+        $('#authModal')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') performLogin(); });
+        $('#aiInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAi(); });
+        $('#botText')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBot(); });
+        $('#rngAddonSeats')?.addEventListener('input', (e) => syncSeats(e.target.value));
+        $('#inpSeats')?.addEventListener('input', (e) => syncSeats(e.target.value));
+        $('#inpYears')?.addEventListener('input', recalcAddons);
+        $('#inpPakExtraSeats')?.addEventListener('input', recalcBaseOrder);
+        $('#rngPartnerSales')?.addEventListener('input', recalcPartner);
+        $('#inpRegionFilter')?.addEventListener('input', renderRegionsTable);
         bindSeg('segTier', recalcAddons);
         bindSeg('segPakTier', recalcBaseOrder);
         window.addEventListener('resize', moveIndicator);
@@ -1223,12 +1172,12 @@
         recalcPartner();
         renderRegionsTable();
         initBackdrop();
-        const initial = D.initialStage || (location.pathname === '/admin' ? 'admin' : location.hash.slice(1));
-        switchStage(initial && initial !== 'addons' ? initial : 'product', { scroll: false });
+        const initial = D.initialStage || location.hash.slice(1);
+        switchStage(initial && initial !== 'addons' && initial !== 'admin' ? initial : 'product', { scroll: false });
         if (document.fonts?.ready) document.fonts.ready.then(moveIndicator);
         initMap().then(() => selectRegion(selectedCode || 'RU-SVE'));
         restoreSession();
-        refreshRegistry();
+        refreshCatalogRegions();
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

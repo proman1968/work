@@ -38,9 +38,11 @@ export class YooKassaService {
      */
     buildYooKassaPaymentPayload(order) {
         const valueStr = Number(order.amountRub || 0).toFixed(2);
-        const description = order.includeBasePak
-            ? `Заказ ${order.orderId}: ПАК ODANT-WORK (10 вечных лицензий + 1 год Enterprise) + доп. места (${order.addonSeats} мест, ${order.tierName})`
-            : `Заказ ${order.orderId}: Годовая лицензия WORK (${order.addonSeats} польз., уровень ${order.tierName}, ${order.years} г.)`;
+        const description = order.kind === 'franchise_reservation'
+            ? `Заказ ${order.orderId}: Невозвратный залог за резервирование региональной франшизы ODANT-WORK (${order.regionName})`
+            : order.includeBasePak
+                ? `Заказ ${order.orderId}: ПАК ODANT-WORK (10 вечных лицензий + 1 год Enterprise) + доп. места (${order.addonSeats} мест, ${order.tierName})`
+                : `Заказ ${order.orderId}: Годовая лицензия WORK (${order.addonSeats} польз., уровень ${order.tierName}, ${order.years} г.)`;
 
         return {
             amount: {
@@ -160,22 +162,34 @@ export class YooKassaService {
 
         if (event === 'payment.succeeded' || obj.status === 'succeeded') {
             const result = this.store.completePaidOrder(order.orderId, { paymentId });
-            if (!result.alreadyProcessed && typeof this.onOrderPaid === 'function') {
+            if (result.reservation) {
+                return {
+                    ok: true,
+                    status: 'paid',
+                    kind: 'franchise_reservation',
+                    orderId: result.order.orderId,
+                    reservationId: result.reservation.reservationId,
+                    regionCode: result.reservation.regionCode,
+                    regionName: result.reservation.regionName,
+                    alreadyProcessed: result.alreadyProcessed,
+                };
+            }
+            if (!result.alreadyProcessed && result.license && typeof this.onOrderPaid === 'function') {
                 await Promise.resolve(this.onOrderPaid(result.order, result.license)).catch(() => {});
             }
             return {
                 ok: true,
                 status: 'paid',
                 orderId: result.order.orderId,
-                licenseId: result.license.licenseId,
-                totalSeats: result.license.totalSeats,
-                tier: result.license.support.tierName,
+                licenseId: result.license?.licenseId || result.order.licenseId,
+                totalSeats: result.license?.totalSeats ?? 0,
+                tier: result.license?.support?.tierName || result.order.tierName || '',
                 alreadyProcessed: result.alreadyProcessed,
             };
         }
 
         if (event === 'payment.canceled' || obj.status === 'canceled') {
-            this.store.updateOrder(order.orderId, { status: 'canceled' });
+            this.store.cancelOrder(order.orderId);
             return { ok: true, status: 'canceled', orderId: order.orderId };
         }
 

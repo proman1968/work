@@ -12,6 +12,7 @@ export default {
     maxTokens: 131072,
     maxOutput: 32768,
     functionCalling: true,
+    efforts: ['off', 'low', 'medium', 'high'],
     effort: 'low',
     capabilities: [
         'chat',

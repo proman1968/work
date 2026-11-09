@@ -7,8 +7,8 @@
  *   Сессия задачи (.task) — ./session.js
  */
 import { log } from './log.js';
-import { runLoop } from './loop.js';
-import { workTools, accountingTools } from './tools/work.js';
+import { runLoop, pickAllowedEffort } from './loop.js';
+import { workTools, accountingTools, contextConeOf } from './tools/work.js';
 import { webTools, serviceTools, mcpTools } from './tools/services.js';
 import { metaTools, listing, MAX_DEPTH } from './tools/meta.js';
 import { connectTools } from './tools/connect.js';
@@ -143,10 +143,14 @@ export async function llmFor(modelPath) {
     }
     await item.init;
     const caps = Array.isArray(item.capabilities) ? item.capabilities : String(item.capabilities || '').split(/[\s,]+/);
+    const rawEfforts = item.efforts ?? item.DATA?.efforts;
+    const efforts = (Array.isArray(rawEfforts) ? rawEfforts : String(rawEfforts || '').split(/[\s,]+/))
+        .map(s => String(s || '').trim()).filter(Boolean);
     const maxOutput = Number(item.maxOutput) || undefined;
     return {
         name: path,
         item,
+        efforts,
         contextTokens: Number(item.maxTokens) || 32000,
         vision: caps.includes('vision'),
         fork: caps.includes('fork') || item.protocol === 'halogen',
@@ -160,7 +164,7 @@ export async function llmFor(modelPath) {
             if (maxOutput)
                 req.maxOutput = maxOutput;
             if (effort && caps.includes('effort'))
-                req.effort = effort;
+                req.effort = efforts.length ? pickAllowedEffort(effort, efforts) : effort;
             if (halogenKeep)
                 req.halogenKeep = halogenKeep;
             if (halogenFrom)
@@ -264,6 +268,7 @@ WORK — система управления деятельностью, где 
 - Контракт места (readme) — закон: прежде чем создавать/менять, прочитай его (read класса) и следуй ему.
 # Как работать
 - Сначала разберись (ls/read/find/schema), потом действуй; не выдумывай пути — проверяй.
+- Если запрос делается в контексте конкретной организации или подразделения, работай и собирай отчёты СТРОГО в рамках этого контекста: движение допустимо только «вниз» от точки задачи (дочерние элементы) или «вверх» (учётные модули своей организации и общие данные уровня WORK). Переходы «влево-вправо» в соседние организации или соседние подразделения запрещены. Если в текущем контексте запрошенных данных нет — прямо скажи об этом, не подставляй данные других организаций.
 - Независимые чтения вызывай параллельно в одном ходе.
 - Задачи из 3+ шагов — веди план todo_write; широкое исследование — поручай субагенту (task).
 - Уровень рассуждений (effort: off | low | medium | high) выбирай сам по сложности задачи: для себя — задавай effort в todo_write при составлении или обновлении плана; для субагентов — передавай effort в task и agent_start (off/low — быстрый поиск, выборка и чтение; medium — анализ данных, сверка учёта, написание кода; high — сложная архитектура и отладка).
@@ -309,7 +314,7 @@ export const VOICE_NOTE = `# Голосовой режим
  * @param {EnvParams} [p]
  * @returns {Promise<any>} env: { place, session, config, hooks, agents, skills, role, … }
  */
-export async function createEnv({ place, session, host, tz, location, role, voice } = {}) {
+export async function createEnv({ place, contextPath, session, host, tz, location, role, voice } = {}) {
     // ОС и сеть — руководителю WORK, работающему в роли BOSS (или без выбранной роли: REST, расписание)
     const system = async () => (!role || role === 'BOSS') && await systemAllowed(session);
     const [config, hooks, allAgents, allSkills, baseSystem, caps, privatePlace] = await Promise.all([
@@ -462,7 +467,7 @@ export async function createEnv({ place, session, host, tz, location, role, voic
                         + 'Инструментов os_*/net_*/shell у тебя нет в списке: не ищи их в дереве и не поручай такую работу субагенту — сразу объясни ограничение.'));
             if (await system())
                 parts.push('ОС и сеть: os_* работают с файловой системой СЕРВЕРА WORK вне дерева WORK; net_* — с его локальной сетью. Начинай с os_info/net_info. net_discover ищет объявления, net_scan — порты, net_probe уточняет протокол. Открытый порт не подтверждает вид сервиса. net_register создаёт коннектор в /SERVICES/LAN; назначай доступ через роли класса. Файлы WORK читай и сохраняй WORK-инструментами. shell — полноценная команда ОС с правами процесса, ограничения roots/deny файловых инструментов на неё не распространяются.');
-            parts.push(await placeBlock(place, session, location));
+            parts.push(await placeBlock(place, session, location, contextPath));
             tail.push(nowLine(tz));
             tail.push(MODE_NOTE[host?.mode] || MODE_NOTE.auto);
             if (voice && !def)
@@ -541,7 +546,7 @@ async function resolvePlace(lat, lon) {
 }
 
 /** Блок «Контекст» — только то, что постоянно в задаче (место, пользователь, роли, местоположение); время — nowLine. */
-async function placeBlock(place, session, location) {
+async function placeBlock(place, session, location, contextPath) {
     const lines = ['# Контекст'];
     if (place) {
         try {
@@ -549,6 +554,15 @@ async function placeBlock(place, session, location) {
         }
         catch (e) { log.debug('place.init', e); /* без DATA */ }
         lines.push('- Место задачи (текущий класс): ' + place.path + (place.DATA?.label ? ' «' + place.DATA.label + '»' : '') + (place.type ? ' [' + place.type + ']' : ''));
+        if (contextPath && contextPath !== place.path)
+            lines.push('- Открытая форма (контекст вопроса): ' + contextPath);
+        const cone = contextConeOf(contextPath || place.path);
+        if (cone) {
+            const scopeDesc = cone.length > 2
+                ? `подразделение «/${cone.join('/')}» организации «${cone[1]}»`
+                : `организация «${cone[1]}» (/ORGANIZATIONS/${cone[1]})`;
+            lines.push(`- Границы контекста: ${scopeDesc}. Движение разрешено только «вниз» (дочерние элементы точки) или «вверх» (учётные модули своей организации /ORGANIZATIONS/${cone[1]}/MODULES и общие данные уровня WORK). Выход «влево-вправо» в другие организации или соседние подразделения запрещён; если данных в этом контексте нет — сообщи, что в данной организации/подразделении их нет.`);
+        }
     }
     const user = session?.$user;
     if (user && user !== globalThis.WORK) {

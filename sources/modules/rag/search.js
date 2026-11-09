@@ -10,7 +10,7 @@ import { CONFIG, queryInput } from './config.js';
 import * as store from './store.js';
 import * as REFS from '../../server/access/refs.js';
 import { embed } from './embedder.js';
-import { buildContexts, scopeDocs, feedDocs, layerWeight } from './scope.js';
+import { buildContexts, scopeDocs, feedDocs, layerWeight, inVerticalCone } from './scope.js';
 import { invalidate, pending } from './indexer.js';
 
 function dot(a, b) {
@@ -45,10 +45,13 @@ async function collectCandidates(point, params, filter = {}) {
     const ctx = await buildContexts(point, params);
     const cands = new Map();
     const prefix = filter.prefix || '';
+    const coneBase = params.contextPoint || point?.path || '/';
     const offer = (doc, context, weight) => {
         if (filter.kinds && !filter.kinds.has(doc.kind))
             return;
         if (prefix && !(doc.virtual === prefix || doc.virtual.startsWith(prefix + '/')))
+            return;
+        if (!inVerticalCone(doc.virtual || doc.path, coneBase))
             return;
         const prev = cands.get(doc.path);
         if (!prev || prev.weight < weight)

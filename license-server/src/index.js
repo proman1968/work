@@ -14,6 +14,7 @@ export {
     calculateFranchiseFee,
     calculatePartnerDiscount,
     calculatePartnerEconomics,
+    PUBLIC_OFERTA,
 } from './catalog.js';
 export { LICENSE_PROTOCOL, loadOrCreateAuthorityKeys, canonicalLicenseString, signCertificate, verifyCertificate } from './crypto.js';
 export { LicenseStore } from './store.js';

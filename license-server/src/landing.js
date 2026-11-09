@@ -16,6 +16,7 @@ import {
     FRANCHISE_PROGRAM,
     REGIONS_CATALOG,
     PARTNER_TRAINING_TRACKS,
+    PUBLIC_OFERTA,
 } from './catalog.js';
 
 const ICON_PATHS = {
@@ -50,6 +51,7 @@ const ICON_PATHS = {
     image: 'M4 5h16v14H4z M4 16l5-5 4 4 3-3 4 4 M15 9h.01',
     search: 'M11 4a7 7 0 1 0 0 14a7 7 0 1 0 0-14 M20 20l-4-4',
     key: 'M8 14a4 4 0 1 0 0-8a4 4 0 1 0 0 8 M11 10h10 M17 10v4 M20 10v3',
+    cart: 'M4 5h2l2.4 9.5a2 2 0 0 0 2 1.5h7.2a2 2 0 0 0 1.9-1.4L21 8H7 M9 20a1 1 0 1 0 0-2a1 1 0 1 0 0 2 M18 20a1 1 0 1 0 0-2a1 1 0 1 0 0 2',
 };
 
 export function icon(name) {
@@ -139,6 +141,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         districts: FEDERAL_DISTRICTS,
         ai: AI_PLATFORM,
         vendor: VENDOR_CONTACTS,
+        oferta: PUBLIC_OFERTA,
         icons: ICON_PATHS,
         initialStage,
     };
@@ -188,8 +191,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
 
             <div class="top-actions">
                 <button class="icon-btn" id="btnTheme" onclick="toggleTheme()" title="Светлая / тёмная тема" aria-label="Переключить тему">${icon('sun')}</button>
-                <button class="btn btn-ghost btn-sm" id="btnAdminTop" data-stage="admin" title="Админ-панель сервера лицензий">${icon('server')}<span>Админка</span></button>
-                <button class="btn btn-ghost btn-sm" id="btnAuth" data-action="auth">${icon('user')}<span id="btnAuthText">Войти</span></button>
+                <button class="btn btn-ghost btn-sm" data-action="open-oferta" title="Публичный договор-оферта ODANT-WORK">${icon('docs')}<span>Оферта</span></button>
+                <button class="btn btn-ghost btn-sm" id="btnAuth" data-action="auth">${icon('user')}<span id="btnAuthText">Войти / Регистрация</span></button>
                 <button class="btn btn-primary btn-sm" data-stage="order">Заказать</button>
             </div>
         </header>
@@ -361,6 +364,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <div><span class="kicker">Заказ</span><h2 class="h2">Программно-аппаратный комплекс ODANT-WORK</h2></div>
                 <p>Сервер AMD Ryzen™ AI Max+ PRO 495 · 192 ГБ · 4 ТБ с установленной платформой, вечной лицензией на ${P.baseSeats} мест и 1 годом поддержки Enterprise (дальше — по желанию). Оплата через ЮKassa с чеком по 54-ФЗ.</p>
             </div>
+            <div class="card oferta-banner" data-oferta-banner></div>
             <div class="split">
                 <div class="card">
                     <div class="row2">
@@ -376,7 +380,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <label>Уровень поддержки дополнительных мест</label>
                         <div class="seg" id="segPakTier">${Object.values(SLA_TIERS).map(t => `<button data-tier="${t.id}" class="${t.id === 'business' ? 'on' : ''}">${esc(t.name)}<small>${rub(t.pricePerUserYearRub)}/год</small></button>`).join('')}</div>
                     </div>
-                    <p class="note muted" style="margin:6px 0 0">Уже есть комплекс? <a href="#" data-action="addons">Войдите в кабинет</a>, чтобы докупить места со скидкой.</p>
+                    <p class="note muted" style="margin:6px 0 0">Уже есть комплекс? <a href="#" data-action="addons">Войдите в кабинет и подпишите оферту</a>, чтобы докупить места со скидкой.</p>
                 </div>
                 <div class="card summary card-glow">
                     <span class="kicker">Итого</span>
@@ -388,12 +392,13 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             </div>
         </section>
 
-        <!-- ============ ДОКУПКА ЛИЦЕНЗИЙ (только после входа) ============ -->
+        <!-- ============ ДОКУПКА ЛИЦЕНЗИЙ (только после входа и подписания оферты) ============ -->
         <section class="stage" id="stage-addons">
             <div class="sec-head">
                 <div><span class="kicker">Личный кабинет</span><h2 class="h2">Докупка пользовательских лицензий</h2></div>
                 <p id="userBadgeBox"></p>
             </div>
+            <div class="card oferta-banner" data-oferta-banner></div>
             <div class="split">
                 <div class="card">
                     <div class="field">
@@ -430,6 +435,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <div><span class="kicker">Партнёрская программа</span><h2 class="h2">Региональная франшиза ODANT-WORK</h2></div>
                 <p>Число франшиз в субъекте пропорционально населению, паушальный взнос — экономике региона. Резерв закрепляется сразу после невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}, полная оплата паушального взноса — в течение 1 года.</p>
             </div>
+            <div class="card oferta-banner" data-oferta-banner></div>
             <div class="stats">
                 <div class="stat"><b id="statVacant">${totalVacant}</b><span>вакантных франшиз</span></div>
                 <div class="stat"><b>${visibleRegions.length}</b><span>субъектов РФ</span></div>
@@ -567,14 +573,13 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 </div>
                 <div class="card">
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-                        <h3 class="h3" style="margin:0">Реестр лицензий и резервов</h3>
+                        <h3 class="h3" style="margin:0">Ваша лицензия и привязка мессенджеров</h3>
                         <div style="display:flex;gap:8px;flex-wrap:wrap">
-                            <button class="btn btn-ghost btn-sm" data-action="registry">Обновить</button>
-                            <button class="btn btn-ok btn-sm" data-action="demo-pak">Выпустить демо-лицензию</button>
-                            <button class="btn btn-primary btn-sm" data-stage="admin">Открыть админку →</button>
+                            <button class="btn btn-ghost btn-sm" data-action="auth">Личный кабинет</button>
+                            <button class="btn btn-ghost btn-sm" data-action="open-oferta">Договор-оферта</button>
                         </div>
                     </div>
-                    <div class="console" id="registryBox" style="margin-top:14px">Загрузка…</div>
+                    <div class="console" id="clientLicenseBox" style="margin-top:14px">Войдите в личный кабинет и подпишите договор-оферту, чтобы получить код привязки вашего комплекса к ботам MAX, Telegram и VK.</div>
                 </div>
             </div>
             <div class="card">
@@ -588,155 +593,6 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <div class="contact-row">${icon('pin')}<div><b>${esc(VENDOR_CONTACTS.address)}</b><br><a href="https://yandex.ru/maps/?pt=${VENDOR_CONTACTS.geo.lon},${VENDOR_CONTACTS.geo.lat}&z=17&l=map" target="_blank" rel="noopener">Открыть на карте</a></div></div>
                         <div class="contact-row">${icon('phone')}<div>${VENDOR_CONTACTS.phones.map(p => `<a href="tel:${p.replace(/[^\d+]/g, '')}">${esc(p)}</a>`).join('<br>')}</div></div>
                         <div class="contact-row">${icon('globe')}<div><a href="${esc(VENDOR_CONTACTS.site)}" target="_blank" rel="noopener">${esc(VENDOR_CONTACTS.site.replace(/^https?:\/\//, ''))}</a> · <a href="https://${esc(P.domain)}">${esc(P.domain)}</a></div></div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ============ АДМИНКА СЕРВЕРА ЛИЦЕНЗИЙ (/admin) ============ -->
-        <section class="stage" id="stage-admin">
-            <div class="sec-head">
-                <div>
-                    <span class="kicker">Центр сертификации и биллинга · /admin</span>
-                    <h2 class="h2">Админ-панель сервера лицензий ODANT-WORK</h2>
-                </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap">
-                    <button class="btn btn-ghost btn-sm" data-action="registry">Обновить реестр</button>
-                    <button class="btn btn-ok btn-sm" data-action="demo-pak">+ Демо-лицензия ПАК</button>
-                </div>
-            </div>
-
-            <div class="stats">
-                <div class="stat"><b id="admStatLic">0</b><span id="admStatLicSub">лицензий ПАК · 0 мест</span></div>
-                <div class="stat"><b id="admStatPaid">0 ₽</b><span id="admStatPaidSub">оплачено заказов: 0</span></div>
-                <div class="stat"><b id="admStatPending">0 ₽</b><span id="admStatPendingSub">ожидают оплаты: 0</span></div>
-                <div class="stat"><b id="admStatPartners">0 / 0</b><span>партнёров / резервов франшиз</span></div>
-                <div class="stat"><b id="admStatTickets">0</b><span id="admStatTicketsSub">открытых тикетов SLA</span></div>
-            </div>
-
-            <div class="admin-workspace" id="adminWorkspace">
-                <!-- Левая вкладка ИИ-агента и навигации админки -->
-                <aside class="admin-left">
-                    <nav class="admin-nav" aria-label="Вкладки админ-панели">
-                        <button class="adm-tab on" data-adm-tab="all">${icon('ai')}<span>ИИ-агент + Все разделы</span><i class="live-dot"></i></button>
-                        <button class="adm-tab" data-adm-tab="agent">${icon('agents')}<span>Только ИИ-агент</span></button>
-                        <button class="adm-tab" data-adm-tab="licenses">${icon('key')}<span>Лицензии (${P.baseSeats} вечн. + доп.)</span></button>
-                        <button class="adm-tab" data-adm-tab="orders">${icon('cart')}<span>Заказы ЮKassa</span></button>
-                        <button class="adm-tab" data-adm-tab="partners">${icon('map')}<span>Франшизы и партнёры</span></button>
-                        <button class="adm-tab" data-adm-tab="tickets">${icon('chat')}<span>Тикеты SLA (MAX·TG·VK)</span></button>
-                    </nav>
-
-                    <div class="card adm-agent-card" id="admAgentCard">
-                        <div class="ai-head" style="padding:0 0 12px;margin-bottom:10px">
-                            <img src="/assets/odant-logo.png" alt="">
-                            <div>
-                                <b>ИИ-агент администратора</b>
-                                <span>● управление реестром · в сети</span>
-                            </div>
-                        </div>
-                        <div class="ai-msgs adm-ai-msgs" id="admAiMessages">
-                            <div class="msg bot">Здравствуйте! Я ИИ-агент панели администратора ODANT-WORK. Помогу проанализировать реестр лицензий (${P.baseSeats} вечных мест + 1 год Enterprise), выпустить сертификат Ed25519, провести оплату заказов ЮKassa или проверить квоты франшиз по регионам РФ.</div>
-                        </div>
-                        <div class="ai-sugg" style="padding:8px 0;border-top:1px solid var(--line)">
-                            <button data-adm-ask="Сводка по серверу лицензий">Сводка реестра</button>
-                            <button data-adm-ask="Выпусти базовую лицензию для ООО «АгроТех» ИНН 6234001122">+ Выпустить лицензию</button>
-                            <button data-adm-ask="Проведи оплату ожидающих заказов">Провести оплаты</button>
-                            <button data-adm-ask="Сколько вакантных франшиз в Татарстане?">Квота Татарстана</button>
-                            <button data-adm-ask="Какие модели входят в комплекс и как подключить мощные ИИ по API?">Модели и API</button>
-                        </div>
-                        <div class="ai-input" style="padding:10px 0 0">
-                            <input type="text" id="admAiInput" placeholder="Команда или вопрос ИИ-агенту админки…" autocomplete="off">
-                            <button class="btn btn-primary" data-action="adm-ai-send" aria-label="Отправить">${icon('send')}</button>
-                        </div>
-                    </div>
-                </aside>
-
-                <!-- Правая область разделов админки -->
-                <div class="admin-main" id="adminMain">
-                    <div class="card" data-adm-sec="licenses">
-                        <div class="sec-head" style="margin-bottom:14px">
-                            <div>
-                                <span class="kicker">Выпуск сертификата Ed25519</span>
-                                <h3 class="h3" style="margin:4px 0 0">Выпустить базовую лицензию комплекса (${P.baseSeats} вечных лицензий + 1 год поддержки Enterprise, далее — по желанию)</h3>
-                            </div>
-                        </div>
-                        <div class="grid g4" style="align-items:end">
-                            <div class="field" style="margin:0"><label for="admLicOrg">Организация</label><input type="text" id="admLicOrg" value="АО «РязаньАгроПром»"></div>
-                            <div class="field" style="margin:0"><label for="admLicInn">ИНН</label><input type="text" id="admLicInn" value="6234109876"></div>
-                            <div class="field" style="margin:0"><label for="admLicEmail">Email клиента</label><input type="email" id="admLicEmail" value="it@ryazan-agro.ru"></div>
-                            <div class="field" style="margin:0"><label for="admLicHwid">HWID комплекса (необязательно)</label><input type="text" id="admLicHwid" placeholder="WORK-HWID-..."></div>
-                        </div>
-                        <div style="display:flex;align-items:center;gap:14px;margin-top:14px;flex-wrap:wrap">
-                            <button class="btn btn-primary btn-sm" data-action="adm-issue-lic">${icon('key')} Выпустить и подписать сертификат</button>
-                            <span class="small muted" id="admIssueStatus"></span>
-                        </div>
-                    </div>
-
-                    <div class="card" data-adm-sec="licenses">
-                        <h3 class="h3" style="margin:0 0 12px">Выпущенные лицензии комплексов ODANT-WORK</h3>
-                        <div class="table-wrap">
-                            <table class="t">
-                                <thead><tr>
-                                    <th>Лицензия / Код бота</th>
-                                    <th>Организация / ИНН</th>
-                                    <th>Привязка оборудования</th>
-                                    <th class="num">Сессии (вечные + доп.)</th>
-                                    <th>SLA и срок</th>
-                                    <th>Сертификат</th>
-                                </tr></thead>
-                                <tbody id="admLicensesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="card" data-adm-sec="orders">
-                        <h3 class="h3" style="margin:0 0 12px">Заказы и платежи ЮKassa</h3>
-                        <div class="table-wrap">
-                            <table class="t">
-                                <thead><tr>
-                                    <th>Заказ / Платёж</th>
-                                    <th>Назначение</th>
-                                    <th>Плательщик</th>
-                                    <th class="num">Сумма</th>
-                                    <th>Статус</th>
-                                    <th>Действия</th>
-                                </tr></thead>
-                                <tbody id="admOrdersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="card" data-adm-sec="partners">
-                        <h3 class="h3" style="margin:0 0 12px">Резервы региональных франшиз и действующие партнёры</h3>
-                        <div class="table-wrap">
-                            <table class="t">
-                                <thead><tr>
-                                    <th>ID / Тип</th>
-                                    <th>Субъект РФ</th>
-                                    <th>Компания / ИНН</th>
-                                    <th>Условия / Скидка</th>
-                                    <th>Статус</th>
-                                    <th>Действия</th>
-                                </tr></thead>
-                                <tbody id="admPartnersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div class="card" data-adm-sec="tickets">
-                        <h3 class="h3" style="margin:0 0 12px">Обращения техподдержки (MAX · Telegram · VK)</h3>
-                        <div class="table-wrap">
-                            <table class="t">
-                                <thead><tr>
-                                    <th>Тикет / Канал</th>
-                                    <th>Клиент / Лицензия</th>
-                                    <th>SLA</th>
-                                    <th>Переписка</th>
-                                    <th>Ответ инженера</th>
-                                </tr></thead>
-                                <tbody id="admTicketsBody"><tr><td colspan="5" class="muted">Загрузка…</td></tr></tbody>
-                            </table>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -758,7 +614,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     <h4>${esc(VENDOR_CONTACTS.company)}</h4>
                     <p>${esc(VENDOR_CONTACTS.address)}</p>
                     <p>${VENDOR_CONTACTS.phones.map(esc).join(', ')}</p>
-                    <p><a href="${esc(VENDOR_CONTACTS.site)}" target="_blank" rel="noopener">${esc(VENDOR_CONTACTS.site.replace(/^https?:\/\//, ''))}</a></p>
+                    <p><a href="${esc(VENDOR_CONTACTS.site)}" target="_blank" rel="noopener">${esc(VENDOR_CONTACTS.site.replace(/^https?:\/\//, ''))}</a> · <a href="#" data-action="open-oferta">Публичная оферта</a></p>
                 </div>
             </div>
             <div class="footer-bottom">
@@ -768,19 +624,68 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         </footer>
     </div>
 
-    <!-- Вход в кабинет -->
+    <!-- Регистрация / Вход в кабинет и подписание публичной оферты ПЭП -->
     <div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
-        <div class="card">
+        <div class="card" style="max-width:540px">
             <div class="modal-head">
                 <img src="/assets/odant-logo.png" alt="">
-                <div><h3 class="h3" id="authTitle" style="margin:0">Кабинет владельца ODANT-WORK</h3><div class="small muted">Докупка лицензий доступна после входа</div></div>
+                <div>
+                    <h3 class="h3" id="authTitle" style="margin:0">Регистрация и подписание оферты</h3>
+                    <div class="small muted" id="authSub">Заказ комплекса, докупка лицензий и резервирование франшизы доступны после регистрации и акцепта оферты (ПЭП)</div>
+                </div>
             </div>
-            <div class="field"><label for="authEmail">Корпоративный email</label><input type="email" id="authEmail" value="admin@maslotorg.ru"></div>
-            <div class="field"><label for="authCompany">Организация</label><input type="text" id="authCompany" value="ООО «Маслоторг»"></div>
-            <div class="field"><label for="authLicId">Номер лицензии (если уже выдан)</label><input type="text" id="authLicId" placeholder="Будет выпущен автоматически"></div>
-            <div style="display:flex;gap:10px;margin-top:8px">
-                <button class="btn btn-primary" style="flex:1" data-action="login">Войти</button>
-                <button class="btn btn-ghost" data-action="auth-close">Отмена</button>
+            <div class="row2">
+                <div class="field"><label for="authEmail">Корпоративный email *</label><input type="email" id="authEmail" value="admin@maslotorg.ru" required></div>
+                <div class="field"><label for="authInn">ИНН организации *</label><input type="text" id="authInn" value="7701234567" inputmode="numeric" required></div>
+            </div>
+            <div class="row2">
+                <div class="field"><label for="authCompany">Наименование организации *</label><input type="text" id="authCompany" value="ООО «Маслоторг»" required></div>
+                <div class="field"><label for="authSigner">ФИО и должность подписанта *</label><input type="text" id="authSigner" value="Перепелкин Р.А., Генеральный директор" required></div>
+            </div>
+            <div class="field"><label for="authLicId">Номер лицензии ПАК (если уже выдан)</label><input type="text" id="authLicId" placeholder="Будет привязан или выпущен автоматически"></div>
+
+            <div class="oferta-check-box">
+                <label class="oferta-check-label">
+                    <input type="checkbox" id="authOfertaCheck" checked>
+                    <span>
+                        Я ознакомился с условиями <a href="#" data-action="open-oferta">Публичного договора-оферты ODANT-WORK (${esc(PUBLIC_OFERTA.version)})</a> и подписываю его простой электронной подписью (ПЭП) от имени указанной организации.
+                    </span>
+                </label>
+            </div>
+            <div class="status" id="authErrorMsg" style="color:var(--danger);min-height:18px;margin-top:6px"></div>
+            <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
+                <button class="btn btn-primary" style="flex:1" data-action="login">${icon('check')} Зарегистрироваться и подписать оферту</button>
+                <button class="btn btn-ghost" id="btnLogoutModal" data-action="logout" style="display:none">Выйти</button>
+                <button class="btn btn-ghost" data-action="auth-close">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Полный текст Публичного договора-оферты ODANT-WORK -->
+    <div class="modal" id="ofertaModal" role="dialog" aria-modal="true" aria-labelledby="ofertaTitle">
+        <div class="card" style="max-width:760px">
+            <div class="modal-head">
+                <img src="/assets/odant-logo.png" alt="">
+                <div>
+                    <span class="kicker">Редакция ${esc(PUBLIC_OFERTA.version)} от ${esc(PUBLIC_OFERTA.updatedAt)}</span>
+                    <h3 class="h3" id="ofertaTitle" style="margin:2px 0 0">${esc(PUBLIC_OFERTA.title)}</h3>
+                </div>
+            </div>
+            <div class="oferta-scroll">
+                ${PUBLIC_OFERTA.sections.map(s => `
+                    <div class="oferta-sec">
+                        <h4>${esc(s.number)}. ${esc(s.title)}</h4>
+                        <p>${esc(s.text)}</p>
+                    </div>
+                `).join('')}
+                <div class="oferta-sec">
+                    <h4>7. Реквизиты Правообладателя</h4>
+                    <p><b>${esc(VENDOR_CONTACTS.company)}</b> · Адрес: ${esc(VENDOR_CONTACTS.address)} · Тел.: ${VENDOR_CONTACTS.phones.map(esc).join(', ')} · Сайт: ${esc(VENDOR_CONTACTS.site)}</p>
+                </div>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;flex-wrap:wrap">
+                <button class="btn btn-primary" data-action="accept-from-oferta">${icon('check')} Принять условия и перейти к подписанию ПЭП</button>
+                <button class="btn btn-ghost" data-action="oferta-close">Закрыть</button>
             </div>
         </div>
     </div>

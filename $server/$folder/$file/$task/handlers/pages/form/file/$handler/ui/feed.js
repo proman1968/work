@@ -51,6 +51,8 @@ const HOVER = /*css*/`
     .meta oda-button { padding: 2px; border-radius: var(--radius-s); }
 `;
 
+const EXPANDED_USER_PROMPTS = new Set();
+
 ODA({ is: 'microchat-user',
     imports: 'oda//button, oda//icon',
     template: /*html*/`
@@ -60,8 +62,41 @@ ODA({ is: 'microchat-user',
                 background: var(--accent-soft);
                 border-radius: var(--radius-l) var(--radius-l) var(--radius-s) var(--radius-l);
                 padding: 10px 14px; max-width: min(85%, 640px); min-width: 0;
-                white-space: pre-wrap; word-break: break-word; line-height: 1.45;
+                line-height: 1.45;
                 user-select: text;
+                position: relative;
+            }
+            .bubble[collapsible]:not([expanded]) {
+                cursor: pointer;
+                padding-bottom: 6px;
+            }
+            .bubble-text {
+                white-space: pre-wrap;
+                word-break: break-word;
+            }
+            .bubble[collapsible]:not([expanded]) .bubble-text {
+                max-height: calc(1.45em * 4.5);
+                overflow: hidden;
+                -webkit-mask-image: linear-gradient(to bottom, #000 50%, rgba(0, 0, 0, 0.08) 100%);
+                mask-image: linear-gradient(to bottom, #000 50%, rgba(0, 0, 0, 0.08) 100%);
+            }
+            .expand-bar {
+                @apply --horizontal;
+                align-items: center;
+                justify-content: center;
+                gap: 4px;
+                margin-top: 4px;
+                padding-top: 2px;
+                font-size: 11px;
+                font-weight: 600;
+                color: var(--accent-color);
+                cursor: pointer;
+                user-select: none;
+                opacity: .85;
+            }
+            .expand-bar:hover {
+                opacity: 1;
+                text-decoration: underline;
             }
             .bubble[queued] { opacity: .6; border: 1px dashed var(--accent-color); }
             .queued { @apply --horizontal; @apply --muted; align-items: center; gap: 4px; font-size: x-small; margin-top: 4px; }
@@ -70,7 +105,13 @@ ODA({ is: 'microchat-user',
             .att span { @apply --chip; cursor: pointer; }
             ${HOVER}
         </style>
-        <div class="bubble" ~if="text" :queued="data?.queued">{{text}}</div>
+        <div class="bubble" ~if="text" :queued="data?.queued" :collapsible="isLong" :expanded="expanded" @tap="onBubbleTap($event)">
+            <div class="bubble-text">{{text}}</div>
+            <div class="expand-bar" ~if="isLong" @tap.stop="toggleExpand">
+                <span>{{expanded ? 'Свернуть' : 'Показать полностью'}}</span>
+                <oda-icon :icon="expanded ? 'carbon:chevron-up' : 'carbon:chevron-down'" :icon-size="13"></oda-icon>
+            </div>
+        </div>
         <div class="queued" ~if="data?.queued">
             <oda-icon icon="carbon:time" :icon-size="12"></oda-icon><span>в очереди — агент прочтёт после текущего шага</span>
             <oda-button icon="carbon:close" :icon-size="12" title="Отменить" @tap="unqueue"></oda-button>
@@ -90,7 +131,44 @@ ODA({ is: 'microchat-user',
     data: null,
     group: null,
     nested: false,
+    _expandedRev: 0,
     get text() { return String(this.data?.content || ''); },
+    get _expandKey() {
+        return String(this.data?.id || '') + '|' + this.text.slice(0, 120);
+    },
+    get isLong() {
+        const t = this.text;
+        if (!t)
+            return false;
+        if (t.length > 260)
+            return true;
+        return t.split('\n').length > 4;
+    },
+    get expanded() {
+        void this._expandedRev;
+        return EXPANDED_USER_PROMPTS.has(this._expandKey) || EXPANDED_USER_PROMPTS.has(this.text.slice(0, 120));
+    },
+    toggleExpand() {
+        const k1 = this._expandKey;
+        const k2 = this.text.slice(0, 120);
+        if (this.expanded) {
+            EXPANDED_USER_PROMPTS.delete(k1);
+            EXPANDED_USER_PROMPTS.delete(k2);
+        }
+        else {
+            EXPANDED_USER_PROMPTS.add(k1);
+            EXPANDED_USER_PROMPTS.add(k2);
+        }
+        this._expandedRev++;
+    },
+    onBubbleTap() {
+        if (!this.isLong || this.expanded)
+            return;
+        const sel = typeof window !== 'undefined' ? window.getSelection?.()?.toString?.() : '';
+        if (sel && sel.trim().length > 0)
+            return;
+        this.toggleExpand();
+    },
     get time() { return fmtTime(this.data?.time); },
     get busy() { return this.$pdp?.status === 'running'; },
     attachmentName,
@@ -461,16 +539,25 @@ ODA({ is: 'microchat-tool',
     get multiple() { return !!this.data?.args?.multiple; },
     get fields() { return Array.isArray(this.data?.args?.fields) ? this.data.args.fields : []; },
     get canAnswer() {
-        if (this.fields.length)
-            return this.fields.every(f => !f.required || (this.values[f.id] != null && this.values[f.id] !== ''));
+        if (this.fields.length) {
+            const hasReq = this.fields.some(f => f.required);
+            if (hasReq)
+                return this.fields.every(f => !f.required || (this.values[f.id] != null && this.values[f.id] !== ''));
+            if (this.options.length)
+                return !!(this.picked.length || Object.values(this.values).some(v => v != null && v !== '') || String(this.comment || '').trim());
+            return true;
+        }
         return !!(this.picked.length || String(this.comment || '').trim());
     },
     get answerText() {
         if (this.data?.name !== 'ask_user' || this.isQuestion)
             return '';
-        if (this.data?.values)
-            return Object.entries(this.data.values).map(([k, v]) => k + ': ' + v).join('; ');
-        return this.data?.answer || '';
+        const parts = [];
+        if (this.data?.answer)
+            parts.push(this.data.answer);
+        if (this.data?.values && Object.keys(this.data.values).length)
+            parts.push(Object.entries(this.data.values).map(([k, v]) => k + ': ' + v).join('; '));
+        return parts.join(' · ');
     },
     get showArgs() {
         const a = this.data?.args;
@@ -551,9 +638,9 @@ ODA({ is: 'microchat-tool',
         const shell = findShell(this);
         if (!shell)
             return;
-        if (this.fields.length)
-            return shell.reply(this.data.id, { values: this.values, content: this.comment || undefined });
         const text = [this.picked.join(', '), String(this.comment || '').trim()].filter(Boolean).join('. ');
+        if (this.fields.length)
+            return shell.reply(this.data.id, { values: this.values, content: text || undefined });
         shell.reply(this.data.id, { content: text });
     },
     approve(accept, always) {

@@ -17,7 +17,8 @@ export const scheduleTools = [
                 at: { type: 'string', description: 'Время ЧЧ:ММ (create; для date — обязательно)' },
                 days: { type: 'array', items: { type: 'integer' }, description: 'Дни недели 1–7 (1 — пн); по умолчанию ежедневно' },
                 workdays: { type: 'boolean', description: 'По рабочим дням (пн–пт) — вместо days' },
-                every: { type: 'integer', description: 'Или интервал в минутах (от 15)' },
+                every: { type: 'integer', description: 'Или интервал в минутах (от 15; можно сочетать с at — время старта, date — день YYYY-MM-DD и until — время окончания ЧЧ:ММ или ISO)' },
+                until: { type: 'string', description: 'Время или дата-время окончания для интервального расписания every (например "23:59" или ISO)' },
                 once: { type: 'string', description: 'Или однократно: дата-время ISO' },
                 date: { type: 'string', description: 'Или календарная дата YYYY-MM-DD (с at; 9.8)' },
                 repeat: { type: 'string', enum: ['monthly', 'yearly'], description: 'Для date: monthly — каждый месяц в это число, yearly — каждый год в эту дату' },
@@ -31,6 +32,8 @@ export const scheduleTools = [
         },
         permission(args, ctx) {
             if (args?.action === 'send') {
+                if (ctx?.session?.scheduled && args.scope !== 'department')
+                    return { verdict: 'allow' };
                 const target = args.scope === 'department' ? 'всему подразделению' : 'лично вам';
                 return { verdict: 'ask', reason: `отправить уведомление (${target}): ${String(args.prompt || args.label || '').slice(0, 200)}` };
             }
@@ -39,8 +42,8 @@ export const scheduleTools = [
             if (ctx?.host?.allowed?.has?.('schedule'))
                 return { verdict: 'allow' };
             const when = args.once ? 'однократно ' + args.once
+                : args.every ? 'каждые ' + args.every + ' мин' + (args.at ? ' с ' + args.at : '') + (args.until ? ' до ' + args.until : (args.date ? ' ' + args.date + ' до 23:59' : ''))
                 : args.date ? 'календарь ' + args.date + (args.repeat ? ' повтор ' + args.repeat : '') + ' в ' + (args.at || '?')
-                : args.every ? 'каждые ' + args.every + ' мин'
                 : (args.at || '?') + (args.workdays ? ' по рабочим дням' : args.days ? ' по дням ' + args.days.join(',') : ' ежедневно');
             return { verdict: 'ask', reason: 'запускать задачу по расписанию (' + when + '): ' + String(args.prompt || '').slice(0, 200) };
         },
@@ -58,7 +61,7 @@ export const scheduleTools = [
                         uid, task, label: args.label, prompt: args.prompt, tz: ctx.tz,
                         rule: {
                             at: args.at, days: args.days, workdays: args.workdays,
-                            every: args.every, once: args.once, date: args.date,
+                            every: args.every, until: args.until, once: args.once, date: args.date,
                             repeat: args.repeat, scope: args.scope,
                         },
                     });

@@ -17,18 +17,22 @@ import {
     PARTNER_TRAINING_TRACKS,
     calculateFranchiseFee,
     calculatePartnerDiscount,
+    PUBLIC_OFERTA,
 } from './catalog.js';
 import { loadOrCreateAuthorityKeys, signCertificate } from './crypto.js';
 
 const ONE_YEAR_MS = 365 * 24 * 3600_000;
 
 export class LicenseStore {
-    constructor({ dataDir = './data' } = {}) {
+    constructor({ dataDir = './data', adminLogin = '', adminPassword = '' } = {}) {
         this.dataDir = dataDir;
         fs.mkdirSync(this.dataDir, { recursive: true });
         this.stateFile = path.join(this.dataDir, 'store.json');
         this.keyFile = path.join(this.dataDir, 'authority-key.json');
         this.authorityKeys = loadOrCreateAuthorityKeys(this.keyFile);
+        this.adminLogin = String(adminLogin || process.env.WORK_ADMIN_LOGIN || 'admin').trim();
+        this.adminPassword = String(adminPassword || process.env.WORK_ADMIN_PASSWORD || process.env.WORK_ADMIN_KEY || 'odant-admin');
+        this.adminSessions = new Map();
 
         this.state = {
             licenses: {},
@@ -41,6 +45,54 @@ export class LicenseStore {
             users: {},
         };
         this._load();
+    }
+
+    /**
+     * Авторизация администратора центра лицензирования (/admin).
+     */
+    loginAdmin({ login = 'admin', password = '' } = {}) {
+        const cleanLogin = String(login || 'admin').trim();
+        const cleanPass = String(password || '');
+        if (cleanLogin !== this.adminLogin || cleanPass !== this.adminPassword) {
+            throw new Error('Неверный логин или ключ администратора');
+        }
+        const token = 'adm_' + crypto.randomBytes(24).toString('hex');
+        const now = Date.now();
+        const session = {
+            token,
+            login: cleanLogin,
+            createdAt: now,
+            expiresAt: now + 7 * 24 * 3600_000,
+        };
+        this.adminSessions.set(token, session);
+        return {
+            authenticated: true,
+            login: cleanLogin,
+            token,
+            expiresAt: session.expiresAt,
+        };
+    }
+
+    logoutAdmin(token = '') {
+        const clean = String(token || '').trim();
+        if (clean) this.adminSessions.delete(clean);
+        return { ok: true };
+    }
+
+    verifyAdminToken(token = '') {
+        const clean = String(token || '').trim();
+        if (!clean)
+            return false;
+        if (clean === this.adminPassword && this.adminPassword.length >= 6)
+            return true;
+        const sess = this.adminSessions.get(clean);
+        if (!sess)
+            return false;
+        if (sess.expiresAt < Date.now()) {
+            this.adminSessions.delete(clean);
+            return false;
+        }
+        return true;
     }
 
     _load() {
@@ -421,6 +473,15 @@ export class LicenseStore {
         if (!ord)
             throw new Error(`Заказ ${orderId} не найден`);
         if (ord.status === 'paid') {
+            if (ord.kind === 'franchise_reservation' && ord.reservationId && this.state.reservations[ord.reservationId]) {
+                const resv = this.state.reservations[ord.reservationId];
+                return {
+                    order: ord,
+                    reservation: resv,
+                    regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
+                    alreadyProcessed: true,
+                };
+            }
             return {
                 order: ord,
                 license: this.getLicenseSummary(ord.licenseId),
@@ -437,7 +498,8 @@ export class LicenseStore {
             resv.depositPaid = true;
             resv.paidAt = ord.paidAt;
             resv.paymentId = ord.paymentId;
-            resv.status = 'deposit_paid';
+            if (!resv.convertedToPartnerId)
+                resv.status = 'deposit_paid';
             this._save();
             return {
                 order: ord,
@@ -460,6 +522,30 @@ export class LicenseStore {
         }
         this._save();
         return { order: ord, license, partner, alreadyProcessed: false };
+    }
+
+    /**
+     * Отменить неоплаченный заказ (при отмене резерва франшизы также освобождает региональную квоту).
+     */
+    cancelOrder(orderId) {
+        const ord = this.state.orders[orderId];
+        if (!ord)
+            throw new Error(`Заказ ${orderId} не найден`);
+        if (ord.status === 'paid')
+            throw new Error(`Заказ ${orderId} уже оплачен и не может быть отменён без возврата`);
+        ord.status = 'canceled';
+        ord.canceledAt = Date.now();
+        let regionQuota = null;
+        if (ord.kind === 'franchise_reservation' && ord.reservationId && this.state.reservations[ord.reservationId]) {
+            const resv = this.state.reservations[ord.reservationId];
+            if (!resv.convertedToPartnerId) {
+                resv.status = 'canceled';
+                resv.canceledAt = ord.canceledAt;
+            }
+            regionQuota = this.getRegionPartnerQuotaStatus(resv.regionCode);
+        }
+        this._save();
+        return { order: ord, regionQuota };
     }
 
     /**
@@ -581,6 +667,16 @@ export class LicenseStore {
         return t;
     }
 
+    closeTicket(ticketId) {
+        const t = this.state.tickets[ticketId];
+        if (!t)
+            throw new Error(`Тикет ${ticketId} не найден`);
+        t.status = 'closed';
+        t.closedAt = Date.now();
+        this._save();
+        return t;
+    }
+
     listTickets({ licenseId = '' } = {}) {
         const all = Object.values(this.state.tickets).sort((a, b) => b.createdAt - a.createdAt);
         if (licenseId)
@@ -588,14 +684,48 @@ export class LicenseStore {
         return all;
     }
 
+    _formatUserResponse(user) {
+        if (!user)
+            return null;
+        return {
+            userId: user.userId,
+            email: user.email,
+            name: user.name,
+            position: user.position || '',
+            companyName: user.companyName,
+            inn: user.inn,
+            phone: user.phone || '',
+            licenseId: user.licenseId,
+            sessionKey: user.sessionKey,
+            ofertaAccepted: Boolean(user.ofertaAccepted),
+            ofertaAcceptedAt: user.ofertaAcceptedAt || null,
+            ofertaVersion: user.ofertaVersion || '',
+            ofertaSignerName: user.ofertaSignerName || '',
+            ofertaSignatureId: user.ofertaSignatureId || '',
+            createdAt: user.createdAt,
+            lastLoginAt: user.lastLoginAt,
+            license: this.getLicenseSummary(user.licenseId),
+        };
+    }
+
     /**
      * Зарегистрировать или авторизовать пользователя личного кабинета ODANT-WORK.
-     * Докупка дополнительных пользовательских лицензий доступна только зарегистрированным пользователям.
+     * Любые операции заказа комплекса, докупки лицензий, оплаты и резервирования франшизы
+     * доступны пользователю после регистрации и подписания публичной оферты (ПЭП).
      */
-    registerOrLoginUser({ email = '', name = '', companyName = '', inn = '', licenseId = '' } = {}) {
+    registerOrLoginUser({
+        email = '',
+        name = '',
+        position = '',
+        companyName = '',
+        inn = '',
+        phone = '',
+        licenseId = '',
+        ofertaAccepted = false,
+    } = {}) {
         const cleanEmail = String(email || '').trim().toLowerCase();
         if (!cleanEmail || !cleanEmail.includes('@'))
-            throw new Error('Укажите корректный email для входа в личный кабинет ODANT-WORK');
+            throw new Error('Укажите корректный корпоративный email для регистрации в личном кабинете ODANT-WORK');
 
         let user = this.state.users[cleanEmail];
         const now = Date.now();
@@ -607,6 +737,7 @@ export class LicenseStore {
                         name: companyName || name || 'Организация ODANT-WORK',
                         inn: inn || '',
                         email: cleanEmail,
+                        phone: phone || '',
                     },
                 });
                 lic = summary.certificate;
@@ -615,10 +746,17 @@ export class LicenseStore {
                 userId: 'USR-' + crypto.createHash('sha256').update(cleanEmail).digest('hex').slice(0, 10).toUpperCase(),
                 email: cleanEmail,
                 name: String(name || companyName || cleanEmail.split('@')[0]).trim(),
+                position: String(position || '').trim(),
                 companyName: String(companyName || lic.customer?.name || 'Организация ODANT-WORK').trim(),
                 inn: String(inn || lic.customer?.inn || '').trim(),
+                phone: String(phone || lic.customer?.phone || '').trim(),
                 licenseId: lic.licenseId,
                 sessionKey: 'wks_' + crypto.randomBytes(16).toString('hex'),
+                ofertaAccepted: false,
+                ofertaAcceptedAt: null,
+                ofertaVersion: '',
+                ofertaSignerName: '',
+                ofertaSignatureId: '',
                 createdAt: now,
                 lastLoginAt: now,
             };
@@ -627,23 +765,75 @@ export class LicenseStore {
         else {
             user.lastLoginAt = now;
             if (name) user.name = String(name).trim();
+            if (position) user.position = String(position).trim();
             if (companyName) user.companyName = String(companyName).trim();
             if (inn) user.inn = String(inn).trim();
+            if (phone) user.phone = String(phone).trim();
             if (licenseId && this.findLicense(licenseId)) {
                 user.licenseId = this.findLicense(licenseId).licenseId;
             }
         }
+
+        if (ofertaAccepted && !user.ofertaAccepted) {
+            user.ofertaAccepted = true;
+            user.ofertaAcceptedAt = now;
+            user.ofertaVersion = PUBLIC_OFERTA.version;
+            user.ofertaSignerName = String(name || user.name || user.companyName).trim();
+            user.ofertaSignatureId = 'PEP-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+        }
+
+        // Синхронизируем реквизиты клиента с привязанной лицензией
+        if (user.licenseId && this.state.licenses[user.licenseId]) {
+            const rawLic = this.state.licenses[user.licenseId];
+            if (user.companyName) rawLic.customer.name = user.companyName;
+            if (user.inn) rawLic.customer.inn = user.inn;
+            if (user.email) rawLic.customer.email = user.email;
+            if (user.phone) rawLic.customer.phone = user.phone;
+            this.state.licenses[user.licenseId] = signCertificate(rawLic, this.authorityKeys);
+        }
+
         this._save();
-        return {
-            userId: user.userId,
-            email: user.email,
-            name: user.name,
-            companyName: user.companyName,
-            inn: user.inn,
-            licenseId: user.licenseId,
-            sessionKey: user.sessionKey,
-            license: this.getLicenseSummary(user.licenseId),
-        };
+        return this._formatUserResponse(user);
+    }
+
+    /**
+     * Подписать публичную оферту ODANT-WORK простой электронной подписью (ПЭП) в личном кабинете.
+     */
+    acceptUserOferta(sessionKeyOrEmail = '', {
+        signerName = '',
+        position = '',
+        companyName = '',
+        inn = '',
+        phone = '',
+    } = {}) {
+        const key = String(sessionKeyOrEmail || '').trim();
+        let user = Object.values(this.state.users).find(u => u.sessionKey === key || u.email === key.toLowerCase());
+        if (!user)
+            throw new Error('Пользователь не найден. Пожалуйста, войдите или зарегистрируйтесь в личном кабинете.');
+
+        const now = Date.now();
+        if (signerName) user.name = String(signerName).trim();
+        if (position) user.position = String(position).trim();
+        if (companyName) user.companyName = String(companyName).trim();
+        if (inn) user.inn = String(inn).trim();
+        if (phone) user.phone = String(phone).trim();
+
+        user.ofertaAccepted = true;
+        user.ofertaAcceptedAt = user.ofertaAcceptedAt || now;
+        user.ofertaVersion = PUBLIC_OFERTA.version;
+        user.ofertaSignerName = String(signerName || user.name || user.companyName).trim();
+        user.ofertaSignatureId = user.ofertaSignatureId || ('PEP-' + crypto.randomBytes(4).toString('hex').toUpperCase());
+
+        if (user.licenseId && this.state.licenses[user.licenseId]) {
+            const rawLic = this.state.licenses[user.licenseId];
+            if (user.companyName) rawLic.customer.name = user.companyName;
+            if (user.inn) rawLic.customer.inn = user.inn;
+            if (user.phone) rawLic.customer.phone = user.phone;
+            this.state.licenses[user.licenseId] = signCertificate(rawLic, this.authorityKeys);
+        }
+
+        this._save();
+        return this._formatUserResponse(user);
     }
 
     findUserBySessionKey(sessionKey = '') {
@@ -653,27 +843,33 @@ export class LicenseStore {
         const user = Object.values(this.state.users).find(u => u.sessionKey === key);
         if (!user)
             return null;
-        return {
-            userId: user.userId,
-            email: user.email,
-            name: user.name,
-            companyName: user.companyName,
-            inn: user.inn,
-            licenseId: user.licenseId,
-            license: this.getLicenseSummary(user.licenseId),
-        };
+        return this._formatUserResponse(user);
+    }
+
+    listUsers() {
+        return Object.values(this.state.users)
+            .sort((a, b) => (b.lastLoginAt || 0) - (a.lastLoginAt || 0))
+            .map(u => {
+                const formatted = this._formatUserResponse(u);
+                delete formatted.sessionKey;
+                return formatted;
+            });
     }
 
     /**
      * Получить статус квоты и вакантных франшиз по региону (макс. число партнёров пропорционально населению).
      */
-    getRegionPartnerQuotaStatus(regionCode = 'RU-SVE', customPopulationMillions = null) {
+    getRegionPartnerQuotaStatus(regionCode = 'RU-SVE', customPopulationMillions = null, options = {}) {
         const info = calculateFranchiseFee(regionCode, customPopulationMillions);
+        const ignoreResId = options?.ignoreReservationId || '';
         const existingInRegion = Object.values(this.state.partners).filter(
             p => p.regionCode === info.regionCode && p.status !== 'revoked'
         );
         const reservedInRegion = Object.values(this.state.reservations || {}).filter(
-            r => r.regionCode === info.regionCode && r.status !== 'canceled' && !r.convertedToPartnerId
+            r => r.regionCode === info.regionCode
+                && r.status !== 'canceled'
+                && !r.convertedToPartnerId
+                && r.reservationId !== ignoreResId
         );
         const occupied = existingInRegion.length + reservedInRegion.length;
         const vacantFranchises = Math.max(0, info.maxPartnersQuota - occupied);
@@ -786,9 +982,11 @@ export class LicenseStore {
     /**
      * Зарегистрировать регионального партнёра-франчайзи с контролем региональной квоты (по населению)
      * и расчётом фиксированного паушального взноса (пропорционально экономике региона).
+     * Если передан reservationId — конвертирует существующий резерв франшизы в действующего партнёра.
      */
     registerPartner({
         partnerId = '',
+        reservationId = '',
         companyName = '',
         inn = '',
         regionCode = 'RU-SVE',
@@ -798,10 +996,25 @@ export class LicenseStore {
         contactPerson = '',
         annualSalesRub = 0,
     } = {}) {
-        if (!companyName)
+        const resv = reservationId ? this.state.reservations[reservationId] : null;
+        if (reservationId && !resv)
+            throw new Error(`Резерв франшизы ${reservationId} не найден`);
+        if (resv?.convertedToPartnerId && this.state.partners[resv.convertedToPartnerId])
+            return this.getPartnerSummary(resv.convertedToPartnerId);
+
+        const effCompany = String(companyName || resv?.companyName || '').trim();
+        const effRegion = String(regionCode || resv?.regionCode || 'RU-SVE').trim();
+        const effInn = String(inn || resv?.inn || '').trim();
+        const effEmail = String(email || resv?.email || '').trim();
+        const effPhone = String(phone || resv?.phone || '').trim();
+        const effContact = String(contactPerson || resv?.contactPerson || '').trim();
+
+        if (!effCompany)
             throw new Error('Укажите наименование компании-партнёра');
 
-        const quotaStatus = this.getRegionPartnerQuotaStatus(regionCode, populationMillions);
+        const quotaStatus = this.getRegionPartnerQuotaStatus(effRegion, populationMillions, {
+            ignoreReservationId: resv?.reservationId || '',
+        });
         const existing = partnerId ? this.state.partners[partnerId] : null;
 
         if (!existing && quotaStatus.availablePartnerSlots <= 0) {
@@ -818,8 +1031,9 @@ export class LicenseStore {
 
         const partner = {
             partnerId: id,
-            companyName: String(companyName).trim(),
-            inn: String(inn || existing?.inn || '').trim(),
+            reservationId: resv?.reservationId || existing?.reservationId || '',
+            companyName: effCompany,
+            inn: effInn || existing?.inn || '',
             regionCode: quotaStatus.regionCode,
             regionName: quotaStatus.regionName,
             district: quotaStatus.district,
@@ -827,9 +1041,9 @@ export class LicenseStore {
             maxRegionPartnersQuota: quotaStatus.maxPartnersQuota,
             economicIndex: quotaStatus.economicIndex,
             franchiseFeeRub: quotaStatus.franchiseFeeRub,
-            email: String(email || existing?.email || '').trim(),
-            phone: String(phone || existing?.phone || '').trim(),
-            contactPerson: String(contactPerson || existing?.contactPerson || '').trim(),
+            email: effEmail || existing?.email || '',
+            phone: effPhone || existing?.phone || '',
+            contactPerson: effContact || existing?.contactPerson || '',
             annualSalesRub: discountInfo.annualSalesRub,
             discountPercent: discountInfo.discountPercent,
             statusLevel: discountInfo.statusLevel,
@@ -841,6 +1055,16 @@ export class LicenseStore {
         };
 
         this.state.partners[id] = partner;
+        if (resv) {
+            resv.convertedToPartnerId = id;
+            resv.status = 'converted';
+            resv.convertedAt = now;
+            resv.depositPaid = true;
+            if (resv.orderId && this.state.orders[resv.orderId] && this.state.orders[resv.orderId].status === 'pending') {
+                this.state.orders[resv.orderId].status = 'paid';
+                this.state.orders[resv.orderId].paidAt = now;
+            }
+        }
         this._save();
         return this.getPartnerSummary(id);
     }
@@ -870,8 +1094,11 @@ export class LicenseStore {
         partnerId,
         specialistName = '',
         email = '',
-        trackId = 'pak-ai-engineer',
-        score = 100,
+        specialistEmail = '',
+        trackId = '',
+        trackCode = '',
+        score = undefined,
+        examScore = undefined,
     } = {}) {
         const p = this.state.partners[partnerId];
         if (!p)
@@ -879,11 +1106,21 @@ export class LicenseStore {
         if (!specialistName)
             throw new Error('Укажите ФИО аттестуемого специалиста');
 
-        const track = PARTNER_TRAINING_TRACKS.find(t => t.id === trackId || t.code === trackId);
+        const requestedTrack = String(trackId || trackCode || '').trim();
+        let track = null;
+        if (!requestedTrack || requestedTrack === 'next' || requestedTrack === 'TRK-PAK-HW') {
+            const passedIds = new Set((p.certifiedSpecialists || []).map(c => c.trackId));
+            track = PARTNER_TRAINING_TRACKS.find(t => t.requiredForFranchise && !passedIds.has(t.id))
+                || PARTNER_TRAINING_TRACKS.find(t => !passedIds.has(t.id))
+                || PARTNER_TRAINING_TRACKS[0];
+        }
+        else {
+            track = PARTNER_TRAINING_TRACKS.find(t => t.id === requestedTrack || t.code === requestedTrack);
+        }
         if (!track)
-            throw new Error(`Учебный курс ${trackId} не найден в программе обучения`);
+            throw new Error(`Учебный курс ${requestedTrack} не найден в программе обучения`);
 
-        const numericScore = Number(score ?? 0);
+        const numericScore = Number(score ?? examScore ?? 100);
         if (numericScore < track.passScore) {
             throw new Error(
                 `Балл аттестации (${numericScore}) ниже проходного порога (${track.passScore}) для курса «${track.title}»`
@@ -898,7 +1135,7 @@ export class LicenseStore {
             companyName: p.companyName,
             regionCode: p.regionCode,
             specialistName: String(specialistName).trim(),
-            email: String(email || '').trim(),
+            email: String(email || specialistEmail || '').trim(),
             trackId: track.id,
             trackCode: track.code,
             trackTitle: track.title,

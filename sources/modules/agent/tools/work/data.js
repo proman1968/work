@@ -10,7 +10,7 @@ import * as GATEWAY from '../../../../server/access/gateway.js';
 export const search = {
         name: 'search',
         readonly: true,
-        description: 'Смысловой поиск (RAG) по документам, объектам данных и своей ленте — только то, что доступно пользователю; сначала место задачи, затем соседние точки организации. Для точных строк и имён — find.',
+        description: 'Смысловой поиск (RAG) по документам, объектам данных и своей ленте в рамках вертикали контекста задачи (место задачи, его дочерние элементы и общие данные выше по иерархии, без выхода в соседние организации и подразделения). Для точных строк и имён — find.',
         parameters: {
             type: 'object',
             properties: {
@@ -18,7 +18,7 @@ export const search = {
                 path: { type: 'string', description: 'Точка, от которой искать (по умолчанию место задачи)' },
                 k: { type: 'integer', description: 'Сколько фрагментов (по умолчанию 8, максимум 30)' },
                 kinds: { type: 'string', description: 'Виды через запятую: file, object, log, class' },
-                rings: { type: 'integer', description: 'Насколько широко расходиться по дереву (0 — только точка; по умолчанию 3)' },
+                rings: { type: 'integer', description: 'Насколько широко расходиться по вертикали дерева (0 — только точка; по умолчанию 3)' },
             },
             required: ['query'],
         },
@@ -31,6 +31,7 @@ export const search = {
                 k: Math.min(30, Number(args.k) || 8),
                 kinds: args.kinds || undefined,
                 rings: args.rings,
+                contextPoint: ctx?.place?.path,
             }, ctx);
             const rows = res?.results || [];
             // R15 (8.38): RAG-кучки из чужих файлов (письмо/загрузка) — чужой текст в контексте
@@ -263,6 +264,7 @@ export const query = {
             const offset = Math.max(0, Number(args.offset) || 0);
             const rows = await callAs(point, 'query_objects', {
                 type: args.type, where: args.where, rings: args.rings, limit, offset,
+                contextPoint: ctx?.place?.path,
             }, ctx);
             if (!rows?.length)
                 return offset
@@ -284,7 +286,7 @@ export const describeClass = {
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'WORK-путь учётного класса (например /ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Реализация/Покупателю или /ORGANIZATIONS/Маслоторг/MODULES/Register/REGISTER/62)' },
+            path: { type: 'string', description: 'WORK-путь учётного класса текущей организации (например /ORGANIZATIONS/<Организация>/MODULES/Register/OPERATIONS/Реализация/Покупателю или /ORGANIZATIONS/<Организация>/MODULES/Register/REGISTER/62)' },
         },
         required: ['path'],
     },

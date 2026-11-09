@@ -456,6 +456,24 @@ export function inspectPreinstalledModels(rootDir = '.') {
     });
 }
 
+export const SEAT_VOLUME_DISCOUNTS = Object.freeze([
+    { minSeats: 100, discountPercent: 25 },
+    { minSeats: 50,  discountPercent: 20 },
+    { minSeats: 25,  discountPercent: 15 },
+    { minSeats: 10,  discountPercent: 10 },
+    { minSeats: 5,   discountPercent: 5 },
+    { minSeats: 1,   discountPercent: 0 },
+]);
+
+export function getVolumeDiscountPercent(seats = 1) {
+    const count = Math.max(0, Math.floor(Number(seats || 0)));
+    for (const d of SEAT_VOLUME_DISCOUNTS) {
+        if (count >= d.minSeats)
+            return d.discountPercent;
+    }
+    return 0;
+}
+
 /**
  * Полная сводка состояния ПАК и лицензии для UI и API.
  */
@@ -474,20 +492,24 @@ export function getFullLicenseStatus(options = {}) {
         hardware,
         pakSpec: PAK_HARDWARE_SPEC,
         supportTiers: Object.values(SUPPORT_TIERS),
+        volumeDiscounts: SEAT_VOLUME_DISCOUNTS,
         preinstalledModels: models,
     };
 }
 
 /**
- * Калькулятор стоимости заказа (базовый ПАК + дополнительные годовые лицензии).
+ * Калькулятор стоимости заказа (базовый ПАК + дополнительные годовые лицензии со скидкой от количества).
  */
 export function calculateLicenseQuote({ includeBasePak = false, tier = 'business', addonSeats = 1, years = 1 } = {}) {
     const tierKey = String(tier || 'business').toLowerCase();
     const tierSpec = SUPPORT_TIERS[tierKey] || SUPPORT_TIERS.business;
     const seatsCount = Math.max(0, Math.floor(Number(addonSeats || 0)));
     const yearsCount = Math.max(1, Math.min(5, Math.floor(Number(years || 1))));
+    const discountPercent = getVolumeDiscountPercent(seatsCount);
     const baseRub = includeBasePak ? PAK_HARDWARE_SPEC.basePriceRub : 0;
-    const addonsRub = seatsCount * tierSpec.pricePerUserYearRub * yearsCount;
+    const addonsGrossRub = seatsCount * tierSpec.pricePerUserYearRub * yearsCount;
+    const addonsDiscountRub = Math.round(addonsGrossRub * (discountPercent / 100));
+    const addonsRub = addonsGrossRub - addonsDiscountRub;
     return {
         includeBasePak: !!includeBasePak,
         basePakPriceRub: baseRub,
@@ -497,6 +519,9 @@ export function calculateLicenseQuote({ includeBasePak = false, tier = 'business
         pricePerUserYearRub: tierSpec.pricePerUserYearRub,
         addonSeats: seatsCount,
         years: yearsCount,
+        volumeDiscountPercent: discountPercent,
+        addonsGrossRub,
+        addonsDiscountRub,
         addonsTotalRub: addonsRub,
         totalRub: baseRub + addonsRub,
         reactionText: tierSpec.reactionText,

@@ -1248,8 +1248,24 @@ export default {
         this.selectedGroupKey = '';
         await this.reload();
     },
+    _notifyConsultantContext() {
+        try {
+            const wf = this._findFormHost?.() || this.domHost;
+            if (!wf || typeof wf.buildConsultantContext !== 'function')
+                return;
+            const exp = window.top?.explorer || window.parent?.explorer;
+            const cons = exp?.$?.('#consultant') || exp?.$?.('item-consultant');
+            if (cons) {
+                const ctx = wf.buildConsultantContext();
+                cons.activeFormContext = ctx;
+                cons.activeFormSummary = ctx;
+            }
+        }
+        catch { /* ignore */ }
+    },
     selectGroup(key) {
         this.selectedGroupKey = this.selectedGroupKey === key ? '' : key;
+        this._notifyConsultantContext();
     },
     async openTurnoversFromAnalysis(row) {
         const r = row || this.selectedAnalysisRow;
@@ -1676,6 +1692,9 @@ export default {
         }
         catch (e) {
             this.error = String(e?.message || e);
+        }
+        finally {
+            this._notifyConsultantContext();
         }
     },
 };

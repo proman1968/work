@@ -2,6 +2,7 @@ export default {
     maxTokens: 4096,
     maxOutput: 4096,
     capabilities: ["chat","stream"],
+    efforts: [],
     effort: "",
     METADATA: {
         STATIC: [{
@@ -45,9 +46,13 @@ export default {
             type: "String",
             placeholder: "chat, stream, effort"
         },{
+            id: "efforts",
+            type: "String",
+            placeholder: "low, medium, high"
+        },{
             id: "effort",
             type: "String",
-            placeholder: "off | low | medium | high"
+            placeholder: "off | low | medium | high | xhigh"
         },{
             id: "functionCalling",
             type: "Boolean",

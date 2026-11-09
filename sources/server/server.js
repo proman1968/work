@@ -366,6 +366,8 @@ export class $server extends $class {
             return res;
         }, {dirs:[], unique_files: []});
         let key = dirs.join(';');
+        if (reset)
+            delete this.merges[key];
 
         return this.merges[key] ??= new AsyncPromise(async () => {
             let body = '';

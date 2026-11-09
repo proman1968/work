@@ -4,6 +4,7 @@ export default {
     maxTokens: 262144,
     maxOutput: 64384,
     capabilities: ['chat', 'stream', 'functions', 'vision', 'effort'],
+    efforts: ['low', 'medium', 'xhigh'],
     effort: 'low',
     functionCalling: true,
     trustLevel: 0

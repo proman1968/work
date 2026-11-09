@@ -12,6 +12,7 @@ export default {
     modality: 'llm',
     maxTokens: 262144,
     maxOutput: 32768,
+    efforts: ['off', 'low', 'medium', 'high'],
     effort: 'low',
     functionCalling: true,
     capabilities: [

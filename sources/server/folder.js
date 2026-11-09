@@ -742,6 +742,8 @@ export class $folder extends $item{
             for (const child of children) {
                 if (results.length >= maxResults)
                     return;
+                if (typeof params.filter === 'function' && !params.filter(child))
+                    continue;
                 if (child.constructor === FS.$folder) {
                     if (child.id[0] === '.' || child.id[0] === '$')
                         continue;

@@ -65,26 +65,50 @@
         async (event) => {
             console.log('notificationclick', event);
             event.notification.close();
+            const nd = event.notification?.data;
+            if ((event.action === 'task-approve' || event.action === 'task-reject') && nd?.task && nd?.approval?.call) {
+                const accept = event.action === 'task-approve';
+                const p = fetch(encodeURI(nd.task) + '?approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ call: nd.approval.call, accept }),
+                }).then(async res => {
+                    const out = await res.json().catch(() => null);
+                    if (!res.ok || out?.ok === false)
+                        throw new Error(out?.error || 'HTTP ' + res.status);
+                }).catch(err => console.warn(err)).finally(() => {
+                    delete pushHandlers[event.notification.tag];
+                });
+                if (typeof event.waitUntil === 'function')
+                    event.waitUntil(p);
+                return;
+            }
             const pushHandler = pushHandlers[event.notification.tag];
-            if (pushHandler) {
-                try {
-                    await pushHandler.actions.find(a => a.action === event.action)?.fn();
-                }
-                catch (err) {
-                    console.warn(err);
+            if (pushHandler && event.action) {
+                const act = pushHandler.actions?.find(a => a.action === event.action);
+                if (act?.fn) {
+                    const p = Promise.resolve().then(() => act.fn()).catch(err => console.warn(err)).finally(() => pushHandler.remove());
+                    if (typeof event.waitUntil === 'function')
+                        event.waitUntil(p);
+                    return;
                 }
                 pushHandler.remove();
                 return;
             }
-            // уведомление с адресом (задача): вкладка с ним — в фокус, иначе открыть
+            if (pushHandler)
+                pushHandler.remove();
+            // уведомление с адресом (задача): вкладка с ним или открытый проводник WORK — в фокус, иначе открыть
             const url = event.notification.data?.url;
             if (url)
                 event.waitUntil((async () => {
                     const target = new URL(url, self.location.origin).href;
                     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-                    const open = wins.find(c => c.url === target);
+                    const open = wins.find(c => c.url === target)
+                        || wins.find(c => {
+                            try { return new URL(c.url).origin === self.location.origin; } catch { return false; }
+                        });
                     if (open)
-                        return open.focus();
+                        return open.focus?.();
                     return self.clients.openWindow(target);
                 })());
         });
@@ -205,17 +229,26 @@ const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"
                 if (String(data.type || '').startsWith('task:')) {
                     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
                     const target = data.data?.url && new URL(data.data.url, self.location.origin).pathname;
-                    if (data.data?.state === 'done' && target && wins.some(c => c.visibilityState === 'visible' && c.focused
-                        && new URL(c.url).pathname === target))
+                    const isViewingTask = c => {
+                        if (c.visibilityState !== 'visible' || !c.focused)
+                            return false;
+                        const p = new URL(c.url).pathname;
+                        if (target && p === target)
+                            return true;
+                        if (p === '/' || p === '/index.html' || p.startsWith('/~/handlers/pages/explorer'))
+                            return true;
+                        return false;
+                    };
+                    if (wins.some(isViewingTask))
                         return;
                     // 9.7: ожидающее разрешение — кнопки «Разрешить/Отклонить» прямо в уведомлении:
                     // подтверждение уходит на сервер (POST file?approve — те же права, что в интерфейсе),
                     // без кнопок (вопрос/прочее) — клик открывает задачу, как раньше
                     const approval = data.data?.approval;
-                    if (approval && approval.call && data.data?.task && !pushHandlers[data.tag]) {
-                        const tag = data.tag;
+                    if (approval && approval.call && data.data?.task) {
+                        const tag = data.tag || data.type;
                         const approveOnServer = async (accept) => {
-                            const res = await fetch(data.data.task + '?approve', {
+                            const res = await fetch(encodeURI(data.data.task) + '?approve', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ call: approval.call, accept }),

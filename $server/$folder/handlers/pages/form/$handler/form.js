@@ -459,38 +459,157 @@ ODA({is: 'work-form',
         const viewLabel = this.view?.label || viewId || '';
         const vc = this.view_control;
         const details = [];
+        const analyticEntries = [];
+        const screenLines = [];
+        let focusSubject = '';
+
         if (vc) {
-            if (vc.from || vc.to)
-                details.push(`период: ${vc.from || '…'} — ${vc.to || '…'}`);
-            else if (vc.atDate)
-                details.push(`на дату: ${vc.atDate}`);
-            if (vc.mode && typeof vc.mode === 'string')
-                details.push(`режим: ${vc.mode}`);
-            if (vc.groupBy && vc.groupBy !== 'none')
-                details.push(`группировка: ${vc.groupBy}`);
-            if (vc.searchText)
-                details.push(`фильтр: «${vc.searchText}»`);
-            else if (vc.query)
-                details.push(`поиск: «${vc.query}»`);
-            const row = vc.editing || vc.focusedRow || vc.selectedRow || vc.current;
-            if (row && typeof row === 'object') {
-                const rowLabel = row.name || row.label || row.account || row.id || '';
-                if (rowLabel)
-                    details.push(`выбрана запись: «${rowLabel}»`);
+            try {
+                if (vc.from || vc.to)
+                    details.push(`период: ${vc.from || '…'} — ${vc.to || '…'}`);
+                else if (vc.atDate)
+                    details.push(`на дату: ${vc.atDate}`);
+                if (vc.mode && typeof vc.mode === 'string')
+                    details.push(`режим: ${vc.mode}`);
+                if (vc.groupBy && vc.groupBy !== 'none')
+                    details.push(`группировка: ${vc.groupBy}`);
+
+                // Активные отборы по аналитикам в Оборотах / Проводках / Анализе счёта (vc.filters)
+                if (vc.filters && typeof vc.filters === 'object') {
+                    const slotsArr = Array.isArray(vc.slots) ? vc.slots : [];
+                    for (const [slotId, rawVal] of Object.entries(vc.filters)) {
+                        const objId = String(rawVal || '').trim();
+                        if (!objId)
+                            continue;
+                        const slot = slotsArr.find(s => s?.id === slotId);
+                        const slotLabel = slot?.label || slotId;
+                        const catArr = Array.isArray(slot?.catalog) ? slot.catalog : (Array.isArray(slot?.options) ? slot.options : []);
+                        const catItem = catArr.find(c => String(c?.id ?? c?.value) === objId);
+                        const objName = vc.names?.objects?.[objId] || catItem?.name || catItem?.label || objId;
+                        analyticEntries.push({ slotId, slotLabel, id: objId, name: String(objName) });
+                        details.push(`аналитика ${slotLabel}: «${objName}» [id=${objId}]`);
+                    }
+                }
+                if (analyticEntries.length)
+                    focusSubject = analyticEntries.map(a => a.name).join(', ');
+
+                // Поколоночные и строковые фильтры в Анализе счёта / Журнале / Таблице
+                if (vc.analysisQuery)
+                    details.push(`фильтр анализа: «${vc.analysisQuery}»`);
+                if (vc.slotQueries && typeof vc.slotQueries === 'object') {
+                    for (const [sId, qVal] of Object.entries(vc.slotQueries)) {
+                        const q = String(qVal || '').trim();
+                        if (q && q !== vc.analysisQuery)
+                            details.push(`фильтр ${sId}: «${q}»`);
+                    }
+                }
+                if (vc.searchText)
+                    details.push(`фильтр: «${vc.searchText}»`);
+                else if (vc.searchQuery)
+                    details.push(`поиск: «${vc.searchQuery}»`);
+                else if (vc.search)
+                    details.push(`поиск: «${vc.search}»`);
+                else if (vc.query)
+                    details.push(`поиск: «${vc.query}»`);
+
+                if (vc.account)
+                    details.push(`счёт: ${vc.account}`);
+                if (vc.opCid)
+                    details.push(`операция: ${vc.opCid}`);
+                if (vc.unit)
+                    details.push(`подразделение: ${vc.unit}`);
+
+                // Выделенная группа периода в Оборотах счёта
+                if (vc.mode === 'turnovers' && vc.selectedGroupKey) {
+                    const grpList = Array.isArray(vc.turnoverGroups) ? vc.turnoverGroups : (Array.isArray(vc.groups) ? vc.groups : []);
+                    const grp = grpList.find(g => g?.key === vc.selectedGroupKey);
+                    details.push(`выбран период в таблице: «${grp?.label || vc.selectedGroupKey}»`);
+                }
+
+                // Выделенная строка в Анализе счёта, Ведомости или списке объектов
+                if (vc.mode === 'analysis' && vc.selectedAnalysisRow) {
+                    const ar = vc.selectedAnalysisRow;
+                    if (ar.label) {
+                        details.push(`выбрана аналитика в таблице: «${ar.label}»`);
+                        if (!focusSubject)
+                            focusSubject = ar.label;
+                    }
+                }
+                else {
+                    const row = vc.editing || vc.focusedRow || vc.selectedRow || vc.current;
+                    if (row && typeof row === 'object') {
+                        const rowLabel = vc.documentTitle
+                            || (typeof vc.rowLabel === 'function' ? vc.rowLabel(row) : '')
+                            || row.name || row.label || row.title || row.account || row.id || '';
+                        if (rowLabel) {
+                            details.push(`выбрана запись: «${rowLabel}»${row.id ? ' [id=' + row.id + ']' : ''}`);
+                            if (!focusSubject && (viewId === 'object' || viewId === 'sheet'))
+                                focusSubject = String(rowLabel);
+                        }
+                    }
+                }
+
+                if (vc.entryCard?.entry) {
+                    details.push(`открыта проводка #${vc.entryCard.entry} на сумму ${vc.entryCard.amount}`);
+                }
+
+                const count = vc.total && typeof vc.total === 'number'
+                    ? vc.total
+                    : (Array.isArray(vc.turnoverDocs) && vc.mode === 'turnovers'
+                        ? vc.turnoverDocs.length
+                        : (Array.isArray(vc.rows) ? vc.rows.length : (typeof vc.count === 'number' ? vc.count : undefined)));
+                if (typeof count === 'number')
+                    details.push(`записей на экране: ${count}`);
+
+                // Сводка чисел и документов, которые прямо сейчас отображаются пользователю на экране
+                if (vc.mode === 'turnovers') {
+                    const openTxt = vc.openingText || `Дт ${vc.opening?.debit || 0} / Кт ${vc.opening?.credit || 0}`;
+                    const closeTxt = vc.closingText || `Дт ${vc.closing?.debit || 0} / Кт ${vc.closing?.credit || 0}`;
+                    screenLines.push(`Остаток на начало: ${openTxt}; Обороты за период: Дт ${vc.turnover?.debit || 0} / Кт ${vc.turnover?.credit || 0}; Остаток на конец: ${closeTxt}.`);
+                    if (Array.isArray(vc.turnoverGroups) && vc.turnoverGroups.length && vc.turnoverGroups.length <= 20) {
+                        screenLines.push('Группы периодов слева: ' + vc.turnoverGroups.map(g => `${g.label}: Дт ${g.debit || 0}, Кт ${g.credit || 0}, Сальдо ${g.balance || 0}`).join(' | '));
+                    }
+                    if (Array.isArray(vc.turnoverDocs) && vc.turnoverDocs.length && vc.turnoverDocs.length <= 25) {
+                        screenLines.push('Документы выбранного периода справа (' + vc.turnoverDocs.length + ' шт.):\n' + vc.turnoverDocs.map(d =>
+                            `- ${d.date || ''}: ${d.op || ''} (${d.corrDir || d.corr || ''}) — ${d.rawDebit ? 'Дт ' + d.debit : ''}${d.rawCredit ? (d.rawDebit ? ', ' : '') + 'Кт ' + d.credit : ''} [entry=${d.entry || ''}, op_cid=${d.op_cid || ''}, op_id=${d.op_id || ''}]`
+                        ).join('\n'));
+                    }
+                }
+                else if (vc.mode === 'card' && Array.isArray(vc.displayRows) && vc.displayRows.length && vc.displayRows.length <= 25) {
+                    const openTxt = vc.openingText || `Дт ${vc.opening?.debit || 0} / Кт ${vc.opening?.credit || 0}`;
+                    const closeTxt = vc.closingText || `Дт ${vc.closing?.debit || 0} / Кт ${vc.closing?.credit || 0}`;
+                    screenLines.push(`Остаток на начало: ${openTxt}; Обороты: Дт ${vc.turnover?.debit || 0} / Кт ${vc.turnover?.credit || 0}; Остаток на конец: ${closeTxt}.`);
+                    screenLines.push('Проводки на экране (' + vc.displayRows.length + ' шт.):\n' + vc.displayRows.map(d =>
+                        `- ${d.date || ''}: ${d.op || ''} (корр. ${d.corr || ''}) — Дт ${d.debit || 0} / Кт ${d.credit || 0}, Сальдо ${d.bal || ''} [entry=${d.entry || ''}, op_cid=${d.op_cid || ''}, op_id=${d.op_id || ''}]`
+                    ).join('\n'));
+                }
             }
-            const count = vc.total ?? (Array.isArray(vc.rows) ? vc.rows.length : undefined);
-            if (typeof count === 'number')
-                details.push(`записей на экране: ${count}`);
+            catch (err) {
+                console.warn('[form] buildConsultantContext:', err);
+            }
         }
+
         const extra = details.length ? ` (${details.join(', ')})` : '';
+        const analyticsFilterJson = analyticEntries.length
+            ? JSON.stringify(Object.fromEntries(analyticEntries.map(a => [a.slotId, a.id])))
+            : '';
+
         const viewHints = {
-            sheet: 'Проанализируй оборотно-сальдовую ведомость, остатки на начало/конец, обороты и сходимость баланса.',
-            turnovers: 'Проанализируй корреспонденции счёта и обороты в разрезе аналитик (субконто).',
-            analysis: 'Проанализируй движения и остатки счёта по выбранной аналитике.',
-            postings: 'Поясни представленные проводки счёта (Дебет/Кредит, аналитики, первичные операции).',
-            journal: 'Поясни записи журнала проводок и как перейти к первичным операциям.',
-            objects: 'Поясни структуру таблицы, доступные фильтры/группировки и как создать или отредактировать запись.',
-            object: 'Поясни реквизиты карточки объекта, обязательные поля, статус (draft/posted/storno) и доступные действия.',
+            sheet: focusSubject
+                ? `Внимание: пользователь выделил строку «${focusSubject}». Сфокусируй анализ именно на ней (остатки на начало/конец, обороты и корреспонденции).`
+                : 'Проанализируй оборотно-сальдовую ведомость, остатки на начало/конец, обороты и сходимость баланса.',
+            turnovers: analyticEntries.length
+                ? `ВНИМАНИЕ: в форме установлен отбор по аналитике (${analyticEntries.map(a => `${a.slotLabel}: «${a.name}» [id=${a.id}]`).join(', ')}; фильтр для report: analytics=${analyticsFilterJson}). Разбери СТРОГО расчёты, остатки, обороты и конкретные первичные операции по выбранному контрагенту/аналитике «${focusSubject}» (при необходимости прочитай детали операций через find_objects по их op_id). НЕ выдавай общую сводку по всему счёту в целом!`
+                : 'Проанализируй корреспонденции счёта и обороты в разрезе аналитик (субконто).',
+            analysis: focusSubject
+                ? `Внимание: выбрана аналитика «${focusSubject}». Проанализируй движения, остатки и первичные операции именно по этой аналитике.`
+                : 'Проанализируй движения и остатки счёта по аналитикам.',
+            postings: analyticEntries.length
+                ? `ВНИМАНИЕ: установлен отбор по аналитике (${analyticEntries.map(a => `${a.slotLabel}: «${a.name}» [id=${a.id}]`).join(', ')}). Поясни проводки и первичные операции строго по выбранной аналитике «${focusSubject}».`
+                : 'Поясни представленные проводки счёта (Дебет/Кредит, аналитики, первичные операции).',
+            journal: 'Поясни записи журнала проводок и первичные операции на экране.',
+            objects: 'Поясни структуру таблицы, доступные фильтры/группировки и выбранные записи.',
+            object: 'Поясни реквизиты открытого документа/объекта, его проводки, статус и доступные действия.',
             virtual: 'Поясни, от какого счёта и в каком режиме (balance/turnover) формируется этот виртуальный справочник и какие OVERLAY-поля доступны.',
             staff: 'Поясни текущие назначения руководителя (BOSS), структуру рабочих мест (ROLES), использование USERS/GUESTS и привязанные ссылки LINKS.',
             builder: 'Поясни схему полей (METADATA.FIELDS / STATIC / ANALYTICS / OVERLAY) и трёхосевое наследование класса.',
@@ -498,9 +617,10 @@ ODA({is: 'work-form',
             trainer: 'Поясни профиль оборудования, доступные локальные модели и шаги сборки датасета и дообучения LoRA / SFT / GRPO.',
         };
         const tailHint = viewHints[viewId] || 'Расскажи, что здесь отображается, какие данные сейчас представлены и какие действия доступны.';
-        const title = `Консультация: ${label}${viewLabel ? ' — ' + viewLabel : ''}`;
-        const prompt = `Проконсультируй по открытой форме: «${label}» (путь: ${path}${type ? ', тип: ' + type : ''}${viewLabel ? ', представление: ' + viewLabel + ' [' + viewId + ']' : ''})${extra}. ${tailHint}`;
-        return { path, label, type, viewId, viewLabel, details, title, prompt };
+        const title = `Консультация: ${label}${focusSubject ? ' — ' + focusSubject : ''}${viewLabel ? ' (' + viewLabel + ')' : ''}`;
+        const screenBlock = screenLines.length ? `\n\nДанные на экране пользователя:\n${screenLines.join('\n')}` : '';
+        const prompt = `Проконсультируй по открытой форме: «${label}» (путь: ${path}${type ? ', тип: ' + type : ''}${viewLabel ? ', представление: ' + viewLabel + ' [' + viewId + ']' : ''})${extra}. ${tailHint}${screenBlock}`;
+        return { path, label, type, viewId, viewLabel, details, focusSubject, analyticEntries, title, prompt };
     },
     /**
      * Открыть панель ИИ «Консультант» вместо дерева и автоматически задать вопрос по открытой форме.

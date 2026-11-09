@@ -310,7 +310,7 @@ function makeHost(s, session) {
         get mode() { return body.mode; },
         get effort() { return body.effort; },
         setEffort: level => {
-            if (['off', 'low', 'medium', 'high'].includes(String(level || '')))
+            if (['off', 'low', 'medium', 'high', 'xhigh'].includes(String(level || '')))
                 body.effort = String(level);
         },
         get signal() { return s.controller?.signal; },
@@ -461,7 +461,7 @@ function start(s, session, file) {
             const place = file.$class || file.$owner || null;
             // роль задачи — из тела .task (записана при сохранении) или по области файла
             body.role = body.role || taskRole(file);
-            const env = await createEnv({ place, session, host, tz: body.tz, location: body.location, role: body.role, voice: !!body.voice });
+            const env = await createEnv({ place, contextPath: body.contextPath, session, host, tz: body.tz, location: body.location, role: body.role, voice: !!body.voice });
             const def = body.childAgent ? env.agents.get(body.childAgent) : null;
             if (body.childAgent && !def)
                 throw new Error('субагент «' + body.childAgent + '» больше не доступен в этой точке');
@@ -478,7 +478,7 @@ function start(s, session, file) {
                 tools: await env.makeTools(def, depth, undefined, body.callRestrict),
                 host,
                 depth,
-                ctx: { session, place, env, task: file, tz: body.tz, role: body.role },
+                ctx: { session, place, contextPath: body.contextPath, env, task: file, tz: body.tz, role: body.role },
                 loadImage: env.loadImage,
                 effort: body.effort || def?.meta.effort,
                 maxTurns: Number(def?.meta.maxTurns || env.config.maxTurns) || undefined,

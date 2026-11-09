@@ -196,6 +196,48 @@ export function treeDistance(a, b) {
 }
 
 /**
+ * Проверка вертикального конуса контекста от basePointPath:
+ * если basePointPath находится внутри /ORGANIZATIONS/<Орг>[/<Подразделение>...],
+ * разрешены только дочерние элементы («вниз») и предки/общие модули («вверх»),
+ * а соседние организации и соседние подразделения («влево-вправо») исключаются.
+ */
+export function inVerticalCone(targetPath, basePointPath) {
+    const baseSegs = segsOf(basePointPath);
+    if (baseSegs[0] !== 'ORGANIZATIONS' || baseSegs.length < 2)
+        return true;
+    const orgId = baseSegs[1];
+    if (!orgId || orgId[0] === '$' || orgId[0] === '.' || orgId === '~')
+        return true;
+    const cone = ['ORGANIZATIONS', orgId];
+    if (baseSegs.length >= 3 && baseSegs[2] !== 'MODULES') {
+        for (let i = 2; i < baseSegs.length; i++) {
+            const s = baseSegs[i];
+            if (!s || s[0] === '$' || s[0] === '.' || s === '~')
+                break;
+            cone.push(s);
+        }
+    }
+    const segs = segsOf(targetPath);
+    if (segs[0] !== 'ORGANIZATIONS' || segs.length < 2)
+        return true;
+    const orgSeg = segs[1];
+    if (orgSeg[0] === '$' || orgSeg[0] === '.' || orgSeg === '~')
+        return true;
+    if (orgSeg !== cone[1])
+        return false;
+    if (cone.length > 2 && segs.length >= 3 && segs[2] !== 'MODULES') {
+        for (let i = 2; i < cone.length && i < segs.length; i++) {
+            const s = segs[i];
+            if (s[0] === '$' || s[0] === '.' || s === '~')
+                return true;
+            if (s !== cone[i])
+                return false;
+        }
+    }
+    return true;
+}
+
+/**
  * Контексты поиска от точки.
  * @param {object} point Элемент, от которого ищут
  * @param {object} params session, role, rings
@@ -262,12 +304,15 @@ export async function buildContexts(point, params = {}) {
     }
 
     const rings = Math.max(0, Math.min(8, Number(params.rings ?? CONFIG.search.rings)));
+    const coneBase = params.contextPoint || P.path || '/';
     if (rings > 0) {
         await store.open();
         const candidates = new Map();
         const consider = (path) => {
             const p = path === '/' ? '' : path;
             if (p === (P.path || '') || candidates.has(p))
+                return;
+            if (!inVerticalCone(p || '/', coneBase))
                 return;
             const d = treeDistance(p, P.path);
             if (d >= 1 && d <= rings)

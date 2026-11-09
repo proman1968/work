@@ -37,12 +37,14 @@ export const send = {
             if (replyTo && !/^[\w.@-]{1,80}:\d{10,16}$/.test(replyTo) && !/^\//.test(replyTo))
                 throw new Error('send: reply_to — id записи вида «автор:время» (из результата send или поля id= в logs), получено «' + replyTo + '»');
             const receivers = await resolvePeople(args.to || []);
+            const actor = ctx?.llm?.name || ctx?.env?.config?.model || 'AI';
             const row = await callAs(cls, 'save_message', {
                 message: String(args.message),
                 receivers: receivers.map(r => r.id),
                 includes: (args.includes || []).map(p => absPath(p, ctx)),
                 kind: args.kind || (due ? 'order' : 'message'),
                 due, reply_to: replyTo,
+                actor,
             }, ctx);
             return 'записано в ленту ' + cls.path + ' (id ' + row.id + ')'
                 + (receivers.length ? '; получатели: ' + receivers.map(r => r.label + ' [' + r.id + ']').join(', ') : '');

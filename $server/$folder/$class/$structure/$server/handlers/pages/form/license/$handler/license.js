@@ -224,12 +224,17 @@ export default {
                         <span class="kv-val">{{status?.support?.ticketsRemaining ?? 0}} из {{status?.support?.ticketsQuota ?? 0}}</span>
                     </div>
                     <div class="kv-row">
+                        <span class="kv-label">Код привязки ботов поддержки (MAX · TG · VK)</span>
+                        <span class="kv-val">{{status?.support?.bindCode || status?.licenseId || '—'}}</span>
+                    </div>
+                    <div class="kv-row">
                         <span class="kv-label">Каналы поддержки</span>
                         <span class="kv-val">MAX · Telegram · VK</span>
                     </div>
                 </div>
                 <div class="controls-row">
-                    <button class="btn-secondary" @tap="syncHub">Синхронизировать с work.odant.org</button>
+                    <input type="text" ::value="hubUrl" placeholder="https://work.odant.org" style="min-width:210px;" title="Адрес центра лицензирования">
+                    <button class="btn-secondary" @tap="syncHub">Синхронизировать с центром лицензий</button>
                 </div>
             </div>
         </div>
@@ -282,6 +287,10 @@ export default {
                 </div>
                 <button class="btn-primary" @tap="checkoutYooKassa">Оплатить через ЮKassa</button>
             </div>
+            <div class="controls-row" style="border-top:1px dashed var(--subtle-border); padding-top:10px; margin-top:4px;">
+                <textarea ::value="certJsonInput" rows="2" placeholder="Вставьте подписанный сертификат Ed25519 (JSON) для ручной установки…" style="flex:1; min-width:240px; font-family:monospace;"></textarea>
+                <button class="btn-secondary" @tap="installCertJson">Установить сертификат</button>
+            </div>
             <div class="notice" ~if="message">{{message}}</div>
         </div>
     `,
@@ -289,6 +298,8 @@ export default {
     selectedTier: 'business',
     addonSeats: 1,
     years: 1,
+    hubUrl: '',
+    certJsonInput: '',
     message: '',
     get baseSupportText() {
         const until = this.status?.baseSupportUntil;
@@ -298,9 +309,21 @@ export default {
     },
     get calculatedTotalText() {
         const tiers = this.status?.supportTiers || [];
-        const t = tiers.find(x => x.id === this.selectedTier) || { pricePerUserYearRub: 40000 };
-        const sum = Math.max(1, Number(this.addonSeats || 1)) * Math.max(1, Number(this.years || 1)) * t.pricePerUserYearRub;
-        return this.formatRub(sum);
+        const t = tiers.find(x => x.id === this.selectedTier) || { pricePerUserYearRub: 15000 };
+        const seats = Math.max(1, Number(this.addonSeats || 1));
+        const yrs = Math.max(1, Number(this.years || 1));
+        const discounts = this.status?.volumeDiscounts || [
+            { minSeats: 100, discountPercent: 25 },
+            { minSeats: 50, discountPercent: 20 },
+            { minSeats: 25, discountPercent: 15 },
+            { minSeats: 10, discountPercent: 10 },
+            { minSeats: 5, discountPercent: 5 },
+            { minSeats: 1, discountPercent: 0 },
+        ];
+        const disc = (discounts.find(d => seats >= d.minSeats)?.discountPercent) || 0;
+        const gross = seats * yrs * t.pricePerUserYearRub;
+        const net = gross - Math.round(gross * disc / 100);
+        return this.formatRub(net) + (disc > 0 ? ` (скидка −${disc}%)` : '');
     },
     formatRub(val) {
         return Number(val || 0).toLocaleString('ru-RU') + ' ₽';
@@ -314,6 +337,8 @@ export default {
     async reload() {
         try {
             this.status = await this.$item?.fetch('license_status');
+            if (this.status?.hubUrl && !this.hubUrl)
+                this.hubUrl = this.status.hubUrl;
         }
         catch (err) {
             this.message = 'Ошибка чтения статуса лицензии: ' + (err?.message || err);
@@ -321,18 +346,34 @@ export default {
     },
     async syncHub() {
         try {
-            this.message = 'Синхронизация с сервером лицензий work.odant.org…';
-            this.status = await this.$item?.fetch('license_sync', {});
+            this.message = 'Синхронизация с сервером лицензий…';
+            this.status = await this.$item?.fetch('license_sync', { hubUrl: this.hubUrl || undefined });
             this.message = 'Лицензия успешно синхронизирована.';
         }
         catch (err) {
-            this.message = 'Не удалось связаться с work.odant.org: ' + (err?.message || err);
+            this.message = 'Не удалось связаться с сервером лицензий: ' + (err?.message || err);
+        }
+    },
+    async installCertJson() {
+        const raw = String(this.certJsonInput || '').trim();
+        if (!raw) {
+            this.message = 'Вставьте JSON сертификата лицензии для установки.';
+            return;
+        }
+        try {
+            this.status = await this.$item?.fetch('license_install', { certificate: raw });
+            this.certJsonInput = '';
+            this.message = 'Сертификат лицензии успешно установлен и проверен.';
+        }
+        catch (err) {
+            this.message = 'Ошибка установки сертификата: ' + (err?.message || err);
         }
     },
     async checkoutYooKassa() {
         try {
             this.message = 'Формирование платежа ЮKassa…';
             const res = await this.$item?.fetch('license_checkout', {
+                hubUrl: this.hubUrl || undefined,
                 tier: this.selectedTier,
                 addonSeats: Number(this.addonSeats || 1),
                 years: Number(this.years || 1),

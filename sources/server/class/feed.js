@@ -113,6 +113,11 @@ export const classFeedMethods = {
             if (principal.actorLabel)
                 row.actorLabel = principal.actorLabel;
         }
+        else if (params.actor && typeof params.actor === 'string') {
+            row.actor = String(params.actor).slice(0, 120);
+            if (params.actorLabel && typeof params.actorLabel === 'string')
+                row.actorLabel = String(params.actorLabel).slice(0, 120);
+        }
         if (params.message != null)
             row.content = params.message;
         const includes = LOGS.normalizeIncludes(params.includes);

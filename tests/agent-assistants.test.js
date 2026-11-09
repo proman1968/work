@@ -411,6 +411,15 @@ describe('расписание', () => {
         assert.equal(new Date(S.nextRun(r, 'Europe/Moscow', from)).toISOString(), '2026-10-05T06:00:00.000Z');
         assert.equal(new Date(S.nextRun(S.normalizeRule({ at: '14:30' }), 'Europe/Moscow', from)).toISOString(), '2026-09-28T11:30:00.000Z');
         assert.equal(S.nextRun(S.normalizeRule({ every: 60 }), 'UTC', from), from + 3600_000);
+        // интервал со временем старта (at), датой (date) и временем окончания (until / до конца дня)
+        const everyToday = S.normalizeRule({ every: 45, at: '13:00', date: '2026-11-09', until: '23:59' });
+        const before13 = Date.parse('2026-11-09T09:06:00Z'); // 12:06 МСК
+        assert.equal(new Date(S.nextRun(everyToday, 'Europe/Moscow', before13)).toISOString(), '2026-11-09T10:00:00.000Z', 'первый запуск ровно в 13:00 МСК');
+        const at13 = Date.parse('2026-11-09T10:00:20Z'); // 13:00:20 МСК
+        assert.equal(new Date(S.nextRun(everyToday, 'Europe/Moscow', at13)).toISOString(), '2026-11-09T10:45:00.000Z', 'следующий слот — 13:45 МСК');
+        const at2330 = Date.parse('2026-11-09T20:30:00Z'); // 23:30 МСК (последний слот дня)
+        assert.equal(S.nextRun(everyToday, 'Europe/Moscow', at2330), null, 'после 23:30 следующий слот 00:15 выходит за 23:59 — расписание завершается');
+        assert.equal(S.describeRule(everyToday), 'каждые 45 мин с 13:00 (09.11.2026 до 23:59)');
         assert.equal(S.nextRun(S.normalizeRule({ once: '2026-01-01T00:00:00Z' }), 'UTC', from), null);
         assert.throws(() => S.normalizeRule({ every: 5 }), /от 15/);
         assert.throws(() => S.normalizeRule({ at: '25:00' }));

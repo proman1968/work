@@ -5,7 +5,7 @@
 import '../sources/reactor.js';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { runLoop, toMessages, splitSystem, systemText, maybeCompact, resolveTurnEffort, createThinkSplitter, VOLATILE_HEAD, EMPTY_NUDGE } from '../sources/modules/agent/loop.js';
+import { runLoop, toMessages, splitSystem, systemText, maybeCompact, resolveTurnEffort, pickAllowedEffort, createThinkSplitter, VOLATILE_HEAD, EMPTY_NUDGE } from '../sources/modules/agent/loop.js';
 import { estimateTokens } from '../sources/modules/agent/util.js';
 import { stableToolOrder } from '../sources/modules/agent/index.js';
 import { listing, metaTools } from '../sources/modules/agent/tools/meta.js';
@@ -160,6 +160,13 @@ describe('управление effort моделью и субагентами, 
         const archMsg = [{ id: 'u', type: 'user', content: 'Спроектируй архитектуру модуля и проведи комплексный рефакторинг' }];
         assert.equal(resolveTurnEffort(undefined, archMsg, 0), 'high');
         assert.equal(resolveTurnEffort('high', shortMsg, 0), 'high', 'явный выбор модели не понижается');
+        // Для модели со списком efforts: ['low', 'medium', 'xhigh'] (например Qwen3.8 27b) выбор всегда строго из списка
+        const qwenEfforts = ['low', 'medium', 'xhigh'];
+        assert.equal(resolveTurnEffort(undefined, archMsg, 0, qwenEfforts), 'xhigh', 'high приводится к xhigh из списка модели');
+        assert.equal(resolveTurnEffort('high', shortMsg, 0, qwenEfforts), 'xhigh');
+        assert.equal(resolveTurnEffort('off', shortMsg, 0, qwenEfforts), 'low', 'off приводится к минимальному допустимому low');
+        assert.equal(resolveTurnEffort(undefined, analysisMsg, 0, qwenEfforts), 'medium');
+        assert.equal(pickAllowedEffort('xhigh', ['off', 'low', 'medium', 'high']), 'high');
     });
 
     it('createThinkSplitter: потоковое отделение <think>…</think> в reasoning без утечки в content', () => {

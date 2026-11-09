@@ -113,7 +113,7 @@ ODA({is: 'chat-item',
         </style>
         <div vertical ~if="!compact && !hideAvatar && !expanded && !isTask" ~style="{padding: '0px 8px', order: (!isTask && !isSender) ? 2 : 0}">
             <div flex></div>
-            <item-icon class="sender" icon-size="24" :$item="sender" default="bootstrap:robot"></item-icon>
+            <item-icon class="sender" icon-size="24" :$item="sender" :icon="isAgentSender ? 'bootstrap:robot' : ''" :title="isAgentSender ? agentSenderTitle : ''" default="bootstrap:robot"></item-icon>
         </div>
         <div class="card" shadow :flex="expanded || compact" vertical ~style="cardLayoutStyle" @tap="onCardTap($event)">
             <div class="title" no-flex light horizontal ~if="!(expanded && bodyHeader)" style="justify-content: space-between; align-items: center;">
@@ -195,13 +195,46 @@ ODA({is: 'chat-item',
         $attr: true,
         $def: false,
         set(n) {
-            if (n)
+            if (n) {
+                const root = this.parentElement?.parentElement?.parentElement || this.getRootNode?.()?.host;
+                const allCards = root?.$$ ? root.$$('chat-item') : (this.parentElement?.querySelectorAll?.('chat-item') || []);
+                for (const other of allCards) {
+                    if (other && other !== this && other.expanded)
+                        other.expanded = false;
+                }
                 return;
+            }
+            if (!this._rebindClosing) {
+                let p = this.parentElement || this.host || this.getRootNode?.()?.host;
+                while (p && p.localName !== 'chat-day')
+                    p = p.parentElement || p.host || p.getRootNode?.()?.host;
+                const myId = this._currentItemIdentity || '';
+                if (p && p._expandedTaskKey && myId === 'task:' + p._expandedTaskKey)
+                    p._expandedTaskKey = '';
+            }
             this.bodyHeader = false;
             this._resetBodyCache();
         },
     },
+    get isAgentSender() {
+        const act = String(this.log?.actor || '');
+        if (act === 'AI' || act.startsWith('/MODELS/'))
+            return true;
+        if (Array.isArray(this.log?.receivers) && this.log.receivers.length === 1 && this.log.receivers[0] === this.log?.sender && !this.log?.path)
+            return true;
+        return false;
+    },
+    get agentSenderTitle() {
+        const act = String(this.log?.actor || '');
+        if (this.log?.actorLabel)
+            return String(this.log.actorLabel);
+        if (act.startsWith('/MODELS/'))
+            return 'ИИ-агент (' + act.split('/').pop() + ')';
+        return 'ИИ-агент WORK';
+    },
     get isSender(){
+        if (this.isAgentSender)
+            return false;
         return this.senderId === WORK.uid;
     },
     get isTask() {
@@ -682,10 +715,33 @@ ODA({is: 'chat-item',
                 run($file).catch(() => {});
         }
     },
+    _identityOfItem(item) {
+        if (!item)
+            return '';
+        const targetPath = String(item.logRow?.path || item.DATA?.logRow?.path || item.path || '');
+        const taskMatch = targetPath.match(/([^/\\]+\.task)$/i) || String(item.id || '').match(/([^/\\]+\.task)$/i);
+        if (taskMatch)
+            return 'task:' + taskMatch[1];
+        const logsTask = String(item.id || '').replace(/\.logs$/i, '.task');
+        if (logsTask.endsWith('.task') && (item.logRow?.ext === 'task' || item.DATA?.logRow?.ext === 'task'))
+            return 'task:' + logsTask;
+        return String(item.path || item.id || '');
+    },
     $item: {
         $def: null,
         set(n) {
             const nextKey = n ? String(n.path || n.id || '') : '';
+            const nextIdentity = this._identityOfItem(n);
+            if (this._currentItemIdentity && nextIdentity !== this._currentItemIdentity && this.expanded) {
+                this._rebindClosing = true;
+                try {
+                    this.expanded = false;
+                }
+                finally {
+                    this._rebindClosing = false;
+                }
+            }
+            this._currentItemIdentity = nextIdentity;
             if (nextKey && this._currentItemKey === nextKey && this.log) {
                 const nextRow = n?.logRow || n?.DATA?.logRow;
                 if (nextRow && typeof nextRow === 'object' && typeof nextRow.then !== 'function') {
@@ -764,6 +820,11 @@ ODA({is: 'chat-item',
     },
     get sender() {
         return Promise.resolve(this.itemBody).then(async body => {
+            if (this.isAgentSender) {
+                if (!this.senderIsReady)
+                    this._markSenderReady();
+                return null;
+            }
             if (!body?.sender) {
                 if (!this.senderIsReady)
                     this._markSenderReady();
@@ -775,13 +836,6 @@ ODA({is: 'chat-item',
         })
     },
     get hideAvatar() {
-        if (this.isTask)
-            return true;
-        if (!this.nextElementSibling)
-            return false;
-        return Promise.all([
-            this.sender,
-            this.nextElementSibling.sender
-        ]).then(([current, sibling]) => !!sibling && !!current && current.id === sibling.id);
+        return this.isTask;
     },
 })

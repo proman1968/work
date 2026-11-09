@@ -40,8 +40,102 @@ export function absPath(p, ctx) {
     return (base + '/' + s).replace(/\/+/g, '/');
 }
 
+function canonicalSegs(raw) {
+    const out = [];
+    for (const s of String(raw ?? '').replace(/\\/g, '/').split('/')) {
+        if (!s || s === '.')
+            continue;
+        if (s === '..') {
+            if (out.length)
+                out.pop();
+            continue;
+        }
+        out.push(s);
+    }
+    return out;
+}
+
+/**
+ * Вертикальный конус контекста задачи для узлов внутри /ORGANIZATIONS/<Орг>[/<Подразделение>...]:
+ * возвращает массив сегментов ['ORGANIZATIONS', orgId, ...deptSegs] либо null (если задача
+ * запущена на уровне всего WORK `/`, `/ORGANIZATIONS`, `/MODULES` и т.д., откуда доступны все организации).
+ */
+export function contextConeOf(ctxOrPath) {
+    const raw = typeof ctxOrPath === 'string'
+        ? ctxOrPath
+        : (ctxOrPath?.contextPath || ctxOrPath?.place?.path || '');
+    if (!raw || raw === '/')
+        return null;
+    const segs = canonicalSegs(raw);
+    if (segs[0] !== 'ORGANIZATIONS' || segs.length < 2)
+        return null;
+    const orgId = segs[1];
+    if (!orgId || orgId[0] === '$' || orgId[0] === '.' || orgId === '~')
+        return null;
+    const cone = ['ORGANIZATIONS', orgId];
+    if (segs.length >= 3 && segs[2] !== 'MODULES') {
+        for (let i = 2; i < segs.length; i++) {
+            const s = segs[i];
+            if (!s || s[0] === '$' || s[0] === '.' || s === '~')
+                break;
+            cone.push(s);
+        }
+    }
+    return cone;
+}
+
+/**
+ * Проверка правила вертикального контекста:
+ * от точки задачи (организации или подразделения) разрешено движение только «вниз»
+ * (дочерние элементы) или «вверх» (цепочка предков, учётные модули своей организации
+ * и общие ветки уровня WORK), но запрещено движение «влево-вправо» (в соседние
+ * организации или соседние подразделения).
+ */
+export function checkContextCone(targetPath, ctx) {
+    const cone = contextConeOf(ctx);
+    if (!cone)
+        return { ok: true };
+    const p = typeof ctx === 'string'
+        ? absPath(targetPath, { place: { path: ctx } })
+        : absPath(targetPath, ctx);
+    const segs = canonicalSegs(p);
+    if (segs[0] !== 'ORGANIZATIONS' || segs.length < 2)
+        return { ok: true };
+    const orgSeg = segs[1];
+    if (orgSeg[0] === '$' || orgSeg[0] === '.' || orgSeg === '~')
+        return { ok: true };
+    const placePath = typeof ctx === 'string' ? ctx : (ctx?.place?.path || '/' + cone.join('/'));
+    if (orgSeg !== cone[1]) {
+        return {
+            ok: false,
+            reason: `Выход за рамки контекста организации «${cone[1]}» (${placePath}): обращение к другой организации «/ORGANIZATIONS/${orgSeg}» запрещено. Движение возможно только вниз (дочерние элементы) или вверх (уровень WORK).`,
+        };
+    }
+    if (cone.length > 2 && segs.length >= 3 && segs[2] !== 'MODULES') {
+        for (let i = 2; i < cone.length && i < segs.length; i++) {
+            const s = segs[i];
+            if (s[0] === '$' || s[0] === '.' || s === '~')
+                return { ok: true };
+            if (s !== cone[i]) {
+                return {
+                    ok: false,
+                    reason: `Выход за рамки контекста подразделения «${placePath}»: обращение к соседнему подразделению «/${segs.slice(0, i + 1).join('/')}» запрещено. Движение возможно только вниз (дочерние элементы) или вверх (к организации и уровню WORK).`,
+                };
+            }
+        }
+    }
+    return { ok: true };
+}
+
+export function assertContextCone(targetPath, ctx) {
+    const check = checkContextCone(targetPath, ctx);
+    if (!check.ok)
+        throw new Error(check.reason);
+}
+
 export async function getItem(path, ctx) {
     const p = absPath(path, ctx);
+    assertContextCone(p, ctx);
     let item;
     try {
         item = await WORK.get_item(p === '/' ? '' : p);
@@ -175,14 +269,14 @@ export function formatSize(n) {
     return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 
-export async function listTree(item, depth, indent, out, limit) {
+export async function listTree(item, depth, indent, out, limit, ctx) {
     let kids = [];
     try {
         await item.init;
         kids = (await item.items) || [];
     }
     catch (e) { log.debug('tree.items', e); /* нет доступа/не папка */ }
-    kids = kids.filter(k => k && k.id && k.id !== 'node_modules');
+    kids = kids.filter(k => k && k.id && k.id !== 'node_modules' && checkContextCone(k.path, ctx).ok);
     for (const k of kids) {
         if (out.length >= limit) {
             out.push(indent + '… (ещё есть — сузь путь)');
@@ -194,7 +288,7 @@ export async function listTree(item, depth, indent, out, limit) {
         catch (e) { log.debug('tree.init', e); /* покажем без DATA */ }
         out.push(indent + await lineFor(k));
         if (depth > 1 && isContainer(k))
-            await listTree(k, depth - 1, indent + '  ', out, limit);
+            await listTree(k, depth - 1, indent + '  ', out, limit, ctx);
     }
 }
 
@@ -284,7 +378,9 @@ export async function markUntrustedByPaths(paths, ctx) {
 }
 
 /** Родитель по пути и имя листа; недостающие промежуточные папки → folder для save_file. */
-export async function resolveParent(path, ctx) {    const p = absPath(path, ctx);
+export async function resolveParent(path, ctx) {
+    const p = absPath(path, ctx);
+    assertContextCone(p, ctx);
     const parts = p.split('/').filter(Boolean);
     const filename = parts.pop();
     if (!filename)

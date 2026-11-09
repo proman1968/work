@@ -15,6 +15,7 @@ import {
     FRANCHISE_PROGRAM,
     REGIONS_CATALOG,
     calculateOrderQuote,
+    PUBLIC_OFERTA,
 } from './catalog.js';
 
 const GENERIC_WORDS = new Set([
@@ -58,11 +59,13 @@ export class LicenseServerAiAgent {
         this.fetchImpl = fetchImpl;
     }
 
-    async chat({ message = '', user = null } = {}) {
+    async chat({ message = '', user = null, isAdmin = false } = {}) {
         const text = String(message || '').trim();
         if (!text) {
             return {
-                reply: 'Здравствуйте! Я ИИ-агент лицензионного центра ODANT-WORK. Спросите о комплексе, ИИ-агентах платформы, расчёте лицензий со скидкой, вакантных франшизах или управлении реестром сервера.',
+                reply: isAdmin
+                    ? 'Здравствуйте! Я ИИ-агент консоли администратора ODANT-WORK. Спросите сводку по реестру, выпустите сертификат Ed25519, проведите оплату заказов ЮKassa или активируйте резервы франшиз.'
+                    : 'Здравствуйте! Я ИИ-агент ODANT-WORK. Спросите о комплексе, ИИ-агентах платформы, расчёте лицензий со скидкой, условиях публичной оферты или вакантных франшизах в вашем регионе.',
                 actions: [],
             };
         }
@@ -70,6 +73,12 @@ export class LicenseServerAiAgent {
 
         // 0.1 Команда администратора: выпуск новой лицензии ПАК
         if (/(выпуст|создай|оформ)\S*\s+(?:базов\S*\s+|демо[-\s]*)?лиценз/i.test(lower)) {
+            if (!isAdmin) {
+                return {
+                    reply: 'Прямой выпуск сертификатов лицензий доступен только авторизованному администратору центра сертификации. Для покупки комплекса или докупки мест зарегистрируйтесь в личном кабинете и подпишите договор-оферту.',
+                    actions: [{ type: 'open_auth' }],
+                };
+            }
             const orgMatch = text.match(/(?:для\s+)?((?:ООО|АО|ПАО|ЗАО|ИП)\s*«[^»]+»)/i);
             const innMatch = text.match(/ИНН\s*(\d{10,12})/i) || text.match(/\b(\d{10,12})\b/);
             const emailMatch = text.match(/([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i);
@@ -95,6 +104,12 @@ export class LicenseServerAiAgent {
 
         // 0.2 Команда администратора: проведение оплаты ожидающих заказов ЮKassa
         if (/(провед|подтверд)\S*\s+оплат/i.test(lower)) {
+            if (!isAdmin) {
+                return {
+                    reply: 'Подтверждение платежей вручную доступно только администратору центра биллинга.',
+                    actions: [],
+                };
+            }
             const pending = Object.values(this.store.state.orders || {}).filter(o => o.status === 'pending');
             if (!pending.length) {
                 return {
@@ -105,25 +120,60 @@ export class LicenseServerAiAgent {
             const completed = [];
             for (const o of pending) {
                 const done = this.store.completePaidOrder(o.orderId, { paymentId: o.paymentId || ('yk_' + o.orderId) });
-                if (done) completed.push(done);
+                if (done?.order) completed.push(done.order);
             }
             return {
                 reply: [
                     `Проведена оплата по **${completed.length}** заказам ЮKassa:`,
-                    ...completed.map(o => `• **${o.orderId}** — ${o.customer?.name || 'Клиент'} · **${fmt(o.amountRub)} ₽** (статус: оплачен)`),
+                    ...completed.map(ord => `• **${ord.orderId}** — ${ord.customer?.name || 'Клиент'} · **${fmt(ord.amountRub)} ₽** (статус: оплачен)`),
                     'Сертификаты лицензий и резервы франшиз автоматически обновлены.',
                 ].join('\n'),
                 actions: [{ type: 'refresh_admin' }, { type: 'admin_tab', tab: 'orders' }],
             };
         }
 
+        // 0.25 Команда администратора: активация резервов франшиз в действующих партнёров
+        if (isAdmin && /(активир|конвертир|перевед)\S*\s+(?:резерв|франш|партн)/i.test(lower)) {
+            const pendingRes = Object.values(this.store.state.reservations || {}).filter(
+                r => r.status !== 'canceled' && !r.convertedToPartnerId
+            );
+            if (!pendingRes.length) {
+                return {
+                    reply: 'Сейчас нет неактивированных резервов франшиз.',
+                    actions: [{ type: 'refresh_admin' }],
+                };
+            }
+            const activated = [];
+            for (const r of pendingRes) {
+                const p = this.store.registerPartner({ reservationId: r.reservationId });
+                activated.push(p);
+            }
+            return {
+                reply: [
+                    `Активировано партнёров-франчайзи из резервов: **${activated.length}**:`,
+                    ...activated.map(p => `• **${p.partnerId}** — ${p.companyName} (${p.regionName}, скидка ${p.discountPercent}%)`),
+                ].join('\n'),
+                actions: [{ type: 'refresh_admin' }, { type: 'admin_tab', tab: 'partners' }],
+            };
+        }
+
         // 0.3 Команда администратора: сводка по реестру сервера лицензий / заказам / тикетам
         if (/(сводк|реестр|статус сервер|обзор сервер|неоплачен\S*\s+заказ|покажи заказ|открыт\S*\s+тикет|покажи тикет|резерв\S*\s+франш)/i.test(lower)) {
+            if (!isAdmin) {
+                return {
+                    reply: 'Внутренняя сводка по реестру сервера доступна только в консоли администратора. В личном кабинете на сайте вы можете посмотреть статус своей лицензии и подписанной оферты.',
+                    actions: user ? [{ type: 'switch_stage', stage: 'addons' }] : [{ type: 'open_auth' }],
+                };
+            }
             const licenses = this.store.listLicenses();
             const orders = Object.values(this.store.state.orders || {});
             const partners = this.store.listPartners();
-            const reservations = Object.values(this.store.state.franchiseReservations || {});
+            const reservations = Object.values(this.store.state.reservations || {}).filter(
+                r => r.status !== 'canceled' && !r.convertedToPartnerId
+            );
             const tickets = this.store.listTickets();
+            const users = this.store.listUsers();
+            const signedUsers = users.filter(u => u.ofertaAccepted);
             const totalSeats = licenses.reduce((s, l) => s + (l.totalSeats || 0), 0);
             const paidOrders = orders.filter(o => o.status === 'paid');
             const pendingOrders = orders.filter(o => o.status === 'pending');
@@ -138,10 +188,26 @@ export class LicenseServerAiAgent {
                     `• Оплачено заказов ЮKassa: **${paidOrders.length}** на сумму **${fmt(paidSum)} ₽**`,
                     `• Ожидают оплаты: **${pendingOrders.length}** на сумму **${fmt(pendingSum)} ₽**`,
                     `• Франшизы: **${partners.length}** действующих партнёров и **${reservations.length}** активных резервов`,
+                    `• Клиенты и оферты: **${users.length}** зарегистрировано (оферта ПЭП подписана у **${signedUsers.length}**)`,
                     `• Техподдержка (MAX · TG · VK): **${openTickets.length}** открытых из **${tickets.length}** обращений`,
                     pendingOrders.length > 0 ? '\nНапишите «Проведи оплату заказов», чтобы подтвердить ожидающие платежи.' : '',
                 ].filter(Boolean).join('\n'),
                 actions: [{ type: 'refresh_admin' }],
+            };
+        }
+
+        // 0.4 Вопросы по публичной оферте и порядку регистрации
+        if (/(оферт|договор|пэп|подпис\S*\s+оферт|регистрац|акцепт)/i.test(lower)) {
+            return {
+                reply: [
+                    `**${PUBLIC_OFERTA.title}** (редакция \`${PUBLIC_OFERTA.version}\` от ${PUBLIC_OFERTA.updatedAt}):`,
+                    '• Любые действия по заказу комплекса, докупке годовых лицензий, оплате через ЮKassa и резервированию региональной франшизы выполняются **только после регистрации в личном кабинете и подписания оферты простой электронной подписью (ПЭП)**.',
+                    '• При подписании фиксируются наименование организации, ИНН, корпоративный email, ФИО представителя и уникальный идентификатор подписи `PEP-...`.',
+                    user?.ofertaAccepted
+                        ? `• У вашей организации (**${user.companyName}**) оферта уже подписана: \`${user.ofertaSignatureId}\`.`
+                        : '• Нажмите «Войти / Регистрация», чтобы ознакомиться с текстом оферты и подписать её.',
+                ].join('\n'),
+                actions: [{ type: 'open_oferta' }],
             };
         }
 

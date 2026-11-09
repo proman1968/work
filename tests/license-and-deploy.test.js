@@ -367,7 +367,7 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(tgBuyRes.confirmationUrl);
     });
 
-    it('7. Лендинг ODANT-WORK (work.odant.org): тёмная/светлая тема, карта России, скрытие докупки до входа и собственный ИИ-агент', async () => {
+    it('7. Лендинг ODANT-WORK (work.odant.org), обязательная оферта ПЭП и отдельная защищённая админ-панель (/admin)', async () => {
         const html = await fetch(`${hubUrl}/`).then(r => r.text());
         assert.ok(html.includes('ODANT-WORK'));
         assert.ok(html.includes('AMD Ryzen™ AI Max+ PRO 495'));
@@ -378,20 +378,83 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(html.includes('toggleTheme()'));
         assert.ok(html.includes('russiaMapSvg'));
         assert.ok(html.includes('id="tileAddons"') && html.includes('style="display:none;"'), 'Докупка лицензий скрыта до авторизации пользователя');
-        assert.ok(html.includes('id="admAgentCard"') && html.includes('data-adm-tab="agent"'), 'ИИ-агент интегрирован на левую вкладку админки');
+        assert.ok(html.includes('id="ofertaModal"') && html.includes('id="authOfertaCheck"'), 'Публичная оферта и чекбокс ПЭП встроены в регистрацию');
+        assert.ok(!html.includes('id="btnAdminTop"') && !html.includes('id="stage-admin"'), 'На публичном сайте нет ссылок и верстки админки');
         assert.ok(html.includes('через API из любого источника'), 'Указано подключение более мощных моделей ИИ через API из любого источника');
         assert.ok(!html.includes('1С'), 'В лендинге нет упоминаний 1С');
 
-        // Авторизация пользователя для доступа к докупке лицензий
-        const authRes = await fetch(`${hubUrl}/api/auth/login`, {
+        // 7.1 Отдельная страница админки /admin и обязательная защита входа администратора
+        const adminHtml = await fetch(`${hubUrl}/admin`).then(r => r.text());
+        assert.ok(adminHtml.includes('id="adminLoginScreen"'), 'На странице /admin есть экран входа администратора');
+        assert.ok(adminHtml.includes('id="admAgentCard"') && adminHtml.includes('data-adm-tab="agent"'), 'ИИ-агент интегрирован на левую вкладку отдельной страницы /admin');
+        assert.ok(adminHtml.includes('/assets/admin.js'), 'Подключён отдельный скрипт /assets/admin.js');
+
+        // Без токена администратора доступ к /api/admin/overview закрыт (401)
+        const unauthAdm = await fetch(`${hubUrl}/api/admin/overview`);
+        assert.equal(unauthAdm.status, 401);
+
+        // Неверный пароль администратора отклоняется (401)
+        const badAdmLogin = await fetch(`${hubUrl}/api/admin/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: 'director@maslotorg.ru', companyName: 'ООО «Маслоторг»' }),
+            body: JSON.stringify({ login: 'admin', password: 'wrong-password' }),
+        });
+        assert.equal(badAdmLogin.status, 401);
+
+        // Успешный вход администратора
+        const admLogin = await fetch(`${hubUrl}/api/admin/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ login: 'admin', password: 'odant-admin' }),
+        }).then(r => r.json());
+        assert.equal(admLogin.authenticated, true);
+        assert.ok(admLogin.token.startsWith('adm_'));
+
+        // С токеном администратора открывается /api/admin/overview
+        const admOverview = await fetch(`${hubUrl}/api/admin/overview`, {
+            headers: { 'Authorization': `Bearer ${admLogin.token}` },
+        });
+        assert.equal(admOverview.status, 200);
+
+        // 7.2 Запрет заказов и резервирования франшизы без регистрации и подписания оферты (403 OFERTA_REQUIRED)
+        const orderWithoutOferta = await fetch(`${hubUrl}/api/orders/checkout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ includeBasePak: true, tier: 'business', addonSeats: 0 }),
+        });
+        assert.equal(orderWithoutOferta.status, 403);
+        const orderErr = await orderWithoutOferta.json();
+        assert.equal(orderErr.code, 'OFERTA_REQUIRED');
+
+        // Регистрация пользователя с подписанием публичной оферты ПЭП
+        const authRes = await fetch(`${hubUrl}/api/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: 'director@maslotorg.ru',
+                companyName: 'ООО «Маслоторг»',
+                inn: '7701234567',
+                name: 'Перепелкин Р.А.',
+                ofertaAccepted: true,
+            }),
         }).then(r => r.json());
         assert.ok(authRes.sessionKey);
         assert.ok(authRes.licenseId);
+        assert.equal(authRes.ofertaAccepted, true);
+        assert.ok(authRes.ofertaSignatureId.startsWith('PEP-'));
 
-        // Запрос к собственному ИИ-агенту сервера лицензий
+        // После подписания оферты заказ успешно создаётся
+        const orderWithOferta = await fetch(`${hubUrl}/api/orders/checkout`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${authRes.sessionKey}`,
+            },
+            body: JSON.stringify({ includeBasePak: false, tier: 'business', addonSeats: 10, years: 1 }),
+        });
+        assert.equal(orderWithOferta.status, 200);
+
+        // Запрос к собственному ИИ-агенту сервера лицензий от клиента
         const agentReply = await fetch(`${hubUrl}/api/agent/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -400,11 +463,14 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(agentReply.reply.includes('−15%'));
         assert.equal(agentReply.data.quote.volumeDiscountPercent, 15);
 
-        // Запрос к ИИ-агенту из админки: сводка по серверу
+        // Запрос к ИИ-агенту из админки (с токеном администратора): сводка по серверу
         const admSummary = await fetch(`${hubUrl}/api/agent/chat`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: 'Сводка по серверу лицензий', sessionKey: authRes.sessionKey }),
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${admLogin.token}`,
+            },
+            body: JSON.stringify({ message: 'Сводка по серверу лицензий' }),
         }).then(r => r.json());
         assert.ok(admSummary.reply.includes('Сводка центра лицензирования'));
 
@@ -487,7 +553,9 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(FRANCHISE_PROGRAM.fullPaymentPeriodMonths, 12);
 
         const sveBefore = hubApp.store.getRegionPartnerQuotaStatus('RU-SVE');
-        const reserveRes = await fetch(`${hubUrl}/api/partners/reserve`, {
+
+        // Попытка зарезервировать франшизу без подписания оферты отклоняется (403 OFERTA_REQUIRED)
+        const reserveNoOferta = await fetch(`${hubUrl}/api/partners/reserve`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -496,9 +564,53 @@ describe('ПАК WORK: спецификация, лицензирование, �
                 inn: '6670998877',
                 email: 'ceo@uralfranchise.ru',
             }),
+        });
+        assert.equal(reserveNoOferta.status, 403);
+
+        // С подписанной офертой резервирование проходит успешно
+        const reserveRes = await fetch(`${hubUrl}/api/partners/reserve`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                regionCode: 'RU-SVE',
+                companyName: 'ООО «УралФраншиза»',
+                inn: '6670998877',
+                email: 'ceo@uralfranchise.ru',
+                ofertaAccepted: true,
+            }),
         }).then(r => r.json());
         assert.equal(reserveRes.amountRub, 100_000, 'Сразу за резервирование выставляется невозвратный залог 100 000 ₽');
         assert.equal(reserveRes.regionQuota.vacantFranchises, sveBefore.vacantFranchises - 1, 'Количество вакантных франшиз региона уменьшается на 1 при резервировании');
+
+        // Оплата залога резерва франшизы через Webhook ЮKassa (без падения на result.license)
+        const resPayWh = await fetch(`${hubUrl}/api/payments/yookassa/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'notification',
+                event: 'payment.succeeded',
+                object: {
+                    id: reserveRes.paymentId,
+                    status: 'succeeded',
+                    amount: { value: '100000.00', currency: 'RUB' },
+                    metadata: { orderId: reserveRes.orderId, reservationId: reserveRes.reservation.reservationId },
+                },
+            }),
+        }).then(r => r.json());
+        assert.equal(resPayWh.ok, true);
+        assert.equal(resPayWh.status, 'paid');
+        assert.equal(resPayWh.kind, 'franchise_reservation');
+
+        // Конвертация резерва в действующего партнёра-франчайзи
+        const activatedPartner = await fetch(`${hubUrl}/api/partners/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                reservationId: reserveRes.reservation.reservationId,
+            }),
+        }).then(r => r.json());
+        assert.ok(activatedPartner.partnerId.startsWith('PRT-SVE-'));
+        assert.equal(activatedPartner.companyName, 'ООО «УралФраншиза»');
 
         hubApp.store.recordPartnerSale(p1.partnerId, 50_000_000);
         const updatedPartner = hubApp.store.getPartnerSummary(p1.partnerId);

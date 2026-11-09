@@ -2,7 +2,7 @@
  * Файлы и дерево WORK: ls, read, find, write, append, edit, history, restore, delete.
  * Тела — из прежнего tools/work.js (байт-в-байт); общие вызовы — ./common.js.
  */
-import { absPath, mustItem, callAs, kindOf, isContainer, lineFor, formatSize, listTree, describeClass, numbered, loadText, writeFile, realPathOf, fileAt, trackWrite, target, markUntrustedByPaths } from './common.js';
+import { absPath, checkContextCone, mustItem, callAs, kindOf, isContainer, lineFor, formatSize, listTree, describeClass, numbered, loadText, writeFile, realPathOf, fileAt, trackWrite, target, markUntrustedByPaths } from './common.js';
 import { isAccessDenied } from '../../util.js';
 import { lineDiff } from '../../diff.js';
 import { beforeWrite, recordDelete } from '../../undo.js';
@@ -36,7 +36,7 @@ export const ls = {
             if (!isContainer(item))
                 return await lineFor(item);
             const out = [item.path + '  [' + kindOf(item) + ']'];
-            await listTree(item, Math.min(3, Math.max(1, Number(args.depth) || 1)), '  ', out, 300);
+            await listTree(item, Math.min(3, Math.max(1, Number(args.depth) || 1)), '  ', out, 300, ctx);
             if (out.length === 1)
                 out.push('  (пусто)');
             return out.join('\n');
@@ -116,6 +116,8 @@ export const find = {
                     for (const k of kids) {
                         if (out.length >= limit)
                             return;
+                        if (!checkContextCone(k.path, ctx).ok)
+                            continue;
                         if (re.test(k.id))
                             out.push(k.path + (isContainer(k) ? '/' : ''));
                         if (isContainer(k) && k.id !== 'node_modules')
@@ -127,13 +129,15 @@ export const find = {
             }
             if (!args.text && !args.regex)
                 throw new Error('нужен text, regex или name');
-            const res = await callAs(root, 'find_text', {
+            const rawRes = await callAs(root, 'find_text', {
                 text: args.text || args.regex,
                 regex: args.regex || undefined,
                 ext: args.ext ? String(args.ext).split(',').map(s => s.trim()).filter(Boolean) : undefined,
                 limit,
+                filter: child => checkContextCone(child?.path, ctx).ok,
             }, ctx);
-            if (!res?.length)
+            const res = (rawRes || []).filter(r => checkContextCone(r?.path, ctx).ok);
+            if (!res.length)
                 return 'ничего не найдено';
             // R15 (8.38): найденные строки чужого файла (письмо/загрузка) — чужой текст в контексте
             await markUntrustedByPaths(res.map(r => r?.path), ctx);
