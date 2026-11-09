@@ -1020,6 +1020,9 @@ ODA({is: 'chat-ribbon',
     },
     $listeners:{
         scroll(e){
+            if (this.clientHeight <= 0 || this._restoringScroll || this._wasHidden)
+                return;
+            this._savedScrollTop = this.scrollTop;
             const down = this.scrollTop > -10;
             if (this.scrollDown === down)
                 return;
@@ -1027,10 +1030,42 @@ ODA({is: 'chat-ribbon',
             this.render();
         },
         resize(){
-            this.ribbonHeight = this.clientHeight - 8;
+            if (this.clientHeight <= 0) {
+                this._wasHidden = true;
+                return;
+            }
+            const nextHeight = this.clientHeight - 8;
+            if (nextHeight > 0 && this.ribbonHeight !== nextHeight)
+                this.ribbonHeight = nextHeight;
+            if (this._wasHidden) {
+                this._wasHidden = false;
+                this.restoreScrollPosition();
+            }
         }
     },
     scrollDown: true,
+    _savedScrollTop: 0,
+    _wasHidden: false,
+    _restoringScroll: false,
+    restoreScrollPosition(targetTop = this._savedScrollTop) {
+        if (typeof targetTop !== 'number' || this.clientHeight <= 0)
+            return;
+        this._wasHidden = false;
+        this._restoringScroll = true;
+        const apply = () => {
+            if (this.clientHeight <= 0)
+                return;
+            const prevBehavior = this.style.scrollBehavior;
+            this.style.scrollBehavior = 'auto';
+            this.scrollTop = targetTop;
+            this.style.scrollBehavior = prevBehavior;
+        };
+        apply();
+        requestAnimationFrame(() => {
+            apply();
+            this._restoringScroll = false;
+        });
+    },
     get ribbon(){
         return this;
     },
@@ -1325,8 +1360,14 @@ ODA({is: 'chat-day',
         throw new Error('карточка задачи не появилась в ленте');
     },
     _scrollRibbonDown(){
-        if (this.$pdp.ribbon?.scrollDown)
-            this.async(() => { this.$pdp.ribbon.scrollTop = 0; }, 0);
+        if (this.$pdp.ribbon?.scrollDown) {
+            this.async(() => {
+                if (this.$pdp.ribbon) {
+                    this.$pdp.ribbon._savedScrollTop = 0;
+                    this.$pdp.ribbon.scrollTop = 0;
+                }
+            }, 0);
+        }
     },
     _wrapLogRow(row) {
         if (!row)

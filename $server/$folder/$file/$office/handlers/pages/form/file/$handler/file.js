@@ -136,6 +136,7 @@ export function evaluateSheetFormula(rawFormula, cells = {}, depth = 0) {
 }
 
 export default {
+    imports: 'oda//button, oda//icon',
     $public: {
         allowSave: true,
     },
@@ -145,8 +146,11 @@ export default {
     attached() {
         this.async(() => {
             const ed = this.$?.('oda-office-editor');
-            if (ed)
+            if (ed) {
                 ed.hostView = this;
+                if (this.$item && ed._loadedItem !== this.$item)
+                    ed.loadOfficeItem?.(this.$item);
+            }
         }, 20);
     },
     async save() {
@@ -691,7 +695,7 @@ ODA({
                 <span class="fx-label">fx</span>
                 <input class="formula-input" type="text" placeholder="Значение или формула (=SUM(A1:A10), =A1*B1)..." :value="formulaInputValue" @input="onFormulaInput($event)" @keydown="onFormulaKeyDown($event)">
             </div>
-            <div class="sheet-scroller">
+            <div class="sheet-scroller" @scroll="onSheetScroll($event)">
                 <table class="xlsx-grid">
                     <thead>
                         <tr>
@@ -704,17 +708,17 @@ ODA({
                             <th class="row-num">{{$for.item.rowNum}}</th>
                             <td ~for="$for.item.cells"
                                 class="xlsx-cell"
-                                ~if="!$for.item.hiddenByMerge"
-                                :colspan="$for.item.colSpan"
-                                :rowspan="$for.item.rowSpan"
-                                :active="$for.item.isActive"
-                                :in-range="$for.item.inRange"
-                                ~style="$for.item.styleStr"
-                                @mousedown="onCellMouseDown($for.item, $event)"
-                                @mouseenter="onCellMouseEnter($for.item, $event)"
-                                @dblclick="startInlineEdit($for.item)">
-                                <input ~if="editingCoord === $for.item.coord" class="cell-inline-editor" type="text" :value="formulaInputValue" @input="onFormulaInput($event)" @blur="commitInlineEdit()" @keydown="onInlineEditorKeyDown($event)">
-                                <span ~if="editingCoord !== $for.item.coord">{{$for.item.display}}</span>
+                                :col-span="$for.$for.item.colSpan"
+                                :row-span="$for.$for.item.rowSpan"
+                                :active="$for.$for.item.isActive"
+                                :in-range="$for.$for.item.inRange"
+                                :title="$for.$for.item.display"
+                                ~style="$for.$for.item.styleStr"
+                                @mousedown="onCellMouseDown($for.$for.item, $event)"
+                                @mouseenter="onCellMouseEnter($for.$for.item, $event)"
+                                @dblclick="startInlineEdit($for.$for.item)">
+                                <input ~if="editingCoord === $for.$for.item.coord" class="cell-inline-editor" type="text" :value="formulaInputValue" @input="onFormulaInput($event)" @blur="commitInlineEdit()" @keydown="onInlineEditorKeyDown($event)">
+                                <span ~if="editingCoord !== $for.$for.item.coord">{{$for.$for.item.display}}</span>
                             </td>
                         </tr>
                     </tbody>
@@ -791,6 +795,7 @@ ODA({
     _isSelectingCells: false,
     editingCoord: '',
     formulaInputValue: '',
+    visibleRowLimit: 120,
     _gridTick: 0,
 
     // Состояние документа (.docx)
@@ -906,6 +911,13 @@ ODA({
     },
 
     attached() {
+        if (Object.prototype.hasOwnProperty.call(this, '$item')) {
+            const pre = this.$item;
+            delete this.$item;
+            this.$item = pre;
+        }
+        if (this.$item && this._loadedItem !== this.$item)
+            this.loadOfficeItem(this.$item);
         this._syncDocxDom();
     },
 
@@ -928,6 +940,7 @@ ODA({
     },
 
     async loadOfficeItem(rawItem) {
+        this._loadedItem = rawItem;
         let item = await Promise.resolve(rawItem);
         if (Array.isArray(item))
             item = item.at(-1) || null;
@@ -954,6 +967,7 @@ ODA({
                     ? data.sheets
                     : [{ name: 'Лист1', rowCount: 30, colCount: 12, colWidths: Array(12).fill(110), merges: [], cells: {} }];
                 this.activeSheetIdx = 0;
+                this.visibleRowLimit = 120;
                 this.setActiveCell(0, 0);
                 this._gridTick++;
             }
@@ -1092,7 +1106,8 @@ ODA({
         const sh = this.currentSheet;
         if (!sh)
             return [];
-        const rCount = sh.rowCount || 30;
+        const totalRows = sh.rowCount || 30;
+        const rCount = Math.min(totalRows, Math.max(30, this.visibleRowLimit || 120));
         const cCount = sh.colCount || 12;
         const cellsMap = sh.cells || {};
         const merges = sh.merges || [];
@@ -1100,11 +1115,14 @@ ODA({
         const mergeMap = new Map();
         const hiddenSet = new Set();
         for (const m of merges) {
-            const rs = m.e.r - m.s.r + 1;
+            if (m.s.r >= rCount)
+                continue;
+            const endR = Math.min(rCount - 1, m.e.r);
+            const rs = endR - m.s.r + 1;
             const cs = m.e.c - m.s.c + 1;
             if (rs > 1 || cs > 1) {
                 mergeMap.set(`${m.s.r}:${m.s.c}`, { rowSpan: rs, colSpan: cs });
-                for (let r = m.s.r; r <= m.e.r; r++) {
+                for (let r = m.s.r; r <= endR; r++) {
                     for (let c = m.s.c; c <= m.e.c; c++) {
                         if (r !== m.s.r || c !== m.s.c)
                             hiddenSet.add(`${r}:${c}`);
@@ -1123,6 +1141,8 @@ ODA({
             const rowCells = [];
             for (let c = 0; c < cCount; c++) {
                 const coord = `${r}:${c}`;
+                if (hiddenSet.has(coord))
+                    continue;
                 const cell = cellsMap[coord] || null;
                 const mInfo = mergeMap.get(coord);
                 const isActive = r === this.activeRow && c === this.activeCol;
@@ -1198,12 +1218,28 @@ ODA({
         };
     },
 
+    onSheetScroll(e) {
+        const el = e?.target;
+        const sh = this.currentSheet;
+        if (!el || !sh)
+            return;
+        const totalRows = sh.rowCount || 30;
+        if (this.visibleRowLimit >= totalRows)
+            return;
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 240) {
+            this.visibleRowLimit = Math.min(totalRows, (this.visibleRowLimit || 120) + 150);
+            this._gridTick++;
+        }
+    },
+
     setActiveCell(r, c, extendSelection = false) {
         const sh = this.currentSheet;
         const maxR = (sh?.rowCount || 30) - 1;
         const maxC = (sh?.colCount || 12) - 1;
         const nr = Math.max(0, Math.min(maxR, r));
         const nc = Math.max(0, Math.min(maxC, c));
+        if (nr + 10 > (this.visibleRowLimit || 120))
+            this.visibleRowLimit = Math.min(maxR + 1, nr + 60);
         this.activeRow = nr;
         this.activeCol = nc;
         if (!extendSelection) {

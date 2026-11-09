@@ -1427,6 +1427,12 @@ ODA({is: 'work-form',
         if (nav.view === 'objects' && nav.id) {
             nav.view = 'object';
         }
+        // Сохраним позицию прокрутки ленты чата до изменения полосы вкладок (formTabs)
+        const curRib = this.view_control?.$?.('form-chat')?.$?.('oda-chat')?.$?.('#ribbon');
+        if (curRib && curRib.clientHeight > 0 && !curRib._wasHidden) {
+            curRib._savedScrollTop = curRib.scrollTop;
+            curRib._wasHidden = true;
+        }
         // Зафиксируем текущую (начальную) вкладку перед открытием дочерней
         if (!opts?.skipEnsureCurrent && this.view)
             this._ensureCurrentTab(this.view);
@@ -1467,6 +1473,13 @@ ODA({is: 'work-form',
     async activateTab(tab, explicitNav = null) {
         if (!tab || !tab.$item)
             return;
+        if (this.activeTabKey && tab.key !== this.activeTabKey && this.view_control && this.view_control !== tab.control) {
+            const curRib = this.view_control?.$?.('form-chat')?.$?.('oda-chat')?.$?.('#ribbon');
+            if (curRib && curRib.clientHeight > 0 && !curRib._wasHidden) {
+                curRib._savedScrollTop = curRib.scrollTop;
+                curRib._wasHidden = true;
+            }
+        }
         this.activeTabKey = tab.key;
         this.activeItem = tab.$item;
         if (this.hasClassTree) {
@@ -1629,11 +1642,24 @@ ODA({is: 'work-form',
 
         const showOnlyMainChild = (keepEl) => {
             for (const ch of [...this.children]) {
-                if (ch.getAttribute?.('slot') === 'main') {
-                    const isActive = ch === keepEl;
-                    ch.hidden = !isActive;
-                    ch.style.display = isActive ? '' : 'none';
+                if (ch.getAttribute?.('slot') === 'main' && ch !== keepEl) {
+                    if (!ch.hidden && ch.style.display !== 'none') {
+                        const rib = ch.$?.('form-chat')?.$?.('oda-chat')?.$?.('#ribbon');
+                        if (rib && rib.clientHeight > 0 && !rib._wasHidden) {
+                            rib._savedScrollTop = rib.scrollTop;
+                            rib._wasHidden = true;
+                        }
+                    }
+                    ch.hidden = true;
+                    ch.style.display = 'none';
                 }
+            }
+            if (keepEl && keepEl.getAttribute?.('slot') === 'main') {
+                keepEl.hidden = false;
+                keepEl.style.display = '';
+                const rib = keepEl.$?.('form-chat')?.$?.('oda-chat')?.$?.('#ribbon');
+                if (rib && typeof rib.restoreScrollPosition === 'function')
+                    rib.restoreScrollPosition();
             }
         };
 

@@ -161,7 +161,7 @@ export function parseSpreadsheet(buf, ext = 'xlsx') {
     const sheets = wb.SheetNames.map((name, sheetIdx) => {
         const ws = wb.Sheets[name] || {};
         const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
-        const maxR = Math.min(500, Math.max(29, (ref.e?.r || 0) + 8));
+        const maxR = Math.min(2000, Math.max(29, (ref.e?.r || 0) + 8));
         const maxC = Math.min(52, Math.max(11, (ref.e?.c || 0) + 4));
 
         const colWidths = [];
@@ -172,10 +172,12 @@ export function parseSpreadsheet(buf, ext = 'xlsx') {
             colWidths.push(Math.max(50, Math.min(500, px || 110)));
         }
 
-        const merges = (ws['!merges'] || []).map(m => ({
-            s: { r: m.s.r, c: m.s.c },
-            e: { r: m.e.r, c: m.e.c },
-        }));
+        const merges = (ws['!merges'] || [])
+            .filter(m => m?.s && m?.e && m.s.r <= maxR && m.s.c <= maxC)
+            .map(m => ({
+                s: { r: m.s.r, c: m.s.c },
+                e: { r: Math.min(maxR, m.e.r), c: Math.min(maxC, m.e.c) },
+            }));
 
         const cells = {};
         const savedSheetStyles = savedMeta?.sheets?.[sheetIdx]?.styles || {};
@@ -187,13 +189,17 @@ export function parseSpreadsheet(buf, ext = 'xlsx') {
             if (!cell)
                 continue;
             const pos = XLSX.utils.decode_cell(key);
-            if (pos.r > 500 || pos.c > 52)
+            if (pos.r > maxR || pos.c > maxC)
                 continue;
             const coord = `${pos.r}:${pos.c}`;
             const st = savedSheetStyles[coord] || {};
+            const rawV = (cell.t === 'e' && !cell.f) ? '' : (cell.v ?? '');
+            const hasStyle = Boolean(st.bold || st.italic || st.align || st.color || st.bg || st.numFmt);
+            if (rawV === '' && !cell.f && !hasStyle)
+                continue;
             const entry = {
-                v: cell.v ?? '',
-                t: cell.t || (typeof cell.v === 'number' ? 'n' : 's'),
+                v: rawV,
+                t: cell.t === 'e' ? 's' : (cell.t || (typeof rawV === 'number' ? 'n' : 's')),
             };
             if (cell.f)
                 entry.f = String(cell.f);

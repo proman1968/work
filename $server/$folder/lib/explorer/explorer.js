@@ -584,6 +584,25 @@ export default {
         window.addEventListener('hashchange', ()=>{
             this.load_page();
         });
+        if (!this._swMsgHooked && typeof navigator !== 'undefined' && navigator.serviceWorker?.addEventListener) {
+            this._swMsgHooked = true;
+            navigator.serviceWorker.addEventListener('message', async (ev) => {
+                const msg = ev?.data;
+                if (!msg || msg.type !== 'work:open-task' || !msg.path)
+                    return;
+                try {
+                    const clean = decodeURI(String(msg.path)).replace(/^https?:\/\/[^/]+/i, '').replace(/\/~\/handlers\/.*$/, '').replace(/\/index\.html$/, '');
+                    if (!clean)
+                        return;
+                    const item = await WORK.get_item(clean);
+                    if (item && typeof window.execute === 'function')
+                        await window.execute(item);
+                }
+                catch (err) {
+                    console.warn('[explorer] work:open-task:', err);
+                }
+            });
+        }
         window.close = (win) => {
             const iframe = this.$$('iframe').find(f => f.contentWindow === win);
             if (iframe) {

@@ -479,6 +479,8 @@ export default {
         if (this._sticking)
             return;
         const el = e.target;
+        if (!el || el.clientHeight <= 0)
+            return;
         const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
         const movedUp = this._lastScrollTop != null && el.scrollTop < this._lastScrollTop - 4;
         this._lastScrollTop = el.scrollTop;

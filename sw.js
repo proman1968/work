@@ -97,18 +97,24 @@
             }
             if (pushHandler)
                 pushHandler.remove();
-            // уведомление с адресом (задача): вкладка с ним или открытый проводник WORK — в фокус, иначе открыть
+            // уведомление с адресом (задача): вкладка с ним или открытый проводник WORK — в фокус и открыть задачу, иначе открыть
             const url = event.notification.data?.url;
-            if (url)
+            const taskPath = event.notification.data?.task || '';
+            if (url || taskPath)
                 event.waitUntil((async () => {
-                    const target = new URL(url, self.location.origin).href;
+                    const target = new URL(url || taskPath, self.location.origin).href;
                     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
                     const open = wins.find(c => c.url === target)
                         || wins.find(c => {
                             try { return new URL(c.url).origin === self.location.origin; } catch { return false; }
                         });
-                    if (open)
+                    if (open) {
+                        try {
+                            open.postMessage?.({ type: 'work:open-task', path: taskPath || url });
+                        }
+                        catch { /* ignore */ }
                         return open.focus?.();
+                    }
                     return self.clients.openWindow(target);
                 })());
         });

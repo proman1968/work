@@ -275,12 +275,8 @@ export async function recover(file, session) {
         return { status: 'already-running' };
     if (body.status === 'waiting' && body.waiting) {
         const call = findCall(body.items, body.waiting.call)?.entry;
-        if (call) {
-            // 9.7: подтверждение после рестарта — тоже с кнопками в уведомлении
-            pushNotify(s, session, 'waiting', call.args?.question || call.reason || call.name,
-                { waitingKind: body.waiting.kind, call: body.waiting.call, reason: call.reason || call.name || '' });
+        if (call)
             return { status: 'waiting' };
-        }
         body.status = 'needs_review';
         await save(s, session);
         pushNotify(s, session, 'review', 'Не найден ожидающий вызов после перезапуска. Откройте задачу.');
