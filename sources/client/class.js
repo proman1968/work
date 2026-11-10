@@ -12,6 +12,8 @@ export class $class extends $folder{
                         return 'odant:module';
                     if (this.type === '$domain' && this.id === 'MODULES')
                         return 'odant:folder';
+                    if (this.type === '$structure')
+                        return this.DATA?.icon || 'odant:structure';
                     return this.DATA?.icon || 'bootstrap:database';
                 },
                 set(n){

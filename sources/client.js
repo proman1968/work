@@ -592,14 +592,17 @@ class WebSocketEvents {
                     // версия — до fire: слушатели changed делают load(), а его URL (и дедуп WORK.fetch) включает версию;
                     // старый порядок склеивал reload с висящим прежним запросом и отдавал устаревший JSON
                     item.increaseVersion();
-                    // роли пользователей приходят в данных элемента (roleIds): подтянуть свежие и сбросить списки
+                    // роли пользователей и флаги безопасности (roleIds, hasSecurity, icon, label) приходят в info:
+                    // подтянуть свежие данные и уведомить дерево
                     if (item.DATA?.roleIds && !(item instanceof CORE.$user) && !WORK._roleRefresh.has(item)) {
                         WORK._roleRefresh.add(item);
                         item.fetch('info').then(() => {
-                            for (const key of ['admins', 'bosses', 'users', 'guests']) {
+                            for (const key of ['admins', 'bosses', 'users', 'guests', 'icon', 'label']) {
                                 delete item[key];
                                 Reactor.invalidate(item, key);
                             }
+                            item.increaseVersion();
+                            item.fire('changed', data);
                         }).catch(() => { }).finally(() => WORK._roleRefresh.delete(item));
                     }
                     item.fire('changed', data);

@@ -167,6 +167,52 @@ export function parseModuleList(raw) {
     return [...new Set(list.map(x => safeNodeName(String(x ?? '').trim())).filter(Boolean))];
 }
 
+/** Подобрать подходящую по смыслу иконку для подразделения ($structure) по его названию или id. */
+export function inferStructureIcon(label = '', id = '') {
+    const s = `${label || ''} ${id || ''}`.toLowerCase();
+    if (/(^|[^a-zа-яё0-9])(ai|ml|llm|ии)([^a-zа-яё0-9]|$)|нейро|искусствен|интеллект|робот/i.test(s))
+        return 'carbon:machine-learning-model';
+    if (/(^|[^a-zа-яё0-9])(rnd|r&d|lab|research\w*)([^a-zа-яё0-9]|$)|исслед|наук|науч|лабор/i.test(s))
+        return 'carbon:chemistry';
+    if (/(^|[^a-zа-яё0-9])(fin\w*|acc\w*)([^a-zа-яё0-9]|$)|бухгалт|финанс|казнач|расчет|расчёт|банк/i.test(s))
+        return 'icons:account-balance';
+    if (/(^|[^a-zа-яё0-9])(warehouse\w*|stock\w*|store\w*)([^a-zа-яё0-9]|$)|склад|хранен|резервуар/i.test(s))
+        return 'icons:store';
+    if (/(^|[^a-zа-яё0-9])(sale\w*|commerc\w*)([^a-zа-яё0-9]|$)|продаж|сбыт|коммерч|клиент/i.test(s))
+        return 'icons:shopping-cart';
+    if (/(^|[^a-zа-яё0-9])(purchas\w*|procur\w*|buy\w*)([^a-zа-яё0-9]|$)|закуп|снабж/i.test(s))
+        return 'carbon:shopping-bag';
+    if (/(^|[^a-zа-яё0-9])(logist\w*|transp\w*|deliver\w*)([^a-zа-яё0-9]|$)|логист|трансп|достав|перевоз/i.test(s))
+        return 'lineawesome:shuttle-van-solid';
+    if (/(^|[^a-zа-яё0-9])(hr|person\w*|staff\w*)([^a-zа-яё0-9]|$)|кадр|персонал|рекрут/i.test(s))
+        return 'icons:assignment-ind';
+    if (/(^|[^a-zа-яё0-9])(legal\w*|law\w*)([^a-zа-яё0-9]|$)|юрид|юрист|правов|договор/i.test(s))
+        return 'icons:gavel';
+    if (/(^|[^a-zа-яё0-9])(it|dev\w*|soft\w*|tech\w*)([^a-zа-яё0-9]|$)|разработ|программ|информац|технолог|автоматиз/i.test(s))
+        return 'icons:code';
+    if (/(^|[^a-zа-яё0-9])(prod\w*|manufact\w*|factory)([^a-zа-яё0-9]|$)|производств|цех|завод|фасов/i.test(s))
+        return 'carbon:industry';
+    if (/(^|[^a-zа-яё0-9])(market\w*|pr|advert\w*)([^a-zа-яё0-9]|$)|маркетинг|реклам|продвиж/i.test(s))
+        return 'carbon:bullhorn';
+    if (/(^|[^a-zа-яё0-9])(sec\w*|guard\w*)([^a-zа-яё0-9]|$)|безопасн|охран/i.test(s))
+        return 'icons:security';
+    return 'odant:structure';
+}
+
+/** Вставить icon в export default, если поля ещё нет. */
+export function ensureIconField(post, icon) {
+    const raw = String(post || '');
+    const clean = String(icon || '').trim();
+    if (!clean || /\bicon\s*:/.test(raw))
+        return raw;
+    const m = raw.match(/export\s+default\s*\{/);
+    if (m)
+        return raw.slice(0, m.index + m[0].length) + '\n    icon: ' + JSON.stringify(clean) + ',' + raw.slice(m.index + m[0].length);
+    if (/^\s*\{/.test(raw))
+        return raw.replace(/^\s*\{/, '{ icon: ' + JSON.stringify(clean) + ', ');
+    return raw;
+}
+
 /** Вставить model в export default, если поля ещё нет. */
 export function ensureModelField(post, tag) {
     const raw = String(post || '');

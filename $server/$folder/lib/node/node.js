@@ -93,7 +93,7 @@ export default {
                 </div>
             </div>
             <span class="obj-count" ~if="objectCount">{{objectCount}}</span>
-            <span class="size" class="size" ~if="showSize" ~show="$item?.size">{{$item?.size}}</span>
+            <span class="size" ~if="showSize && !($item instanceof CORE.$class) && !isPlace" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>
         </div>
     `,

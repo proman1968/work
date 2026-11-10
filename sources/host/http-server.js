@@ -396,9 +396,29 @@ export function createRequestHandler() {
 
         // подписка сокета на изменения пути (reset → {path}) — после успешного ответа (доступ проверен);
         // статика UI (модули, стили, иконки) — не данные
-        const subscribe = () => {
+        const subscribe = (res) => {
+            const events = session.sockets?.[request.headers['x-work-wsid']]?.events;
+            if (!events)
+                return;
             if (!STATIC_PATH.test(path))
-                session.sockets?.[request.headers['x-work-wsid']]?.events?.add(path);
+                events.add(path);
+            const walk = (node, depth = 0) => {
+                if (!node || typeof node !== 'object' || depth > 5)
+                    return;
+                if (Array.isArray(node)) {
+                    for (const el of node)
+                        walk(el, depth);
+                    return;
+                }
+                if (typeof node.path === 'string' && node.path && !STATIC_PATH.test(node.path) && !node.logsFilePath)
+                    events.add(node.path);
+                if (Array.isArray(node.items)) {
+                    for (const ch of node.items)
+                        walk(ch, depth + 1);
+                }
+            };
+            if (res && (method === 'info' || !method || path.endsWith('/@items')))
+                walk(res, 0);
         };
         params.session = session;
         if (item?.constructor === CORE.$file && ['LOCK', 'UNLOCK', 'PROPFIND', 'PUT'].includes(String(request.method || '').toUpperCase())) {
@@ -592,7 +612,7 @@ export function createRequestHandler() {
             throw new Error('Нет доступа');
 
         const header = { "Content-Type": "application/json", "X-Content-Type-Options": "nosniff" };
-        subscribe();
+        subscribe(result);
         // if (method === 'load_icon') {
         //     header['Content-Type'] = params.ext === 'png' ? 'image/png' : 'image/svg+xml';
         // }

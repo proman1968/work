@@ -340,7 +340,13 @@ export class $folder extends $item {
             // и дереву не нужен отдельный @items ради стрелки раскрытия
             if (key === 'items' && this.type !== '$file' && !String(this.short).includes('~'))
                 return WORK.fetch(location.origin + (this.short || '/'), 'info', { ...params, deep: 1 })
-                    .then(r => Array.isArray(r?.items) ? r.items : []);
+                    .then(r => {
+                        if (r && typeof r === 'object' && !Array.isArray(r)) {
+                            const { items: _kids, ...meta } = r;
+                            Object.assign(this.DATA ??= {}, meta);
+                        }
+                        return Array.isArray(r?.items) ? r.items : [];
+                    });
             let path;
             switch (key) {
                 case 'entries':

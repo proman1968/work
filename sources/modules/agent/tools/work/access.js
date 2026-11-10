@@ -61,36 +61,148 @@ export const assign = {
         risk: 'write',
         outbound: true, // смена прав доступа после чтения внешнего содержимого — только с подтверждением (taint.js)
         target: args => absPath(String(args?.path || '') + '/class.js', null),
-        description: 'Назначить или снять пользователей (или узлы сети) на роль класса: меняет только #security собственного class.js. Роль — объявленная в точке (ADMIN, BOSS, USER, GUEST, прикладные). Требует прав администратора.',
+        description: 'Назначить или снять пользователей на роль точки (BOSS, USER), либо создать/изменить рабочее место (должность) в #security.ROLES подразделения ($structure / $base): меняет только #security собственного class.js. Для создания или настройки рабочего места укажи place (id или путь места, например "researcher" или "head/accountant") и label (например "Исследователь"), при необходимости add/remove сотрудников и links. Требует прав BOSS.',
         parameters: {
             type: 'object',
             properties: {
-                path: { type: 'string', description: 'WORK-путь класса' },
-                role: { type: 'string', description: 'Роль (USER, BOSS, CUSTOMER…)' },
-                add: { type: 'array', items: { type: 'string' }, description: 'Кого назначить: uid, ФИО или id узла сети' },
+                path: { type: 'string', description: 'WORK-путь класса (подразделения $structure или организации $base)' },
+                role: { type: 'string', description: 'Системная роль (BOSS, USER) или id рабочего места' },
+                place: { type: 'string', description: 'ID или путь рабочего места в #security.ROLES подразделения (например "researcher" или "head/accountant")' },
+                label: { type: 'string', description: 'Отображаемое название рабочего места по-русски (например "Исследователь", "Главный бухгалтер")' },
+                icon: { type: 'string', description: 'Иконка рабочего места (необязательно)' },
+                links: { type: 'array', items: { type: 'object' }, description: 'Привязанные учётные классы рабочего места: [{ id: "/ORGANIZATIONS/.../CATALOGS/...", access: "read"|"write", scope?: "own"|"place"|"unit"|"all" }]' },
+                add: { type: 'array', items: { type: 'string' }, description: 'Кого назначить: uid, ФИО, псевдо-субъекты USERS / GUESTS или id узла сети' },
                 remove: { type: 'array', items: { type: 'string' }, description: 'Кого снять' },
             },
-            required: ['path', 'role'],
+            required: ['path'],
         },
         async run(args, ctx) {
             const cls = await mustItem(args.path, ctx);
             if (!(cls instanceof FS.$class))
                 throw new Error('assign: ' + absPath(args.path, ctx) + ' — не класс');
-            const declared = await cls.declared_roles;
-            const role = declared[String(args.role || '').toUpperCase()];
-            if (!role)
-                throw new Error('роль «' + args.role + '» не объявлена в точке; есть: ' + Object.keys(declared).join(', '));
+            await cls.init;
             const ids = async list => {
                 const out = [];
                 for (const x of list || []) {
                     const s = String(x).trim();
-                    if (/^[0-9A-F]{15}$/i.test(s))
+                    if (s.toUpperCase() === 'USERS' || s.toUpperCase() === 'GUESTS')
+                        out.push(s.toUpperCase());
+                    else if (/^[0-9A-F]{15}$/i.test(s))
                         out.push(s.toUpperCase()); // узел сети
                     else
                         out.push(...(await resolvePeople([s])).map(p => p.id));
                 }
                 return out;
             };
+            const declared = await cls.declared_roles;
+            const roleKey = String(args.role || '').trim().toUpperCase();
+            const declaredRole = (!args.place && !args.label && !Array.isArray(args.links) && roleKey) ? declared[roleKey] : null;
+            const isStruct = typeof cls._isStructure === 'function' ? await cls._isStructure() : (cls.type === '$structure' || cls.type === '$base');
+
+            // Проверяем, относится ли вызов к рабочему месту (#security.ROLES) в подразделении ($structure / $base)
+            const hasExistingPlace = (rolesList, targetKey) => {
+                if (!Array.isArray(rolesList) || !targetKey)
+                    return false;
+                const steps = String(targetKey).split('/').filter(Boolean);
+                let curList = rolesList;
+                for (const st of steps) {
+                    const found = (curList || []).find(r => r && (String(r.id).toLowerCase() === st.toLowerCase() || String(r.label).toLowerCase() === st.toLowerCase()));
+                    if (!found)
+                        return false;
+                    curList = found.ROLES;
+                }
+                return true;
+            };
+            const isWorkplaceCall = Boolean(
+                args.place
+                || (isStruct && (args.label || Array.isArray(args.links)))
+                || (isStruct && !declaredRole && args.role && hasExistingPlace(cls.DATA?.['#security']?.ROLES, args.role))
+            );
+
+            if (isWorkplaceCall) {
+                if (!isStruct)
+                    throw new Error('assign: рабочие места (#security.ROLES) поддерживаются только в подразделениях ($structure) и организациях ($base)');
+                const rawTrail = String(args.place || args.role || args.label || '').trim();
+                if (!rawTrail)
+                    throw new Error('assign: укажи place (id рабочего места) и/или label (название рабочего места)');
+                const own = await cls.meta_file;
+                const text = own ? await own.load({ encoding: 'utf-8', session: ctx?.session }) : '';
+                const data = text ? (await FS.$class.importScript(String(text))) || {} : {};
+                const copy = { ...data };
+                const sec = { ...(copy['#security'] || {}) };
+                sec.ROLES = Array.isArray(sec.ROLES) ? JSON.parse(JSON.stringify(sec.ROLES)) : [];
+
+                const steps = rawTrail.split('/').map(s => s.trim()).filter(Boolean);
+                let curList = sec.ROLES;
+                let targetPlace = null;
+                const trailIds = [];
+                for (let i = 0; i < steps.length; i++) {
+                    const st = steps[i];
+                    const isLast = i === steps.length - 1;
+                    let found = curList.find(r => r && (String(r.id).toLowerCase() === st.toLowerCase() || String(r.label).toLowerCase() === st.toLowerCase()));
+                    if (!found) {
+                        const normId = st.toLowerCase().replace(/[^a-zа-яё0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || ('place_' + Date.now());
+                        found = {
+                            id: normId,
+                            label: (isLast && args.label) ? String(args.label).trim() : st,
+                            USERS: [],
+                            LINKS: [],
+                        };
+                        curList.push(found);
+                    }
+                    else if (isLast && args.label) {
+                        found.label = String(args.label).trim();
+                    }
+                    if (isLast && args.icon)
+                        found.icon = String(args.icon).trim();
+                    trailIds.push(found.id);
+                    targetPlace = found;
+                    if (!isLast) {
+                        found.ROLES = Array.isArray(found.ROLES) ? found.ROLES : [];
+                        curList = found.ROLES;
+                    }
+                }
+                const add = await ids(args.add), remove = new Set(await ids(args.remove));
+                if (add.length || remove.size) {
+                    const uSet = new Set((Array.isArray(targetPlace.USERS) ? targetPlace.USERS : []).filter(u => !remove.has(u)));
+                    for (const u of add)
+                        uSet.add(u);
+                    targetPlace.USERS = [...uSet];
+                }
+                if (Array.isArray(args.links)) {
+                    const curLinks = Array.isArray(targetPlace.LINKS) ? [...targetPlace.LINKS] : [];
+                    for (const l of args.links) {
+                        if (!l?.id)
+                            continue;
+                        const cleanLink = {
+                            id: String(l.id).trim(),
+                            access: l.access === 'write' ? 'write' : 'read',
+                            ...(l.scope ? { scope: String(l.scope).trim() } : {}),
+                        };
+                        const idx = curLinks.findIndex(x => x?.id === cleanLink.id);
+                        if (idx >= 0)
+                            curLinks[idx] = cleanLink;
+                        else
+                            curLinks.push(cleanLink);
+                    }
+                    targetPlace.LINKS = curLinks;
+                }
+                copy['#security'] = sec;
+                const trailStr = trailIds.join('/');
+                await callAs(cls.meta_folder, 'save_file', {
+                    filename: 'class.js',
+                    post: 'export default ' + FS.$class.toScript(copy),
+                    message: 'рабочее место ' + trailStr + ' («' + (targetPlace.label || targetPlace.id) + '»)',
+                }, ctx, 'BOSS');
+                cls.reset();
+                return 'рабочее место ' + trailStr + ' («' + (targetPlace.label || targetPlace.id) + '») в ' + cls.path + ' (#security.ROLES)'
+                    + (targetPlace.USERS?.length ? ', сотрудники: ' + targetPlace.USERS.join(', ') : '');
+            }
+
+            const role = declaredRole || declared[roleKey];
+            if (!role)
+                throw new Error('роль «' + args.role + '» не объявлена в точке; есть: ' + Object.keys(declared).join(', ')
+                    + (isStruct ? ' (для создания рабочего места укажи place и label)' : ''));
             const add = await ids(args.add), remove = new Set(await ids(args.remove));
             if (!add.length && !remove.size)
                 throw new Error('assign: нужен add или remove');

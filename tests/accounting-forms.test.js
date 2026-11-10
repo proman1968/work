@@ -1379,6 +1379,11 @@ describe('архитектура представлений формы (VIEW п�
         assert.ok(!formSrc.includes('onObjectSave()'), 'дублирующая кнопка Save внизу формы объекта убрана (живёт сверху в шапке)');
         assert.ok(formSrc.includes('~if="allowSave"'), 'кнопка Save в шапке контролирует allowSave активного представления');
         assert.ok(formSrc.includes('vc !== this.view_control'), 'syncFromView игнорирует фоновые вызовы от неактивных вкладок');
+        assert.ok(formSrc.includes('<item-node-explorer no-flex :$item="rootItem"></item-node-explorer>'), 'шапка формы привязана к корневому классу rootItem, а не к внутреннему выбранному классу');
+        assert.ok(formSrc.includes('allowSearch: false') && formSrc.includes('showSize: false') && formSrc.includes('hideRoots: 1'), 'дерево классов формы (#formClassTree): без поиска, без размеров файлов и с всегда раскрытым корнем (hideRoots: 1)');
+        assert.ok(!formSrc.includes('exp.syncTreeToPath(curItem'), 'выбор класса внутри формы не меняет фокус главного навигационного дерева');
+        const nodeSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/lib/node/node.js'), 'utf-8');
+        assert.ok(nodeSrc.includes('!($item instanceof CORE.$class)'), 'в дереве у классов не отображается размер папки/файла (.size), только objectCount');
         assert.deepEqual(objects.getFocusedServices(), [], 'в табличном представлении form/objects кнопки объекта внизу не застревают');
 
         // Проводник: корень сервера виден администратору (hideTops: 0), вкладки Организации и Модули убраны из левой панели,

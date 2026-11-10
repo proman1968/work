@@ -199,7 +199,7 @@ ODA({is: 'work-form',
         <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
             <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px; margin: 4px;">
                 <div :flex="ODA.states?.mobileMode"></div>
-                <item-node-explorer no-flex :$item="currentItem"></item-node-explorer>
+                <item-node-explorer no-flex :$item="rootItem"></item-node-explorer>
                 <div flex></div>
                 <oda-button id="consultantBtn" shadow icon="icons:help" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
@@ -775,6 +775,9 @@ ODA({is: 'work-form',
      * автоматически через Reactor, без ручных вызовов и render().
      */
     activeItem: null,
+    get rootItem() {
+        return this._rootItem || this.$item;
+    },
     get currentItem() {
         return this.activeItem || this.$item;
     },
@@ -919,13 +922,13 @@ ODA({is: 'work-form',
                 slot: 'left-panel',
                 id: 'formClassTree',
                 order: 0,
-                allowSearch: true,
+                allowSearch: false,
                 onlyClasses: true,
                 hideFiles: true,
                 hideSystem: true,
-                showSize: true,
+                showSize: false,
                 allowFocus: true,
-                hideRoots: 0,
+                hideRoots: 1,
                 hideTops: 0,
                 $item: root,
                 icon: this.rootItemIcon,
@@ -935,6 +938,7 @@ ODA({is: 'work-form',
             tree.setAttribute('slot', 'left-panel');
             tree.setAttribute('id', 'formClassTree');
             tree.setAttribute('order', '0');
+            tree.setAttribute('hide-roots', '1');
             tree.setAttribute('icon', this.rootItemIcon);
             tree.setAttribute('label', this.rootItemLabel);
             tree.style.height = '0';
@@ -943,6 +947,9 @@ ODA({is: 'work-form',
         }
         else {
             tree.$item = root;
+            tree.allowSearch = false;
+            tree.showSize = false;
+            tree.hideRoots = 1;
             tree.icon = this.rootItemIcon;
             tree.label = this.rootItemLabel;
             tree.execute = (item) => this.onClassTreeSelect(item);
@@ -1742,9 +1749,6 @@ ODA({is: 'work-form',
                 const ctx = this.buildConsultantContext();
                 cons.activeFormContext = ctx;
                 cons.activeFormSummary = ctx;
-            }
-            if (exp && typeof exp.syncTreeToPath === 'function' && curItem) {
-                exp.syncTreeToPath(curItem.short || curItem.path || '');
             }
         } catch { /* ignore */ }
     },

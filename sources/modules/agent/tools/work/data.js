@@ -108,14 +108,15 @@ export const createClass = {
         name: 'create_class',
         risk: 'write',
         target: args => absPath(String(args?.parent || '') + '/' + String(args?.id || ''), null),
-        description: 'Создать новый класс (узел структуры) внутри класса parent. Для обычного $class имя id — ЗАГЛАВНЫМИ. type — типизатор ($class, $structure, $base, …: смотри контракт места через read). class_js — тело class.js (export default {...}).',
+        description: 'Создать новый класс (подразделение $structure, справочник $catalog, операцию $operation, счёт $account и т.д.) внутри класса parent. Для обычного $class имя id — ЗАГЛАВНЫМИ; для подразделений $structure id — латиницей snake_case (finances, ai_research). Обязательно передавай подходящую по смыслу иконку icon. ВНИМАНИЕ: НЕ используй create_class для создания рабочих мест (должностей, например «Главный бухгалтер», «Исследователь») — рабочие места хранятся в "#security".ROLES подразделения и создаются через инструмент assign (параметры place и label).',
         parameters: {
             type: 'object',
             properties: {
                 parent: { type: 'string', description: 'WORK-путь родительского класса' },
-                id: { type: 'string', description: 'Имя класса' },
-                type: { type: 'string', description: 'Типизатор, по умолчанию $class' },
-                label: { type: 'string', description: 'Отображаемое имя' },
+                id: { type: 'string', description: 'Имя класса (для $structure — латиницей snake_case)' },
+                type: { type: 'string', description: 'Типизатор ($structure, $base, $catalog, $operation, $account, $struct, $virtual…)' },
+                label: { type: 'string', description: 'Отображаемое имя по-русски' },
+                icon: { type: 'string', description: 'Подходящая по смыслу иконка из наборов ODA (например carbon:machine-learning-model, carbon:chemistry, icons:account-balance, icons:shopping-cart, icons:store, icons:assignment-ind, lineawesome:shuttle-van-solid, icons:code)' },
                 class_js: { type: 'string', description: 'Содержимое class.js (необязательно)' },
             },
             required: ['parent', 'id'],
@@ -129,6 +130,8 @@ export const createClass = {
                 p.type = args.type;
             if (args.label)
                 p.label = args.label;
+            if (args.icon)
+                p.icon = args.icon;
             if (args.class_js)
                 p.post = args.class_js;
             await callAs(parent, 'create', p, ctx);

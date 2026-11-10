@@ -39,7 +39,7 @@ before(async () => {
     prev = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-assist-'));
     write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${ADMIN}'] } }`);
-    for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
+    for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file', '$server/$folder/$class/$structure', '$server/$folder/$class/$structure/$base'])
         write(p + '/class.js', 'export default {}');
     // типы файлов данных проекта: лента (.logs) — запись дня, а не обычный файл
     for (const rel of ['$server/$folder/$file/$data/class.js', '$server/$folder/$file/$logs/class.js'])
@@ -50,6 +50,8 @@ before(async () => {
             write('$server/$folder/$class/ai/' + dir + '/' + f, fs.readFileSync(path.join(ROOT, '$server/$folder/$class/ai', dir, f), 'utf-8'));
     for (const [uid, label] of [[ADMIN, 'Админ Главный'], [BOSS, 'Сидоров Босс'], [IVAN, 'Иванов Иван'], [PETR, 'Иванова Пётр']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
+    write('ORGANIZATIONS/$domain/class.js', `export default { label: 'Организации' }`);
+    write('ORGANIZATIONS/TestOrg/$base/class.js', `export default { label: 'ТестОрг', '#security': { BOSS: ['${BOSS}'] } }`);
     write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['${BOSS}'], USER: ['${IVAN}'] }, METADATA: { FIELDS: [
         { id: 'name', required: true }, { id: 'time', type: 'timestamp', required: true },
         { id: 'code', label: 'Код', required: true }, { id: 'price', label: 'Цена', type: 'Number' },
@@ -178,6 +180,26 @@ describe('отчёты и права', () => {
         assert.deepEqual(await org.roles({ session: { uid: PETR } }), ['USER']);
         await assert.rejects(tool('assign').run({ path: '/ORG', role: 'NOPE', add: [IVAN] }, as(ADMIN)), /не объявлена/);
         await assert.rejects(tool('assign').run({ path: '/ORG', role: 'BOSS', add: ['25552181BAA7A14'] }, as(ADMIN)), /узлу/);
+
+        // Создание подразделения ($structure) с подбором подходящей иконки и создание рабочего места в #security.ROLES через assign
+        await tool('create_class').run({ parent: '/ORGANIZATIONS/TestOrg', id: 'ai_research', type: '$structure', label: 'Исследование ИИ' }, as(BOSS));
+        const dept = await WORK.get_item('/ORGANIZATIONS/TestOrg/ai_research');
+        await dept.init;
+        assert.equal(dept.DATA?.icon, 'carbon:machine-learning-model', 'для подразделения ИИ автоматически подобрана подходящая иконка');
+        const placeRes = await tool('assign').run({
+            path: '/ORGANIZATIONS/TestOrg/ai_research',
+            place: 'researcher',
+            label: 'Исследователь',
+            add: ['Иванова Пётр'],
+        }, as(BOSS));
+        assert.match(placeRes, /рабочее место researcher \(«Исследователь»\)/);
+        const deptAfter = await WORK.get_item('/ORGANIZATIONS/TestOrg/ai_research');
+        await deptAfter.init;
+        assert.equal(deptAfter.DATA?.['#security']?.ROLES?.[0]?.id, 'researcher');
+        assert.equal(deptAfter.DATA?.['#security']?.ROLES?.[0]?.label, 'Исследователь');
+        assert.deepEqual(deptAfter.DATA?.['#security']?.ROLES?.[0]?.USERS, [PETR]);
+        const lsOut = await tool('ls').run({ path: '/ORGANIZATIONS/TestOrg', depth: 2 }, as(BOSS));
+        assert.match(lsOut, /#place:researcher «Исследователь»/, 'ls показывает рабочие места подразделения из #security.ROLES');
     });
 });
 

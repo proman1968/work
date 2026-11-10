@@ -392,12 +392,24 @@ export default {
         return bm;
     },
     /**
-     * Раскрыть дерево и сфокусироваться на элементе, от которого открыта форма.
+     * Раскрыть дерево и сфокусироваться на корневом элементе открытой формы.
      */
     async syncTreeToPath(targetPath) {
         if (!targetPath)
             return;
-        const clean = String(targetPath).replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '') || '/';
+        let clean = String(targetPath).replace(/\/~\/handlers\/.*$/, '').replace(/\/+$/, '') || '/';
+        if (clean.includes('#place:') && clean.includes('->')) {
+            const placePrefix = clean.slice(0, clean.indexOf('->') + 2);
+            const linkTarget = clean.slice(clean.lastIndexOf('->') + 2);
+            const rootTarget = this._resolveDataRootPath(linkTarget);
+            if (rootTarget)
+                clean = placePrefix + rootTarget;
+        }
+        else if (!clean.includes('#place:')) {
+            const rootTarget = this._resolveDataRootPath(clean);
+            if (rootTarget)
+                clean = rootTarget;
+        }
         const trees = (this.$$('item-tree') || []).filter(t => !t.hidden);
         let matchedTree = null;
         for (const t of trees) {
@@ -564,8 +576,14 @@ export default {
             const fullUrl = encodeURI(window.location.origin + openShort + ($item.type !== '$handler' ? '/~/handlers/pages/' + ($item.page || 'form') : '') + '/index.html');
             const bm = this._upsertBookmarkForUrl(fullUrl, openShort === short ? $item : null);
             if (openShort !== short && bm) {
-                const itemStateKey = ($item && ('_stateKey' in Object($item)) && $item._stateKey) ? String($item._stateKey) : short;
-                bm.stateKey = itemStateKey;
+                const itemStateKey = ($item && ('_stateKey' in Object($item)) && $item._stateKey) ? String($item._stateKey) : '';
+                if (itemStateKey && itemStateKey.includes('#place:') && itemStateKey.includes('->')) {
+                    const placePrefix = itemStateKey.slice(0, itemStateKey.indexOf('->') + 2);
+                    bm.stateKey = placePrefix + openShort;
+                }
+                else {
+                    bm.stateKey = openShort;
+                }
                 this._hydrateBookmarkMeta(bm, { cachedOnly: false });
             }
             this.load_page(fullUrl);

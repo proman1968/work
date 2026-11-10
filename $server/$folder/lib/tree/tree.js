@@ -101,6 +101,7 @@ export default {
         hideFiles: false,
         onlyClasses: false, // только CORE.$class (site)
         onlyChatModels: false, // только языковые модели ($ai с поддержкой chat)
+        execute: null,
     },
     showUsers: false,
     showSize: false,
@@ -127,6 +128,8 @@ export default {
                 await this.prefetch(n);
                 await this.getItems(n, 1);
                 this._applySavedStateToItems([n]);
+                if (this.hideRoots > 0 || this.hideTops > 0)
+                    n.expanded = true;
                 this.items = [n];
                 if (this._pendingRevealPath) {
                     const p = this._pendingRevealPath;
@@ -149,6 +152,8 @@ export default {
         await this.prefetch(n);
         await this.getItems(n, 1);
         this._applySavedStateToItems([n]);
+        if (this.hideRoots > 0 || this.hideTops > 0)
+            n.expanded = true;
         this.items = [n];
     },
     _savedExpandedSet: null,
@@ -635,15 +640,49 @@ ODA({is: 'oda-tree-node',
     stickyLevel: 0,
     stickyTop: 0,
     isStuck: false,
+    _watchedRawItem: null,
+    _onWatchedChanged: null,
     attached() {
         const tree = this.$pdp?.tree;
         if (tree) {
             tree._mountedNodes ??= new Set();
             tree._mountedNodes.add(this);
         }
+        this._bindItemWatch(this.$item);
     },
     detached() {
         this.$pdp?.tree?._mountedNodes?.delete(this);
+        if (this._watchedRawItem && this._onWatchedChanged)
+            this._watchedRawItem.removeEventListener?.('changed', this._onWatchedChanged);
+        this._watchedRawItem = null;
+    },
+    _bindItemWatch(it) {
+        const raw = rawItem(it);
+        if (!raw || typeof raw.addEventListener !== 'function')
+            return;
+        if (this._watchedRawItem === raw)
+            return;
+        if (this._watchedRawItem && this._onWatchedChanged)
+            this._watchedRawItem.removeEventListener?.('changed', this._onWatchedChanged);
+        this._watchedRawItem = raw;
+        this._onWatchedChanged = (e) => {
+            this.async(async () => {
+                this._secTree = null;
+                if (this.$item) {
+                    const k = rawItem(this.$item);
+                    SEC_TREE_PROMISES.delete(k);
+                    SEC_NODES_MAP.delete(k);
+                    this.invalidate?.('hasSecurity', 'knownHasItems', 'items', 'expanderIcon');
+                    this.$item.expanded = true;
+                    if (e?.detail?.value && typeof e.detail.value === 'string') {
+                        const found = (await this.items)?.find(f => f.id === e.detail.value);
+                        if (found && this.$pdp?.tree)
+                            this.$pdp.tree.focusedItem = found;
+                    }
+                }
+            });
+        };
+        raw.addEventListener('changed', this._onWatchedChanged);
     },
     _syncStuck(scrollTop = 0) {
         if (!this.expanded || this.hideRoots > 0 || !this.expanderIcon) {
@@ -730,6 +769,7 @@ ODA({is: 'oda-tree-node',
         // Места и ссылки рисуются обычными дочерними узлами (см. items).
         if (!this.$item || isLinkNode(this.$item) || ('isPlace' in Object(this.$item) && this.$item.isPlace))
             return false;
+        this.$item.__version;
         const t = this.$item?.type;
         if (t !== '$structure' && t !== '$base' && t !== '$server')
             return false;
@@ -851,10 +891,15 @@ ODA({is: 'oda-tree-node',
         }
     },
     get $item() {
-        return this.$for?.item;
+        const it = this.$for?.item;
+        if (it)
+            this._bindItemWatch(it);
+        return it;
     },
     expanded: {
         get() {
+            if (this.hideTops > 0 || this.hideRoots > 0)
+                return true;
             return this.$pdp.expandAll || this.$item?.expanded || false;
         },
         async set(n) {

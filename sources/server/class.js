@@ -31,6 +31,8 @@ import {
     scaffoldModuleTreeSync,
     ensureBaseModulesDomainSync,
     parseModuleList,
+    inferStructureIcon,
+    ensureIconField,
     ensureModelField,
     parseCreateDevice,
     findChildWithModel,
@@ -91,6 +93,8 @@ export class $class extends $folder {
                     return 'odant:module';
                 if (this.type === '$domain' && this.id === 'MODULES')
                     return 'odant:folder';
+                if (this.type === '$structure')
+                    return this.DATA?.icon || 'odant:structure';
                 return this.DATA?.icon;
             },
             get isCustom() {
@@ -576,14 +580,23 @@ export class $class extends $folder {
         const srcModClassFile = srcModDir ? path.join(srcModDir, '$module', 'class.js') : '';
 
         let post = p.post;
+        const explicitIcon = typeof p.icon === 'string' ? p.icon.trim() : '';
+        const defaultIcon = explicitIcon || (type === '$structure' ? inferStructureIcon(p.label, id) : '');
         if (post == null) {
             if (srcModClassFile && fs.existsSync(srcModClassFile)) {
                 const customLabel = (p.label && p.label !== id && p.label !== rawId) ? p.label : '';
                 post = extractStubClassJsSync(srcModClassFile, customLabel);
+                if (explicitIcon)
+                    post = ensureIconField(post, explicitIcon);
             }
             else {
-                post = `export default {\n    label: '${p.label || id}'\n}`;
+                const safeLbl = String(p.label || id).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                const iconLine = defaultIcon ? `\n    icon: '${defaultIcon.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}',` : '';
+                post = `export default {\n    label: '${safeLbl}',${iconLine}\n}`;
             }
+        }
+        else if (defaultIcon && !/\bicon\s*:/.test(String(post))) {
+            post = ensureIconField(post, defaultIcon);
         }
         if (type === '$ai' && rawId && rawId !== id) {
             const early = await parseCreateDevice(post, s => this.constructor.importScript(s));
@@ -659,6 +672,7 @@ export class $class extends $folder {
             post,
             ignore_save_logs: true,
         });
+        item.reset();
         this.reset();
         return log;
     }

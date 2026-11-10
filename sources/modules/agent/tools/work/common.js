@@ -251,6 +251,7 @@ export function isContainer(item) {
 export async function lineFor(item) {
     const kind = kindOf(item);
     const label = item?.DATA?.label || item?.label;
+    const icon = item instanceof FS.$class ? (item?.DATA?.icon || '') : '';
     const name = item.id + (isContainer(item) ? '/' : '');
     let extra = '';
     if (!isContainer(item)) {
@@ -258,7 +259,7 @@ export async function lineFor(item) {
         if (size != null)
             extra = ' ' + formatSize(size);
     }
-    return name + '  [' + kind + (label && label !== item.id ? ' «' + label + '»' : '') + ']' + extra;
+    return name + '  [' + kind + (label && label !== item.id ? ' «' + label + '»' : '') + (icon ? ', icon: ' + icon : '') + ']' + extra;
 }
 
 export function formatSize(n) {
@@ -269,6 +270,20 @@ export function formatSize(n) {
     return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 
+function appendPlacesLines(roles, indent, out, limit, prefix = '') {
+    if (!Array.isArray(roles))
+        return;
+    for (const r of roles) {
+        if (!r || !r.id || out.length >= limit)
+            continue;
+        const trail = prefix ? `${prefix}/${r.id}` : r.id;
+        const lbl = r.label && r.label !== r.id ? ` «${r.label}»` : '';
+        out.push(`${indent}[рабочее место #place:${trail}${lbl} (в #security.ROLES)]`);
+        if (Array.isArray(r.ROLES) && r.ROLES.length)
+            appendPlacesLines(r.ROLES, indent + '  ', out, limit, trail);
+    }
+}
+
 export async function listTree(item, depth, indent, out, limit, ctx) {
     let kids = [];
     try {
@@ -276,6 +291,9 @@ export async function listTree(item, depth, indent, out, limit, ctx) {
         kids = (await item.items) || [];
     }
     catch (e) { log.debug('tree.items', e); /* нет доступа/не папка */ }
+    if (item instanceof FS.$class && Array.isArray(item.DATA?.['#security']?.ROLES)) {
+        appendPlacesLines(item.DATA['#security'].ROLES, indent, out, limit);
+    }
     kids = kids.filter(k => k && k.id && k.id !== 'node_modules' && checkContextCone(k.path, ctx).ok);
     for (const k of kids) {
         if (out.length >= limit) {
