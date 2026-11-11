@@ -284,6 +284,7 @@ export function createLicenseServerApp(options = {}) {
         dataDir: options.dataDir || DEFAULT_DATA_DIR,
         adminLogin: options.adminLogin,
         adminPassword: options.adminPassword,
+        publicOrigin: options.publicOrigin || 'https://work.odant.org',
     });
     let bots = null;
     const yookassa = options.yookassa || new YooKassaService({

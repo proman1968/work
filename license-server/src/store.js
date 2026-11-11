@@ -34,12 +34,16 @@ import {
 const ONE_YEAR_MS = 365 * 24 * 3600_000;
 
 export class LicenseStore {
-    constructor({ dataDir = './data', adminLogin = '', adminPassword = '' } = {}) {
+    constructor({ dataDir = './data', adminLogin = '', adminPassword = '', publicOrigin = 'https://work.odant.org' } = {}) {
         this.dataDir = dataDir;
         fs.mkdirSync(this.dataDir, { recursive: true });
         this.stateFile = path.join(this.dataDir, 'store.json');
         this.keyFile = path.join(this.dataDir, 'authority-key.json');
-        this.authorityKeys = loadOrCreateAuthorityKeys(this.keyFile);
+        const isOfficialOrigin = !publicOrigin || String(publicOrigin).includes('work.odant.org') || String(publicOrigin).includes('localhost');
+        const isFakeTestDir = String(dataDir).includes('fake-hub-data');
+        this.authorityKeys = loadOrCreateAuthorityKeys(this.keyFile, {
+            useCanonicalFallback: isOfficialOrigin && !isFakeTestDir,
+        });
         this.adminLogin = String(adminLogin || process.env.WORK_ADMIN_LOGIN || 'admin').trim();
         this.adminPassword = String(adminPassword || process.env.WORK_ADMIN_PASSWORD || process.env.WORK_ADMIN_KEY || 'odant-admin');
         this.adminSessions = new Map();
@@ -186,9 +190,43 @@ export class LicenseStore {
                 this.state.certificates = raw.certificates || {};
                 this.state.users = raw.users || {};
                 this._ensureBootstrapAdmin();
+                this._resignAllWithAuthority();
             }
         }
         catch { /* начинаем с чистого состояния */ }
+    }
+
+    /**
+     * Гарантировать, что все токены владельцев и сертификаты лицензий в store подписаны текущим каноническим ключом ЦС.
+     */
+    _resignAllWithAuthority() {
+        let changed = false;
+        for (const [id, lic] of Object.entries(this.state.licenses || {})) {
+            if (lic && lic.issuerPublicKey !== this.authorityKeys.publicKey) {
+                this.state.licenses[id] = signCertificate(lic, this.authorityKeys);
+                changed = true;
+            }
+        }
+        for (const user of Object.values(this.state.users || {})) {
+            if (!user) continue;
+            if (!user.hubToken || !verifyOwnerAccessToken(user.hubToken, this.authorityKeys.publicKey)) {
+                const tokData = createOwnerAccessToken({
+                    hubUrl: user.hubUrl || 'https://work.odant.org',
+                    accountId: user.userId,
+                    email: user.email,
+                    tokenId: user.hubTokenId || '',
+                    secret: user.hubTokenSecret || '',
+                    issuedAt: user.createdAt || Date.now(),
+                }, this.authorityKeys);
+                user.hubToken = tokData.token;
+                user.hubTokenId = tokData.payload.tokenId;
+                user.hubTokenSecret = tokData.payload.secret;
+                changed = true;
+            }
+        }
+        if (changed) {
+            try { this._save(); } catch { /* ignore */ }
+        }
     }
 
     _save() {

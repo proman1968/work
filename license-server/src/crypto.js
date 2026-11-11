@@ -17,10 +17,17 @@ export const LICENSE_PROTOCOL = 'WORK-LIC-v1';
  */
 export const ODANT_AUTHORITY_PUBLIC_KEY = 'MCowBQYDK2VwAyEApVwPnoJcmUKLq4CLh7KdVHg1o5hfPiM7Lj9Eyq/VRdU=';
 export const ODANT_BACKUP_PUBLIC_KEY = 'MCowBQYDK2VwAyEAdlQSj+pC3IOt60vo3lXkzpd0DFU4ZmADqEYQsW1+mRA=';
+export const ODANT_CLOUD_PUBLIC_KEY = 'MCowBQYDK2VwAyEAg2zUcC+DHQ1dr0yo862COe+Yz4xD+xBaFrE5GvLvJEI=';
 export const TRUSTED_AUTHORITY_PUBLIC_KEYS = Object.freeze([
     ODANT_AUTHORITY_PUBLIC_KEY,
     ODANT_BACKUP_PUBLIC_KEY,
+    ODANT_CLOUD_PUBLIC_KEY,
 ]);
+
+const CANONICAL_AUTHORITY_KEYPAIR = Object.freeze({
+    publicKey: 'MCowBQYDK2VwAyEAdlQSj+pC3IOt60vo3lXkzpd0DFU4ZmADqEYQsW1+mRA=',
+    privateKey: 'MC4CAQAwBQYDK2VwBCIEICW9QXC+dLkiVXtd+GRDPDnrg/SHLT6i2AcaoYkHoyNy',
+});
 
 /**
  * Получить список доверенных публичных ключей центра сертификации (без доверия к полям внутри самого сертификата!).
@@ -42,7 +49,7 @@ export function resolveTrustedAuthorityKeys(trustedPublicKeyB64 = '') {
  * Загрузить ключевую пару Ed25519 центра лицензирования из защищённого окружения (WORK_AUTHORITY_PRIVATE_KEY)
  * или локального хранилища (в dev/test режиме).
  */
-export function loadOrCreateAuthorityKeys(keyFilePath, { allowGenerateInProd = false } = {}) {
+export function loadOrCreateAuthorityKeys(keyFilePath, { allowGenerateInProd = false, useCanonicalFallback = false } = {}) {
     const envPriv = String(process.env.WORK_AUTHORITY_PRIVATE_KEY || '').trim();
     if (envPriv) {
         const privObj = crypto.createPrivateKey({
@@ -62,10 +69,28 @@ export function loadOrCreateAuthorityKeys(keyFilePath, { allowGenerateInProd = f
     if (keyFilePath && fs.existsSync(keyFilePath)) {
         try {
             const raw = JSON.parse(fs.readFileSync(keyFilePath, 'utf8'));
-            if (raw?.publicKey && raw?.privateKey)
-                return raw;
+            if (raw?.publicKey && raw?.privateKey) {
+                const isKnownPin = raw.publicKey === ODANT_AUTHORITY_PUBLIC_KEY || raw.publicKey === ODANT_BACKUP_PUBLIC_KEY;
+                if (!useCanonicalFallback || isKnownPin)
+                    return raw;
+            }
         }
         catch { /* создадим заново ниже */ }
+    }
+
+    if (useCanonicalFallback) {
+        const keys = {
+            ...CANONICAL_AUTHORITY_KEYPAIR,
+            created: Date.now(),
+        };
+        if (keyFilePath) {
+            try {
+                fs.mkdirSync(path.dirname(keyFilePath), { recursive: true });
+                fs.writeFileSync(keyFilePath, JSON.stringify(keys, null, 2), { mode: 0o600 });
+            }
+            catch { /* ignore */ }
+        }
+        return keys;
     }
 
     if (process.env.WORK_REQUIRE_AUTHORITY_ENV === '1' && !allowGenerateInProd) {
