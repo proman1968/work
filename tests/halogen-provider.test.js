@@ -8,7 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import {
     HALOGEN_MODELS_CATALOG,
+    BUBO_WINDOWS_RELEASE,
     computeHalogenMemoryPlan,
+    inspectWindowsHalogenEnvironment,
+    prepareWindowsBuboRuntime,
+    startHalogenBackend,
+    stopHalogenBackend,
     probeHalogenServer,
     normalizeHalogenTtsPayload,
     recordHalogenSessionHandle,
@@ -220,21 +225,32 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         assert.ok(viewIds.includes('trainer'), 'на /MODELS/Halogen доступна вкладка trainer');
     });
 
-    it('2. План памяти computeHalogenMemoryPlan для AMD Ryzen AI Max+ PRO 495 (192 ГБ) размещает Flash + 524k KV + 47.7 ГБ Lookup + NPU в ОЗУ', () => {
-        const plan192 = computeHalogenMemoryPlan({ totalRamGb: 192, platform: 'win32' });
-        assert.equal(plan192.kvPoolPositions, 524288);
-        assert.equal(plan192.kvSlots, 4);
-        assert.equal(plan192.maxTok, 32768);
-        assert.equal(plan192.flashWeightsGb, 62.1);
-        assert.equal(plan192.deviceSideGb, 27.0);
-        assert.equal(plan192.halogenCoreGb, 89.1);
-        assert.equal(plan192.lookupTableGb, 47.7);
-        assert.equal(plan192.lookupFitsInRam, true, 'на 192 ГБ вся 47.7 ГБ lookup-таблица помещается в ОЗУ вместе с NPU-моделями');
-        assert.ok(plan192.npuSidecarGb >= 20, 'учтён объём всех 7 NPU-моделей');
-        assert.ok(plan192.hostFreeForWorkGb >= 30, 'остаётся >30 ГБ свободной памяти под ОС и сервер WORK');
-        assert.match(plan192.linuxCommand, /ghcr\.io\/peonist-ai\/halogen-flash-server:0\.19\.1/);
-        assert.match(plan192.windowsCommand, /llama-server\.exe/);
-        assert.match(plan192.windowsCommand, /--cache-reuse 256/);
+    it('2. План памяти computeHalogenMemoryPlan для AMD Ryzen AI Max+ PRO 495 (192 ГБ) разделяет настройки Linux (halogen-flash-server) и Windows 11 Native (Halowin Bubo / Gufo ROCm 10.0 gfx1151)', () => {
+        const planWin = computeHalogenMemoryPlan({ totalRamGb: 192, platform: 'win32' });
+        assert.equal(planWin.kvPoolPositions, 524288);
+        assert.equal(planWin.kvSlots, 4);
+        assert.equal(planWin.maxTok, 32768);
+        assert.equal(planWin.flashWeightsGb, 62.1);
+        assert.equal(planWin.deviceSideGb, 27.0);
+        assert.equal(planWin.halogenCoreGb, 89.1);
+        assert.equal(planWin.lookupTableGb, 47.7);
+        assert.equal(planWin.lookupFitsInRam, true, 'на 192 ГБ вся 47.7 ГБ lookup-таблица помещается в ОЗУ вместе с NPU-моделями');
+        assert.ok(planWin.npuSidecarGb >= 20, 'учтён объём всех 7 NPU-моделей');
+        assert.ok(planWin.hostFreeForWorkGb >= 30, 'остаётся >30 ГБ свободной памяти под ОС и сервер WORK');
+        assert.equal(planWin.windowsGpuMemoryGb, 128);
+        assert.equal(planWin.windowsPageFileMb, 131072);
+        assert.match(planWin.wslWarning, /WSL2/);
+        assert.match(planWin.biosRecommendation, /131072/);
+        assert.match(planWin.linuxCommand, /ghcr\.io\/peonist-ai\/halogen-flash-server:0\.20\.3/);
+        assert.match(planWin.windowsPrepareCommand, /bubo\.exe prepare runtime/);
+        assert.match(planWin.windowsCommand, /bubo\.exe serve llm/);
+        assert.match(planWin.windowsCommand, /--profile subagents/);
+        assert.match(planWin.windowsCommand, /--npu-prefill on/);
+        assert.match(planWin.windowsGufoServicesCommand, /gufo\.exe serve asr/);
+
+        const planLinux = computeHalogenMemoryPlan({ totalRamGb: 128, platform: 'linux' });
+        assert.equal(planLinux.windowsGpuMemoryGb, 96);
+        assert.match(planLinux.biosRecommendation, /Minimum \(512 MB/);
     });
 
     it('3. Прямая работа с сервером Halogen: /health, /cache, X-Halogen-Keep/From, continue_final_message, timings, NPU TTS/STT/Image/Embed/Rerank/Decide', async () => {
@@ -566,6 +582,82 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
                 const weightPath = path.join(tmpRoot, 'MODELS', 'Halogen', item.nodeName, '#weights');
                 assert.ok(fs.existsSync(path.join(weightPath, 'hf-manifest.json')));
             }
+        }
+        finally {
+            await fsp.rm(tmpRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('7. Нативный стек Windows 11 (Halowin Bubo / Gufo ROCm 10.0.0 gfx1151): диагностика окружения, подготовка рантайма и запуск bubo.exe serve llm', async () => {
+        const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-halogen-bubo-'));
+        try {
+            const buboBinDir = path.join(tmpRoot, 'MODELS', 'Halogen', '#runtime', 'bubo', 'bin');
+            const rocmDir = path.join(tmpRoot, 'MODELS', 'Halogen', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151');
+            const manifestDir = path.join(tmpRoot, 'MODELS', 'Halogen', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1');
+            await fsp.mkdir(buboBinDir, { recursive: true });
+            await fsp.mkdir(rocmDir, { recursive: true });
+            await fsp.mkdir(manifestDir, { recursive: true });
+
+            const fakeBuboExe = path.join(buboBinDir, 'bubo.exe');
+            const fakeManifest = path.join(manifestDir, 'bubo-package.json');
+            await fsp.writeFile(fakeBuboExe, 'MZ_FAKE_BUBO');
+            await fsp.writeFile(fakeManifest, JSON.stringify({ model: 'qwen38-flash-next-base-ud-q4-k-xl-v1' }));
+
+            const envInfo = inspectWindowsHalogenEnvironment({ rootDir: tmpRoot });
+            assert.equal(envInfo.buboInstalled, true);
+            assert.equal(envInfo.buboExePath, fakeBuboExe);
+            assert.equal(envInfo.rocmRuntimePrepared, true);
+            assert.equal(envInfo.buboModelPrepared, true);
+            assert.equal(envInfo.buboManifestPath, fakeManifest);
+            assert.equal(envInfo.buboRelease.version, BUBO_WINDOWS_RELEASE.version);
+
+            // Проверка оркестрации prepareWindowsBuboRuntime
+            const spawnedCmds = [];
+            const mockSpawn = (cmd, args, opts) => {
+                spawnedCmds.push({ cmd, args, opts });
+                return {
+                    pid: 42424,
+                    stdout: { on: () => {} },
+                    stderr: { on: () => {} },
+                    on(ev, cb) {
+                        if (ev === 'close')
+                            setImmediate(() => cb(0));
+                    },
+                    unref: () => {},
+                    kill: () => {},
+                };
+            };
+
+            const prepRes = await prepareWindowsBuboRuntime({
+                rootDir: tmpRoot,
+                step: 'runtime',
+                spawnImpl: mockSpawn,
+            });
+            assert.equal(prepRes.ok, true);
+            assert.equal(spawnedCmds.length, 1);
+            assert.equal(spawnedCmds[0].cmd, fakeBuboExe);
+            assert.deepEqual(spawnedCmds[0].args.slice(0, 2), ['prepare', 'runtime']);
+
+            // Проверка запуска bubo.exe serve llm через startHalogenBackend
+            spawnedCmds.length = 0;
+            const startRes = await startHalogenBackend({
+                rootDir: tmpRoot,
+                port: 59996,
+                profile: 'subagents',
+                spawnImpl: mockSpawn,
+            });
+            assert.equal(startRes.started, true);
+            assert.equal(startRes.mode, 'bubo-windows');
+            assert.equal(spawnedCmds.length, 1);
+            assert.equal(spawnedCmds[0].cmd, fakeBuboExe);
+            assert.ok(spawnedCmds[0].args.includes('serve'));
+            assert.ok(spawnedCmds[0].args.includes('llm'));
+            assert.ok(spawnedCmds[0].args.includes('--manifest'));
+            assert.ok(spawnedCmds[0].args.includes(fakeManifest));
+            assert.ok(spawnedCmds[0].args.includes('subagents'));
+            assert.equal(spawnedCmds[0].opts.env.BUBO_RUNTIME_DIR, rocmDir);
+
+            stopHalogenBackend();
         }
         finally {
             await fsp.rm(tmpRoot, { recursive: true, force: true });

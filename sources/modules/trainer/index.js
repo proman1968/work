@@ -37,6 +37,7 @@ import {
     HALOGEN_DEFAULT_PORT,
     HALOGEN_DEFAULT_BASE_URL,
     HALOGEN_IMAGE_TAG,
+    BUBO_WINDOWS_RELEASE,
     HALOGEN_MODELS_CATALOG,
     HALOGEN_TTS_VOICES,
     recordHalogenSessionHandle,
@@ -44,6 +45,8 @@ import {
     releaseHalogenSessionHandle,
     normalizeHalogenTtsPayload,
     computeHalogenMemoryPlan,
+    inspectWindowsHalogenEnvironment,
+    prepareWindowsBuboRuntime,
     probeHalogenServer,
     startHalogenBackend,
     stopHalogenBackend,
@@ -66,6 +69,8 @@ export const halogenFallback = Object.freeze({
     releaseHalogenSessionHandle,
     probeHalogenServer,
     computeHalogenMemoryPlan,
+    inspectWindowsHalogenEnvironment,
+    prepareWindowsBuboRuntime,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
 });
@@ -75,6 +80,7 @@ export {
     HALOGEN_DEFAULT_PORT,
     HALOGEN_DEFAULT_BASE_URL,
     HALOGEN_IMAGE_TAG,
+    BUBO_WINDOWS_RELEASE,
     HALOGEN_MODELS_CATALOG,
     HALOGEN_TTS_VOICES,
     recordHalogenSessionHandle,
@@ -82,6 +88,8 @@ export {
     releaseHalogenSessionHandle,
     normalizeHalogenTtsPayload,
     computeHalogenMemoryPlan,
+    inspectWindowsHalogenEnvironment,
+    prepareWindowsBuboRuntime,
     probeHalogenServer,
     startHalogenBackend,
     stopHalogenBackend,
@@ -148,6 +156,7 @@ export const TRAINER_METHODS = Object.freeze({
                     memoryPlan: halogenPlan,
                     catalog: inspectHalogenCatalogWithStatus(),
                     handles: listHalogenSessionHandles(),
+                    windowsEnv: inspectWindowsHalogenEnvironment(),
                 },
             };
         },
@@ -170,7 +179,17 @@ export const TRAINER_METHODS = Object.freeze({
                 hardware: hw,
                 memoryPlan,
                 catalog: inspectHalogenCatalogWithStatus(),
+                windowsEnv: probe.windowsEnv || inspectWindowsHalogenEnvironment(),
             };
+        },
+    },
+    halogen_prepare_windows: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            return prepareWindowsBuboRuntime({
+                step: p.step || 'runtime',
+                modelSet: p.modelSet || 'original',
+            });
         },
     },
     halogen_download_bundle: {

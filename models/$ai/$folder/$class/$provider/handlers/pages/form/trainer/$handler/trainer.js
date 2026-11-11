@@ -721,15 +721,16 @@ export default {
     <div class="workspace" ~if="activeTab === 'halogen'">
         <div class="panel-left">
             <div class="sticky-header">
-                <div class="section-title">Универсальный гибридный контур Halogen (:8731 · iGPU Radeon 8065S + Ryzen AI NPU)</div>
+                <div class="section-title">Контур Strix Halo (:8731 · Linux halogen-flash-server / Windows 11 Halowin Bubo · Gufo ROCm 10.0 gfx1151 + NPU)</div>
                 <div class="model-top">
                     <div class="model-title-group">
                         <span class="badge optimal" ~if="halogenState?.online">Сервер :8731 активен</span>
-                        <span class="badge purple" ~if="!halogenState?.online">Встроенный гибридный движок WORK</span>
-                        <strong>{{halogenState?.modeLabel || 'Гибридный контур готов'}}</strong>
+                        <span class="badge purple" ~if="!halogenState?.online">Автономный контур WORK</span>
+                        <strong>{{halogenState?.modeLabel || 'Контур готов'}}</strong>
                     </div>
                     <div class="toolbar">
                         <button type="button" class="btn" @tap="refreshHalogen()">Проверить :8731</button>
+                        <button type="button" class="btn primary" ~if="halogenState?.windowsEnv?.isWindows && !halogenState?.windowsEnv?.rocmRuntimePrepared" @tap="prepareWindowsBubo('runtime')">Установить Halowin Bubo (ROCm 10.0 gfx1151)</button>
                         <button type="button" class="btn primary" @tap="downloadHalogenBundleAll()">Скачать весь пакет (GPU + NPU)</button>
                         <button type="button" class="btn primary" @tap="startHalogenServer()">Запустить локальный сервер</button>
                     </div>
@@ -740,6 +741,13 @@ export default {
                     <span class="hw-chip">FP8 Lookup Table: <strong>{{halogenState.memoryPlan.lookupTableGb}} ГБ</strong> (в ОЗУ)</span>
                     <span class="hw-chip">NPU Sidecar: <strong>{{halogenState.memoryPlan.npuSidecarGb}} ГБ</strong></span>
                     <span class="hw-chip">Свободно под WORK: <strong>~{{halogenState.memoryPlan.hostFreeForWorkGb}} ГБ</strong></span>
+                </div>
+                <div class="hw-specs" ~if="halogenState?.windowsEnv?.isWindows">
+                    <span class="hw-chip">Движок Windows: <strong>{{halogenState.windowsEnv.buboInstalled ? 'Halowin Bubo v0.1.2 (gufo 0.26.0)' : 'Не установлен'}}</strong></span>
+                    <span class="hw-chip">ROCm 10.0 (gfx1151): <strong>{{halogenState.windowsEnv.rocmRuntimePrepared ? 'Установлен' : 'Требуется установка'}}</strong></span>
+                    <span class="hw-chip">NPU XRT (xrt-smi): <strong>{{halogenState.windowsEnv.npuDriverInstalled ? 'Активен' : 'Не найден'}}</strong></span>
+                    <span class="hw-chip">VC++ Redist: <strong>{{halogenState.windowsEnv.vcRedistInstalled ? 'ОК' : 'Требуется'}}</strong></span>
+                    <span class="hw-chip" ~if="halogenState.windowsEnv.pageFileGb !== null">PageFile: <strong>{{halogenState.windowsEnv.pageFileGb}} ГБ</strong> (рек. 128 ГБ)</span>
                 </div>
             </div>
 
@@ -785,13 +793,21 @@ export default {
                 </div>
             </div>
 
-            <div class="section-title">Команды запуска (Windows 11 Hybrid / Linux Container)</div>
+            <div class="section-title">Нативный стек Windows 11 (Halowin Bubo / Gufo / Strata) и Linux Container</div>
             <div class="card" ~if="halogenState?.memoryPlan">
-                <div style="font-size:12px;font-weight:700;">Windows 11 (llama-server ROCm/Vulkan + Prompt Cache + Speculative Lookup):</div>
-                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsCommand}}</pre>
-                <div style="font-size:12px;font-weight:700;margin-top:6px;">Linux Native (halogen-flash-server ROCm /dev/kfd + NPU /dev/accel/accel0):</div>
+                <div style="font-size:11.5px;padding:6px 8px;border-radius:4px;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.35);">
+                    <strong>Важно про WSL2 и BIOS:</strong> {{halogenState.memoryPlan.wslWarning}}<br>
+                    <strong>Настройка памяти:</strong> {{halogenState.memoryPlan.biosRecommendation}}
+                </div>
+                <div style="font-size:12px;font-weight:700;margin-top:6px;">1. Windows 11 Native — Halowin Bubo (AMD ROCm 10.0.0 gfx1151 + Ryzen AI XRT NPU + MTP + Dense Twin):</div>
+                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsPrepareCommand}}
+{{halogenState.memoryPlan.windowsCommand}}</pre>
+                <div style="font-size:12px;font-weight:700;margin-top:6px;">2. Windows 11 — Мультимодальные сервисы Gufo (ASR / TTS / Embeddings / Image / SystemOne):</div>
+                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsGufoServicesCommand}}</pre>
+                <div style="font-size:12px;font-weight:700;margin-top:6px;">3. Windows 11 PowerShell (Администратор) — Фиксированный Page File 128 ГБ (131072 МБ):</div>
+                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsPageFileCommand}}</pre>
+                <div style="font-size:12px;font-weight:700;margin-top:6px;">4. Linux Native (halogen-flash-server ROCm /dev/kfd + NPU /dev/accel/accel0):</div>
                 <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.linuxCommand}}</pre>
-                <div style="font-size:11.5px;opacity:0.85;margin-top:4px;">{{halogenState.memoryPlan.biosRecommendation}}</div>
             </div>
 
             <div class="section-title">Снимки KV-сессий субагентов (X-Halogen-Keep / X-Halogen-From)</div>
@@ -915,7 +931,12 @@ export default {
             this.jobs = Array.isArray(st?.jobs) ? st.jobs : [];
             if (st?.halogen) {
                 this.halogenState = this.halogenState
-                    ? { ...this.halogenState, catalog: st.halogen.catalog, handles: st.halogen.handles }
+                    ? {
+                        ...this.halogenState,
+                        catalog: st.halogen.catalog,
+                        handles: st.halogen.handles,
+                        windowsEnv: st.halogen.windowsEnv || this.halogenState.windowsEnv,
+                    }
                     : st.halogen;
             }
             if (!this.selectedDataset && this.datasets.length)
@@ -1098,6 +1119,20 @@ export default {
             return;
         try {
             await this.$item.fetch('halogen_start');
+            await this.refreshHalogen();
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async prepareWindowsBubo(step = 'runtime') {
+        this.error = '';
+        if (!this.$item)
+            return;
+        try {
+            const res = await this.$item.fetch('halogen_prepare_windows', { step });
+            if (res?.error)
+                this.error = res.error;
             await this.refreshHalogen();
         }
         catch (e) {
