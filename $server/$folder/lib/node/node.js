@@ -129,6 +129,8 @@ export default {
         const path = this.$item?.path;
         if (!path || !String(path).includes('/history/'))
             return '';
+        if (CORE.$file?.parseDatedFileName?.(this.$item?.id || path))
+            return '';
         const parse = CORE.$file?.parseHistoryEntryPath || this.$item?.constructor?.parseHistoryEntryPath;
         if (typeof parse !== 'function')
             return '';

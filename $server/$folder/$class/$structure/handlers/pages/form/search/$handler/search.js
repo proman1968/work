@@ -233,7 +233,11 @@ export default {
         this.loading = true;
         try {
             const res = await this.$item.fetch('search_tree', { q });
-            this.files = Array.isArray(res?.files) ? res.files : [];
+            const rawFiles = Array.isArray(res?.files) ? res.files : [];
+            this.files = rawFiles.map(f => {
+                const dated = CORE?.$file?.formatDatedFileLabel?.(f.path || f.label, f.label);
+                return dated ? { ...f, label: dated } : f;
+            });
             this.nodes = Array.isArray(res?.nodes) ? res.nodes : [];
             this.objects = Array.isArray(res?.objects) ? res.objects : [];
             this.searched = true;

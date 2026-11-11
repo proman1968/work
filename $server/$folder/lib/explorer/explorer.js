@@ -241,6 +241,9 @@ export default {
     _defaultLabelForShort(short = '') {
         const clean = String(short || '').replace(/\/+$/, '');
         const last = clean.split('/').filter(Boolean).pop() || 'Форма';
+        const dated = CORE?.$file?.formatDatedFileLabel?.(last);
+        if (dated)
+            return dated;
         if (last === 'REGISTER')
             return 'Бухгалтерский журнал';
         if (last === 'OPERATIONS')
@@ -335,8 +338,11 @@ export default {
             const item = cached || await WORK.get_item(entry.short);
             if (!item)
                 return;
-            const rawLabel = item.DATA?.label || item.label || item.id || entry.label;
             const code = entry.short.split('/').filter(Boolean).pop() || '';
+            const dated = (item instanceof CORE.$file || CORE?.$file?.parseDatedFileName?.(code))
+                ? CORE?.$file?.formatDatedFileLabel?.(item?.id || code, item?.DATA?.label)
+                : '';
+            const rawLabel = dated || item.DATA?.label || item.label || item.id || entry.label;
             const isAcc = item.type === '$account' || /^\d+(?:\.\d+)?$/.test(code);
             let label = String(rawLabel || entry.label);
             if (code === 'REGISTER' && (label === 'REGISTER' || label === 'План счетов и журнал'))
@@ -363,7 +369,9 @@ export default {
         const itemStateKey = ($item && ('_stateKey' in Object($item)) && $item._stateKey) ? String($item._stateKey) : '';
         let bm = list.find(b => b.url === pageUrl);
         if (!bm) {
-            const label = $item?.DATA?.label || $item?.label || this._defaultLabelForShort(short);
+            const lastSeg = String(short || '').split('/').filter(Boolean).pop() || '';
+            const dated = CORE?.$file?.formatDatedFileLabel?.($item?.id || lastSeg, $item?.DATA?.label);
+            const label = dated || $item?.DATA?.label || $item?.label || this._defaultLabelForShort(short);
             bm = {
                 url: pageUrl,
                 hash,

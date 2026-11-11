@@ -32,6 +32,9 @@ export class $file extends $folder{
         return this.id || ''
     }
     get label(){
+        const dated = this.constructor.formatDatedFileLabel(this.id || this.path, this.DATA?.label);
+        if (dated)
+            return dated;
         if (!this.path)
             return this.id || '';
         let parts = this.path.split('/');
@@ -117,6 +120,70 @@ export class $file extends $folder{
 
         })
     }
+    static __user_labels__ = Object.create(null);
+
+    static parseDatedFileName(idOrPath) {
+        if (!idOrPath) return null;
+        const leaf = String(idOrPath).replace(/\\/g, '/').split('/').pop() || '';
+        const m = /^(\d{10,16})\.([^./\\]+)\.([A-Za-z0-9_-]+)$/.exec(leaf);
+        if (!m) return null;
+        const ms = Number(m[1]);
+        if (!Number.isFinite(ms) || ms <= 0) return null;
+        const dt = new Date(ms);
+        if (Number.isNaN(dt.getTime())) return null;
+        const pad = n => String(n).padStart(2, '0');
+        const dateStr = `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}.${dt.getFullYear()}`;
+        const timeStr = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+        const dateTime = `${dateStr} ${timeStr}`;
+        return {
+            timestamp: m[1],
+            ms,
+            userId: m[2],
+            ext: m[3],
+            dateStr,
+            timeStr,
+            dateTime,
+        };
+    }
+
+    static resolveUserLabel(userId) {
+        const uid = String(userId || '').trim();
+        if (!uid) return '';
+        if (uid === 'WORK' || uid === 'system') return 'WORK';
+        if ($file.__user_labels__[uid])
+            return $file.__user_labels__[uid];
+        if (globalThis.WORK?.uid === uid && globalThis.WORK?.USER) {
+            const myLbl = globalThis.WORK.USER.DATA?.label || globalThis.WORK.USER.label;
+            if (myLbl && typeof myLbl === 'string' && myLbl !== uid)
+                return ($file.__user_labels__[uid] = myLbl);
+        }
+        const cachedItem = globalThis.CORE?.$item?.ITEMS?.['/USERS/' + uid]
+            || globalThis.CORE?.$item?.ITEMS?.['/USERS/$folder/' + uid]
+            || globalThis.WORK?.items?.['/USERS/' + uid];
+        const cachedLbl = cachedItem?.DATA?.label;
+        if (cachedLbl && typeof cachedLbl === 'string' && cachedLbl !== uid)
+            return ($file.__user_labels__[uid] = cachedLbl);
+        if (globalThis.WORK?.get_item && !$file.__user_loading__?.[uid]) {
+            $file.__user_loading__ ??= Object.create(null);
+            $file.__user_loading__[uid] = true;
+            Promise.resolve(globalThis.WORK.get_item('/USERS/' + uid, 'info')).then(u => {
+                const lbl = u?.DATA?.label || u?.label;
+                if (lbl && typeof lbl === 'string')
+                    $file.__user_labels__[uid] = lbl;
+            }).catch(() => {});
+        }
+        return uid;
+    }
+
+    static formatDatedFileLabel(idOrPath, serverHint = '') {
+        if (serverHint && typeof serverHint === 'string' && serverHint.includes(' · '))
+            return serverHint;
+        const parsed = this.parseDatedFileName(idOrPath);
+        if (!parsed) return '';
+        const who = this.resolveUserLabel(parsed.userId);
+        return who ? `${parsed.dateTime} · ${who}` : parsed.dateTime;
+    }
+
     static parseHistoryEntryPath(path) {
         if (!path) return null;
         const parts = path.split('/');

@@ -96,4 +96,18 @@ describe('path-syntax', () => {
         const md = '[a](/rules.md/~/handlers/pages/form/) [b](https://example.com) [c](#anchor)';
         assert.equal(fixWorkMdLinks(md, '/'), md);
     });
+
+    it('formatDatedFileLabel formats date.user.ext files with readable date and user label', () => {
+        const path = '/ORGANIZATIONS/Маслоторг/finances/~/task/2026-10-27/1793110507596.CA4E097FF6C1D387.task';
+        const parsed = $file.parseDatedFileName(path);
+        assert.ok(parsed);
+        assert.equal(parsed.timestamp, '1793110507596');
+        assert.equal(parsed.userId, 'CA4E097FF6C1D387');
+        assert.equal(parsed.ext, 'task');
+        assert.match(parsed.dateTime, /^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/);
+        const label = $file.formatDatedFileLabel(path);
+        assert.match(label, /^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2} · /);
+        assert.doesNotMatch(label, /1793110507596/);
+        assert.doesNotMatch(label, /\.task$/);
+    });
 });

@@ -1375,8 +1375,13 @@ ODA({is: 'work-form',
     _computeTabLabel($item, viewHandler, nav = null) {
         if (nav?.label)
             return String(nav.label);
-        const rawLabel = $item?.DATA?.label || $item?.label || $item?.id || ($item?.short || '').split('/').pop() || 'Форма';
         const code = ($item?.short || $item?.path || '').split('/').pop() || '';
+        const dated = ($item instanceof CORE.$file || CORE?.$file?.parseDatedFileName?.(code))
+            ? CORE?.$file?.formatDatedFileLabel?.($item?.id || code, $item?.DATA?.label)
+            : '';
+        if (dated)
+            return dated;
+        const rawLabel = $item?.DATA?.label || $item?.label || $item?.id || code || 'Форма';
         const isAcc = $item?.type === '$account' || /^\d+(?:\.\d+)?$/.test(code);
         const itemTitle = (isAcc && code && !String(rawLabel).startsWith(code + ' ') && String(rawLabel) !== code)
             ? `${code} ${rawLabel}`

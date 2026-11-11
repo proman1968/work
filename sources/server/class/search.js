@@ -42,9 +42,9 @@ export const classSearchMethods = {
             if (!(await owner.canSee(fileItem, params)))
                 return;
             seenFilePaths.add(fPath);
-            const fName = String(fileItem.DATA?.label || fileItem.label || fileItem.name || fileItem.id || '');
+            const fName = String(fileItem.label || fileItem.DATA?.label || fileItem.name || fileItem.id || '');
             const relFilePath = fPath.startsWith(basePrefix) ? fPath.slice(basePrefix.length) : fPath;
-            const nameHit = fName.toLowerCase().includes(q) || relFilePath.toLowerCase().includes(q);
+            const nameHit = fName.toLowerCase().includes(q) || relFilePath.toLowerCase().includes(q) || String(fileItem.id || '').toLowerCase().includes(q);
             let snippet = '';
             let hitLine = 0;
             if (!nameHit) {

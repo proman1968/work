@@ -114,6 +114,73 @@ export class $file extends $folder{
     GET = 'load';
     POST = 'save';
     form = 'file';
+    static __user_labels__ = Object.create(null);
+
+    /**
+     * Разбор имени файла вида `<timestamp>.<user>.<ext>` (например, `1793110507596.CA4E097FF6C1D387.task`).
+     */
+    static parseDatedFileName(idOrPath) {
+        if (!idOrPath) return null;
+        const leaf = String(idOrPath).replace(/\\/g, '/').split('/').pop() || '';
+        const m = /^(\d{10,16})\.([^./\\]+)\.([A-Za-z0-9_-]+)$/.exec(leaf);
+        if (!m) return null;
+        const ms = Number(m[1]);
+        if (!Number.isFinite(ms) || ms <= 0) return null;
+        const dt = new Date(ms);
+        if (Number.isNaN(dt.getTime())) return null;
+        const pad = n => String(n).padStart(2, '0');
+        const dateStr = `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}.${dt.getFullYear()}`;
+        const timeStr = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+        const dateTime = `${dateStr} ${timeStr}`;
+        return {
+            timestamp: m[1],
+            ms,
+            userId: m[2],
+            ext: m[3],
+            dateStr,
+            timeStr,
+            dateTime,
+        };
+    }
+
+    /**
+     * Понятное имя пользователя по его UID (кэшируется в памяти из `USERS/<uid>/$user/class.js`).
+     */
+    static resolveUserLabel(userId) {
+        const uid = String(userId || '').trim();
+        if (!uid) return '';
+        if (uid === 'WORK' || uid === 'system') return 'WORK';
+        if ($file.__user_labels__[uid])
+            return $file.__user_labels__[uid];
+        try {
+            const p = `./USERS/${uid}/$user/class.js`;
+            if (fs.existsSync(p)) {
+                const raw = fs.readFileSync(p, 'utf8');
+                const lblMatch = /label\s*:\s*["'`]([^"'`]+)["'`]/.exec(raw);
+                if (lblMatch?.[1])
+                    return ($file.__user_labels__[uid] = lblMatch[1].trim());
+                const sur = /surname\s*:\s*["'`]([^"'`]+)["'`]/.exec(raw)?.[1] || '';
+                const nam = /\bname\s*:\s*["'`]([^"'`]+)["'`]/.exec(raw)?.[1] || '';
+                const pat = /patronymic\s*:\s*["'`]([^"'`]+)["'`]/.exec(raw)?.[1] || '';
+                const fio = [sur, nam, pat].filter(Boolean).join(' ').trim();
+                if (fio)
+                    return ($file.__user_labels__[uid] = fio);
+            }
+        }
+        catch { /* ignore */ }
+        return uid;
+    }
+
+    /**
+     * Человекочитаемая подпись файла `date.user.ext` → `27.10.2026 17:15 · Перепелкин Роман Александрович`.
+     */
+    static formatDatedFileLabel(idOrPath) {
+        const parsed = this.parseDatedFileName(idOrPath);
+        if (!parsed) return '';
+        const who = this.resolveUserLabel(parsed.userId);
+        return who ? `${parsed.dateTime} · ${who}` : parsed.dateTime;
+    }
+
     static parseHistoryEntryPath(path) {
         if (!path) return null;
         const parts = path.split('/');
@@ -310,12 +377,15 @@ export class $file extends $folder{
         return null;
     }
     get label(){
-        let parts = this.path.split('/');
-        this.id = parts.pop();
+        const dated = this.constructor.formatDatedFileLabel(this.id || this.path);
+        if (dated)
+            return dated;
+        let parts = (this.path || '').split('/');
+        const id = parts.pop() || this.id;
         parts.pop();
         if (parts.pop() === 'history')
             return this.constructor.historyEntryLabel(this.path);
-        return this.id;
+        return this.id || id;
     }
     get storage_folder(){ // папка - классе
         return FS.$folder.build(`.${this.id}`, this.parent);
@@ -341,6 +411,17 @@ export class $file extends $folder{
     }
     get $public(){
         return {
+            get label(){
+                const dated = this.constructor.formatDatedFileLabel(this.id || this.path);
+                if (dated)
+                    return dated;
+                let parts = (this.path || '').split('/');
+                const id = parts.pop() || this.id;
+                parts.pop();
+                if (parts.pop() === 'history')
+                    return this.constructor.historyEntryLabel(this.path);
+                return this.id || id;
+            },
             get lastModified(){
                 return this.stat?.mtime?.getTime?.();
             },
