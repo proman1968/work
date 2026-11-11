@@ -180,24 +180,19 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
 
             <nav class="tabs" id="tabs" aria-label="Разделы">
                 <span class="tab-ind" id="tabInd"></span>
-                <button class="tab active" data-stage="product">Платформа</button>
-                <button class="tab" data-stage="agents">ИИ-агенты</button>
-                <button class="tab" data-stage="pricing">Тарифы</button>
-                <button class="tab" data-stage="order">Комплекс</button>
-                <button class="tab" id="tileAddons" data-stage="addons" style="display:none;">Личный кабинет</button>
+                <button class="tab active" data-stage="product">О платформе</button>
+                <button class="tab" data-stage="clients">Клиентам</button>
                 <button class="tab" data-stage="franchise">Франшиза</button>
-                <button class="tab" data-stage="support">Поддержка</button>
+                <button class="tab" id="tileAddons" data-stage="addons" style="display:none;">Личный кабинет</button>
             </nav>
 
             <div class="top-actions">
                 <button class="icon-btn" id="btnTheme" onclick="toggleTheme()" title="Светлая / тёмная тема" aria-label="Переключить тему">${icon('sun')}</button>
-                <button class="btn btn-ghost btn-sm" data-action="open-oferta" title="Публичный договор-оферта ODANT-WORK">${icon('docs')}<span>Оферта</span></button>
-                <button class="btn btn-ghost btn-sm" id="btnAuth" data-action="auth">${icon('user')}<span id="btnAuthText">Войти / Регистрация</span></button>
-                <button class="btn btn-primary btn-sm" data-stage="order">Заказать</button>
+                <button class="btn btn-primary btn-sm" id="btnAuth" data-action="auth">${icon('user')}<span id="btnAuthText">Войти / Регистрация</span></button>
             </div>
         </header>
 
-        <!-- ============ ПЛАТФОРМА ============ -->
+        <!-- ============ ЛЕНДИНГ: ПЛАТФОРМА И ИИ-АГЕНТЫ (при клике на лого) ============ -->
         <section class="stage active" id="stage-product">
             <div class="hero">
                 <div>
@@ -205,8 +200,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     <h1 class="h1">Учёт, документооборот, процессы и&nbsp;<span class="grad">приватный ИИ</span> — в&nbsp;одном комплексе</h1>
                     <p class="lead">ODANT-WORK — вычислительный центр предприятия, который ставится в серверную и работает автономно. Встроенная система учёта, единое пространство документов и задач, ИИ-консультант в каждой форме и команда ИИ-агентов — без облаков и передачи данных наружу.</p>
                     <div class="hero-cta">
-                        <button class="btn btn-primary btn-lg" data-stage="order">Заказать комплекс · ${rub(P.basePriceRub)}</button>
-                        <button class="btn btn-ghost btn-lg" data-stage="agents">${icon('agents')} Как работают ИИ-агенты</button>
+                        <button class="btn btn-primary btn-lg" data-stage="clients">Клиентам · Условия и покупка</button>
+                        <button class="btn btn-ghost btn-lg" data-stage="franchise">Партнёрская франшиза</button>
                     </div>
                     <div class="trust">
                         <span>${icon('shield')} Данные не покидают контур</span>
@@ -253,10 +248,9 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <span class="kicker">Паспорт комплекса</span>
                         <h2 class="h2">ODANT-WORK · ${esc(P.sku)}</h2>
                         <div class="price-big">${rub(P.basePriceRub)}</div>
-                        <p class="note">Вечная лицензия на ${P.baseSeats} одновременных рабочих сессий, привязанная к оборудованию, и ${P.includedSupportYears} год максимальной поддержки уровня Enterprise (24/7, реакция ≤ 15 мин) — в комплекте. Дальнейшее продление поддержки и докупка мест — по желанию.</p>
+                        <p class="note">Вечная лицензия на ${P.baseSeats} одновременных рабочих сессий и ${P.includedSupportYears} год максимальной поддержки уровня Enterprise — в комплекте с машиной (или ${rub(P.baseLicensePriceRub || 4_000_000)} за базовую лицензию без оборудования).</p>
                         <div class="hero-cta" style="margin-top:20px">
-                            <button class="btn btn-primary" data-stage="order">Оформить заказ</button>
-                            <button class="btn btn-ghost" data-stage="pricing">Тарифы поддержки</button>
+                            <button class="btn btn-primary" data-stage="clients">Условия и покупка</button>
                         </div>
                     </div>
                     <dl class="spec">
@@ -266,7 +260,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <div><dt>Память</dt><dd>${esc(H.ram)}</dd></div>
                         <div><dt>Накопитель</dt><dd>${esc(H.storage)}</dd></div>
                         <div><dt>Защита</dt><dd>${esc(H.security)}</dd></div>
-                        <div><dt>Лицензия</dt><dd>По одновременным сессиям, привязка к HWID и ключу узла</dd></div>
+                        <div><dt>Лицензия</dt><dd>По одновременным сессиям, файлы .lic.json в #system</dd></div>
                     </dl>
                 </div>
             </div>
@@ -279,21 +273,10 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <p>Интегрированные локальные модели предназначены для базовых ежедневных операций внутри контура. Если требуются более мощные модели ИИ, их можно подключить через API из любого источника.</p>
             </div>
             <div class="grid g4">${renderModels()}</div>
-            <div class="card reveal" style="display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap">
-                <div>
-                    <span class="kicker">Подключение мощных моделей ИИ по API</span>
-                    <h3 class="h3" style="margin:4px 0 6px">Нужны более мощные модели? Подключайте из любого источника</h3>
-                    <p class="note" style="margin:0">Предустановленные на комплексе модели закрывают базовые операции учёта, голоса, иллюстраций и поиска без внешних каналов. Для сложной аналитики, больших контекстов и специализированных агентов вы можете в один клик подключить по стандартному API модели из любого источника: внешних облачных провайдеров, корпоративного GPU-кластера или коммерческого API регионального партнёра.</p>
-                </div>
-                <button class="btn btn-ghost btn-sm" data-stage="agents">Подробнее об ИИ-агентах →</button>
-            </div>
-        </section>
 
-        <!-- ============ ИИ-АГЕНТЫ ============ -->
-        <section class="stage" id="stage-agents">
-            <div class="agents-hero">
+            <div class="agents-hero" style="margin-top:28px">
                 <div>
-                    <span class="kicker">ИИ-консультант</span>
+                    <span class="kicker">ИИ-консультант и мультиагентная система</span>
                     <h2 class="h2" style="font-size:clamp(2rem,3.6vw,3.2rem)">Помощник, который <span class="grad">знает вашу организацию</span></h2>
                     <p class="lead">Консультант встроен в каждую форму системы. Он видит открытый документ, понимает структуру учёта и права пользователя — и не просто отвечает, а выполняет работу.</p>
                     <ul class="list">${AI_PLATFORM.consultant.features.map(f => `<li>${esc(f)}</li>`).join('')}</ul>
@@ -324,10 +307,6 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 </div>
             </div>
 
-            <div class="sec-head reveal">
-                <div><span class="kicker">Оркестрация</span><h2 class="h2">Как агенты работают вместе</h2></div>
-                <p>Параллельность и скорость — без потери контроля: права, подтверждения и журнал действий заложены в код платформы, а не в текст подсказки.</p>
-            </div>
             <div class="grid g3">${renderOrchestration()}</div>
 
             <div class="card reveal">
@@ -339,80 +318,94 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             </div>
         </section>
 
-        <!-- ============ ТАРИФЫ ============ -->
-        <section class="stage" id="stage-pricing">
+        <!-- ============ КЛИЕНТАМ: УСЛОВИЯ И ПОКУПКА ============ -->
+        <section class="stage" id="stage-clients">
             <div class="sec-head">
                 <div>
-                    <span class="kicker">Лицензии и поддержка</span>
-                    <h2 class="h2">10 вечных лицензий + 1 год Enterprise в базе, дальше — по желанию</h2>
+                    <span class="kicker">Клиентам · Условия и покупка</span>
+                    <h2 class="h2">Выберите вариант поставки и количество пользователей</h2>
                 </div>
-                <p>${P.baseSeats} рабочих мест входят в комплекс навсегда вместе с 1-м годом поддержки уровня Enterprise. Дальнейшее продление поддержки и докупка годовых мест — по желанию. Считаются одновременные активные сессии, а не учётные записи.</p>
+                <p>Сразу после установки из <code>npm</code> система работает бесплатно в режиме настройки (1 сессия BOSS, ИИ-агенты отключены). Первичная постоянная лицензия открывает <b>${P.baseSeats} вечных мест</b> и включает агентскую ИИ-систему.</p>
             </div>
-            <div class="tiers">${renderTiers()}</div>
-            <div class="card">
-                <div class="sec-head" style="margin-bottom:16px">
-                    <div><span class="kicker">Скидка от количества</span><h3 class="h3" style="font-size:20px">Чем больше мест — тем ниже цена каждого</h3></div>
-                    <p class="small">Скидка применяется ко всему пакету докупаемых мест.</p>
-                </div>
-                ${renderLadder('ladderPricing')}
-            </div>
-        </section>
 
-        <!-- ============ ЗАКАЗ КОМПЛЕКСА ============ -->
-        <section class="stage" id="stage-order">
-            <div class="sec-head">
-                <div><span class="kicker">Заказ</span><h2 class="h2">Программно-аппаратный комплекс ODANT-WORK</h2></div>
-                <p>Сервер AMD Ryzen™ AI Max+ PRO 495 · 192 ГБ · 4 ТБ с установленной платформой, вечной лицензией на ${P.baseSeats} мест и 1 годом поддержки Enterprise (дальше — по желанию). Оплата через ЮKassa с чеком по 54-ФЗ.</p>
-            </div>
-            <div class="card oferta-banner" data-oferta-banner></div>
             <div class="split">
                 <div class="card">
                     <div class="field">
-                        <label>Вариант базовой поставки</label>
+                        <label>1. Базовая постоянная лицензия (10 вечных пользователей + ИИ-агенты)</label>
                         <div class="seg" id="segPakVariant">
-                            <button data-variant="pak" class="on">Комплект с машиной<small>${rub(P.basePriceRub)} · железо + 10 мест</small></button>
-                            <button data-variant="license_only">Базовая лицензия без железа<small>${rub(P.baseLicensePriceRub || 4_000_000)} · 10 вечных мест</small></button>
+                            <button data-variant="pak" class="on">С машинкой (ПАК)<small>${rub(P.basePriceRub)} · сервер + 10 вечных мест</small></button>
+                            <button data-variant="license_only">Без машинки (лицензия)<small>${rub(P.baseLicensePriceRub || 4_000_000)} · 10 вечных мест</small></button>
+                            <button data-variant="addons_only">Только доп. юзеры<small>0 ₽ · базовая уже есть</small></button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>2. Дополнительные временные пользователи (сверх 10 вечных)</label>
+                        <div style="display:flex;align-items:center;gap:16px">
+                            <input type="range" id="inpPakExtraSeats" min="0" max="150" value="0" style="flex:1">
+                            <input type="number" id="inpPakExtraSeatsNum" min="0" max="2000" value="0" style="width:110px">
                         </div>
                     </div>
                     <div class="row2">
-                        <div class="field"><label for="inpPakOrg">Организация</label><input type="text" id="inpPakOrg" value="ООО «Маслоторг»"></div>
-                        <div class="field"><label for="inpPakInn">ИНН</label><input type="text" id="inpPakInn" value="7701234567" inputmode="numeric"></div>
+                        <div class="field">
+                            <label>Уровень поддержки доп. мест</label>
+                            <div class="seg" id="segPakTier">${Object.values(SLA_TIERS).map(t => `<button data-tier="${t.id}" class="${t.id === 'business' ? 'on' : ''}">${esc(t.name)}<small>${rub(t.pricePerUserYearRub)}/год</small></button>`).join('')}</div>
+                        </div>
+                        <div class="field">
+                            <label for="inpPakYears">Срок временных мест, лет (1–5)</label>
+                            <input type="number" id="inpPakYears" min="1" max="5" value="1">
+                        </div>
                     </div>
-                    <div class="field"><label for="inpPakEmail">Email для счёта и личного кабинета</label><input type="email" id="inpPakEmail" value="admin@maslotorg.ru"></div>
-                    <div class="field">
-                        <label>Дополнительные годовые места сразу в поставку: <b id="lblPakSeats" style="color:var(--text)">0</b></label>
-                        <input type="range" id="inpPakExtraSeats" min="0" max="150" value="0">
-                    </div>
-                    <div class="field">
-                        <label>Уровень поддержки дополнительных мест</label>
-                        <div class="seg" id="segPakTier">${Object.values(SLA_TIERS).map(t => `<button data-tier="${t.id}" class="${t.id === 'business' ? 'on' : ''}">${esc(t.name)}<small>${rub(t.pricePerUserYearRub)}/год</small></button>`).join('')}</div>
-                    </div>
-                    <p class="note muted" style="margin:6px 0 0">Уже есть комплекс? <a href="#" data-action="addons">Войдите в кабинет и подпишите оферту</a>, чтобы докупить места со скидкой или получить токен привязки.</p>
+                    <div class="field" style="margin-top:6px"><label>Скидка от количества дополнительных мест</label>${renderLadder('ladderPricing')}</div>
                 </div>
+
                 <div class="card summary card-glow">
-                    <span class="kicker">Итого</span>
+                    <span class="kicker">Ваш выбор</span>
                     <div class="sum-total" id="lblPakTotal">${rub(P.basePriceRub)}</div>
+                    <div class="small" id="lblPakDiscount" style="color:var(--ok);font-weight:650">Включает 10 вечных мест и 1 год поддержки Enterprise</div>
                     <div class="sum-lines" id="lblPakBreakdown"></div>
-                    <button class="btn btn-primary btn-lg" style="width:100%" data-action="order-pak">Оформить и оплатить через ЮKassa</button>
-                    <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:8px" data-action="order-pak-invoice">Выставить счёт-договор (для юр. лиц)</button>
+                    <button class="btn btn-primary btn-lg" style="width:100%" data-action="buy-client-config">Купить</button>
+                    <p class="small muted" style="margin:8px 0 0;text-align:center">При нажатии «Купить» заказ добавится в ваш Личный кабинет, где вы сможете оплатить его через ЮKassa или выставить счёт-договор для юр. лица.</p>
                     <div class="status" id="pakOrderStatus"></div>
                 </div>
             </div>
+
+            <div class="sec-head" style="margin-top:12px">
+                <div>
+                    <span class="kicker">Тарифы поддержки и конкурентных мест</span>
+                    <h2 class="h2">Условия годовых лицензий и SLA</h2>
+                </div>
+                <p>Считаются одновременные активные сессии, а не число заведённых сотрудников в базе.</p>
+            </div>
+            <div class="tiers">${renderTiers()}</div>
         </section>
 
-        <!-- ============ ДОКУПКА ЛИЦЕНЗИЙ И ЛИЧНЫЙ КАБИНЕТ (только после входа и подписания оферты) ============ -->
+        <!-- ============ ЛИЧНЫЙ КАБИНЕТ (открывается после входа / регистрации) ============ -->
         <section class="stage" id="stage-addons">
             <div class="sec-head">
-                <div><span class="kicker">Личный кабинет владельца</span><h2 class="h2">Токен привязки, ваши лицензии и покупка</h2></div>
+                <div><span class="kicker">Личный кабинет владельца</span><h2 class="h2">Заказы, токен привязки и лицензии</h2></div>
                 <p id="userBadgeBox"></p>
             </div>
-            <div class="card oferta-banner" data-oferta-banner></div>
 
-            <div class="split" style="margin-bottom:20px">
+            <div class="card" style="margin-bottom:20px">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                    <div>
+                        <span class="kicker">Заказы и оплата</span>
+                        <h3 class="h3" style="margin:4px 0 0">Ваши заказы в Личном кабинете</h3>
+                    </div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-ghost btn-sm" data-stage="clients">+ Добавить лицензию / ПАК</button>
+                        <button class="btn btn-ghost btn-sm" data-stage="franchise">+ Зарезервировать франшизу</button>
+                        <button class="btn btn-ghost btn-sm" data-action="refresh-cabinet">Обновить</button>
+                    </div>
+                </div>
+                <div id="cabinetOrdersBox" style="margin-top:14px"></div>
+            </div>
+
+            <div class="split">
                 <div class="card">
-                    <span class="kicker">Шаг 1 · Привязка вашего локального сервера WORK</span>
+                    <span class="kicker">Привязка локального сервера WORK</span>
                     <h3 class="h3" style="margin:4px 0 8px">Токен владельца (содержит URL сервера поддержки)</h3>
-                    <p class="small" style="margin:0 0 12px">Скопируйте этот токен и вставьте его в разделе <b>WORK → Лицензия</b> вашей локальной системы. По этому токену система автоматически скачивает и обновляет ваши лицензии в папку <code>#system</code>.</p>
+                    <p class="small" style="margin:0 0 12px">Скопируйте этот токен и вставьте его в разделе <b>WORK → Лицензия</b> вашей локальной системы. По этому токену система сама скачивает и обновляет оплаченные файлы лицензий в папку <code>#system</code>.</p>
                     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
                         <input type="text" id="inpCabinetHubToken" readonly placeholder="owk1..." style="flex:1;min-width:220px;font-family:monospace">
                         <button class="btn btn-primary btn-sm" data-action="copy-hub-token">Скопировать токен</button>
@@ -422,53 +415,9 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 </div>
 
                 <div class="card">
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-                        <div>
-                            <span class="kicker">Шаг 2 · Ваши выпущенные лицензии</span>
-                            <h3 class="h3" style="margin:4px 0 6px">Файлы лицензий в личном кабинете</h3>
-                        </div>
-                        <button class="btn btn-ghost btn-sm" data-action="refresh-cabinet">Обновить</button>
-                    </div>
+                    <span class="kicker">Действующие лицензии (.lic.json) и франшизы</span>
+                    <h3 class="h3" style="margin:4px 0 6px">Выпущенные файлы лицензий</h3>
                     <div id="cabinetLicensesBox" class="small" style="margin-top:8px;line-height:1.55"></div>
-                </div>
-            </div>
-
-            <div class="split">
-                <div class="card">
-                    <span class="kicker">Шаг 3 · Приобретение базовой и дополнительных лицензий</span>
-                    <div class="field" style="margin-top:8px">
-                        <label>Базовая постоянная лицензия (10 вечных пользователей + включение ИИ-агентов)</label>
-                        <div class="seg" id="segCabinetBase">
-                            <button data-base="license_only" class="on">Базовая лицензия (без железа)<small>${rub(P.baseLicensePriceRub || 4_000_000)} · 10 вечных мест</small></button>
-                            <button data-base="pak">Комплект с машиной<small>${rub(P.basePriceRub)} · сервер + 10 мест</small></button>
-                            <button data-base="none">Только доп. временные<small>0 ₽ · базовая уже куплена</small></button>
-                        </div>
-                    </div>
-                    <div class="field">
-                        <label>Дополнительные временные места (сверх 10 вечных)</label>
-                        <div style="display:flex;align-items:center;gap:16px">
-                            <input type="range" id="rngAddonSeats" min="0" max="150" value="0" style="flex:1">
-                            <input type="number" id="inpSeats" min="0" max="2000" value="0" style="width:110px">
-                        </div>
-                    </div>
-                    <div class="field">
-                        <label>Уровень поддержки дополнительных мест</label>
-                        <div class="seg" id="segTier">${Object.values(SLA_TIERS).map(t => `<button data-tier="${t.id}" class="${t.id === 'business' ? 'on' : ''}">${esc(t.name)}<small>${rub(t.pricePerUserYearRub)} · ${esc(t.reactionLabel)}</small></button>`).join('')}</div>
-                    </div>
-                    <div class="row2">
-                        <div class="field"><label for="inpYears">Срок временных лицензий, лет (кратно годам)</label><input type="number" id="inpYears" min="1" max="5" value="1"></div>
-                        <div class="field"><label for="inpLicId">Идентификатор лицензии</label><input type="text" id="inpLicId" readonly></div>
-                    </div>
-                    <div class="field" style="margin-top:6px"><label>Скидка от количества доп. мест</label>${renderLadder('ladderAddons')}</div>
-                </div>
-                <div class="card summary card-glow">
-                    <span class="kicker">К оплате</span>
-                    <div class="sum-total" id="lblTotal">0 ₽</div>
-                    <div class="small" id="lblDiscountBadge" style="color:var(--ok);font-weight:650"></div>
-                    <div class="sum-lines" id="lblBreakdown"></div>
-                    <button class="btn btn-primary btn-lg" style="width:100%" data-action="order-addons">Оплатить через ЮKassa</button>
-                    <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:8px" data-action="order-addons-invoice">Выставить счёт-договор (для юр. лиц)</button>
-                    <div class="status" id="orderStatus"></div>
                 </div>
             </div>
         </section>
@@ -534,12 +483,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <div><span>Индекс экономики</span><b id="mapRegIndex">—</b></div>
                         <div><span>Остаток (в течение года)</span><b id="mapRegRest">—</b></div>
                     </div>
-                    <div class="field"><label for="inpPartnerCompany">Компания</label><input type="text" id="inpPartnerCompany" value="ООО «УралТехИнтеграция»"></div>
-                    <div class="row2">
-                        <div class="field"><label for="inpPartnerInn">ИНН</label><input type="text" id="inpPartnerInn" value="6670123456" inputmode="numeric"></div>
-                        <div class="field"><label for="inpPartnerEmail">Email</label><input type="email" id="inpPartnerEmail" value="partner@uraltech.ru"></div>
-                    </div>
-                    <button class="btn btn-primary" style="width:100%" id="btnReserveSelected" data-action="reserve-selected" disabled>Зарезервировать · залог ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</button>
+                    <button class="btn btn-primary" style="width:100%;margin-top:8px" id="btnReserveSelected" data-action="reserve-selected" disabled>Зарезервировать · залог ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</button>
+                    <p class="small muted" style="margin:8px 0 0;text-align:center">При нажатии «Зарезервировать» заявка на регион добавится как заказ в ваш Личный кабинет.</p>
                     <div class="status" id="partnerActionMsg"></div>
                 </aside>
             </div>
@@ -592,56 +537,6 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="grid g4">${renderTracks()}</div>
         </section>
 
-        <!-- ============ ПОДДЕРЖКА ============ -->
-        <section class="stage" id="stage-support">
-            <div class="sec-head">
-                <div><span class="kicker">Сервис</span><h2 class="h2">Поддержка в мессенджерах MAX, Telegram и VK</h2></div>
-                <p>Боты принимают обращения, показывают статус лицензии, выставляют счета и передают вопросы инженеру по SLA вашего тарифа.</p>
-            </div>
-            <div class="grid g2">
-                <div class="card">
-                    <h3 class="h3">Консоль бота</h3>
-                    <div class="row2" style="margin-top:12px">
-                        <div class="field"><label for="botChannel">Канал</label><select id="botChannel"><option value="max">MAX</option><option value="telegram">Telegram</option><option value="vk">VK</option></select></div>
-                        <div class="field"><label for="botChatId">Chat ID</label><input type="text" id="botChatId" value="client-101"></div>
-                    </div>
-                    <div class="field"><label for="botText">Команда или текст</label>
-                        <div style="display:flex;gap:8px"><input type="text" id="botText" value="/start"><button class="btn btn-primary" data-action="bot-send">${icon('send')}</button></div>
-                    </div>
-                    <div class="chips" style="margin-bottom:12px">
-                        <button class="chip" data-bot="/status">/status</button>
-                        <button class="chip" data-bot="/buy business 10">/buy business 10</button>
-                        <button class="chip" data-bot="/help">/help</button>
-                    </div>
-                    <div class="console" id="botReplyBox">Ответ бота появится здесь…</div>
-                </div>
-                <div class="card">
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-                        <h3 class="h3" style="margin:0">Ваша лицензия и привязка мессенджеров</h3>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap">
-                            <button class="btn btn-ghost btn-sm" data-action="auth">Личный кабинет</button>
-                            <button class="btn btn-ghost btn-sm" data-action="open-oferta">Договор-оферта</button>
-                        </div>
-                    </div>
-                    <div class="console" id="clientLicenseBox" style="margin-top:14px">Войдите в личный кабинет и подпишите договор-оферту, чтобы получить код привязки вашего комплекса к ботам MAX, Telegram и VK.</div>
-                </div>
-            </div>
-            <div class="card">
-                <div class="spec-wrap">
-                    <div>
-                        <span class="kicker">Разработчик платформы</span>
-                        <h2 class="h2">${esc(VENDOR_CONTACTS.company)}</h2>
-                        <p class="note">${esc(VENDOR_CONTACTS.description)}. Головной офис ODANT — в Рязани.</p>
-                    </div>
-                    <div>
-                        <div class="contact-row">${icon('pin')}<div><b>${esc(VENDOR_CONTACTS.address)}</b><br><a href="https://yandex.ru/maps/?pt=${VENDOR_CONTACTS.geo.lon},${VENDOR_CONTACTS.geo.lat}&z=17&l=map" target="_blank" rel="noopener">Открыть на карте</a></div></div>
-                        <div class="contact-row">${icon('phone')}<div>${VENDOR_CONTACTS.phones.map(p => `<a href="tel:${p.replace(/[^\d+]/g, '')}">${esc(p)}</a>`).join('<br>')}</div></div>
-                        <div class="contact-row">${icon('globe')}<div><a href="${esc(VENDOR_CONTACTS.site)}" target="_blank" rel="noopener">${esc(VENDOR_CONTACTS.site.replace(/^https?:\/\//, ''))}</a> · <a href="https://${esc(P.domain)}">${esc(P.domain)}</a></div></div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
         <footer>
             <div class="footer">
                 <div>
@@ -668,39 +563,57 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         </footer>
     </div>
 
-    <!-- Регистрация / Вход в кабинет и подписание публичной оферты ПЭП -->
+    <!-- Вход / Регистрация в Личный кабинет (без ИНН, ФИО и ПЭП — по Email, через мессенджеры или OAuth) -->
     <div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
-        <div class="card" style="max-width:540px">
+        <div class="card" style="max-width:480px">
             <div class="modal-head">
                 <img src="/assets/odant-logo.png" alt="">
                 <div>
-                    <h3 class="h3" id="authTitle" style="margin:0">Регистрация и подписание оферты</h3>
-                    <div class="small muted" id="authSub">Заказ комплекса, докупка лицензий и резервирование франшизы доступны после регистрации и акцепта оферты (ПЭП)</div>
+                    <h3 class="h3" id="authTitle" style="margin:0">Вход / Регистрация</h3>
+                    <div class="small muted" id="authSub">Войдите в Личный кабинет по Email, через мессенджер или OAuth</div>
                 </div>
             </div>
-            <div class="row2">
-                <div class="field"><label for="authEmail">Корпоративный email *</label><input type="email" id="authEmail" value="admin@maslotorg.ru" required></div>
-                <div class="field"><label for="authInn">ИНН организации *</label><input type="text" id="authInn" value="7701234567" inputmode="numeric" required></div>
-            </div>
-            <div class="row2">
-                <div class="field"><label for="authCompany">Наименование организации *</label><input type="text" id="authCompany" value="ООО «Маслоторг»" required></div>
-                <div class="field"><label for="authSigner">ФИО и должность подписанта *</label><input type="text" id="authSigner" value="Перепелкин Р.А., Генеральный директор" required></div>
-            </div>
-            <div class="field"><label for="authLicId">Номер лицензии ПАК (если уже выдан)</label><input type="text" id="authLicId" placeholder="Будет привязан или выпущен автоматически"></div>
 
-            <div class="oferta-check-box">
+            <div id="authIntentNotice" class="small" style="display:none;padding:10px 12px;border-radius:10px;background:rgba(0,163,224,.12);border:1px solid rgba(0,163,224,.35);margin-bottom:4px"></div>
+
+            <div class="field">
+                <label for="authEmail">Ваш Email</label>
+                <div style="display:flex;gap:8px">
+                    <input type="email" id="authEmail" value="admin@maslotorg.ru" placeholder="name@company.ru" style="flex:1" required>
+                    <button class="btn btn-primary" data-action="login">${icon('check')} Войти по Email</button>
+                </div>
+            </div>
+
+            <div class="field" style="margin-top:6px">
+                <label>Быстрый вход через мессенджеры</label>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="telegram">Telegram</button>
+                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="max">MAX</button>
+                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="vk">VK Мессенджер</button>
+                </div>
+            </div>
+
+            <div class="field">
+                <label>Вход через OAuth-провайдеров</label>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="yandex">Яндекс ID</button>
+                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="vk_id">VK ID</button>
+                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="google">Google</button>
+                </div>
+            </div>
+
+            <div class="oferta-check-box" style="margin-top:6px">
                 <label class="oferta-check-label">
                     <input type="checkbox" id="authOfertaCheck" checked>
                     <span>
-                        Я ознакомился с условиями <a href="#" data-action="open-oferta">Публичного договора-оферты ODANT-WORK (${esc(PUBLIC_OFERTA.version)})</a> и подписываю его простой электронной подписью (ПЭП) от имени указанной организации.
+                        Регистрируясь и входя в Личный кабинет, я принимаю условия <a href="#" data-action="open-oferta">Публичного договора-оферты ODANT-WORK (${esc(PUBLIC_OFERTA.version)})</a>.
                     </span>
                 </label>
             </div>
-            <div class="status" id="authErrorMsg" style="color:var(--danger);min-height:18px;margin-top:6px"></div>
-            <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap">
-                <button class="btn btn-primary" style="flex:1" data-action="login">${icon('check')} Зарегистрироваться и подписать оферту</button>
-                <button class="btn btn-ghost" id="btnLogoutModal" data-action="logout" style="display:none">Выйти</button>
-                <button class="btn btn-ghost" data-action="auth-close">Закрыть</button>
+            <div class="status" id="authErrorMsg" style="color:var(--danger);min-height:18px;margin-top:4px"></div>
+            <div style="display:flex;gap:10px;margin-top:6px;justify-content:flex-end;flex-wrap:wrap">
+                <button class="btn btn-ghost btn-sm" id="btnLogoutModal" data-action="logout" style="display:none">Выйти из аккаунта</button>
+                <button class="btn btn-ghost btn-sm" data-action="auth-close">Закрыть</button>
             </div>
         </div>
     </div>
@@ -728,7 +641,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 </div>
             </div>
             <div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;flex-wrap:wrap">
-                <button class="btn btn-primary" data-action="accept-from-oferta">${icon('check')} Принять условия и перейти к подписанию ПЭП</button>
+                <button class="btn btn-primary" data-action="accept-from-oferta">${icon('check')} Принять условия оферты</button>
                 <button class="btn btn-ghost" data-action="oferta-close">Закрыть</button>
             </div>
         </div>

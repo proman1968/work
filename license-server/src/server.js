@@ -327,7 +327,8 @@ export function createLicenseServerApp(options = {}) {
                 const user = ensureCustomerOferta(req, body);
                 const reserved = store.reserveFranchiseSlot({
                     ...body,
-                    companyName: body.companyName || user?.companyName || '',
+                    ownerAccountId: user?.userId || body.ownerAccountId || '',
+                    companyName: body.companyName || user?.companyName || user?.email || '',
                     inn: body.inn || user?.inn || '',
                     email: body.email || user?.email || '',
                 });
@@ -337,6 +338,90 @@ export function createLicenseServerApp(options = {}) {
                     reservation: reserved.reservation,
                     order: reserved.order,
                     regionQuota: reserved.regionQuota,
+                });
+            }
+
+            // 2.6.1 Добавление позиции («Купить» или «Зарезервировать») как неоплаченного заказа в Личный кабинет
+            if (req.method === 'POST' && pathname === '/api/cabinet/orders/draft') {
+                const body = await readJsonBody(req);
+                const user = ensureCustomerOferta(req, body);
+                let order;
+                let reservation = null;
+                if (body.kind === 'franchise_reservation' || body.regionCode) {
+                    const reserved = store.reserveFranchiseSlot({
+                        regionCode: body.regionCode,
+                        ownerAccountId: user?.userId || '',
+                        companyName: body.companyName || user?.companyName || user?.email || 'Партнёр ODANT-WORK',
+                        inn: body.inn || user?.inn || '',
+                        email: body.email || user?.email || '',
+                    });
+                    order = reserved.order;
+                    reservation = reserved.reservation;
+                }
+                else {
+                    order = store.createOrder({
+                        ...body,
+                        licenseId: body.licenseId || user?.licenseId || '',
+                        ownerAccountId: user?.userId || '',
+                        customer: {
+                            name: body.customer?.name || user?.companyName || user?.email || '',
+                            inn: body.customer?.inn || user?.inn || '',
+                            email: body.customer?.email || user?.email || '',
+                            phone: body.customer?.phone || user?.phone || '',
+                        },
+                    });
+                }
+                const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                return sendJson(res, 200, {
+                    ok: true,
+                    order,
+                    reservation,
+                    user: updatedUser,
+                });
+            }
+
+            // 2.6.2 Оплата существующего заказа из Личного кабинета (через ЮKassa или по счёту-договору для юрлиц)
+            if (req.method === 'POST' && pathname === '/api/cabinet/orders/pay') {
+                const body = await readJsonBody(req);
+                const user = ensureCustomerOferta(req, body);
+                const order = store.prepareOrderPayment(body.orderId, {
+                    paymentMethod: body.paymentMethod || 'yookassa',
+                    companyName: body.companyName || user?.companyName || '',
+                    inn: body.inn || user?.inn || '',
+                });
+                const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                if (order.paymentMethod === 'invoice') {
+                    return sendJson(res, 200, {
+                        ok: true,
+                        orderId: order.orderId,
+                        paymentMethod: 'invoice',
+                        invoiceNumber: order.invoiceNumber,
+                        contractNumber: order.contractNumber,
+                        invoiceUrl: `${reqOrigin}${order.invoiceUrl}`,
+                        confirmationUrl: `${reqOrigin}${order.invoiceUrl}`,
+                        order,
+                        user: updatedUser,
+                    });
+                }
+                const payment = await yookassa.createPaymentForOrder(order, { originOverride: reqOrigin });
+                return sendJson(res, 200, {
+                    ok: true,
+                    ...payment,
+                    order,
+                    user: updatedUser,
+                });
+            }
+
+            // 2.6.3 Отмена (удаление) неоплаченного заказа из Личного кабинета
+            if (req.method === 'POST' && pathname === '/api/cabinet/orders/cancel') {
+                const body = await readJsonBody(req);
+                const user = ensureCustomerOferta(req, body);
+                store.cancelOrder(body.orderId);
+                const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                return sendJson(res, 200, {
+                    ok: true,
+                    orderId: body.orderId,
+                    user: updatedUser,
                 });
             }
 

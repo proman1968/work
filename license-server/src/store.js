@@ -939,9 +939,24 @@ export class LicenseStore {
     _formatUserResponse(user) {
         if (!user)
             return null;
+        const userEmail = String(user.email || '').toLowerCase();
+        const userOrders = Object.values(this.state.orders || {})
+            .filter(o => o.status !== 'canceled' && (
+                (user.userId && o.ownerAccountId === user.userId)
+                || (user.licenseId && o.licenseId === user.licenseId)
+                || (userEmail && String(o.customer?.email || '').toLowerCase() === userEmail)
+            ))
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        const userReservations = Object.values(this.state.reservations || {})
+            .filter(r => r.status !== 'canceled' && (
+                (user.userId && r.ownerAccountId === user.userId)
+                || (userEmail && String(r.email || '').toLowerCase() === userEmail)
+            ))
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         return {
             userId: user.userId,
             email: user.email,
+            authProvider: user.authProvider || 'email',
             name: user.name,
             position: user.position || '',
             companyName: user.companyName,
@@ -960,28 +975,37 @@ export class LicenseStore {
             createdAt: user.createdAt,
             lastLoginAt: user.lastLoginAt,
             license: this.getLicenseSummary(user.licenseId),
+            orders: userOrders,
+            reservations: userReservations,
         };
     }
 
     /**
-     * Зарегистрировать или авторизовать пользователя личного кабинета ODANT-WORK.
-     * Любые операции заказа комплекса, докупки лицензий, оплаты и резервирования франшизы
-     * доступны пользователю после регистрации и подписания публичной оферты (ПЭП).
+     * Зарегистрировать или авторизовать пользователя личного кабинета ODANT-WORK
+     * (по email, через OAuth или через мессенджеры Telegram / MAX / VK).
+     * Акцепт договора-оферты фиксируется по факту регистрации (ofertaAccepted = true по умолчанию).
      */
     registerOrLoginUser({
         email = '',
+        provider = 'email',
+        providerAccount = '',
         name = '',
         position = '',
         companyName = '',
         inn = '',
         phone = '',
         licenseId = '',
-        ofertaAccepted = false,
+        ofertaAccepted = true,
         hubUrl = 'https://work.odant.org',
     } = {}) {
-        const cleanEmail = String(email || '').trim().toLowerCase();
+        const cleanProvider = String(provider || 'email').trim().toLowerCase();
+        let cleanEmail = String(email || '').trim().toLowerCase();
+        if (!cleanEmail && providerAccount) {
+            const safeAcc = String(providerAccount).trim().toLowerCase().replace(/[^a-z0-9._+-]/g, '') || 'user';
+            cleanEmail = safeAcc.includes('@') ? safeAcc : `${safeAcc}@${cleanProvider}.id.odant.org`;
+        }
         if (!cleanEmail || !cleanEmail.includes('@'))
-            throw new Error('Укажите корректный корпоративный email для регистрации в личном кабинете ODANT-WORK');
+            throw new Error('Укажите корректный email или войдите через мессенджер / OAuth');
 
         let user = this.state.users[cleanEmail];
         const now = Date.now();
@@ -995,7 +1019,7 @@ export class LicenseStore {
                     ownerEmail: cleanEmail,
                     baseActivated: false,
                     customer: {
-                        name: companyName || name || 'Организация ODANT-WORK',
+                        name: companyName || name || cleanEmail,
                         inn: inn || '',
                         email: cleanEmail,
                         phone: phone || '',
@@ -1013,11 +1037,12 @@ export class LicenseStore {
             user = {
                 userId,
                 email: cleanEmail,
+                authProvider: cleanProvider,
                 name: String(name || companyName || cleanEmail.split('@')[0]).trim(),
                 position: String(position || '').trim(),
-                companyName: String(companyName || lic.customer?.name || 'Организация ODANT-WORK').trim(),
-                inn: String(inn || lic.customer?.inn || '').trim(),
-                phone: String(phone || lic.customer?.phone || '').trim(),
+                companyName: String(companyName || '').trim(),
+                inn: String(inn || '').trim(),
+                phone: String(phone || '').trim(),
                 licenseId: lic.licenseId,
                 sessionKey: 'wks_' + crypto.randomBytes(16).toString('hex'),
                 hubToken: tokData.token,
@@ -1036,6 +1061,7 @@ export class LicenseStore {
         }
         else {
             user.lastLoginAt = now;
+            if (cleanProvider && cleanProvider !== 'email') user.authProvider = cleanProvider;
             if (name) user.name = String(name).trim();
             if (position) user.position = String(position).trim();
             if (companyName) user.companyName = String(companyName).trim();
@@ -1058,11 +1084,11 @@ export class LicenseStore {
             }
         }
 
-        if (ofertaAccepted && !user.ofertaAccepted) {
+        if (ofertaAccepted !== false && !user.ofertaAccepted) {
             user.ofertaAccepted = true;
             user.ofertaAcceptedAt = now;
             user.ofertaVersion = PUBLIC_OFERTA.version;
-            user.ofertaSignerName = String(name || user.name || user.companyName).trim();
+            user.ofertaSignerName = String(name || user.name || user.companyName || user.email).trim();
             user.ofertaSignatureId = 'PEP-' + crypto.randomBytes(4).toString('hex').toUpperCase();
         }
 
@@ -1299,6 +1325,7 @@ export class LicenseStore {
      */
     reserveFranchiseSlot({
         regionCode = 'RU-SVE',
+        ownerAccountId = '',
         companyName = '',
         inn = '',
         email = '',
@@ -1306,8 +1333,7 @@ export class LicenseStore {
         contactPerson = '',
         returnUrl = '',
     } = {}) {
-        if (!companyName)
-            throw new Error('Укажите наименование компании для резервирования региональной франшизы');
+        const effCompanyName = String(companyName || email || 'Партнёр ODANT-WORK').trim();
 
         const quotaStatus = this.getRegionPartnerQuotaStatus(regionCode);
         if (quotaStatus.vacantFranchises <= 0) {
@@ -1321,14 +1347,17 @@ export class LicenseStore {
         const reservationId = 'RES-' + quotaStatus.regionCode.replace(/^RU-/, '') + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
         const depositRub = FRANCHISE_PROGRAM.reservationDepositRub;
         const orderId = 'ORD-FR-' + Date.now().toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+        const invoiceNumber = 'СЧ-FR-' + new Date(now).toISOString().slice(0, 10).replace(/-/g, '') + '-' + orderId.slice(-4);
+        const contractNumber = 'ДЛ-FR-' + new Date(now).getFullYear() + '-' + orderId.slice(-6);
 
         const reservation = {
             reservationId,
             orderId,
+            ownerAccountId: String(ownerAccountId || '').trim(),
             regionCode: quotaStatus.regionCode,
             regionName: quotaStatus.regionName,
             district: quotaStatus.district,
-            companyName: String(companyName).trim(),
+            companyName: effCompanyName,
             inn: String(inn || '').trim(),
             email: String(email || 'franchise@odant.org').trim(),
             phone: String(phone || '').trim(),
@@ -1346,6 +1375,7 @@ export class LicenseStore {
 
         const order = {
             orderId,
+            ownerAccountId: String(ownerAccountId || '').trim(),
             kind: 'franchise_reservation',
             reservationId,
             licenseId: reservationId,
@@ -1356,6 +1386,9 @@ export class LicenseStore {
             years: 1,
             amountRub: depositRub,
             franchiseFeeRub: quotaStatus.franchiseFeeRub,
+            invoiceNumber,
+            contractNumber,
+            invoiceUrl: `/api/orders/${encodeURIComponent(orderId)}/invoice`,
             items: [
                 {
                     title: `Невозвратный залог за резервирование региональной франшизы ODANT-WORK (${quotaStatus.regionName}, паушальный взнос ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽, полная оплата в течение 1 года)`,
@@ -1387,6 +1420,67 @@ export class LicenseStore {
             order,
             regionQuota: this.getRegionPartnerQuotaStatus(quotaStatus.regionCode),
         };
+    }
+
+    /**
+     * Обновить способ оплаты и реквизиты юрлица для существующего заказа из Личного кабинета.
+     */
+    prepareOrderPayment(orderId, {
+        paymentMethod = 'yookassa',
+        companyName = '',
+        inn = '',
+        kpp = '',
+        legalAddress = '',
+    } = {}) {
+        const order = this.state.orders[orderId];
+        if (!order)
+            throw new Error(`Заказ ${orderId} не найден`);
+        order.paymentMethod = paymentMethod === 'invoice' ? 'invoice' : 'yookassa';
+        order.customer = order.customer || {};
+        if (companyName) order.customer.name = String(companyName).trim();
+        if (inn) order.customer.inn = String(inn).trim();
+        if (kpp) order.customer.kpp = String(kpp).trim();
+        if (legalAddress) order.customer.legalAddress = String(legalAddress).trim();
+        if (!order.invoiceNumber) {
+            order.invoiceNumber = 'СЧ-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + orderId.slice(-4);
+        }
+        if (!order.contractNumber) {
+            order.contractNumber = 'ДЛ-' + new Date().getFullYear() + '-' + orderId.slice(-6);
+        }
+        if (!order.invoiceUrl) {
+            order.invoiceUrl = `/api/orders/${encodeURIComponent(orderId)}/invoice`;
+        }
+        if (order.reservationId && this.state.reservations[order.reservationId]) {
+            if (companyName) this.state.reservations[order.reservationId].companyName = String(companyName).trim();
+            if (inn) this.state.reservations[order.reservationId].inn = String(inn).trim();
+        }
+        if (order.ownerAccountId) {
+            const u = Object.values(this.state.users).find(usr => usr.userId === order.ownerAccountId);
+            if (u) {
+                if (companyName) u.companyName = String(companyName).trim();
+                if (inn) u.inn = String(inn).trim();
+            }
+        }
+        this._save();
+        return order;
+    }
+
+    /**
+     * Отменить неоплаченный заказ в Личном кабинете (и снять резерв региона, если это был резерв франшизы).
+     */
+    cancelOrder(orderId) {
+        const order = this.state.orders[orderId];
+        if (!order)
+            throw new Error(`Заказ ${orderId} не найден`);
+        if (order.status === 'paid')
+            throw new Error('Оплаченный заказ отменить нельзя');
+        order.status = 'canceled';
+        order.canceledAt = Date.now();
+        if (order.reservationId && this.state.reservations[order.reservationId]) {
+            this.state.reservations[order.reservationId].status = 'canceled';
+        }
+        this._save();
+        return { ok: true, orderId };
     }
 
     /**
