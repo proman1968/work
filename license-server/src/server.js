@@ -392,7 +392,14 @@ export function createLicenseServerApp(options = {}) {
 
             // 2. Каталог ПАК, отдельной базовой лицензии (4 млн ₽), тарифов SLA, прочих товаров, партнёрской франшизы и оферты
             if (req.method === 'GET' && pathname === '/api/catalog') {
+                let serverVersion = '1.0.13';
+                try {
+                    const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+                    serverVersion = pkg.version || serverVersion;
+                }
+                catch { /* ignore */ }
                 return sendJson(res, 200, {
+                    serverVersion,
                     product: PAK_PRODUCT,
                     baseLicenseProduct: BASE_LICENSE_PRODUCT,
                     additionalProducts: ADDITIONAL_PRODUCTS,
