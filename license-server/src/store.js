@@ -993,6 +993,7 @@ export class LicenseStore {
                 const summary = this.issueOrUpdateLicense({
                     ownerAccountId: userId,
                     ownerEmail: cleanEmail,
+                    baseActivated: false,
                     customer: {
                         name: companyName || name || 'Организация ODANT-WORK',
                         inn: inn || '',

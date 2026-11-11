@@ -184,7 +184,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <button class="tab" data-stage="agents">ИИ-агенты</button>
                 <button class="tab" data-stage="pricing">Тарифы</button>
                 <button class="tab" data-stage="order">Комплекс</button>
-                <button class="tab" id="tileAddons" data-stage="addons" style="display:none;">Докупка лицензий</button>
+                <button class="tab" id="tileAddons" data-stage="addons" style="display:none;">Личный кабинет</button>
                 <button class="tab" data-stage="franchise">Франшиза</button>
                 <button class="tab" data-stage="support">Поддержка</button>
             </nav>
@@ -403,37 +403,63 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         <!-- ============ ДОКУПКА ЛИЦЕНЗИЙ И ЛИЧНЫЙ КАБИНЕТ (только после входа и подписания оферты) ============ -->
         <section class="stage" id="stage-addons">
             <div class="sec-head">
-                <div><span class="kicker">Личный кабинет владельца</span><h2 class="h2">Токен привязки локальной системы и покупка лицензий</h2></div>
+                <div><span class="kicker">Личный кабинет владельца</span><h2 class="h2">Токен привязки, ваши лицензии и покупка</h2></div>
                 <p id="userBadgeBox"></p>
             </div>
             <div class="card oferta-banner" data-oferta-banner></div>
-            <div class="card" style="margin-bottom:20px">
-                <span class="kicker">Ключ доступа для локального сервера WORK</span>
-                <h3 class="h3" style="margin:4px 0 8px">Токен владельца (содержит URL сервера поддержки и ключ синхронизации лицензий)</h3>
-                <p class="small" style="margin:0 0 10px">Скопируйте этот токен и вставьте его в раздел «Лицензирование» вашей локальной системы ODANT-WORK. Система автоматически привяжется к личному кабинету и загрузит файлы лицензий в папку <code>#system</code>.</p>
-                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-                    <input type="text" id="inpCabinetHubToken" readonly placeholder="owk1..." style="flex:1;min-width:260px;font-family:monospace">
-                    <button class="btn btn-ghost btn-sm" data-action="gen-hub-token">Сгенерировать / Обновить токен</button>
+
+            <div class="split" style="margin-bottom:20px">
+                <div class="card">
+                    <span class="kicker">Шаг 1 · Привязка вашего локального сервера WORK</span>
+                    <h3 class="h3" style="margin:4px 0 8px">Токен владельца (содержит URL сервера поддержки)</h3>
+                    <p class="small" style="margin:0 0 12px">Скопируйте этот токен и вставьте его в разделе <b>WORK → Лицензия</b> вашей локальной системы. По этому токену система автоматически скачивает и обновляет ваши лицензии в папку <code>#system</code>.</p>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                        <input type="text" id="inpCabinetHubToken" readonly placeholder="owk1..." style="flex:1;min-width:220px;font-family:monospace">
+                        <button class="btn btn-primary btn-sm" data-action="copy-hub-token">Скопировать токен</button>
+                        <button class="btn btn-ghost btn-sm" data-action="gen-hub-token">Перевыпустить</button>
+                    </div>
+                    <div class="small" id="tokenCopyStatus" style="color:var(--ok);min-height:18px;margin-top:6px"></div>
+                </div>
+
+                <div class="card">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+                        <div>
+                            <span class="kicker">Шаг 2 · Ваши выпущенные лицензии</span>
+                            <h3 class="h3" style="margin:4px 0 6px">Файлы лицензий в личном кабинете</h3>
+                        </div>
+                        <button class="btn btn-ghost btn-sm" data-action="refresh-cabinet">Обновить</button>
+                    </div>
+                    <div id="cabinetLicensesBox" class="small" style="margin-top:8px;line-height:1.55"></div>
                 </div>
             </div>
+
             <div class="split">
                 <div class="card">
-                    <div class="field">
-                        <label>Количество дополнительных мест</label>
-                        <div style="display:flex;align-items:center;gap:16px">
-                            <input type="range" id="rngAddonSeats" min="1" max="150" value="10" style="flex:1">
-                            <input type="number" id="inpSeats" min="1" max="2000" value="10" style="width:110px">
+                    <span class="kicker">Шаг 3 · Приобретение базовой и дополнительных лицензий</span>
+                    <div class="field" style="margin-top:8px">
+                        <label>Базовая постоянная лицензия (10 вечных пользователей + включение ИИ-агентов)</label>
+                        <div class="seg" id="segCabinetBase">
+                            <button data-base="license_only" class="on">Базовая лицензия (без железа)<small>${rub(P.baseLicensePriceRub || 4_000_000)} · 10 вечных мест</small></button>
+                            <button data-base="pak">Комплект с машиной<small>${rub(P.basePriceRub)} · сервер + 10 мест</small></button>
+                            <button data-base="none">Только доп. временные<small>0 ₽ · базовая уже куплена</small></button>
                         </div>
                     </div>
                     <div class="field">
-                        <label>Уровень поддержки</label>
+                        <label>Дополнительные временные места (сверх 10 вечных)</label>
+                        <div style="display:flex;align-items:center;gap:16px">
+                            <input type="range" id="rngAddonSeats" min="0" max="150" value="0" style="flex:1">
+                            <input type="number" id="inpSeats" min="0" max="2000" value="0" style="width:110px">
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>Уровень поддержки дополнительных мест</label>
                         <div class="seg" id="segTier">${Object.values(SLA_TIERS).map(t => `<button data-tier="${t.id}" class="${t.id === 'business' ? 'on' : ''}">${esc(t.name)}<small>${rub(t.pricePerUserYearRub)} · ${esc(t.reactionLabel)}</small></button>`).join('')}</div>
                     </div>
                     <div class="row2">
-                        <div class="field"><label for="inpYears">Срок, лет (кратно годам)</label><input type="number" id="inpYears" min="1" max="5" value="1"></div>
-                        <div class="field"><label for="inpLicId">Лицензия комплекса</label><input type="text" id="inpLicId" readonly></div>
+                        <div class="field"><label for="inpYears">Срок временных лицензий, лет (кратно годам)</label><input type="number" id="inpYears" min="1" max="5" value="1"></div>
+                        <div class="field"><label for="inpLicId">Идентификатор лицензии</label><input type="text" id="inpLicId" readonly></div>
                     </div>
-                    <div class="field" style="margin-top:6px"><label>Скидка от количества</label>${renderLadder('ladderAddons')}</div>
+                    <div class="field" style="margin-top:6px"><label>Скидка от количества доп. мест</label>${renderLadder('ladderAddons')}</div>
                 </div>
                 <div class="card summary card-glow">
                     <span class="kicker">К оплате</span>
@@ -809,7 +835,12 @@ export function renderSandboxPaymentPage(order) {
             });
             const data = await res.json();
             document.getElementById('st').textContent = data.status || event;
-            document.getElementById('msg').textContent = data.status === 'paid' ? 'Оплата проведена. Лицензия обновлена.' : 'Платёж отменён.';
+            document.getElementById('msg').innerHTML = data.status === 'paid'
+                ? 'Оплата успешно проведена! Файлы лицензий выпущены в вашем Личном кабинете.<br><button class="btn cancel" style="margin-top:10px" onclick="if(window.opener){window.opener.postMessage({type:\\'odant:order-paid\\'},\\'*\\');window.close();}else{location.href=\\'/#addons\\';}">Вернуться в Личный кабинет →</button>'
+                : 'Платёж отменён.';
+            if (data.status === 'paid' && window.opener) {
+                try { window.opener.postMessage({ type: 'odant:order-paid', orderId: ORDER.orderId }, '*'); } catch {}
+            }
         }
     </script>
 </body>

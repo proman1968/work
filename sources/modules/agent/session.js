@@ -444,7 +444,7 @@ async function assertTaskOwner(file, params) {
 }
 
 /** Запуск петли (фоном). Возвращает сразу; ход работы — событиями и сохранениями. */
-function start(s, session, file) {
+function start(s, session, file, licenseOpts = {}) {
     const body = s.body;
     s.controller = new AbortController();
     s.startedAt = Date.now();
@@ -455,6 +455,9 @@ function start(s, session, file) {
         let restart;
         let aborted;
         try {
+            if (shouldEnforceAgentLicense(licenseOpts)) {
+                assertAgentSystemLicensed({ license: licenseOpts.license, systemDir: licenseOpts.systemDir });
+            }
             const place = file.$class || file.$owner || null;
             // роль задачи — из тела .task (записана при сохранении) или по области файла
             body.role = body.role || taskRole(file);
@@ -567,9 +570,6 @@ function applyOffline(body, reply) {
  */
 export async function prompt(file, params = {}) {
     params = argsOf(params);
-    if (shouldEnforceAgentLicense(params)) {
-        assertAgentSystemLicensed({ license: params.license, systemDir: params.systemDir });
-    }
     await assertTaskOwner(file, params);
     const s = stateOf(file);
     const session = params.session;
@@ -687,7 +687,7 @@ export async function prompt(file, params = {}) {
         body.model = params.model;
     s.body = body;
     await save(s, session);
-    start(s, session, file);
+    start(s, session, file, { enforceLicense: params.enforceLicense, license: params.license, systemDir: params.systemDir });
     return { ok: true };
 }
 

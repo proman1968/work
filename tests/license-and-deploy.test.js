@@ -755,6 +755,8 @@ describe('ПАК WORK: спецификация, лицензирование, �
         }).then(r => r.json());
         assert.ok(ownerReg.userId.startsWith('USR-'));
         assert.ok(ownerReg.hubToken.startsWith('owk1.'));
+        assert.equal(ownerReg.license.baseActivated, false, 'До оплаты заказа базовая лицензия в личном кабинете ещё не активирована');
+        assert.equal(ownerReg.license.licenseFiles.length, 0, 'До оплаты заказа файлы лицензий ещё не выпущены');
 
         // Владелец оформляет заказ с оплатой по договору (счёту) для юр. лиц
         const invoiceOrder = await fetch(`${hubUrl}/api/orders/checkout`, {
@@ -953,7 +955,10 @@ describe('ПАК WORK: спецификация, лицензирование, �
             ofertaAccepted: true,
             hubUrl: 'https://fake-license.example.org',
         });
-        const fakeSummary = fakeHubApp.store.getLicenseSummary(fakeUser.licenseId);
+        const fakeSummary = fakeHubApp.store.issueOrUpdateLicense({
+            licenseId: fakeUser.licenseId,
+            baseActivated: true,
+        });
         const fakeBaseFile = fakeSummary.licenseFiles.find(f => f.kind === 'base')?.licenseFile;
         assert.ok(fakeUser.hubToken.startsWith('owk1.'));
         assert.ok(fakeBaseFile?.signature);

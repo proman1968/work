@@ -320,10 +320,65 @@
             $('#botText').value = '/bind ' + currentUser.license.support.bindCode;
         }
         $('#userBadgeBox').innerHTML = `${esc(currentUser.companyName)} (ИНН ${esc(currentUser.inn || '—')}) · лицензия <b>${esc(currentUser.licenseId)}</b> · ПЭП <code>${esc(currentUser.ofertaSignatureId || '—')}</code>`;
+        if (currentUser.license?.baseActivated && $('#segCabinetBase')) {
+            $$('#segCabinetBase button').forEach(b => b.classList.toggle('on', b.dataset.base === 'none'));
+            if (Number($('#inpSeats')?.value) === 0 && $('#inpSeats')) {
+                $('#inpSeats').value = 5;
+                if ($('#rngAddonSeats')) $('#rngAddonSeats').value = 5;
+            }
+        }
+        renderCabinetLicenses();
         updateOfertaBanners();
         updateClientSupportCard();
         moveIndicator();
         recalcAddons();
+    }
+
+    function renderCabinetLicenses() {
+        const box = $('#cabinetLicensesBox');
+        if (!box) return;
+        const lic = currentUser?.license;
+        const files = lic?.licenseFiles || [];
+        if (!files.length) {
+            box.innerHTML = `<div style="padding:12px 14px;border-radius:10px;border:1px dashed var(--border);color:var(--muted);">
+                У вас пока нет приобретённых лицензий. Оформите базовую постоянную лицензию (или комплект с машиной) в Шаге 3 ниже — после оплаты файлы лицензий сразу появятся здесь и будут доступны для автоматической загрузки по вашему токену.
+            </div>`;
+            return;
+        }
+        const rows = files.map(f => {
+            const lf = f.licenseFile || f;
+            const isBase = lf.kind === 'base' || lf.perpetual;
+            const expText = isBase ? 'Бессрочно (постоянная)' : (lf.expiresAt ? 'до ' + new Date(lf.expiresAt).toLocaleDateString('ru-RU') + ` (${lf.years || 1} г.)` : '—');
+            const title = isBase ? 'Первичная постоянная лицензия (10 вечных мест + ИИ-агенты)' : `Временная лицензия (+${lf.seats} конк. мест · ${String(lf.tier || '').toUpperCase()})`;
+            return `<div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center;">
+                <div><b>${esc(title)}</b><br><code style="font-size:11.5px;color:var(--muted)">${esc(f.fileName || lf.fileId)}</code></div>
+                <div style="text-align:right"><span class="pill" style="padding:3px 10px;font-size:11.5px">${esc(expText)}</span></div>
+            </div>`;
+        }).join('');
+        box.innerHTML = `<div>Всего доступно одновременных сессий: <b style="color:var(--text)">${lic.totalSeats}</b> (${lic.baseSeats} вечных + ${lic.addonSeats} временных)</div>` + rows;
+    }
+
+    async function refreshCabinetUser() {
+        if (!currentUser?.sessionKey) return;
+        try {
+            const data = await api('/api/auth/me?sessionKey=' + encodeURIComponent(currentUser.sessionKey));
+            if (data.authenticated && data.user) {
+                currentUser = { ...data.user, sessionKey: currentUser.sessionKey };
+                onAuthenticated();
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    function copyCabinetToken() {
+        const val = $('#inpCabinetHubToken')?.value || '';
+        if (!val) return;
+        navigator.clipboard?.writeText(val);
+        const st = $('#tokenCopyStatus');
+        if (st) {
+            st.textContent = 'Токен скопирован в буфер обмена! Вставьте его в локальном WORK → Лицензия.';
+            setTimeout(() => { if (st.textContent.includes('скопирован')) st.textContent = ''; }, 5000);
+        }
     }
 
     /* ================= Калькуляторы ================= */
@@ -346,28 +401,43 @@
     const lines = (rows) => rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
 
     function recalcAddons() {
-        const seats = Math.max(1, Number($('#inpSeats').value) || 1);
+        const baseMode = $('#segCabinetBase button.on')?.dataset.base || 'license_only';
+        const includeBasePak = baseMode === 'pak';
+        const includeBaseLicenseOnly = baseMode === 'license_only';
+        const basePrice = includeBasePak
+            ? (D.product?.basePriceRub || 5_000_000)
+            : (includeBaseLicenseOnly ? (D.product?.baseLicensePriceRub || 4_000_000) : 0);
+
+        const minSeats = (includeBasePak || includeBaseLicenseOnly) ? 0 : 1;
+        const seats = Math.max(minSeats, Number($('#inpSeats').value) || 0);
         const years = Math.min(5, Math.max(1, Number($('#inpYears').value) || 1));
         const tier = tierById(segValue('segTier'));
         const disc = volumeDiscount(seats);
         const gross = seats * tier.pricePerUserYearRub * years;
         const saved = Math.round(gross * disc.discountPercent / 100);
-        $('#lblTotal').textContent = rub(gross - saved);
-        $('#lblDiscountBadge').textContent = disc.discountPercent
+        const addonsNet = gross - saved;
+        const total = basePrice + addonsNet;
+
+        $('#lblTotal').textContent = rub(total);
+        $('#lblDiscountBadge').textContent = seats > 0 && disc.discountPercent
             ? `Скидка за количество −${disc.discountPercent}% · экономия ${rub(saved)}`
-            : 'Скидка от количества начинается с 5 мест';
-        $('#lblBreakdown').innerHTML = lines([
-            ['Уровень поддержки', `${esc(tier.name)} · ${esc(tier.reactionLabel)}`],
-            ['Цена места в год', rub(tier.pricePerUserYearRub)],
-            ['Мест × лет', `${seats} × ${years}`],
-            ['Без скидки', rub(gross)],
-            ['Скидка', `−${disc.discountPercent}%`],
-            ['Всего мест после докупки', `${(D.product?.baseSeats || 10) + seats}`],
-        ]);
+            : (includeBasePak || includeBaseLicenseOnly ? 'Включает 10 вечных мест и активацию ИИ-агентов' : 'Скидка от количества начинается с 5 мест');
+
+        const breakdownRows = [];
+        if (includeBasePak) breakdownRows.push(['Базовый комплект (с машиной)', rub(basePrice)]);
+        if (includeBaseLicenseOnly) breakdownRows.push(['Базовая лицензия (без железа)', rub(basePrice)]);
+        if (seats > 0) {
+            breakdownRows.push(['Уровень поддержки доп. мест', `${esc(tier.name)} · ${esc(tier.reactionLabel)}`]);
+            breakdownRows.push(['Доп. мест × лет', `${seats} × ${years} (${rub(addonsNet)})`]);
+        }
+        breakdownRows.push(['Итого мест после покупки', `${(D.product?.baseSeats || 10) + (currentUser?.license?.addonSeats || 0) + seats}`]);
+        $('#lblBreakdown').innerHTML = lines(breakdownRows);
         markLadder('ladderAddons', seats);
     }
     function syncSeats(v) {
-        const n = Math.max(1, Math.min(2000, Number(v) || 1));
+        const baseMode = $('#segCabinetBase button.on')?.dataset.base || 'license_only';
+        const minSeats = baseMode === 'none' ? 1 : 0;
+        const n = Math.max(minSeats, Math.min(2000, Number(v) || 0));
         $('#inpSeats').value = n;
         $('#rngAddonSeats').value = Math.min(150, n);
         recalcAddons();
@@ -430,15 +500,22 @@
             requireAuthAndOferta(() => submitAddonOrder(paymentMethod));
             return;
         }
+        const baseMode = $('#segCabinetBase button.on')?.dataset.base || 'license_only';
+        const includeBasePak = baseMode === 'pak';
+        const includeBaseLicenseOnly = baseMode === 'license_only';
+        const minSeats = (includeBasePak || includeBaseLicenseOnly) ? 0 : 1;
+        const addonSeats = Math.max(minSeats, Number($('#inpSeats').value) || 0);
+
         const st = $('#orderStatus');
         st.textContent = paymentMethod === 'invoice' ? 'Формируем счёт-договор для юр. лица…' : 'Формируем счёт ЮKassa…';
         try {
             const data = await api('/api/orders/checkout', {
                 sessionKey: currentUser?.sessionKey || '',
-                includeBasePak: false,
+                includeBasePak,
+                includeBaseLicenseOnly,
                 paymentMethod,
                 tier: segValue('segTier'),
-                addonSeats: Number($('#inpSeats').value) || 1,
+                addonSeats,
                 years: Number($('#inpYears').value) || 1,
                 licenseId: $('#inpLicId').value.trim(),
                 customer: { name: currentUser?.companyName || '', inn: currentUser?.inn || '', email: currentUser?.email || '' },
@@ -1165,6 +1242,8 @@
                 case 'order-addons': submitAddonOrder('yookassa'); break;
                 case 'order-addons-invoice': submitAddonOrder('invoice'); break;
                 case 'gen-hub-token': generateCabinetToken(); break;
+                case 'copy-hub-token': copyCabinetToken(); break;
+                case 'refresh-cabinet': refreshCabinetUser(); break;
                 case 'reserve-selected': reserveRegionFranchise(selectedCode); break;
                 case 'bot-send': sendBot(); break;
                 case 'cert-close': $('#certModal')?.classList.remove('open'); break;
@@ -1191,8 +1270,14 @@
         $('#rngPartnerSales')?.addEventListener('input', recalcPartner);
         $('#inpRegionFilter')?.addEventListener('input', renderRegionsTable);
         bindSeg('segTier', recalcAddons);
+        bindSeg('segCabinetBase', () => { syncSeats($('#inpSeats')?.value || 0); });
         bindSeg('segPakTier', recalcBaseOrder);
         bindSeg('segPakVariant', recalcBaseOrder);
+        window.addEventListener('message', (e) => {
+            if (e.data?.type === 'odant:order-paid') {
+                refreshCabinetUser();
+            }
+        });
         window.addEventListener('resize', moveIndicator);
         window.addEventListener('hashchange', () => { const id = location.hash.slice(1); if (id && id !== currentStage) switchStage(id, { scroll: false }); });
     }

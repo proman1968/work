@@ -6,357 +6,304 @@ export default {
                 @apply --vertical;
                 @apply --flex;
                 overflow: auto;
-                padding: 20px;
+                padding: 24px;
                 gap: 20px;
                 box-sizing: border-box;
                 background: var(--body-background, #f6f8fb);
                 color: var(--content-color, #1e293b);
             }
-            .grid-top {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                gap: 16px;
+            .container {
+                max-width: 920px;
+                width: 100%;
+                margin: 0 auto;
+                display: flex;
+                flex-direction: column;
+                gap: 20px;
             }
             .card {
                 background: var(--content-background, #fff);
                 border: 1px solid var(--subtle-border, #e2e8f0);
                 border-radius: 12px;
-                padding: 18px 20px;
+                padding: 22px 24px;
                 display: flex;
                 flex-direction: column;
-                gap: 12px;
+                gap: 16px;
                 box-shadow: 0 1px 3px rgba(0,0,0,.04);
             }
             .card-head {
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
-                gap: 10px;
+                gap: 12px;
+                flex-wrap: wrap;
             }
             .card-title {
-                font-size: 16px;
+                font-size: 17px;
                 font-weight: 700;
                 display: flex;
                 align-items: center;
                 gap: 8px;
             }
             .badge {
-                padding: 4px 10px;
+                padding: 5px 12px;
                 border-radius: 999px;
-                font-size: 12px;
+                font-size: 12.5px;
                 font-weight: 600;
                 background: rgba(16, 185, 129, 0.14);
                 color: #059669;
             }
             .badge.warn {
-                background: rgba(245, 158, 11, 0.15);
+                background: rgba(245, 158, 11, 0.16);
                 color: #d97706;
             }
-            .kv-list {
+            .alert-box {
+                padding: 16px 18px;
+                border-radius: 10px;
+                border: 1px solid rgba(245, 158, 11, 0.35);
+                background: rgba(245, 158, 11, 0.08);
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                font-size: 13.5px;
+                line-height: 1.5;
+            }
+            .alert-title {
+                font-weight: 700;
+                font-size: 15px;
+                color: #b45309;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+            .steps {
+                margin: 0;
+                padding-left: 20px;
                 display: flex;
                 flex-direction: column;
                 gap: 6px;
-                font-size: 13px;
             }
-            .kv-row {
-                display: flex;
-                justify-content: space-between;
-                gap: 12px;
-                padding: 4px 0;
-                border-bottom: 1px dashed var(--subtle-border, #e2e8f0);
-            }
-            .kv-label {
-                color: var(--muted-color, #64748b);
-            }
-            .kv-val {
-                font-weight: 600;
-                text-align: right;
-                font-family: monospace;
-            }
-            .seats-meter {
-                display: flex;
-                align-items: baseline;
-                gap: 10px;
-            }
-            .seats-big {
-                font-size: 28px;
-                font-weight: 800;
+            .steps a {
                 color: var(--accent-color, #2563eb);
+                font-weight: 600;
+                text-decoration: none;
             }
-            .models-grid {
+            .steps a:hover {
+                text-decoration: underline;
+            }
+            .summary-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-                gap: 10px;
+                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                gap: 12px;
             }
-            .model-box {
+            .stat-box {
                 border: 1px solid var(--subtle-border, #e2e8f0);
-                border-radius: 8px;
-                padding: 10px 12px;
+                border-radius: 10px;
+                padding: 12px 14px;
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
             }
-            .model-title {
-                font-weight: 700;
-                font-size: 14px;
-            }
-            .model-role {
+            .stat-label {
                 font-size: 12px;
                 color: var(--muted-color, #64748b);
             }
-            .tiers-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-                gap: 12px;
+            .stat-val {
+                font-size: 15px;
+                font-weight: 700;
             }
-            .tier-card {
-                border: 2px solid var(--subtle-border, #e2e8f0);
-                border-radius: 10px;
-                padding: 14px;
-                cursor: pointer;
-                display: flex;
-                flex-direction: column;
-                gap: 8px;
-                transition: border-color .15s, background .15s;
-            }
-            .tier-card[selected] {
-                border-color: var(--accent-color, #2563eb);
-                background: rgba(37, 99, 235, 0.04);
-            }
-            .tier-price {
-                font-size: 20px;
+            .stat-val.big {
+                font-size: 22px;
                 font-weight: 800;
                 color: var(--accent-color, #2563eb);
             }
-            .controls-row {
+            .token-row {
                 display: flex;
                 flex-wrap: wrap;
                 align-items: center;
-                gap: 12px;
-                margin-top: 8px;
+                gap: 10px;
             }
-            input, select, textarea {
-                padding: 8px 10px;
-                border-radius: 6px;
+            input {
+                padding: 10px 12px;
+                border-radius: 8px;
                 border: 1px solid var(--subtle-border, #cbd5e1);
                 background: var(--content-background, #fff);
                 color: inherit;
-                font-size: 13px;
+                font-size: 13.5px;
+                flex: 1;
+                min-width: 240px;
+                font-family: monospace;
             }
             .btn-primary {
                 background: var(--accent-color, #2563eb);
                 color: #fff;
                 border: none;
                 border-radius: 8px;
-                padding: 9px 16px;
+                padding: 10px 18px;
                 font-weight: 600;
+                font-size: 13.5px;
                 cursor: pointer;
             }
             .btn-secondary {
                 background: transparent;
                 border: 1px solid var(--subtle-border, #cbd5e1);
                 border-radius: 8px;
-                padding: 8px 14px;
+                padding: 9px 16px;
                 font-weight: 600;
+                font-size: 13.5px;
                 cursor: pointer;
                 color: inherit;
             }
+            .lic-table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 13.5px;
+            }
+            .lic-table th, .lic-table td {
+                padding: 10px 12px;
+                border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+                text-align: left;
+            }
+            .lic-table th {
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                color: var(--muted-color, #64748b);
+                font-weight: 600;
+            }
+            .empty-box {
+                padding: 24px;
+                text-align: center;
+                color: var(--muted-color, #64748b);
+                font-size: 13.5px;
+                border: 1px dashed var(--subtle-border, #cbd5e1);
+                border-radius: 10px;
+            }
             .notice {
-                padding: 10px 14px;
+                padding: 12px 16px;
                 border-radius: 8px;
                 background: rgba(37, 99, 235, 0.08);
-                font-size: 13px;
+                font-size: 13.5px;
             }
         </style>
 
-        <div class="grid-top">
+        <div class="container">
             <div class="card">
                 <div class="card-head">
                     <div class="card-title">
-                        <oda-icon icon="carbon:chip" :icon-size="20"></oda-icon>
-                        <span>Паспорт ПАК WORK</span>
+                        <oda-icon icon="carbon:certificate" :icon-size="22"></oda-icon>
+                        <span>Лицензирование ODANT-WORK</span>
                     </div>
-                    <span class="badge">{{status?.hardwareMatch !== false ? 'Железо привязано' : 'Проверка HWID'}}</span>
+                    <span class="badge" :class="status?.baseLicensed ? '' : 'warn'">
+                        {{status?.baseLicensed ? 'Лицензия активна · ИИ-агенты включены' : 'Базовая лицензия не установлена'}}
+                    </span>
                 </div>
-                <div class="kv-list">
-                    <div class="kv-row">
-                        <span class="kv-label">Платформа ПАК</span>
-                        <span class="kv-val">{{status?.pakSpec?.cpu || 'AMD Ryzen™ AI Max+ PRO 495'}} · {{status?.pakSpec?.ramGb || 192}} ГБ RAM · SSD {{status?.pakSpec?.ssdTb || 4}} ТБ</span>
-                    </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Hardware ID (HWID)</span>
-                        <span class="kv-val">{{status?.hardware?.hwid || '—'}}</span>
-                    </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Ключ узла (#system/node-key.json)</span>
-                        <span class="kv-val">{{status?.hardware?.nodeFingerprint || '—'}}</span>
-                    </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Номер лицензии</span>
-                        <span class="kv-val">{{status?.licenseId || '—'}}</span>
-                    </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Статус агентской ИИ-системы</span>
-                        <span class="kv-val">{{status?.aiAgentsEnabled ? 'АКТИВНА (Базовая лицензия 10 мест)' : 'ОТКЛЮЧЕНА (Требуется базовая лицензия)'}}</span>
-                    </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Аккаунт владельца (ЛК)</span>
-                        <span class="kv-val">{{status?.tokenBinding?.email || status?.ownerEmail || 'Не привязан'}}</span>
-                    </div>
-                </div>
-            </div>
 
-            <div class="card">
-                <div class="card-head">
-                    <div class="card-title">
-                        <oda-icon icon="carbon:user-multiple" :icon-size="20"></oda-icon>
-                        <span>Одновременные сессии (рабочие места)</span>
+                <div class="alert-box" ~if="!status?.baseLicensed">
+                    <div class="alert-title">
+                        <oda-icon icon="carbon:warning-alt" :icon-size="18"></oda-icon>
+                        <span>Система работает в режиме первичной настройки (1 сессия BOSS, агентская ИИ-система отключена)</span>
                     </div>
-                    <span class="badge" :class="status?.baseLicensed ? '' : 'warn'">{{status?.baseLicensed ? ('Вечная база: ' + (status?.baseSeats || 10) + ' мест') : 'Режим настройки: 1 сессия (BOSS)'}}</span>
+                    <div>Чтобы снять ограничения, включить агентскую ИИ-систему и открыть 10 вечных пользовательских мест:</div>
+                    <ol class="steps">
+                        <li>Откройте сайт <a :href="portalUrl" target="_blank" rel="noopener">{{portalUrl}}</a>, войдите в Личный кабинет и приобретите базовую лицензию.</li>
+                        <li>В Личном кабинете скопируйте <strong>Токен владельца</strong> (<code>owk1...</code>).</li>
+                        <li>Вставьте токен в поле ниже и нажмите <strong>«Привязать токен»</strong> — система сама загрузит ваши лицензии в папку <code>#system</code>.</li>
+                    </ol>
                 </div>
-                <div class="seats-meter">
-                    <span class="seats-big">{{status?.activeSeatsCount || 0}} / {{status?.totalSeats || 1}}</span>
-                    <span>активных сессий ({{status?.baseLicensed ? ((status?.baseSeats || 10) + ' вечных + ' + (status?.addonSeats || 0) + ' срочных годовых') : '1 сессия BOSS до загрузки базовой лицензии'}})</span>
-                </div>
-                <div class="kv-list">
-                    <div class="kv-row">
-                        <span class="kv-label">Уровень поддержки (SLA)</span>
-                        <span class="kv-val">{{status?.support?.tierName || 'Enterprise'}} ({{status?.support?.reactionText || 'до 15 минут'}})</span>
+
+                <div class="summary-grid">
+                    <div class="stat-box">
+                        <span class="stat-label">Одновременные сессии (рабочие места)</span>
+                        <span class="stat-val big">{{status?.activeSeatsCount || 0}} / {{status?.totalSeats || 1}}</span>
+                        <span class="stat-label">
+                            {{status?.baseLicensed ? ((status?.baseSeats || 10) + ' вечных + ' + (status?.addonSeats || 0) + ' временных') : 'Только 1 сессия BOSS (настройка)'}}
+                        </span>
                     </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Включённый 1-й год поддержки ПАК (Enterprise, далее — по желанию)</span>
-                        <span class="kv-val">{{baseSupportText}}</span>
+                    <div class="stat-box">
+                        <span class="stat-label">Агентская ИИ-система</span>
+                        <span class="stat-val">{{status?.aiAgentsEnabled ? 'Включена' : 'Отключена'}}</span>
+                        <span class="stat-label">{{status?.aiAgentsEnabled ? 'Доступны все ИИ-агенты и Консультант' : 'Требуется базовая лицензия'}}</span>
                     </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Файлов лицензий в папке #system</span>
-                        <span class="kv-val">{{(status?.licenseFiles || []).length}} шт.</span>
-                    </div>
-                    <div class="kv-row">
-                        <span class="kv-label">URL сервера поддержки (из токена)</span>
-                        <span class="kv-val">{{status?.tokenBinding?.hubUrl || status?.hubUrl || 'https://work.odant.org'}}</span>
+                    <div class="stat-box">
+                        <span class="stat-label">Аккаунт владельца (ЛК)</span>
+                        <span class="stat-val">{{status?.tokenBinding?.email || status?.ownerEmail || 'Не привязан'}}</span>
+                        <span class="stat-label">{{status?.tokenBinding?.bound ? ('Сервер: ' + status.tokenBinding.hubUrl) : 'Токен не привязан'}}</span>
                     </div>
                 </div>
-                <div class="controls-row">
-                    <input type="text" ::value="ownerTokenInput" placeholder="Вставьте токен владельца (owk1...) из ЛК work.odant.org" style="flex:1; min-width:220px; font-family:monospace;" title="Токен владельца с URL сервера поддержки">
+
+                <div class="token-row">
+                    <input type="text" ::value="ownerTokenInput" placeholder="Вставьте токен владельца (owk1...) из личного кабинета work.odant.org">
                     <button class="btn-primary" @tap="bindOwnerToken">Привязать токен</button>
-                    <button class="btn-secondary" @tap="syncHub">Проверить лицензии</button>
+                    <button class="btn-secondary" ~if="status?.tokenBinding?.bound" @tap="syncHub">Проверить обновления лицензий</button>
                 </div>
-            </div>
-        </div>
 
-        <div class="card">
-            <div class="card-head">
-                <div class="card-title">
-                    <oda-icon icon="carbon:renew" :icon-size="20"></oda-icon>
-                    <span>Автоматическое обновление системы через npm (с сохранением данных)</span>
-                </div>
-                <span class="badge">Пакет: {{status?.autoUpdate?.packageName || 'odant-work'}}</span>
+                <div class="notice" ~if="message">{{message}}</div>
             </div>
-            <div style="font-size:12.5px; color:var(--text-muted, #64748b);">
-                При обновлении из npm все пользовательские базы данных, файлы, настройки (<code>#system</code>) и изменённые пользователем классы гарантированно сохраняются по контрольным суммам манифеста.
-            </div>
-            <div class="controls-row">
-                <button class="btn-secondary" @tap="checkNpmUpdates">Проверить обновления на npm</button>
-                <button class="btn-primary" @tap="applyNpmUpdate">Обновить систему сейчас</button>
-                <span style="font-size:12.5px; color:var(--muted-color);" ~if="status?.autoUpdate?.latestAvailableVersion">
-                    Доступная версия в npm: <strong>{{status.autoUpdate.latestAvailableVersion}}</strong>
-                </span>
-            </div>
-        </div>
 
-        <div class="card">
-            <div class="card-head">
-                <div class="card-title">
-                    <oda-icon icon="carbon:machine-learning-model" :icon-size="20"></oda-icon>
-                    <span>Предустановленный локальный стек ИИ ODANT-WORK</span>
+            <div class="card">
+                <div class="card-head">
+                    <div class="card-title">
+                        <oda-icon icon="carbon:folder-details" :icon-size="20"></oda-icon>
+                        <span>Установленные файлы лицензий в папке #system</span>
+                    </div>
+                    <span class="badge" :class="installedLicenses.length ? '' : 'warn'">{{installedLicenses.length}} файл(ов)</span>
                 </div>
-                <span class="badge">Базовые операции локально · мощные ИИ — через API из любого источника</span>
-            </div>
-            <div style="font-size:12.5px; color:var(--text-muted, #64748b); margin-bottom:10px;">
-                Интегрированные модели предназначены для базовых ежедневных операций. Если требуются более мощные модели ИИ, их можно подключить через API из любого внешнего или корпоративного источника в разделе <code>/MODELS</code>.
-            </div>
-            <div class="models-grid">
-                <div class="model-box" ~for="status?.preinstalledModels || []">
-                    <div class="model-title">{{$for.item.title}}</div>
-                    <div class="model-role">{{$for.item.role}}</div>
-                    <div style="font-size:11px; margin-top:4px; font-family:monospace;">{{$for.item.path}} (~{{$for.item.ramEstimateGb}} ГБ RAM)</div>
-                </div>
-            </div>
-        </div>
 
-        <div class="card">
-            <div class="card-head">
-                <div class="card-title">
-                    <oda-icon icon="carbon:shopping-cart" :icon-size="20"></oda-icon>
-                    <span>Докупить годовые лицензии на дополнительных пользователей (ЮKassa)</span>
+                <div class="empty-box" ~if="!installedLicenses.length">
+                    В папке <code>#system</code> нет установленных лицензий. Привяжите токен владельца выше, чтобы система автоматически скачала ваши лицензии из личного кабинета.
                 </div>
-                <span class="badge">work.odant.org</span>
+
+                <table class="lic-table" ~if="installedLicenses.length">
+                    <thead>
+                        <tr>
+                            <th>Тип лицензии</th>
+                            <th>Файл в #system</th>
+                            <th>Пользователи</th>
+                            <th>Срок действия</th>
+                            <th>Статус</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr ~for="installedLicenses">
+                            <td style="font-weight:600;">{{$for.item.typeTitle}}</td>
+                            <td style="font-family:monospace;font-size:12.5px;">{{$for.item.fileName}}</td>
+                            <td style="font-weight:700;">{{$for.item.seatsText}}</td>
+                            <td>{{$for.item.periodText}}</td>
+                            <td><span class="badge" :class="$for.item.active ? '' : 'warn'">{{$for.item.statusText}}</span></td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
-            <div class="tiers-grid">
-                <div class="tier-card" ~for="status?.supportTiers || []" :selected="selectedTier === $for.item.id" @tap="selectTier($for.item.id)">
-                    <div style="font-weight:700; font-size:15px;">{{$for.item.name}}</div>
-                    <div class="tier-price">{{formatRub($for.item.pricePerUserYearRub)}} / год</div>
-                    <div style="font-size:12px; color:var(--muted-color);">{{$for.item.description}}</div>
-                    <div style="font-size:12px; font-weight:600;">Реакция: {{$for.item.reactionText}}</div>
-                </div>
-            </div>
-            <div class="controls-row">
-                <label>Доп. рабочих мест:
-                    <input type="number" min="1" max="500" ::value="addonSeats" style="width:80px;">
-                </label>
-                <label>Срок (лет):
-                    <input type="number" min="1" max="5" ::value="years" style="width:70px;">
-                </label>
-                <div style="font-weight:700; font-size:16px;">
-                    Итого к оплате: {{calculatedTotalText}}
-                </div>
-                <button class="btn-primary" @tap="checkoutYooKassa">Оплатить через ЮKassa</button>
-                <button class="btn-secondary" @tap="checkoutInvoice">Счёт-договор (для юр. лиц)</button>
-            </div>
-            <div class="controls-row" style="border-top:1px dashed var(--subtle-border); padding-top:10px; margin-top:4px;">
-                <textarea ::value="certJsonInput" rows="2" placeholder="Вставьте подписанный файл лицензии (.lic.json) или сертификат Ed25519 для ручной установки в #system…" style="flex:1; min-width:240px; font-family:monospace;"></textarea>
-                <button class="btn-secondary" @tap="installCertJson">Установить в #system</button>
-            </div>
-            <div class="notice" ~if="message">{{message}}</div>
         </div>
     `,
     status: null,
-    selectedTier: 'business',
-    addonSeats: 1,
-    years: 1,
-    hubUrl: '',
     ownerTokenInput: '',
-    certJsonInput: '',
     message: '',
-    get baseSupportText() {
-        const until = this.status?.baseSupportUntil;
-        if (!until)
-            return 'Включён (1 год)';
-        return 'до ' + new Date(until).toLocaleDateString('ru-RU');
+    get portalUrl() {
+        return this.status?.tokenBinding?.hubUrl || this.status?.hubUrl || 'https://work.odant.org';
     },
-    get calculatedTotalText() {
-        const tiers = this.status?.supportTiers || [];
-        const t = tiers.find(x => x.id === this.selectedTier) || { pricePerUserYearRub: 15000 };
-        const seats = Math.max(1, Number(this.addonSeats || 1));
-        const yrs = Math.max(1, Number(this.years || 1));
-        const discounts = this.status?.volumeDiscounts || [
-            { minSeats: 100, discountPercent: 25 },
-            { minSeats: 50, discountPercent: 20 },
-            { minSeats: 25, discountPercent: 15 },
-            { minSeats: 10, discountPercent: 10 },
-            { minSeats: 5, discountPercent: 5 },
-            { minSeats: 1, discountPercent: 0 },
-        ];
-        const disc = (discounts.find(d => seats >= d.minSeats)?.discountPercent) || 0;
-        const gross = seats * yrs * t.pricePerUserYearRub;
-        const net = gross - Math.round(gross * disc / 100);
-        return this.formatRub(net) + (disc > 0 ? ` (скидка −${disc}%)` : '');
-    },
-    formatRub(val) {
-        return Number(val || 0).toLocaleString('ru-RU') + ' ₽';
-    },
-    selectTier(id) {
-        this.selectedTier = id;
+    get installedLicenses() {
+        const files = this.status?.licenseFiles || [];
+        const now = Date.now();
+        return files.map(f => {
+            const isBase = f.kind === 'base' || f.perpetual;
+            const exp = Number(f.expiresAt || 0);
+            const active = f.signatureValid !== false && (isBase || exp > now);
+            return {
+                fileName: f.fileName || `${f.fileId || 'license'}.lic.json`,
+                typeTitle: isBase
+                    ? 'Первичная постоянная лицензия'
+                    : `Дополнительная временная лицензия (${String(f.tier || 'business').toUpperCase()})`,
+                seatsText: isBase ? `${f.seats || 10} вечных мест` : `+${f.seats || 0} конк. мест`,
+                periodText: isBase
+                    ? 'Бессрочно (постоянная)'
+                    : (exp ? `до ${new Date(exp).toLocaleDateString('ru-RU')} (${f.years || 1} г.)` : '—'),
+                active,
+                statusText: f.signatureValid === false
+                    ? 'Неверная подпись'
+                    : (active ? 'Активна' : 'Истекла'),
+            };
+        });
     },
     async attached() {
         await this.reload();
@@ -364,124 +311,41 @@ export default {
     async reload() {
         try {
             this.status = await this.$item?.fetch('license_status');
-            if (this.status?.hubUrl && !this.hubUrl)
-                this.hubUrl = this.status.hubUrl;
         }
         catch (err) {
             this.message = 'Ошибка чтения статуса лицензии: ' + (err?.message || err);
         }
     },
-    async syncHub() {
-        try {
-            this.message = 'Синхронизация с сервером лицензий…';
-            this.status = await this.$item?.fetch('license_sync', { hubUrl: this.hubUrl || undefined });
-            this.message = 'Лицензии из личного кабинета успешно проверены и обновлены в #system.';
-        }
-        catch (err) {
-            this.message = 'Не удалось связаться с сервером лицензий: ' + (err?.message || err);
-        }
-    },
     async bindOwnerToken() {
         const tok = String(this.ownerTokenInput || '').trim();
         if (!tok) {
-            this.message = 'Введите токен владельца (owk1...), сгенерированный в личном кабинете work.odant.org.';
+            this.message = 'Вставьте токен владельца (owk1...), скопированный в личном кабинете work.odant.org.';
             return;
         }
         try {
-            this.message = 'Привязка токена владельца и загрузка лицензий из личного кабинета…';
+            this.message = 'Проверка токена и загрузка лицензий из личного кабинета…';
             this.status = await this.$item?.fetch('license_bind_token', { token: tok });
             this.ownerTokenInput = '';
-            this.message = 'Токен владельца успешно привязан, файлы лицензий сохранены в #system!';
+            const count = (this.status?.licenseFiles || []).length;
+            this.message = count > 0
+                ? `Токен успешно привязан! Загружено файлов лицензий в #system: ${count}.`
+                : 'Токен успешно привязан к личному кабинету. Оплаченных лицензий в кабинете пока нет — после покупки нажмите «Проверить обновления лицензий».';
         }
         catch (err) {
             this.message = 'Ошибка привязки токена: ' + (err?.message || err);
         }
     },
-    async checkNpmUpdates() {
+    async syncHub() {
         try {
-            this.message = 'Проверка обновлений пакета в npm…';
-            const res = await this.$item?.fetch('updater_check');
-            await this.reload();
-            this.message = res?.updateAvailable
-                ? `Доступна новая версия в npm: ${res.latestVersion} (текущая: ${res.currentVersion})`
-                : `Установлена актуальная версия (${res?.currentVersion || '—'})`;
+            this.message = 'Запрос лицензий из личного кабинета…';
+            this.status = await this.$item?.fetch('license_sync');
+            const count = (this.status?.licenseFiles || []).length;
+            this.message = count > 0
+                ? `Лицензии синхронизированы. Установлено файлов в #system: ${count}.`
+                : 'Синхронизация выполнена. Активных купленных лицензий в личном кабинете пока не найдено.';
         }
         catch (err) {
-            this.message = 'Ошибка проверки обновлений npm: ' + (err?.message || err);
-        }
-    },
-    async applyNpmUpdate() {
-        try {
-            this.message = 'Загрузка и установка обновления из npm (с сохранением пользовательских данных)…';
-            const res = await this.$item?.fetch('updater_apply');
-            await this.reload();
-            this.message = res?.updated
-                ? `Система обновлена до версии ${res.latestVersion}. Пользовательские данные и классы сохранены.`
-                : 'Обновление не требуется — установлена актуальная версия.';
-        }
-        catch (err) {
-            this.message = 'Ошибка обновления: ' + (err?.message || err);
-        }
-    },
-    async installCertJson() {
-        const raw = String(this.certJsonInput || '').trim();
-        if (!raw) {
-            this.message = 'Вставьте JSON сертификата лицензии для установки.';
-            return;
-        }
-        try {
-            this.status = await this.$item?.fetch('license_install', { certificate: raw });
-            this.certJsonInput = '';
-            this.message = 'Файл лицензии успешно установлен в #system и проверен.';
-        }
-        catch (err) {
-            this.message = 'Ошибка установки сертификата: ' + (err?.message || err);
-        }
-    },
-    async checkoutYooKassa() {
-        try {
-            this.message = 'Формирование платежа ЮKassa…';
-            const res = await this.$item?.fetch('license_checkout', {
-                hubUrl: this.hubUrl || undefined,
-                tier: this.selectedTier,
-                addonSeats: Number(this.addonSeats || 1),
-                years: Number(this.years || 1),
-                paymentMethod: 'yookassa',
-                returnUrl: location.href,
-            });
-            if (res?.confirmationUrl) {
-                this.message = 'Переход на страницу оплаты ЮKassa: ' + res.confirmationUrl;
-                window.open(res.confirmationUrl, '_blank');
-            }
-            else {
-                this.message = 'Заказ создан: ' + (res?.orderId || '');
-            }
-        }
-        catch (err) {
-            this.message = 'Ошибка создания платежа: ' + (err?.message || err);
-        }
-    },
-    async checkoutInvoice() {
-        try {
-            this.message = 'Формирование счёта-договора для юр. лица…';
-            const res = await this.$item?.fetch('license_checkout', {
-                hubUrl: this.hubUrl || undefined,
-                tier: this.selectedTier,
-                addonSeats: Number(this.addonSeats || 1),
-                years: Number(this.years || 1),
-                paymentMethod: 'invoice',
-                returnUrl: location.href,
-            });
-            if (res?.invoiceUrl) {
-                this.message = `Счёт-договор № ${res.invoiceNumber || res.orderId} сформирован: ${res.invoiceUrl}`;
-                window.open(res.invoiceUrl, '_blank');
-            }
-            else {
-                this.message = 'Счёт создан: ' + (res?.orderId || '');
-            }
-        }
-        catch (err) {
-            this.message = 'Ошибка формирования счёта: ' + (err?.message || err);
+            this.message = 'Ошибка связи с сервером поддержки: ' + (err?.message || err);
         }
     },
 };
