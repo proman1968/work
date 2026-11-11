@@ -192,93 +192,29 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             </div>
         </header>
 
-        <!-- ============ ЛЕНДИНГ: ПЛАТФОРМА И ИИ-АГЕНТЫ (при клике на лого) ============ -->
+        <!-- ============ О ПЛАТФОРМЕ (чистое описание без визуального шума) ============ -->
         <section class="stage active" id="stage-product">
-            <div class="hero">
+            <div class="sec-head" style="margin-top:4px">
                 <div>
-                    <span class="pill"><span class="dot"></span>Программно-аппаратный комплекс на AMD Ryzen™ AI Max+ PRO 495</span>
-                    <h1 class="h1">Учёт, документооборот, процессы и&nbsp;<span class="grad">приватный ИИ</span> — в&nbsp;одном комплексе</h1>
-                    <p class="lead">ODANT-WORK — вычислительный центр предприятия, который ставится в серверную и работает автономно. Встроенная система учёта, единое пространство документов и задач, ИИ-консультант в каждой форме и команда ИИ-агентов — без облаков и передачи данных наружу.</p>
-                    <div class="hero-cta">
-                        <button class="btn btn-primary btn-lg" data-stage="clients">Клиентам · Условия и покупка</button>
-                        <button class="btn btn-ghost btn-lg" data-stage="franchise">Партнёрская франшиза</button>
-                    </div>
-                    <div class="trust">
-                        <span>${icon('shield')} Данные не покидают контур</span>
-                        <span>${icon('key')} ${P.baseSeats} вечных лицензий</span>
-                        <span>${icon('check')} 1 год поддержки Enterprise (далее — по желанию)</span>
-                    </div>
+                    <span class="kicker">Платформа цифровой организации</span>
+                    <h1 class="h2" style="font-size:clamp(1.9rem,3vw,2.6rem);margin:4px 0 0">ODANT-WORK — учёт, документооборот, процессы и&nbsp;<span class="grad">приватный ИИ</span></h1>
                 </div>
-                <div class="showcase" aria-hidden="true">
-                    <div class="showcase-ring"></div>
-                    <div class="showcase-ring r2"></div>
-                    <div class="showcase-logo"><img src="/assets/odant-logo.png" alt=""></div>
-                    <div class="chipf c1"><b>132 TOPS</b>ИИ-производительность</div>
-                    <div class="chipf c2"><b>192 ГБ</b>единой памяти LPDDR5x</div>
-                    <div class="chipf c3"><b>16 / 32</b>ядра / потока Zen 5</div>
-                    <div class="chipf c4"><b>4 ТБ</b>NVMe PCIe® 4.0</div>
-                </div>
+                <p>Все данные предприятия — справочники, проводки, документы, переписка и задачи — живут в единой модели с общими правами доступа и работают автономно в вашем контуре без передачи данных наружу.</p>
             </div>
 
-            <div class="kpis reveal">
-                <div class="kpi"><b data-count="132">132<small>TOPS</small></b><span>общая ИИ-производительность, NPU 55 TOPS</span></div>
-                <div class="kpi"><b data-count="61">61<small>TFLOPS</small></b><span>FP16 на графике Radeon™ 8065S</span></div>
-                <div class="kpi"><b data-count="192">192<small>ГБ</small></b><span>единая память для моделей и данных</span></div>
-                <div class="kpi"><b data-count="5.2" data-dec="1">5.2<small>ГГц</small></b><span>максимальная частота, 80 МБ кэша</span></div>
-            </div>
-
-            <div class="sec-head reveal">
-                <div>
-                    <span class="kicker">Что внутри</span>
-                    <h2 class="h2">Одна система вместо зоопарка программ</h2>
-                </div>
-                <p>Все данные предприятия — справочники, проводки, документы, переписка и задачи — живут в одной модели с едиными правами доступа. Поэтому ИИ видит полную картину и действует по правилам вашей организации.</p>
-            </div>
             <div class="bento">
                 <article class="card spot reveal wide"><div class="ico">${icon('ledger')}</div><h3 class="h3">Встроенная система учёта</h3><p class="note">План счетов, справочники и аналитики, явная двойная запись с исправлением только через сторно. Оборотно-сальдовая ведомость, анализ, обороты и журнал проводок — в едином табличном стандарте.</p></article>
-                <article class="card spot reveal wide"><div class="ico">${icon('docs')}</div><h3 class="h3">Документооборот</h3><p class="note">Единое файловое пространство подразделений, первичные документы по шаблонам, согласования, версии и восстановление файлов. Офисные форматы открываются прямо в системе.</p></article>
-                <article class="card spot reveal"><div class="ico">${icon('flow')}</div><h3 class="h3">Управление процессами</h3><p class="note">Структура подразделений, роли, рабочие места, поручения со сроками и журнал всех фактов.</p></article>
+                <article class="card spot reveal wide"><div class="ico">${icon('docs')}</div><h3 class="h3">Документооборот и офис</h3><p class="note">Единое файловое пространство подразделений, первичные документы по шаблонам, согласования, версии и восстановление файлов. Таблицы, тексты и презентации редактируются прямо в системе.</p></article>
+                <article class="card spot reveal"><div class="ico">${icon('flow')}</div><h3 class="h3">Управление процессами</h3><p class="note">Структура подразделений, роли BOSS и USER, рабочие места, поручения со сроками и журнал всех фактов.</p></article>
                 <article class="card spot reveal"><div class="ico">${icon('ai')}</div><h3 class="h3">ИИ-консультант</h3><p class="note">Кнопка «?» в любой форме и голосовой диалог: объяснит, найдёт, посчитает и проведёт операцию.</p></article>
                 <article class="card spot reveal"><div class="ico">${icon('agents')}</div><h3 class="h3">Мультиагентная система</h3><p class="note">${AI_PLATFORM.agents.length} ролевых ИИ-агентов и ${AI_PLATFORM.skillsCount}+ навыков работают параллельно и строго в рамках прав.</p></article>
             </div>
 
-            <div class="card card-glow reveal">
-                <div class="spec-wrap">
-                    <div>
-                        <span class="kicker">Паспорт комплекса</span>
-                        <h2 class="h2">ODANT-WORK · ${esc(P.sku)}</h2>
-                        <div class="price-big">${rub(P.basePriceRub)}</div>
-                        <p class="note">Вечная лицензия на ${P.baseSeats} одновременных рабочих сессий и ${P.includedSupportYears} год максимальной поддержки уровня Enterprise — в комплекте с машиной (или ${rub(P.baseLicensePriceRub || 4_000_000)} за базовую лицензию без оборудования).</p>
-                        <div class="hero-cta" style="margin-top:20px">
-                            <button class="btn btn-primary" data-stage="clients">Условия и покупка</button>
-                        </div>
-                    </div>
-                    <dl class="spec">
-                        <div><dt>Процессор</dt><dd>${esc(H.cpu)}</dd></div>
-                        <div><dt>Графика</dt><dd>${esc(H.gpu)}</dd></div>
-                        <div><dt>ИИ-ускорение</dt><dd>${esc(H.aiEngine)}</dd></div>
-                        <div><dt>Память</dt><dd>${esc(H.ram)}</dd></div>
-                        <div><dt>Накопитель</dt><dd>${esc(H.storage)}</dd></div>
-                        <div><dt>Защита</dt><dd>${esc(H.security)}</dd></div>
-                        <div><dt>Лицензия</dt><dd>По одновременным сессиям, файлы .lic.json в #system</dd></div>
-                    </dl>
-                </div>
-            </div>
-
-            <div class="sec-head reveal">
+            <div class="agents-hero" style="margin-top:12px">
                 <div>
-                    <span class="kicker">Приватный и гибридный ИИ</span>
-                    <h2 class="h2">Четыре типа базовых моделей уже установлены</h2>
-                </div>
-                <p>Интегрированные локальные модели предназначены для базовых ежедневных операций внутри контура. Если требуются более мощные модели ИИ, их можно подключить через API из любого источника.</p>
-            </div>
-            <div class="grid g4">${renderModels()}</div>
-
-            <div class="agents-hero" style="margin-top:28px">
-                <div>
-                    <span class="kicker">ИИ-консультант и мультиагентная система</span>
-                    <h2 class="h2" style="font-size:clamp(2rem,3.6vw,3.2rem)">Помощник, который <span class="grad">знает вашу организацию</span></h2>
-                    <p class="lead">Консультант встроен в каждую форму системы. Он видит открытый документ, понимает структуру учёта и права пользователя — и не просто отвечает, а выполняет работу.</p>
+                    <span class="kicker">ИИ-консультант в каждой форме</span>
+                    <h2 class="h2">Помощник, который <span class="grad">знает вашу организацию</span></h2>
+                    <p class="lead">Консультант видит открытый документ, понимает структуру учёта и права пользователя — и не просто отвечает на вопросы, а выполняет работу.</p>
                     <ul class="list">${AI_PLATFORM.consultant.features.map(f => `<li>${esc(f)}</li>`).join('')}</ul>
                 </div>
                 <div class="mock" id="consultantMock">
@@ -309,25 +245,42 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
 
             <div class="grid g3">${renderOrchestration()}</div>
 
-            <div class="card reveal">
-                <div class="sec-head" style="margin-bottom:18px">
-                    <div><span class="kicker">Навыки</span><h2 class="h2">${AI_PLATFORM.skillsCount}+ проверенных рецептов работы</h2></div>
-                    <p>Навык — описанный порядок решения типовой задачи. Удачный результат агента с одобрения сотрудника сохраняется как новый навык подразделения.</p>
+            <div class="sec-head reveal">
+                <div>
+                    <span class="kicker">Приватный и гибридный ИИ</span>
+                    <h2 class="h2">Четыре типа базовых моделей уже установлены</h2>
                 </div>
-                <div class="skills">${AI_PLATFORM.skills.map(s => `<span>${esc(s)}</span>`).join('')}</div>
+                <p>Интегрированные локальные модели предназначены для базовых ежедневных операций внутри контура. Если требуются более мощные модели ИИ, их можно подключить через API из любого источника.</p>
+            </div>
+            <div class="grid g4">${renderModels()}</div>
+
+            <div class="card card-glow reveal">
+                <div class="spec-wrap">
+                    <div>
+                        <span class="kicker">Аппаратное исполнение или собственная инфраструктура</span>
+                        <h2 class="h2">ODANT-WORK · ${esc(P.sku)}</h2>
+                        <div class="price-big">${rub(P.basePriceRub)}</div>
+                        <p class="note">Вечная лицензия на ${P.baseSeats} одновременных рабочих сессий и ${P.includedSupportYears} год поддержки уровня Enterprise — в комплекте с сервером (или ${rub(P.baseLicensePriceRub || 4_000_000)} за базовую лицензию без оборудования при установке через <code>npm</code>).</p>
+                        <div class="hero-cta" style="margin-top:20px">
+                            <button class="btn btn-primary" data-stage="clients">Перейти к покупке →</button>
+                            <button class="btn btn-ghost" data-stage="franchise">Региональная франшиза</button>
+                        </div>
+                    </div>
+                    <dl class="spec">
+                        <div><dt>Процессор</dt><dd>${esc(H.cpu)}</dd></div>
+                        <div><dt>Графика</dt><dd>${esc(H.gpu)}</dd></div>
+                        <div><dt>ИИ-ускорение</dt><dd>${esc(H.aiEngine)}</dd></div>
+                        <div><dt>Память</dt><dd>${esc(H.ram)}</dd></div>
+                        <div><dt>Накопитель</dt><dd>${esc(H.storage)}</dd></div>
+                        <div><dt>Защита</dt><dd>${esc(H.security)}</dd></div>
+                        <div><dt>Лицензия</dt><dd>По одновременным сессиям, файлы .lic.json в #system</dd></div>
+                    </dl>
+                </div>
             </div>
         </section>
 
-        <!-- ============ КЛИЕНТАМ: УСЛОВИЯ И ПОКУПКА ============ -->
+        <!-- ============ КЛИЕНТАМ: СРАЗУ КАЛЬКУЛЯТОР СВЕРХУ ============ -->
         <section class="stage" id="stage-clients">
-            <div class="sec-head">
-                <div>
-                    <span class="kicker">Клиентам · Условия и покупка</span>
-                    <h2 class="h2">Выберите вариант поставки и количество пользователей</h2>
-                </div>
-                <p>Сразу после установки из <code>npm</code> система работает бесплатно в режиме настройки (1 сессия BOSS, ИИ-агенты отключены). Первичная постоянная лицензия открывает <b>${P.baseSeats} вечных мест</b> и включает агентскую ИИ-систему.</p>
-            </div>
-
             <div class="split">
                 <div class="card">
                     <div class="field">
@@ -369,12 +322,12 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 </div>
             </div>
 
-            <div class="sec-head" style="margin-top:12px">
+            <div class="sec-head" style="margin-top:16px">
                 <div>
                     <span class="kicker">Тарифы поддержки и конкурентных мест</span>
-                    <h2 class="h2">Условия годовых лицензий и SLA</h2>
+                    <h2 class="h2">Условия лицензирования и SLA</h2>
                 </div>
-                <p>Считаются одновременные активные сессии, а не число заведённых сотрудников в базе.</p>
+                <p>Сразу после установки из <code>npm</code> система работает бесплатно в режиме настройки (1 сессия BOSS, ИИ-агенты отключены). Базовая постоянная лицензия открывает <b>${P.baseSeats} вечных одновременных сессий</b> и включает агентскую ИИ-систему.</p>
             </div>
             <div class="tiers">${renderTiers()}</div>
         </section>
@@ -422,21 +375,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             </div>
         </section>
 
-        <!-- ============ ФРАНШИЗА ============ -->
+        <!-- ============ ФРАНШИЗА: СРАЗУ КАРТА СВЕРХУ, ВСЯ ПРОЧАЯ ИНФОРМАЦИЯ ВНИЗУ ============ -->
         <section class="stage" id="stage-franchise">
-            <div class="sec-head">
-                <div><span class="kicker">Партнёрская программа</span><h2 class="h2">Региональная франшиза ODANT-WORK</h2></div>
-                <p>Число франшиз в субъекте пропорционально населению, паушальный взнос — экономике региона. Резерв закрепляется сразу после невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}, полная оплата паушального взноса — в течение 1 года.</p>
-            </div>
-            <div class="card oferta-banner" data-oferta-banner></div>
-            <div class="stats">
-                <div class="stat"><b id="statVacant">${totalVacant}</b><span>вакантных франшиз</span></div>
-                <div class="stat"><b>${visibleRegions.length}</b><span>субъектов РФ</span></div>
-                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.baseFranchiseFeeRub)}</b><span>базовый паушальный взнос</span></div>
-                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b><span>залог за резерв</span></div>
-                <div class="stat"><b>${FRANCHISE_PROGRAM.minDiscountPercent}→${FRANCHISE_PROGRAM.maxDiscountPercent}%</b><span>скидка партнёра от объёма</span></div>
-            </div>
-
             <div class="map-layout">
                 <div class="card map-card">
                     <div class="map-tools">
@@ -487,6 +427,19 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     <p class="small muted" style="margin:8px 0 0;text-align:center">При нажатии «Зарезервировать» заявка на регион добавится как заказ в ваш Личный кабинет.</p>
                     <div class="status" id="partnerActionMsg"></div>
                 </aside>
+            </div>
+
+            <div class="sec-head" style="margin-top:8px">
+                <div><span class="kicker">Партнёрская программа</span><h2 class="h2">Региональная франшиза ODANT-WORK</h2></div>
+                <p>Число франшиз в субъекте пропорционально населению, паушальный взнос — экономике региона. Резерв закрепляется сразу после невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}, полная оплата паушального взноса — в течение 1 года.</p>
+            </div>
+
+            <div class="stats">
+                <div class="stat"><b id="statVacant">${totalVacant}</b><span>вакантных франшиз</span></div>
+                <div class="stat"><b>${visibleRegions.length}</b><span>субъектов РФ</span></div>
+                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.baseFranchiseFeeRub)}</b><span>базовый паушальный взнос</span></div>
+                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b><span>залог за резерв</span></div>
+                <div class="stat"><b>${FRANCHISE_PROGRAM.minDiscountPercent}→${FRANCHISE_PROGRAM.maxDiscountPercent}%</b><span>скидка партнёра от объёма</span></div>
             </div>
 
             <div class="card">
@@ -563,54 +516,51 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         </footer>
     </div>
 
-    <!-- Вход / Регистрация в Личный кабинет (без ИНН, ФИО и ПЭП — по Email, через мессенджеры или OAuth) -->
+    <!-- Вход / Регистрация в Личный кабинет по одноразовому коду на Email -->
     <div class="modal" id="authModal" role="dialog" aria-modal="true" aria-labelledby="authTitle">
-        <div class="card" style="max-width:480px">
+        <div class="card" style="max-width:460px">
             <div class="modal-head">
                 <img src="/assets/odant-logo.png" alt="">
                 <div>
                     <h3 class="h3" id="authTitle" style="margin:0">Вход / Регистрация</h3>
-                    <div class="small muted" id="authSub">Войдите в Личный кабинет по Email, через мессенджер или OAuth</div>
+                    <div class="small muted" id="authSub">На ваш Email придёт одноразовый 6-значный код подтверждения</div>
                 </div>
             </div>
 
             <div id="authIntentNotice" class="small" style="display:none;padding:10px 12px;border-radius:10px;background:rgba(0,163,224,.12);border:1px solid rgba(0,163,224,.35);margin-bottom:4px"></div>
 
-            <div class="field">
-                <label for="authEmail">Ваш Email</label>
-                <div style="display:flex;gap:8px">
-                    <input type="email" id="authEmail" value="admin@maslotorg.ru" placeholder="name@company.ru" style="flex:1" required>
-                    <button class="btn btn-primary" data-action="login">${icon('check')} Войти по Email</button>
+            <div id="authStepEmail">
+                <div class="field">
+                    <label for="authEmail">Ваш Email *</label>
+                    <input type="email" id="authEmail" value="" placeholder="Введите ваш email (например, name@company.ru)" autocomplete="email" required>
+                </div>
+
+                <div class="oferta-check-box" style="margin-top:10px">
+                    <label class="oferta-check-label">
+                        <input type="checkbox" id="authOfertaCheck" checked>
+                        <span>
+                            Регистрируясь и входя в Личный кабинет, я принимаю условия <a href="#" data-action="open-oferta">Публичного договора-оферты ODANT-WORK (${esc(PUBLIC_OFERTA.version)})</a>.
+                        </span>
+                    </label>
+                </div>
+
+                <button class="btn btn-primary" style="width:100%;margin-top:12px" id="btnSendCode" data-action="send-code">Получить код на Email</button>
+            </div>
+
+            <div id="authStepCode" style="display:none">
+                <div class="small" id="authCodeSentNotice" style="padding:10px 12px;border-radius:10px;background:rgba(16,185,129,.12);color:var(--ok);margin-bottom:10px"></div>
+                <div class="field">
+                    <label for="authCodeInput">Одноразовый код из письма (6 цифр) *</label>
+                    <input type="text" id="authCodeInput" value="" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" style="font-size:20px;letter-spacing:6px;text-align:center;font-family:monospace">
+                </div>
+                <button class="btn btn-primary" style="width:100%;margin-top:10px" id="btnVerifyCode" data-action="verify-code">${icon('check')} Подтвердить код и войти</button>
+                <div style="display:flex;justify-content:space-between;margin-top:8px">
+                    <button class="btn btn-ghost btn-sm" data-action="reset-auth-step">← Изменить Email</button>
+                    <button class="btn btn-ghost btn-sm" data-action="send-code">Отправить код повторно</button>
                 </div>
             </div>
 
-            <div class="field" style="margin-top:6px">
-                <label>Быстрый вход через мессенджеры</label>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="telegram">Telegram</button>
-                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="max">MAX</button>
-                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="vk">VK Мессенджер</button>
-                </div>
-            </div>
-
-            <div class="field">
-                <label>Вход через OAuth-провайдеров</label>
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="yandex">Яндекс ID</button>
-                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="vk_id">VK ID</button>
-                    <button class="btn btn-ghost btn-sm" data-action="oauth-login" data-provider="google">Google</button>
-                </div>
-            </div>
-
-            <div class="oferta-check-box" style="margin-top:6px">
-                <label class="oferta-check-label">
-                    <input type="checkbox" id="authOfertaCheck" checked>
-                    <span>
-                        Регистрируясь и входя в Личный кабинет, я принимаю условия <a href="#" data-action="open-oferta">Публичного договора-оферты ODANT-WORK (${esc(PUBLIC_OFERTA.version)})</a>.
-                    </span>
-                </label>
-            </div>
-            <div class="status" id="authErrorMsg" style="color:var(--danger);min-height:18px;margin-top:4px"></div>
+            <div class="status" id="authErrorMsg" style="color:var(--danger);min-height:18px;margin-top:6px"></div>
             <div style="display:flex;gap:10px;margin-top:6px;justify-content:flex-end;flex-wrap:wrap">
                 <button class="btn btn-ghost btn-sm" id="btnLogoutModal" data-action="logout" style="display:none">Выйти из аккаунта</button>
                 <button class="btn btn-ghost btn-sm" data-action="auth-close">Закрыть</button>

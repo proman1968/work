@@ -67,7 +67,7 @@
         }
         if (!$('#stage-' + id)) id = 'product';
         currentStage = id;
-        document.body.setAttribute('data-stage', id);
+        document.body.setAttribute('data-active-stage', id);
         $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.stage === id));
         $$('.stage').forEach(s => s.classList.toggle('active', s.id === 'stage-' + id));
         moveIndicator();
@@ -167,32 +167,65 @@
         return false;
     }
 
-    async function performLogin(provider = 'email') {
+    function resetAuthStep() {
+        if ($('#authStepEmail')) $('#authStepEmail').style.display = '';
+        if ($('#authStepCode')) $('#authStepCode').style.display = 'none';
+        if ($('#authCodeInput')) $('#authCodeInput').value = '';
+        if ($('#authErrorMsg')) $('#authErrorMsg').textContent = '';
+        setTimeout(() => $('#authEmail')?.focus(), 50);
+    }
+
+    async function sendAuthCode() {
         const errBox = $('#authErrorMsg');
         if (errBox) errBox.textContent = '';
-        let email = $('#authEmail')?.value.trim() || '';
+        const email = $('#authEmail')?.value.trim() || '';
         const ofertaChecked = $('#authOfertaCheck') ? Boolean($('#authOfertaCheck').checked) : true;
-
+        if (!email || !email.includes('@')) {
+            if (errBox) errBox.textContent = 'Введите ваш корректный email адрес.';
+            return;
+        }
         if (!ofertaChecked) {
             if (errBox) errBox.textContent = 'Подтвердите согласие с условиями Публичного договора-оферты.';
             return;
         }
-        if (provider === 'email' && (!email || !email.includes('@'))) {
-            if (errBox) errBox.textContent = 'Укажите корректный email.';
+        const btn = $('#btnSendCode');
+        if (btn) btn.disabled = true;
+        try {
+            const res = await api('/api/auth/send-code', { email });
+            if ($('#authStepEmail')) $('#authStepEmail').style.display = 'none';
+            if ($('#authStepCode')) $('#authStepCode').style.display = '';
+            if ($('#authCodeSentNotice')) {
+                $('#authCodeSentNotice').textContent = res.message || `Код отправлен на ${email}. Введите его ниже.`;
+            }
+            if ($('#authCodeInput')) {
+                $('#authCodeInput').value = '';
+                setTimeout(() => $('#authCodeInput')?.focus(), 50);
+            }
+        }
+        catch (err) {
+            if (errBox) errBox.textContent = err.message;
+        }
+        finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function verifyAuthCode() {
+        const errBox = $('#authErrorMsg');
+        if (errBox) errBox.textContent = '';
+        const email = $('#authEmail')?.value.trim() || '';
+        const code = $('#authCodeInput')?.value.trim() || '';
+        if (!code || code.length < 6) {
+            if (errBox) errBox.textContent = 'Введите 6-значный код из письма.';
             return;
         }
-        if (provider !== 'email' && (!email || !email.includes('@'))) {
-            email = `user.${provider}@${provider}.id.odant.org`;
-        }
-
+        const btn = $('#btnVerifyCode');
+        if (btn) btn.disabled = true;
         try {
-            const data = await api('/api/auth/register', {
-                email,
-                provider,
-                ofertaAccepted: true,
-            });
+            const data = await api('/api/auth/verify-code', { email, code });
             currentUser = data;
             try { localStorage.setItem('odant_work_session', data.sessionKey); } catch { /* приватный режим */ }
+            resetAuthStep();
             onAuthenticated();
             closeAuth();
             const nextAction = pendingAuthAction;
@@ -206,6 +239,9 @@
         }
         catch (err) {
             if (errBox) errBox.textContent = err.message;
+        }
+        finally {
+            if (btn) btn.disabled = false;
         }
     }
 
@@ -1207,7 +1243,7 @@
             }
             if (el.matches('[data-district]')) { setDistrict(el.dataset.district); return; }
             if (el.matches('[data-ask]')) { sendAi(el.dataset.ask); return; }
-            if (el.dataset.stage) { e.preventDefault(); switchStage(el.dataset.stage); return; }
+            if (el.dataset.stage && el !== document.body) { e.preventDefault(); switchStage(el.dataset.stage); return; }
             switch (el.dataset.action) {
                 case 'auth':
                     if (isUserReadyForOrders() && currentStage !== 'addons') {
@@ -1215,12 +1251,14 @@
                     }
                     else {
                         pendingAuthAction = null;
+                        resetAuthStep();
                         openAuth();
                     }
                     break;
                 case 'auth-close': closeAuth(); break;
-                case 'login': performLogin('email'); break;
-                case 'oauth-login': performLogin(el.dataset.provider || 'email'); break;
+                case 'send-code': sendAuthCode(); break;
+                case 'verify-code': verifyAuthCode(); break;
+                case 'reset-auth-step': resetAuthStep(); break;
                 case 'logout': e.preventDefault(); performLogout(); break;
                 case 'open-oferta': e.preventDefault(); openOfertaModal(); break;
                 case 'oferta-close': closeOfertaModal(); break;
@@ -1261,7 +1299,12 @@
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') { closeAuth(); closeOfertaModal(); $('#certModal')?.classList.remove('open'); toggleAi(false); }
         });
-        $('#authModal')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') performLogin('email'); });
+        $('#authModal')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') {
+                if ($('#authStepCode')?.style.display !== 'none') verifyAuthCode();
+                else sendAuthCode();
+            }
+        });
         $('#aiInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAi(); });
         $('#inpPakExtraSeats')?.addEventListener('input', (e) => syncClientSeats(e.target.value));
         $('#inpPakExtraSeatsNum')?.addEventListener('input', (e) => syncClientSeats(e.target.value));

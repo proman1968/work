@@ -17,7 +17,9 @@
  *  - GET  /api/admin/overview              — Сводка по лицензиям, заказам и тикетам.
  */
 import http from 'node:http';
+import tls from 'node:tls';
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
@@ -116,7 +118,106 @@ function sendHtml(res, status, html) {
     res.end(html);
 }
 
+function loadSmtpConfig() {
+    if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+        return {
+            host: process.env.SMTP_HOST,
+            port: Number(process.env.SMTP_PORT || 465),
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+        };
+    }
+    const candidates = [
+        path.resolve(process.cwd(), '#system/mail.json'),
+        path.resolve(process.cwd(), '../#system/mail.json'),
+        fileURLToPath(new URL('../../#system/mail.json', import.meta.url)),
+    ];
+    for (const p of candidates) {
+        try {
+            if (fs.existsSync(p)) {
+                const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+                if (j?.host && j?.auth?.user && j?.auth?.pass) {
+                    return {
+                        host: j.host,
+                        port: Number(j.port || 465),
+                        user: j.auth.user,
+                        pass: j.auth.pass,
+                    };
+                }
+            }
+        }
+        catch { /* ignore */ }
+    }
+    return {
+        host: 'smtp.yandex.ru',
+        port: 465,
+        user: 'proman1968.perepelkin@yandex.ru',
+        pass: 'zifeomdqijldyece',
+    };
+}
+
+/**
+ * Отправка реального письма с 6-значным кодом подтверждения по SMTPS (TLS 465, без внешних зависимостей).
+ */
+async function sendOtpEmail({ to, code }) {
+    const cfg = loadSmtpConfig();
+    const subjectB64 = Buffer.from(`Код подтверждения ODANT-WORK: ${code}`, 'utf8').toString('base64');
+    const htmlBody = [
+        '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;">',
+        '<h2 style="margin:0 0 12px;color:#0f172a;">Вход в Личный кабинет ODANT-WORK</h2>',
+        '<p style="color:#475569;font-size:15px;">Ваш одноразовый код подтверждения:</p>',
+        `<div style="font-size:36px;font-weight:800;letter-spacing:8px;text-align:center;padding:16px;background:#f8fafc;border-radius:10px;color:#0284c7;">${code}</div>`,
+        '<p style="color:#64748b;font-size:13px;margin-top:16px;">Код действителен 10 минут. Если вы не запрашивали вход на work.odant.org, просто проигнорируйте это письмо.</p>',
+        '</div>',
+    ].join('\r\n');
+    const mimeMsg = [
+        `From: "ODANT-WORK" <${cfg.user}>`,
+        `To: <${to}>`,
+        `Subject: =?UTF-8?B?${subjectB64}?=`,
+        'MIME-Version: 1.0',
+        'Content-Type: text/html; charset=utf-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        Buffer.from(htmlBody, 'utf8').toString('base64'),
+        '.',
+        '',
+    ].join('\r\n');
+
+    return new Promise((resolve, reject) => {
+        const sock = tls.connect({ host: cfg.host, port: cfg.port, servername: cfg.host, timeout: 12000 });
+        let step = 0;
+        let buf = '';
+        const sendCmd = (line) => sock.write(line + '\r\n');
+        sock.on('timeout', () => { sock.destroy(); reject(new Error('Таймаут соединения с почтовым сервером')); });
+        sock.on('error', (err) => reject(err));
+        sock.on('data', (chunk) => {
+            buf += chunk.toString('utf8');
+            const lines = buf.split('\r\n');
+            buf = lines.pop() || '';
+            for (const line of lines) {
+                if (!/^\d{3} /.test(line)) continue;
+                const status = Number(line.slice(0, 3));
+                if (status >= 400) {
+                    sock.destroy();
+                    reject(new Error('Ошибка SMTP: ' + line));
+                    return;
+                }
+                if (step === 0) { step = 1; sendCmd('EHLO work.odant.org'); }
+                else if (step === 1) { step = 2; sendCmd('AUTH LOGIN'); }
+                else if (step === 2) { step = 3; sendCmd(Buffer.from(cfg.user, 'utf8').toString('base64')); }
+                else if (step === 3) { step = 4; sendCmd(Buffer.from(cfg.pass, 'utf8').toString('base64')); }
+                else if (step === 4) { step = 5; sendCmd(`MAIL FROM:<${cfg.user}>`); }
+                else if (step === 5) { step = 6; sendCmd(`RCPT TO:<${to}>`); }
+                else if (step === 6) { step = 7; sendCmd('DATA'); }
+                else if (step === 7) { step = 8; sock.write(mimeMsg); }
+                else if (step === 8) { step = 9; sendCmd('QUIT'); sock.end(); resolve({ ok: true }); }
+            }
+        });
+    });
+}
+
 export function createLicenseServerApp(options = {}) {
+    const pendingOtpCodes = new Map(); // email -> { code, expiresAt, attempts }
     const store = options.store || new LicenseStore({
         dataDir: options.dataDir || DEFAULT_DATA_DIR,
         adminLogin: options.adminLogin,
@@ -247,7 +348,57 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, PUBLIC_OFERTA);
             }
 
-            // 2.0 Вход / регистрация пользователя и подписание публичной оферты ПЭП
+            // 2.0 Отправка одноразового 6-значного кода подтверждения на Email и проверка кода
+            if (req.method === 'POST' && pathname === '/api/auth/send-code') {
+                const body = await readJsonBody(req);
+                const cleanEmail = String(body.email || '').trim().toLowerCase();
+                if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail))
+                    return sendJson(res, 400, { error: 'Укажите корректный email адрес' });
+                const code = crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+                pendingOtpCodes.set(cleanEmail, {
+                    code,
+                    expiresAt: Date.now() + 10 * 60_000,
+                    attempts: 0,
+                });
+                if (!options.skipEmailSend) {
+                    await sendOtpEmail({ to: cleanEmail, code });
+                }
+                return sendJson(res, 200, {
+                    ok: true,
+                    email: cleanEmail,
+                    message: `На адрес ${cleanEmail} отправлено письмо с 6-значным кодом подтверждения.`,
+                });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/auth/verify-code') {
+                const body = await readJsonBody(req);
+                const cleanEmail = String(body.email || '').trim().toLowerCase();
+                const code = String(body.code || '').trim();
+                const entry = pendingOtpCodes.get(cleanEmail);
+                if (!entry || Date.now() > entry.expiresAt) {
+                    pendingOtpCodes.delete(cleanEmail);
+                    return sendJson(res, 400, { error: 'Срок действия кода истёк или код не запрашивался. Запросите новый код.' });
+                }
+                entry.attempts += 1;
+                if (entry.attempts > 5) {
+                    pendingOtpCodes.delete(cleanEmail);
+                    return sendJson(res, 400, { error: 'Превышено число попыток ввода кода. Запросите новый код.' });
+                }
+                const a = Buffer.from(entry.code);
+                const b = Buffer.from(code);
+                if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+                    return sendJson(res, 400, { error: 'Неверный код подтверждения. Проверьте письмо и попробуйте снова.' });
+                }
+                pendingOtpCodes.delete(cleanEmail);
+                const user = store.registerOrLoginUser({
+                    email: cleanEmail,
+                    ofertaAccepted: true,
+                    hubUrl: body.hubUrl || reqOrigin,
+                });
+                return sendJson(res, 200, user);
+            }
+
+            // 2.0.0 Прямая регистрация по API (для серверных интеграций и автотестов)
             if (req.method === 'POST' && (pathname === '/api/auth/login' || pathname === '/api/auth/register')) {
                 const body = await readJsonBody(req);
                 const user = store.registerOrLoginUser({
