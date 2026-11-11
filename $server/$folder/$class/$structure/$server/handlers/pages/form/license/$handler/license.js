@@ -311,6 +311,7 @@ export default {
     async reload() {
         try {
             this.status = await this.$item?.fetch('license_status');
+            window.top?.dispatchEvent?.(new CustomEvent('work:license-changed', { detail: this.status }));
         }
         catch (err) {
             this.message = 'Ошибка чтения статуса лицензии: ' + (err?.message || err);
@@ -325,6 +326,7 @@ export default {
         try {
             this.message = 'Проверка токена и загрузка лицензий из личного кабинета…';
             this.status = await this.$item?.fetch('license_bind_token', { token: tok });
+            window.top?.dispatchEvent?.(new CustomEvent('work:license-changed', { detail: this.status }));
             this.ownerTokenInput = '';
             const count = (this.status?.licenseFiles || []).length;
             this.message = count > 0
@@ -339,6 +341,7 @@ export default {
         try {
             this.message = 'Запрос лицензий из личного кабинета…';
             this.status = await this.$item?.fetch('license_sync');
+            window.top?.dispatchEvent?.(new CustomEvent('work:license-changed', { detail: this.status }));
             const count = (this.status?.licenseFiles || []).length;
             this.message = count > 0
                 ? `Лицензии синхронизированы. Установлено файлов в #system: ${count}.`

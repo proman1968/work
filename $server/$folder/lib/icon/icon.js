@@ -67,7 +67,16 @@ export default {
         }
     },
     get default(){
-        return this.isUser?'':'files:file';
+        if (this.isUser) {
+            const lbl = String(this.$item?.label || '').trim();
+            if (lbl) {
+                const initials = lbl.split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
+                if (initials)
+                    return '@:' + initials;
+            }
+            return 'icons:account-circle';
+        }
+        return 'files:file';
     },
     get iconColor() {
         if (this.isUser)

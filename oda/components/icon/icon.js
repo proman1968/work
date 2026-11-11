@@ -147,6 +147,8 @@ ODA({is: 'oda-icon',
     },
     _onLoad(e) {
         this.bb = undefined;
+        if (this.iconTag === 'image')
+            return;
         const bb = this.bb;
         if ((!bb || !bb.height || !bb.width) && !this[R].states.sleep) {
             this._icon.error = e;
@@ -200,13 +202,13 @@ ODA({is: 'oda-icon',
     },
     get bb() {
         let bb;
-        if (['use', 'image'].includes(this.iconTag)) {
+        if (this.iconTag === 'use') {
             bb = this.$('#use')?.getBBox?.();
             if (!bb || !bb.width || !bb.height)
                 return;
         }
         else {
-            bb = { width: this.iconSize, height: this.iconSize };
+            bb = { x: 0, y: 0, width: this.iconSize, height: this.iconSize };
         }
         return bb;
     },

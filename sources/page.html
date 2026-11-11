@@ -95,10 +95,11 @@
                     }
                 }
             });
-            if(window.top === window && WORK.DEV_MODE){
+            if(window.top === window){
                 const devPanel = document.getElementById('devModePanel');
-                devPanel.$item = await WORK.get_item('/');
-                devPanel.style = '';
+                const rootItem = await WORK.get_item('/');
+                devPanel.$item = rootItem;
+                await devPanel.refreshLicenseStatus?.();
             }
         // }
         ODA({
@@ -111,11 +112,18 @@
                     @apply --center;
                     flex-wrap: wrap;
                     width: 100%;
-                    padding: 4px;
-                    gap: 8px;
+                    padding: 4px 10px;
+                    gap: 10px;
+                    box-sizing: border-box;
 
                     div{
                         text-align: center;
+                        font-weight: 600;
+                        font-size: 13px;
+                    }
+
+                    .sep {
+                        opacity: 0.45;
                     }
 
                     oda-button{
@@ -124,12 +132,53 @@
                     }
                 }
             </style>
-            <div>СЕРВЕР РАБОТАЕТ В РЕЖИМЕ ОТЛАДКИ</div>
-            <oda-button ~if="showRebootButton" :disabled="disableButton" raised icon="carbon:reset" :label="buttonText" @click="reboot"></oda-button>
+            <div ~if="showDevMode">СЕРВЕР РАБОТАЕТ В РЕЖИМЕ ОТЛАДКИ</div>
+            <oda-button ~if="showDevMode && showRebootButton" :disabled="disableButton" raised icon="carbon:reset" :label="buttonText" @click="reboot"></oda-button>
+            <span class="sep" ~if="showDevMode && showUnlicensed">·</span>
+            <div ~if="showUnlicensed">ЛИЦЕНЗИЯ НЕ УСТАНОВЛЕНА (ИИ-агенты отключены)</div>
+            <oda-button ~if="showUnlicensed" raised icon="carbon:certificate" label="Установить лицензию" @click="openLicenseView"></oda-button>
             `,
             $item: null,
             disableButton: false,
             rebooting: false,
+            showDevMode: false,
+            showUnlicensed: false,
+            attached() {
+                this.showDevMode = Boolean(WORK.DEV_MODE);
+                this._onLicChanged = (e) => {
+                    const st = e?.detail;
+                    if (st && typeof st.baseLicensed === 'boolean') {
+                        this.showUnlicensed = !st.baseLicensed;
+                        this._syncVisibility();
+                    }
+                    else {
+                        this.refreshLicenseStatus();
+                    }
+                };
+                window.addEventListener('work:license-changed', this._onLicChanged);
+            },
+            detached() {
+                if (this._onLicChanged)
+                    window.removeEventListener('work:license-changed', this._onLicChanged);
+            },
+            _syncVisibility() {
+                this.style.display = (this.showDevMode || this.showUnlicensed) ? '' : 'none';
+            },
+            async refreshLicenseStatus() {
+                this.showDevMode = Boolean(WORK.DEV_MODE);
+                try {
+                    const root = this.$item || await WORK.get_item('/');
+                    const st = await root?.fetch?.('license_status');
+                    this.showUnlicensed = Boolean(st && st.baseLicensed === false);
+                }
+                catch {
+                    this.showUnlicensed = false;
+                }
+                this._syncVisibility();
+            },
+            openLicenseView() {
+                window.top.location.hash = '#/~/handlers/pages/form/license';
+            },
             get showRebootButton(){
                 // только реальный ADMIN корня; в DEV права не обходятся — роли читаются напрямую
                 if (!this.$item) return false;
