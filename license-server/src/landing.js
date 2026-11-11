@@ -430,36 +430,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             </div>
 
             <div class="sec-head" style="margin-top:8px">
-                <div><span class="kicker">Партнёрская программа</span><h2 class="h2">Региональная франшиза ODANT-WORK</h2></div>
+                <div><span class="kicker">Партнёрская программа</span><h2 class="h2">Условия региональной франшизы ODANT-WORK</h2></div>
                 <p>Число франшиз в субъекте пропорционально населению, паушальный взнос — экономике региона. Резерв закрепляется сразу после невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}, полная оплата паушального взноса — в течение 1 года.</p>
-            </div>
-
-            <div class="stats">
-                <div class="stat"><b id="statVacant">${totalVacant}</b><span>вакантных франшиз</span></div>
-                <div class="stat"><b>${visibleRegions.length}</b><span>субъектов РФ</span></div>
-                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.baseFranchiseFeeRub)}</b><span>базовый паушальный взнос</span></div>
-                <div class="stat"><b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b><span>залог за резерв</span></div>
-                <div class="stat"><b>${FRANCHISE_PROGRAM.minDiscountPercent}→${FRANCHISE_PROGRAM.maxDiscountPercent}%</b><span>скидка партнёра от объёма</span></div>
-            </div>
-
-            <div class="card">
-                <div class="map-tools">
-                    <h3 class="h3" style="margin:0">Все субъекты Российской Федерации</h3>
-                    <input type="text" id="inpRegionFilter" placeholder="Поиск: Татарстан, Рязань, ДФО…" style="max-width:320px">
-                </div>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th data-sort="name">Субъект<span class="arr">↕</span></th>
-                            <th data-sort="district">Округ<span class="arr">↕</span></th>
-                            <th data-sort="populationMillions" class="num">Население<span class="arr">↕</span></th>
-                            <th data-sort="vacantFranchises">Вакантно<span class="arr">↕</span></th>
-                            <th data-sort="franchiseFeeRub" class="num">Паушальный взнос<span class="arr">↕</span></th>
-                            <th></th>
-                        </tr></thead>
-                        <tbody id="regionsTableBody"></tbody>
-                    </table>
-                </div>
             </div>
 
             <div class="split">

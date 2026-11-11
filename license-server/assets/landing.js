@@ -719,7 +719,7 @@
             el.setAttribute('class', (el.tagName === 'circle' ? 'map-dot' : 'rg') + (lvl >= 0 ? ' l' + lvl : '') + (dim ? ' dim' : ''));
         }
         const total = visibleRegions().reduce((s, r) => s + vacantOf(r), 0);
-        $('#statVacant').textContent = total;
+        if ($('#statVacant')) $('#statVacant').textContent = total;
     }
 
     function clampView(v) {
@@ -842,7 +842,7 @@
         svg.addEventListener('click', (e) => {
             if (MAP.moved) return;
             const el = e.target.closest && e.target.closest('[data-code]');
-            if (el) selectRegion(el.dataset.code, { scrollTable: true });
+            if (el) selectRegion(el.dataset.code);
         });
         svg.addEventListener('dblclick', (e) => { e.preventDefault(); zoomAt(toSvgPoint(e), 0.5); });
         $$('[data-zoom]').forEach(b => b.addEventListener('click', () => {
@@ -899,12 +899,12 @@
         const btn = $('#btnReserveSelected');
         btn.disabled = vac <= 0;
         btn.textContent = vac > 0 ? `Зарезервировать · залог ${rub(D.franchise.reservationDepositRub)}` : 'Все франшизы субъекта заняты';
-        $$('#regionsTableBody tr').forEach(tr => tr.classList.toggle('on', tr.dataset.code === selectedCode));
-        if (scrollTable) $(`#regionsTableBody tr[data-code="${selectedCode}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
 
     const SORT = { key: 'populationMillions', dir: -1 };
     function renderRegionsTable() {
+        const tbody = $('#regionsTableBody');
+        if (!tbody) return;
         const q = ($('#inpRegionFilter')?.value || '').trim().toLowerCase();
         const rows = visibleRegions()
             .filter(r => !MAP.district || r.district === MAP.district)
