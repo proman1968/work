@@ -109,12 +109,13 @@
             template: `
             <style>
                 :host{
-                    @apply --error;
+                    background: #d32f2f;
+                    color: #ffffff;
                     @apply --horizontal;
                     @apply --center;
                     flex-wrap: wrap;
                     width: 100%;
-                    padding: 4px 10px;
+                    padding: 4px 12px;
                     gap: 10px;
                     box-sizing: border-box;
 
@@ -122,15 +123,22 @@
                         text-align: center;
                         font-weight: 600;
                         font-size: 13px;
+                        color: #ffffff;
                     }
 
                     .sep {
-                        opacity: 0.45;
+                        opacity: 0.6;
+                        color: #ffffff;
+                        font-weight: 700;
                     }
 
                     oda-button{
-                        @apply --content;
+                        background: #ffffff !important;
+                        color: #1e293b !important;
+                        fill: #1e293b !important;
                         border-radius: 5px;
+                        font-weight: 600;
+                        font-size: 12.5px;
                     }
                 }
             </style>
@@ -139,12 +147,18 @@
             <span class="sep" ~if="showDevMode && showUnlicensed">·</span>
             <div ~if="showUnlicensed">ЛИЦЕНЗИЯ НЕ УСТАНОВЛЕНА (ИИ-агенты отключены)</div>
             <oda-button ~if="showUnlicensed" raised icon="carbon:certificate" label="Установить лицензию" @click="openLicenseView"></oda-button>
+            <oda-button ~if="showUnlicensed" raised icon="carbon:launch" :label="portalButtonLabel" @click="openPortal"></oda-button>
             `,
             $item: null,
             disableButton: false,
             rebooting: false,
             showDevMode: false,
             showUnlicensed: false,
+            portalUrl: 'https://work.odant.org',
+            get portalButtonLabel() {
+                const raw = String(this.portalUrl || 'https://work.odant.org').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+                return `Личный кабинет (${raw})`;
+            },
             attached() {
                 if (window.top !== window) {
                     this.style.display = 'none';
@@ -157,6 +171,7 @@
                     const st = e?.detail;
                     if (st && typeof st.baseLicensed === 'boolean') {
                         this.showUnlicensed = !st.baseLicensed;
+                        this.portalUrl = st.tokenBinding?.hubUrl || st.hubUrl || 'https://work.odant.org';
                         this._syncVisibility();
                     }
                     else {
@@ -181,6 +196,7 @@
                     this.$item = root;
                     const st = await root?.fetch?.('license_status');
                     this.showUnlicensed = Boolean(st && st.baseLicensed === false);
+                    this.portalUrl = st?.tokenBinding?.hubUrl || st?.hubUrl || 'https://work.odant.org';
                 }
                 catch {
                     this.showUnlicensed = false;
@@ -195,6 +211,9 @@
                 else {
                     window.top.location.hash = '#/~/handlers/pages/form';
                 }
+            },
+            openPortal() {
+                window.open(this.portalUrl || 'https://work.odant.org', '_blank', 'noopener');
             },
             get showRebootButton(){
                 // только реальный ADMIN корня; в DEV права не обходятся — роли читаются напрямую

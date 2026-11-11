@@ -59,11 +59,29 @@ Node:{
         }
     })
 
+    function resolveOdaHost(node) {
+        let cur = node;
+        while (cur) {
+            const cached = cur[R]?.cache?.host;
+            if (cached && typeof cached === 'object')
+                return cached;
+            const p = cur[R]?.cache?.parent || cur.parentElement || cur.parentNode;
+            if (!p)
+                return null;
+            if (p.nodeType === 11 && p.host && typeof p.host === 'object')
+                return p.host;
+            if (typeof p.host === 'object' && p.host)
+                return p.host;
+            cur = p;
+        }
+        return null;
+    }
+
     Object.defineProperty(Node.prototype, 'host', {
         enumerable: false,
         configurable: false,
         get(){
-            return (this[R].cache.host ??= this.parentElement?.host ||  this.parentNode?.host);
+            return (this[R].cache.host ??= resolveOdaHost(this));
         },
         set(n){
             this[R].cache.host = n;
@@ -103,9 +121,9 @@ Node:{
         return !!(node[R]?.props && p in node[R].props) || Reflect.has(node, p);
     }
     function pdpOwner(node, p) {
-        while (node) {
+        while (node && typeof node === 'object') {
             if (pdpHasProp(node, p)) return node;
-            node = node.host;
+            node = (typeof node.host === 'object' && node.host) ? node.host : resolveOdaHost(node);
         }
         return null;
     }

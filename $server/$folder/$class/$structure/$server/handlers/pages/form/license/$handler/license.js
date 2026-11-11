@@ -82,13 +82,36 @@ export default {
                 flex-direction: column;
                 gap: 6px;
             }
-            .steps a {
+            .steps a, .portal-link {
                 color: var(--accent-color, #2563eb);
                 font-weight: 600;
                 text-decoration: none;
+                cursor: pointer;
             }
-            .steps a:hover {
+            .steps a:hover, .portal-link:hover {
                 text-decoration: underline;
+            }
+            .head-actions {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
+            }
+            .btn-portal {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 12px;
+                border-radius: 8px;
+                border: 1px solid var(--accent-color, #2563eb);
+                background: rgba(37, 99, 235, 0.08);
+                color: var(--accent-color, #2563eb);
+                font-weight: 600;
+                font-size: 13px;
+                cursor: pointer;
+            }
+            .btn-portal:hover {
+                background: rgba(37, 99, 235, 0.14);
             }
             .summary-grid {
                 display: grid;
@@ -193,9 +216,14 @@ export default {
                         <oda-icon icon="carbon:certificate" :icon-size="22"></oda-icon>
                         <span>Лицензирование ODANT-WORK</span>
                     </div>
-                    <span class="badge" :class="status?.baseLicensed ? '' : 'warn'">
-                        {{status?.baseLicensed ? 'Лицензия активна · ИИ-агенты включены' : 'Базовая лицензия не установлена'}}
-                    </span>
+                    <div class="head-actions">
+                        <button type="button" class="btn-portal" @tap="openPortal">
+                            <span>Личный кабинет ({{portalHost}}) ↗</span>
+                        </button>
+                        <span class="badge" :class="status?.baseLicensed ? '' : 'warn'">
+                            {{status?.baseLicensed ? 'Лицензия активна · ИИ-агенты включены' : 'Базовая лицензия не установлена'}}
+                        </span>
+                    </div>
                 </div>
 
                 <div class="alert-box" ~if="!status?.baseLicensed">
@@ -205,7 +233,7 @@ export default {
                     </div>
                     <div>Чтобы снять ограничения, включить агентскую ИИ-систему и открыть 10 вечных пользовательских мест:</div>
                     <ol class="steps">
-                        <li>Откройте сайт <a :href="portalUrl" target="_blank" rel="noopener">{{portalUrl}}</a>, войдите в Личный кабинет и приобретите базовую лицензию.</li>
+                        <li>Откройте сайт <span class="portal-link" @tap="openPortal">{{portalUrl}} ↗</span>, войдите в Личный кабинет и приобретите базовую лицензию.</li>
                         <li>В Личном кабинете скопируйте <strong>Токен владельца</strong> (<code>owk1...</code>).</li>
                         <li>Вставьте токен в поле ниже и нажмите <strong>«Привязать токен»</strong> — система сама загрузит ваши лицензии в папку <code>#system</code>.</li>
                     </ol>
@@ -225,9 +253,9 @@ export default {
                         <span class="stat-label">{{status?.aiAgentsEnabled ? 'Доступны все ИИ-агенты и Консультант' : 'Требуется базовая лицензия'}}</span>
                     </div>
                     <div class="stat-box">
-                        <span class="stat-label">Аккаунт владельца (ЛК)</span>
+                        <span class="stat-label">Аккаунт владельца и портал (ЛК)</span>
                         <span class="stat-val">{{status?.tokenBinding?.email || status?.ownerEmail || 'Не привязан'}}</span>
-                        <span class="stat-label">{{status?.tokenBinding?.bound ? ('Сервер: ' + status.tokenBinding.hubUrl) : 'Токен не привязан'}}</span>
+                        <span class="stat-label portal-link" @tap="openPortal">{{portalUrl}} ↗</span>
                     </div>
                 </div>
 
@@ -280,7 +308,25 @@ export default {
     ownerTokenInput: '',
     message: '',
     get portalUrl() {
+        const rawTok = String(this.ownerTokenInput || '').trim();
+        if (rawTok.startsWith('owk1.')) {
+            try {
+                const b64 = rawTok.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/');
+                if (b64) {
+                    const parsed = JSON.parse(atob(b64));
+                    if (parsed?.hubUrl)
+                        return String(parsed.hubUrl).replace(/\/+$/, '');
+                }
+            }
+            catch { /* ignore */ }
+        }
         return this.status?.tokenBinding?.hubUrl || this.status?.hubUrl || 'https://work.odant.org';
+    },
+    get portalHost() {
+        return String(this.portalUrl || 'https://work.odant.org').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    },
+    openPortal() {
+        window.open(this.portalUrl || 'https://work.odant.org', '_blank', 'noopener');
     },
     get installedLicenses() {
         const files = this.status?.licenseFiles || [];

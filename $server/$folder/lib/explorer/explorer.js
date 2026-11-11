@@ -659,41 +659,12 @@ export default {
     async _initTopLicenseBanner() {
         if (window.top !== window)
             return;
-        const devPanel = document.getElementById('devModePanel');
-        if (devPanel && typeof devPanel.refreshLicenseStatus === 'function') {
-            await devPanel.refreshLicenseStatus();
-            return;
-        }
-        // Фоллбэк, если запущенный сервер ещё не перезапускался после обновления page.html
-        let banner = document.getElementById('workUnlicensedBanner');
-        if (!banner) {
-            banner = document.createElement('div');
-            banner.id = 'workUnlicensedBanner';
-            banner.style.cssText = 'display:none;align-items:center;justify-content:center;gap:10px;width:100%;padding:4px 10px;box-sizing:border-box;background:#d32f2f;color:#fff;font-weight:600;font-size:13px;z-index:1000;';
-            banner.innerHTML = `
-                <span>ЛИЦЕНЗИЯ НЕ УСТАНОВЛЕНА (ИИ-агенты отключены)</span>
-                <button type="button" style="background:#fff;color:#1e293b;border:none;border-radius:5px;padding:3px 10px;font-weight:600;font-size:12.5px;cursor:pointer;">Установить лицензию</button>
-            `;
-            banner.querySelector('button')?.addEventListener('click', async () => {
-                const root = this.$item || await WORK.get_item('/');
-                if (typeof window.execute === 'function')
-                    await window.execute(root, { view: 'license' });
-            });
-            document.body.insertBefore(banner, document.body.firstChild);
-            window.addEventListener('work:license-changed', (e) => {
-                const st = e?.detail;
-                if (st && typeof st.baseLicensed === 'boolean')
-                    banner.style.display = st.baseLicensed ? 'none' : 'flex';
-            });
-        }
         try {
-            const root = this.$item || await WORK.get_item('/');
-            const st = await root?.fetch?.('license_status');
-            banner.style.display = (st && st.baseLicensed === false) ? 'flex' : 'none';
+            await customElements.whenDefined('dev-mode-panel');
+            const devPanel = document.getElementById('devModePanel');
+            await devPanel?.refreshLicenseStatus?.();
         }
-        catch {
-            banner.style.display = 'none';
-        }
+        catch { /* ignore */ }
     },
 }
 
