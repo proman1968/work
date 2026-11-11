@@ -99,6 +99,8 @@
                 const devPanel = document.getElementById('devModePanel');
                 const rootItem = await WORK.get_item('/');
                 devPanel.$item = rootItem;
+                if (WORK.DEV_MODE)
+                    devPanel.style.display = '';
                 await devPanel.refreshLicenseStatus?.();
             }
         // }
@@ -144,7 +146,13 @@
             showDevMode: false,
             showUnlicensed: false,
             attached() {
+                if (window.top !== window) {
+                    this.style.display = 'none';
+                    return;
+                }
                 this.showDevMode = Boolean(WORK.DEV_MODE);
+                this._syncVisibility();
+                this.refreshLicenseStatus();
                 this._onLicChanged = (e) => {
                     const st = e?.detail;
                     if (st && typeof st.baseLicensed === 'boolean') {
@@ -165,9 +173,12 @@
                 this.style.display = (this.showDevMode || this.showUnlicensed) ? '' : 'none';
             },
             async refreshLicenseStatus() {
+                if (window.top !== window)
+                    return;
                 this.showDevMode = Boolean(WORK.DEV_MODE);
                 try {
                     const root = this.$item || await WORK.get_item('/');
+                    this.$item = root;
                     const st = await root?.fetch?.('license_status');
                     this.showUnlicensed = Boolean(st && st.baseLicensed === false);
                 }
@@ -176,8 +187,14 @@
                 }
                 this._syncVisibility();
             },
-            openLicenseView() {
-                window.top.location.hash = '#/~/handlers/pages/form/license';
+            async openLicenseView() {
+                const root = this.$item || await WORK.get_item('/');
+                if (typeof window.top?.execute === 'function') {
+                    await window.top.execute(root, { view: 'license' });
+                }
+                else {
+                    window.top.location.hash = '#/~/handlers/pages/form';
+                }
             },
             get showRebootButton(){
                 // только реальный ADMIN корня; в DEV права не обходятся — роли читаются напрямую

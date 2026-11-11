@@ -187,7 +187,7 @@ export class $server extends $class {
         context ??= page.parent?.$parent;
         if(!context)
             throw new Error('Context not found')
-        let text = this.pageHTML;
+        let text = fs.readFileSync('./sources/page.html', {encoding: 'utf-8'});
         text = text.replaceAll('{item_path}', context.short || '/');
         text = text.replaceAll('{item_icon_path}', `${context.path}/~/icon.png`);
         text = text.replaceAll('{handler}', page.id);
