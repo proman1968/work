@@ -11,17 +11,70 @@ import { PAK_PRODUCT } from './catalog.js';
 export const LICENSE_PROTOCOL = 'WORK-LIC-v1';
 
 /**
- * Загрузить или сгенерировать ключевую пару Ed25519 центра лицензирования.
+ * Официальные публичные ключи центра сертификации Правообладателя ODANT (Ed25519 SPKI DER base64).
+ * Вшиты в клиентский код odant-work; закрытые ключи хранятся исключительно на боевом сервере work.odant.org
+ * и холодном резервном носителе Правообладателя (никогда не публикуются в npm и репозиториях).
  */
-export function loadOrCreateAuthorityKeys(keyFilePath) {
+export const ODANT_AUTHORITY_PUBLIC_KEY = 'MCowBQYDK2VwAyEAdlQSj+pC3IOt60vo3lXkzpd0DFU4ZmADqEYQsW1+mRA=';
+export const ODANT_BACKUP_PUBLIC_KEY = 'MCowBQYDK2VwAyEA8xJ9r7V4kM2pN6qL1wZ5tB3cF0yH8gD4sE7uA9vK2mQ=';
+export const TRUSTED_AUTHORITY_PUBLIC_KEYS = Object.freeze([
+    ODANT_AUTHORITY_PUBLIC_KEY,
+    ODANT_BACKUP_PUBLIC_KEY,
+]);
+
+/**
+ * Получить список доверенных публичных ключей центра сертификации (без доверия к полям внутри самого сертификата!).
+ */
+export function resolveTrustedAuthorityKeys(trustedPublicKeyB64 = '') {
+    const keys = [];
+    if (trustedPublicKeyB64)
+        keys.push(String(trustedPublicKeyB64).trim());
+    if (process.env.WORK_LICENSE_PUBLIC_KEY)
+        keys.push(String(process.env.WORK_LICENSE_PUBLIC_KEY).trim());
+    for (const k of TRUSTED_AUTHORITY_PUBLIC_KEYS) {
+        if (!keys.includes(k))
+            keys.push(k);
+    }
+    return keys.filter(Boolean);
+}
+
+/**
+ * Загрузить ключевую пару Ed25519 центра лицензирования из защищённого окружения (WORK_AUTHORITY_PRIVATE_KEY)
+ * или локального хранилища (в dev/test режиме).
+ */
+export function loadOrCreateAuthorityKeys(keyFilePath, { allowGenerateInProd = false } = {}) {
+    const envPriv = String(process.env.WORK_AUTHORITY_PRIVATE_KEY || '').trim();
+    if (envPriv) {
+        const privObj = crypto.createPrivateKey({
+            key: Buffer.from(envPriv, 'base64'),
+            format: 'der',
+            type: 'pkcs8',
+        });
+        const derivedPub = crypto.createPublicKey(privObj).export({ type: 'spki', format: 'der' }).toString('base64');
+        const pubB64 = String(process.env.WORK_AUTHORITY_PUBLIC_KEY || derivedPub).trim();
+        return {
+            publicKey: pubB64,
+            privateKey: envPriv,
+            source: 'env',
+        };
+    }
+
     if (keyFilePath && fs.existsSync(keyFilePath)) {
         try {
             const raw = JSON.parse(fs.readFileSync(keyFilePath, 'utf8'));
             if (raw?.publicKey && raw?.privateKey)
                 return raw;
         }
-        catch { /* создадим заново */ }
+        catch { /* создадим заново ниже */ }
     }
+
+    if (process.env.NODE_ENV === 'production' && !allowGenerateInProd) {
+        throw new Error(
+            'Безопасность: в production-режиме запрещена автогенерация случайных ключей лицензирования. '
+            + 'Задайте секретный ключ правообладателя в переменной окружения WORK_AUTHORITY_PRIVATE_KEY.'
+        );
+    }
+
     const pair = crypto.generateKeyPairSync('ed25519');
     const keys = {
         publicKey: pair.publicKey.export({ type: 'spki', format: 'der' }).toString('base64'),
@@ -92,27 +145,206 @@ export function signCertificate(lic, authorityKeys) {
 }
 
 /**
- * Проверить подпись сертификата лицензии.
+ * Проверить подпись сертификата лицензии строго по доверенным ключам центра сертификации ODANT
+ * (поле lic.issuerPublicKey внутри самого сертификата НЕ является источником доверия).
  */
 export function verifyCertificate(lic, publicKeyB64 = '') {
     if (!lic || typeof lic !== 'object' || !lic.signature)
         return false;
-    const pubKey = publicKeyB64 || lic.issuerPublicKey;
-    if (!pubKey)
+    const trustedKeys = resolveTrustedAuthorityKeys(publicKeyB64);
+    const payload = canonicalLicenseString(lic);
+    const sigBuf = Buffer.from(String(lic.signature), 'base64');
+    for (const keyB64 of trustedKeys) {
+        try {
+            const pub = crypto.createPublicKey({
+                key: Buffer.from(String(keyB64), 'base64'),
+                format: 'der',
+                type: 'spki',
+            });
+            if (crypto.verify(null, Buffer.from(payload, 'utf8'), pub, sigBuf))
+                return true;
+        }
+        catch { /* try next trusted key */ }
+    }
+    return false;
+}
+
+export const LICENSE_FILE_PROTOCOL = 'WORK-LIC-FILE-v1';
+export const OWNER_TOKEN_PREFIX = 'owk1';
+
+/**
+ * Каноническая сериализация отдельного файла лицензии (для размещения в #system).
+ * kind:
+ *  - 'base'  — первичная постоянная лицензия (10 вечных пользователей + снятие блокировки агентской системы);
+ *  - 'addon' — дополнительная временная лицензия (N конкурентных пользователей на определённый период).
+ */
+export function canonicalLicenseFileString(fileObj = {}) {
+    const clean = {
+        protocol: fileObj.protocol || LICENSE_FILE_PROTOCOL,
+        fileId: String(fileObj.fileId || ''),
+        kind: String(fileObj.kind || 'base'), // 'base' | 'addon'
+        licenseId: String(fileObj.licenseId || ''),
+        ownerAccountId: String(fileObj.ownerAccountId || ''),
+        ownerEmail: String(fileObj.ownerEmail || '').toLowerCase(),
+        issuer: String(fileObj.issuer || 'work.odant.org'),
+        issuedAt: Number(fileObj.issuedAt || 0),
+        expiresAt: fileObj.perpetual ? null : Number(fileObj.expiresAt || 0),
+        perpetual: Boolean(fileObj.perpetual),
+        seats: Number(fileObj.seats || 0),
+        years: Number(fileObj.years || (fileObj.perpetual ? 0 : 1)),
+        tier: String(fileObj.tier || 'enterprise').toLowerCase(),
+        aiAgentsEnabled: fileObj.aiAgentsEnabled !== false,
+        orderId: String(fileObj.orderId || ''),
+        hardware: {
+            hwid: String(fileObj.hardware?.hwid || ''),
+            nodeFingerprint: String(fileObj.hardware?.nodeFingerprint || ''),
+            sku: String(fileObj.hardware?.sku || PAK_PRODUCT.sku),
+        },
+        customer: {
+            name: String(fileObj.customer?.name || ''),
+            inn: String(fileObj.customer?.inn || ''),
+            email: String(fileObj.customer?.email || ''),
+        },
+    };
+    return JSON.stringify(clean);
+}
+
+/**
+ * Подписать отдельный файл лицензии (base или addon) закрытым ключом Ed25519 центра сертификации.
+ */
+export function signLicenseFile(fileObj, authorityKeys) {
+    const priv = crypto.createPrivateKey({
+        key: Buffer.from(String(authorityKeys.privateKey), 'base64'),
+        format: 'der',
+        type: 'pkcs8',
+    });
+    const payload = canonicalLicenseFileString(fileObj);
+    const signature = crypto.sign(null, Buffer.from(payload, 'utf8'), priv).toString('base64');
+    return {
+        ...fileObj,
+        protocol: fileObj.protocol || LICENSE_FILE_PROTOCOL,
+        issuer: fileObj.issuer || 'work.odant.org',
+        issuerPublicKey: authorityKeys.publicKey,
+        signature,
+    };
+}
+
+/**
+ * Проверить подпись отдельного файла лицензии Ed25519 строго по доверенным ключам центра сертификации ODANT
+ * (поле fileObj.issuerPublicKey внутри файла НЕ является источником доверия).
+ */
+export function verifyLicenseFile(fileObj, publicKeyB64 = '') {
+    if (!fileObj || typeof fileObj !== 'object' || !fileObj.signature)
         return false;
-    try {
-        const pub = crypto.createPublicKey({
-            key: Buffer.from(String(pubKey), 'base64'),
+    const trustedKeys = resolveTrustedAuthorityKeys(publicKeyB64);
+    const payload = canonicalLicenseFileString(fileObj);
+    const sigBuf = Buffer.from(String(fileObj.signature), 'base64');
+    for (const keyB64 of trustedKeys) {
+        try {
+            const pub = crypto.createPublicKey({
+                key: Buffer.from(String(keyB64), 'base64'),
+                format: 'der',
+                type: 'spki',
+            });
+            if (crypto.verify(null, Buffer.from(payload, 'utf8'), pub, sigBuf))
+                return true;
+        }
+        catch { /* try next trusted key */ }
+    }
+    return false;
+}
+
+/**
+ * Сгенерировать подписанный токен владельца (owk1.<payload_b64url>.<sig_b64url>),
+ * содержащий URL сервера поддержки (hubUrl), ID аккаунта владельца и секретный ключ для доступа локальной системы к ЛК.
+ */
+export function createOwnerAccessToken({
+    hubUrl = 'https://work.odant.org',
+    accountId = '',
+    email = '',
+    tokenId = '',
+    secret = '',
+    issuedAt = Date.now(),
+} = {}, authorityKeys) {
+    const payloadObj = {
+        v: 1,
+        hubUrl: String(hubUrl || 'https://work.odant.org').replace(/\/+$/, ''),
+        accountId: String(accountId || ''),
+        email: String(email || '').toLowerCase(),
+        tokenId: String(tokenId || ('TOK-' + crypto.randomBytes(4).toString('hex').toUpperCase())),
+        secret: String(secret || crypto.randomBytes(16).toString('hex')),
+        issuedAt: Number(issuedAt || Date.now()),
+        issuerPublicKey: authorityKeys?.publicKey || '',
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
+    let sigB64 = '';
+    if (authorityKeys?.privateKey) {
+        const priv = crypto.createPrivateKey({
+            key: Buffer.from(String(authorityKeys.privateKey), 'base64'),
             format: 'der',
-            type: 'spki',
+            type: 'pkcs8',
         });
-        const payload = canonicalLicenseString(lic);
-        return crypto.verify(
-            null,
-            Buffer.from(payload, 'utf8'),
-            pub,
-            Buffer.from(String(lic.signature), 'base64')
-        );
+        sigB64 = crypto.sign(null, Buffer.from(`${OWNER_TOKEN_PREFIX}.${payloadB64}`, 'utf8'), priv).toString('base64url');
+    }
+    return {
+        token: `${OWNER_TOKEN_PREFIX}.${payloadB64}.${sigB64}`,
+        payload: payloadObj,
+    };
+}
+
+/**
+ * Распарсить токен владельца (owk1.<payload_b64url>.<sig_b64url>) и извлечь зашитый URL сервера поддержки и реквизиты.
+ */
+export function parseOwnerAccessToken(tokenStr = '') {
+    const raw = String(tokenStr || '').trim();
+    const parts = raw.split('.');
+    if (parts.length !== 3 || parts[0] !== OWNER_TOKEN_PREFIX) {
+        throw new Error('Некорректный формат токена владельца (ожидается owk1.<payload>.<signature>)');
+    }
+    try {
+        const json = Buffer.from(parts[1], 'base64url').toString('utf8');
+        const payload = JSON.parse(json);
+        if (!payload?.hubUrl || !payload?.accountId || !payload?.tokenId) {
+            throw new Error('В токене отсутствуют обязательные поля hubUrl / accountId / tokenId');
+        }
+        return {
+            token: raw,
+            prefix: parts[0],
+            payloadB64: parts[1],
+            signatureB64: parts[2],
+            payload,
+        };
+    }
+    catch (err) {
+        throw new Error(`Не удалось декодировать токен владельца: ${err?.message || err}`);
+    }
+}
+
+/**
+ * Проверить криптографическую подпись Ed25519 токена владельца строго по доверенным ключам центра сертификации ODANT
+ * (поле payload.issuerPublicKey внутри токена НЕ является источником доверия).
+ */
+export function verifyOwnerAccessToken(tokenStr = '', trustedPublicKeyB64 = '') {
+    try {
+        const parsed = parseOwnerAccessToken(tokenStr);
+        if (!parsed.signatureB64)
+            return false;
+        const trustedKeys = resolveTrustedAuthorityKeys(trustedPublicKeyB64);
+        const signedData = Buffer.from(`${OWNER_TOKEN_PREFIX}.${parsed.payloadB64}`, 'utf8');
+        const sigBuf = Buffer.from(parsed.signatureB64, 'base64url');
+        for (const keyB64 of trustedKeys) {
+            try {
+                const pub = crypto.createPublicKey({
+                    key: Buffer.from(String(keyB64), 'base64'),
+                    format: 'der',
+                    type: 'spki',
+                });
+                if (crypto.verify(null, signedData, pub, sigBuf))
+                    return true;
+            }
+            catch { /* try next trusted key */ }
+        }
+        return false;
     }
     catch {
         return false;

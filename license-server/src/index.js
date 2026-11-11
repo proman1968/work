@@ -1,5 +1,7 @@
 export {
     PAK_PRODUCT,
+    BASE_LICENSE_PRODUCT,
+    ADDITIONAL_PRODUCTS,
     AI_PLATFORM,
     VENDOR_CONTACTS,
     FEDERAL_DISTRICTS,
@@ -16,7 +18,25 @@ export {
     calculatePartnerEconomics,
     PUBLIC_OFERTA,
 } from './catalog.js';
-export { LICENSE_PROTOCOL, loadOrCreateAuthorityKeys, canonicalLicenseString, signCertificate, verifyCertificate } from './crypto.js';
+export {
+    LICENSE_PROTOCOL,
+    LICENSE_FILE_PROTOCOL,
+    OWNER_TOKEN_PREFIX,
+    ODANT_AUTHORITY_PUBLIC_KEY,
+    ODANT_BACKUP_PUBLIC_KEY,
+    TRUSTED_AUTHORITY_PUBLIC_KEYS,
+    resolveTrustedAuthorityKeys,
+    loadOrCreateAuthorityKeys,
+    canonicalLicenseString,
+    signCertificate,
+    verifyCertificate,
+    canonicalLicenseFileString,
+    signLicenseFile,
+    verifyLicenseFile,
+    createOwnerAccessToken,
+    parseOwnerAccessToken,
+    verifyOwnerAccessToken,
+} from './crypto.js';
 export { LicenseStore } from './store.js';
 export { YooKassaService } from './yookassa.js';
 export { SupportBotsHub } from './bots.js';

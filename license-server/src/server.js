@@ -22,6 +22,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
     PAK_PRODUCT,
+    BASE_LICENSE_PRODUCT,
+    ADDITIONAL_PRODUCTS,
     SLA_TIERS,
     SEAT_VOLUME_DISCOUNTS,
     calculateSeatVolumeDiscount,
@@ -225,10 +227,12 @@ export function createLicenseServerApp(options = {}) {
                 return sendStaticAsset(res, STATIC_ASSETS[pathname]);
             }
 
-            // 2. Каталог ПАК, тарифов SLA, партнёрской франшизы и публичной оферты
+            // 2. Каталог ПАК, отдельной базовой лицензии (4 млн ₽), тарифов SLA, прочих товаров, партнёрской франшизы и оферты
             if (req.method === 'GET' && pathname === '/api/catalog') {
                 return sendJson(res, 200, {
                     product: PAK_PRODUCT,
+                    baseLicenseProduct: BASE_LICENSE_PRODUCT,
+                    additionalProducts: ADDITIONAL_PRODUCTS,
                     tiers: Object.values(SLA_TIERS),
                     volumeDiscounts: SEAT_VOLUME_DISCOUNTS,
                     franchiseProgram: FRANCHISE_PROGRAM,
@@ -246,8 +250,21 @@ export function createLicenseServerApp(options = {}) {
             // 2.0 Вход / регистрация пользователя и подписание публичной оферты ПЭП
             if (req.method === 'POST' && (pathname === '/api/auth/login' || pathname === '/api/auth/register')) {
                 const body = await readJsonBody(req);
-                const user = store.registerOrLoginUser(body);
+                const user = store.registerOrLoginUser({
+                    ...body,
+                    hubUrl: body.hubUrl || reqOrigin,
+                });
                 return sendJson(res, 200, user);
+            }
+
+            // 2.0.1 Генерация или перевыпуск токена владельца (с зашитым URL сервера поддержки) в личном кабинете
+            if (req.method === 'POST' && pathname === '/api/cabinet/token') {
+                const body = await readJsonBody(req);
+                const key = extractBearerToken(req, body, url) || body.email || body.accountId || '';
+                const result = store.generateUserHubToken(key, {
+                    hubUrl: body.hubUrl || reqOrigin,
+                });
+                return sendJson(res, 200, result);
             }
 
             if (req.method === 'POST' && pathname === '/api/auth/accept-oferta') {
@@ -346,9 +363,16 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, summary);
             }
 
-            // 5. Синхронизация лицензии с ПАК клиента
+            // 5. Синхронизация лицензии с ПАК клиента (или по токену владельца)
             if (req.method === 'POST' && pathname === '/api/license/sync') {
                 const body = await readJsonBody(req);
+                if (body.token) {
+                    const synced = store.syncByOwnerToken({
+                        ...body,
+                        canonicalHubUrl: body.canonicalHubUrl || reqOrigin,
+                    });
+                    return sendJson(res, 200, synced);
+                }
                 const summary = store.issueOrUpdateLicense({
                     licenseId: body.licenseId,
                     hwid: body.hwid,
@@ -356,6 +380,18 @@ export function createLicenseServerApp(options = {}) {
                     customer: body.customer,
                 });
                 return sendJson(res, 200, summary);
+            }
+
+            // 5.1 Синхронизация и скачивание файлов лицензий (.lic.json) по токену владельца
+            if (req.method === 'POST' && pathname === '/api/license/sync-by-token') {
+                const body = await readJsonBody(req);
+                const tok = body.token || extractBearerToken(req, body, url);
+                const result = store.syncByOwnerToken({
+                    ...body,
+                    token: tok,
+                    canonicalHubUrl: body.canonicalHubUrl || reqOrigin,
+                });
+                return sendJson(res, 200, result);
             }
 
             // 6. Получение лицензии по ID / HWID
@@ -367,25 +403,51 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, summary);
             }
 
-            // 7. Оформление заказа и создание платежа в ЮKassa (только после регистрации и подписания оферты)
+            // 7. Оформление заказа: через ЮKassa ИЛИ по договору/счёту для юрлиц (только после регистрации и подписания оферты)
             if (req.method === 'POST' && pathname === '/api/orders/checkout') {
                 const body = await readJsonBody(req);
                 const user = ensureCustomerOferta(req, body);
                 const order = store.createOrder({
                     ...body,
                     licenseId: body.licenseId || user?.licenseId || '',
+                    ownerAccountId: user?.userId || body.ownerAccountId || '',
                     customer: {
                         name: body.customer?.name || user?.companyName || '',
                         inn: body.customer?.inn || user?.inn || '',
+                        kpp: body.customer?.kpp || '',
+                        legalAddress: body.customer?.legalAddress || '',
                         email: body.customer?.email || user?.email || '',
                         phone: body.customer?.phone || user?.phone || '',
                     },
                 });
+                if (order.paymentMethod === 'invoice') {
+                    return sendJson(res, 200, {
+                        orderId: order.orderId,
+                        licenseId: order.licenseId,
+                        paymentMethod: 'invoice',
+                        status: order.status,
+                        amountRub: order.amountRub,
+                        invoiceNumber: order.invoiceNumber,
+                        contractNumber: order.contractNumber,
+                        invoiceUrl: `${reqOrigin}${order.invoiceUrl}`,
+                        confirmationUrl: `${reqOrigin}${order.invoiceUrl}`,
+                        order,
+                    });
+                }
                 const payment = await yookassa.createPaymentForOrder(order, { originOverride: reqOrigin });
                 return sendJson(res, 200, {
                     ...payment,
                     order,
                 });
+            }
+
+            // 7.1 Печатная форма Счёта-договора на оплату для юридических лиц
+            if (req.method === 'GET' && pathname.startsWith('/api/orders/') && pathname.endsWith('/invoice')) {
+                const orderId = decodeURIComponent(pathname.slice('/api/orders/'.length, -'/invoice'.length));
+                const html = store.renderOrderInvoiceHtml(orderId);
+                if (!html)
+                    return sendHtml(res, 404, '<h1>Счёт не найден</h1>');
+                return sendHtml(res, 200, html);
             }
 
             // 8. Песочница оплаты ЮKassa
@@ -482,6 +544,19 @@ export function createLicenseServerApp(options = {}) {
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
                 const orderId = decodeURIComponent(pathname.slice('/api/admin/orders/'.length, -'/cancel'.length));
                 return sendJson(res, 200, store.cancelOrder(orderId));
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/admin/orders/') && pathname.endsWith('/confirm-invoice')) {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const orderId = decodeURIComponent(pathname.slice('/api/admin/orders/'.length, -'/confirm-invoice'.length));
+                const confirmed = store.confirmInvoicePayment(orderId, body);
+                if (confirmed?.license) {
+                    await bots?.notifyLicenseOrderPaid(confirmed.order, confirmed.license);
+                }
+                return sendJson(res, 200, confirmed);
             }
 
             if (req.method === 'POST' && pathname.startsWith('/api/admin/tickets/') && pathname.endsWith('/close')) {

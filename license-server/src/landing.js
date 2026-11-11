@@ -367,6 +367,13 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="card oferta-banner" data-oferta-banner></div>
             <div class="split">
                 <div class="card">
+                    <div class="field">
+                        <label>Вариант базовой поставки</label>
+                        <div class="seg" id="segPakVariant">
+                            <button data-variant="pak" class="on">Комплект с машиной<small>${rub(P.basePriceRub)} · железо + 10 мест</small></button>
+                            <button data-variant="license_only">Базовая лицензия без железа<small>${rub(P.baseLicensePriceRub || 4_000_000)} · 10 вечных мест</small></button>
+                        </div>
+                    </div>
                     <div class="row2">
                         <div class="field"><label for="inpPakOrg">Организация</label><input type="text" id="inpPakOrg" value="ООО «Маслоторг»"></div>
                         <div class="field"><label for="inpPakInn">ИНН</label><input type="text" id="inpPakInn" value="7701234567" inputmode="numeric"></div>
@@ -380,25 +387,35 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <label>Уровень поддержки дополнительных мест</label>
                         <div class="seg" id="segPakTier">${Object.values(SLA_TIERS).map(t => `<button data-tier="${t.id}" class="${t.id === 'business' ? 'on' : ''}">${esc(t.name)}<small>${rub(t.pricePerUserYearRub)}/год</small></button>`).join('')}</div>
                     </div>
-                    <p class="note muted" style="margin:6px 0 0">Уже есть комплекс? <a href="#" data-action="addons">Войдите в кабинет и подпишите оферту</a>, чтобы докупить места со скидкой.</p>
+                    <p class="note muted" style="margin:6px 0 0">Уже есть комплекс? <a href="#" data-action="addons">Войдите в кабинет и подпишите оферту</a>, чтобы докупить места со скидкой или получить токен привязки.</p>
                 </div>
                 <div class="card summary card-glow">
                     <span class="kicker">Итого</span>
                     <div class="sum-total" id="lblPakTotal">${rub(P.basePriceRub)}</div>
                     <div class="sum-lines" id="lblPakBreakdown"></div>
                     <button class="btn btn-primary btn-lg" style="width:100%" data-action="order-pak">Оформить и оплатить через ЮKassa</button>
+                    <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:8px" data-action="order-pak-invoice">Выставить счёт-договор (для юр. лиц)</button>
                     <div class="status" id="pakOrderStatus"></div>
                 </div>
             </div>
         </section>
 
-        <!-- ============ ДОКУПКА ЛИЦЕНЗИЙ (только после входа и подписания оферты) ============ -->
+        <!-- ============ ДОКУПКА ЛИЦЕНЗИЙ И ЛИЧНЫЙ КАБИНЕТ (только после входа и подписания оферты) ============ -->
         <section class="stage" id="stage-addons">
             <div class="sec-head">
-                <div><span class="kicker">Личный кабинет</span><h2 class="h2">Докупка пользовательских лицензий</h2></div>
+                <div><span class="kicker">Личный кабинет владельца</span><h2 class="h2">Токен привязки локальной системы и покупка лицензий</h2></div>
                 <p id="userBadgeBox"></p>
             </div>
             <div class="card oferta-banner" data-oferta-banner></div>
+            <div class="card" style="margin-bottom:20px">
+                <span class="kicker">Ключ доступа для локального сервера WORK</span>
+                <h3 class="h3" style="margin:4px 0 8px">Токен владельца (содержит URL сервера поддержки и ключ синхронизации лицензий)</h3>
+                <p class="small" style="margin:0 0 10px">Скопируйте этот токен и вставьте его в раздел «Лицензирование» вашей локальной системы ODANT-WORK. Система автоматически привяжется к личному кабинету и загрузит файлы лицензий в папку <code>#system</code>.</p>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                    <input type="text" id="inpCabinetHubToken" readonly placeholder="owk1..." style="flex:1;min-width:260px;font-family:monospace">
+                    <button class="btn btn-ghost btn-sm" data-action="gen-hub-token">Сгенерировать / Обновить токен</button>
+                </div>
+            </div>
             <div class="split">
                 <div class="card">
                     <div class="field">
@@ -413,7 +430,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <div class="seg" id="segTier">${Object.values(SLA_TIERS).map(t => `<button data-tier="${t.id}" class="${t.id === 'business' ? 'on' : ''}">${esc(t.name)}<small>${rub(t.pricePerUserYearRub)} · ${esc(t.reactionLabel)}</small></button>`).join('')}</div>
                     </div>
                     <div class="row2">
-                        <div class="field"><label for="inpYears">Срок, лет</label><input type="number" id="inpYears" min="1" max="5" value="1"></div>
+                        <div class="field"><label for="inpYears">Срок, лет (кратно годам)</label><input type="number" id="inpYears" min="1" max="5" value="1"></div>
                         <div class="field"><label for="inpLicId">Лицензия комплекса</label><input type="text" id="inpLicId" readonly></div>
                     </div>
                     <div class="field" style="margin-top:6px"><label>Скидка от количества</label>${renderLadder('ladderAddons')}</div>
@@ -424,6 +441,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     <div class="small" id="lblDiscountBadge" style="color:var(--ok);font-weight:650"></div>
                     <div class="sum-lines" id="lblBreakdown"></div>
                     <button class="btn btn-primary btn-lg" style="width:100%" data-action="order-addons">Оплатить через ЮKassa</button>
+                    <button class="btn btn-ghost btn-sm" style="width:100%;margin-top:8px" data-action="order-addons-invoice">Выставить счёт-договор (для юр. лиц)</button>
                     <div class="status" id="orderStatus"></div>
                 </div>
             </div>

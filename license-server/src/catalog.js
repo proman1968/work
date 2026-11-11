@@ -6,10 +6,13 @@
 
 export const PAK_PRODUCT = Object.freeze({
     sku: 'WORK-PAK-495-192-4T',
+    baseLicenseSku: 'WORK-LIC-BASE-10',
     name: 'ODANT-WORK',
     domain: 'work.odant.org',
     basePriceRub: 5_000_000,
+    baseLicensePriceRub: 4_000_000,
     baseSeats: 10,
+    unlicensedBossSeats: 1,
     perpetualBase: true,
     includedSupportYears: 1,
     includedSupportTier: 'enterprise',
@@ -213,13 +216,60 @@ export function calculateSeatVolumeDiscount(seats = 1) {
 }
 
 /**
- * Рассчитать стоимость заказа (покупка базового комплекса ODANT-WORK и/или докупка годовых лицензий со скидкой от количества).
+ * Отдельная базовая постоянная лицензия на 10 вечных пользователей (без оборудования) —
+ * для клиентов, самостоятельно приобретших автономную машину AMD Ryzen™ AI Max+ PRO 495 (192 ГБ)
+ * и установивших систему через npm.
+ */
+export const BASE_LICENSE_PRODUCT = Object.freeze({
+    sku: 'WORK-LIC-BASE-10',
+    name: 'Базовая постоянная лицензия ODANT-WORK (10 вечных пользователей, без железа)',
+    priceRub: 4_000_000,
+    baseSeats: 10,
+    perpetualBase: true,
+    aiAgentsEnabled: true,
+    includedSupportYears: 1,
+    includedSupportTier: 'enterprise',
+    description: 'Снимает стартовые ограничения: активирует агентскую ИИ-систему, открывает 10 вечных конкурентных пользовательских мест и включает 1 год поддержки Enterprise.',
+});
+
+/**
+ * Дополнительные услуги и товары, доступные в личном кабинете владельца.
+ */
+export const ADDITIONAL_PRODUCTS = Object.freeze([
+    {
+        id: 'ai-finetune-pack',
+        sku: 'WORK-SRV-FINETUNE',
+        title: 'Пакет дообучения локальных моделей ИИ (LoRA) и разработки навыков под предприятие',
+        priceRub: 600_000,
+        category: 'service',
+    },
+    {
+        id: 'nas-backup-kit',
+        sku: 'WORK-HW-NAS',
+        title: 'Комплект резервного копирования и архивации баз организаций (NAS)',
+        priceRub: 350_000,
+        category: 'hardware',
+    },
+    {
+        id: 'audit-migration-pack',
+        sku: 'WORK-SRV-MIGRATION',
+        title: 'Пакет переноса исторических учётных баз, справочников и остатков',
+        priceRub: 450_000,
+        category: 'service',
+    },
+]);
+
+/**
+ * Рассчитать стоимость заказа (покупка базового комплекса с машиной 5 млн ₽, отдельно базовой лицензии 4 млн ₽,
+ * докупка срочных годовых лицензий со скидкой от количества и прочих товаров/услуг).
  */
 export function calculateOrderQuote({
     includeBasePak = false,
+    includeBaseLicenseOnly = false,
     tier = 'business',
     addonSeats = 0,
     years = 1,
+    extraProductIds = [],
 } = {}) {
     const tierKey = String(tier || 'business').toLowerCase();
     const tierSpec = SLA_TIERS[tierKey] || SLA_TIERS.business;
@@ -229,25 +279,42 @@ export function calculateOrderQuote({
     const volumeDiscount = calculateSeatVolumeDiscount(seats);
     const volumeDiscountPercent = volumeDiscount.discountPercent;
 
-    const baseAmountRub = includeBasePak ? PAK_PRODUCT.basePriceRub : 0;
+    const hasFullPak = Boolean(includeBasePak);
+    const hasBaseLicOnly = !hasFullPak && Boolean(includeBaseLicenseOnly);
+
+    const baseAmountRub = hasFullPak
+        ? PAK_PRODUCT.basePriceRub
+        : (hasBaseLicOnly ? BASE_LICENSE_PRODUCT.priceRub : 0);
+
     const addonsGrossAmountRub = seats * tierSpec.pricePerUserYearRub * periodYears;
     const addonsDiscountRub = Math.round(addonsGrossAmountRub * (volumeDiscountPercent / 100));
     const addonsAmountRub = addonsGrossAmountRub - addonsDiscountRub;
     const effectiveUnitPriceRub = seats > 0 ? Math.round(addonsAmountRub / seats) : tierSpec.pricePerUserYearRub * periodYears;
-    const totalAmountRub = baseAmountRub + addonsAmountRub;
 
     const items = [];
-    if (includeBasePak) {
+    if (hasFullPak) {
         items.push({
+            sku: PAK_PRODUCT.sku,
             title: `${PAK_PRODUCT.name} (${PAK_PRODUCT.hardware.cpu}, ${PAK_PRODUCT.hardware.ramGb} ГБ RAM, SSD ${PAK_PRODUCT.hardware.ssdTb} ТБ, вечная лицензия на ${PAK_PRODUCT.baseSeats} мест + 1 год поддержки Enterprise)`,
             quantity: 1,
             unitPriceRub: PAK_PRODUCT.basePriceRub,
             totalRub: PAK_PRODUCT.basePriceRub,
         });
     }
+    else if (hasBaseLicOnly) {
+        items.push({
+            sku: BASE_LICENSE_PRODUCT.sku,
+            title: BASE_LICENSE_PRODUCT.name,
+            quantity: 1,
+            unitPriceRub: BASE_LICENSE_PRODUCT.priceRub,
+            totalRub: BASE_LICENSE_PRODUCT.priceRub,
+        });
+    }
+
     if (seats > 0) {
         const discSuffix = volumeDiscountPercent > 0 ? `, скидка −${volumeDiscountPercent}% за объём` : '';
         items.push({
+            sku: `WORK-LIC-ADDON-${tierSpec.id.toUpperCase()}`,
             title: `Годовая лицензия ODANT-WORK на доп. рабочее место (уровень ${tierSpec.name}, ${periodYears} г.${discSuffix})`,
             quantity: seats,
             unitPriceRub: effectiveUnitPriceRub,
@@ -255,11 +322,31 @@ export function calculateOrderQuote({
         });
     }
 
+    let extraAmountRub = 0;
+    const extraIds = Array.isArray(extraProductIds) ? extraProductIds : [];
+    for (const pid of extraIds) {
+        const prod = ADDITIONAL_PRODUCTS.find(p => p.id === pid || p.sku === pid);
+        if (prod) {
+            extraAmountRub += prod.priceRub;
+            items.push({
+                sku: prod.sku,
+                title: prod.title,
+                quantity: 1,
+                unitPriceRub: prod.priceRub,
+                totalRub: prod.priceRub,
+            });
+        }
+    }
+
+    const totalAmountRub = baseAmountRub + addonsAmountRub + extraAmountRub;
+
     return {
-        includeBasePak: !!includeBasePak,
-        basePakPriceRub: baseAmountRub,
-        baseSeats: includeBasePak ? PAK_PRODUCT.baseSeats : 0,
-        includedSupportYears: includeBasePak ? PAK_PRODUCT.includedSupportYears : 0,
+        includeBasePak: hasFullPak,
+        includeBaseLicenseOnly: hasBaseLicOnly,
+        basePakPriceRub: hasFullPak ? PAK_PRODUCT.basePriceRub : 0,
+        baseLicenseOnlyPriceRub: hasBaseLicOnly ? BASE_LICENSE_PRODUCT.priceRub : 0,
+        baseSeats: (hasFullPak || hasBaseLicOnly) ? PAK_PRODUCT.baseSeats : 0,
+        includedSupportYears: (hasFullPak || hasBaseLicOnly) ? PAK_PRODUCT.includedSupportYears : 0,
         tier: tierSpec.id,
         tierName: tierSpec.name,
         pricePerUserYearRub: tierSpec.pricePerUserYearRub,
@@ -270,6 +357,7 @@ export function calculateOrderQuote({
         addonsGrossAmountRub,
         addonsDiscountRub,
         addonsAmountRub,
+        extraAmountRub,
         totalAmountRub,
         reactionMinutes: tierSpec.reactionMinutes,
         reactionLabel: tierSpec.reactionLabel,

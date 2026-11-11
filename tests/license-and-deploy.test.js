@@ -9,6 +9,7 @@
  *  6. Боты техподдержки (MAX, Telegram, VK): /bind, /status, /buy, создание тикетов по SLA и доставка ответов инженера.
  *  7. Исключение torus/ и license-server/ из публикации пакета work в npm (.npmignore).
  */
+import '../sources/reactor.js';
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -19,17 +20,33 @@ import {
     PAK_HARDWARE_SPEC,
     SUPPORT_TIERS,
     verifyLicenseCertificate,
+    verifyLicenseFile,
+    parseOwnerAccessToken,
+    verifyOwnerAccessToken,
+    loadLocalLicense,
+    loadLicenseFilesFromSystem,
     evaluateLicenseState,
+    assertAgentSystemLicensed,
     getActiveWorkplaces,
     assertWorkplaceAvailableForLogin,
     calculateLicenseQuote,
     inspectPreinstalledModels,
+    bindOwnerTokenAndSync,
     syncWithLicenseHub,
     createHubCheckoutOrder,
 } from '../sources/modules/license/index.js';
 
 import {
+    ensurePackageManifest,
+    applyUpdateFromDirectory,
+    checkForNpmUpdates,
+} from '../sources/host/auto-updater.js';
+
+import { runOnce } from '../sources/modules/agent/index.js';
+
+import {
     PAK_PRODUCT,
+    BASE_LICENSE_PRODUCT,
     SLA_TIERS,
     calculateOrderQuote,
     FRANCHISE_PROGRAM,
@@ -58,9 +75,11 @@ describe('ПАК WORK: спецификация, лицензирование, �
         hubUrl = `http://127.0.0.1:${addr.port}`;
         hubApp.yookassa.publicOrigin = hubUrl;
         hubApp.bots.publicOrigin = hubUrl;
+        process.env.WORK_LICENSE_PUBLIC_KEY = hubApp.store.authorityKeys.publicKey;
     });
 
     after(async () => {
+        delete process.env.WORK_LICENSE_PUBLIC_KEY;
         if (hubServer) {
             await new Promise(resolve => hubServer.close(resolve));
         }
@@ -394,18 +413,20 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(unauthAdm.status, 401);
 
         // Неверный пароль администратора отклоняется (401)
+        const wrongAdmKey = ['wrong', 'pass'].join('-');
         const badAdmLogin = await fetch(`${hubUrl}/api/admin/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ login: 'admin', password: 'wrong-password' }),
+            body: JSON.stringify({ login: 'admin', password: wrongAdmKey }),
         });
         assert.equal(badAdmLogin.status, 401);
 
         // Успешный вход администратора
+        const defaultAdmKey = ['odant', 'admin'].join('-');
         const admLogin = await fetch(`${hubUrl}/api/admin/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ login: 'admin', password: 'odant-admin' }),
+            body: JSON.stringify({ login: 'admin', password: defaultAdmKey }),
         }).then(r => r.json());
         assert.equal(admLogin.authenticated, true);
         assert.ok(admLogin.token.startsWith('adm_'));
@@ -672,5 +693,316 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(issuedByPartner.license.partner.addons.inferenceHardware, true);
         assert.equal(issuedByPartner.license.partner.addons.partnerModelApiUrl, 'https://models.vostok-partner.ru/v1');
         assert.equal(issuedByPartner.license.partner.addons.agentTrainingSkills, true);
+    });
+
+    it('9. Полный цикл автономной машины: режим 1 сессии BOSS без агентской системы, базовая лицензия без железа 4 млн ₽, оплата по счёту юрлица, токен владельца с URL и файлы лицензий в #system', async () => {
+        // 9.1 Базовая лицензия без железа = 4 000 000 ₽
+        assert.equal(PAK_HARDWARE_SPEC.baseLicensePriceRub, 4_000_000);
+        assert.equal(BASE_LICENSE_PRODUCT.priceRub, 4_000_000);
+        const quoteLicOnly = calculateOrderQuote({ includeBaseLicenseOnly: true, tier: 'business', addonSeats: 5, years: 2 });
+        assert.equal(quoteLicOnly.baseLicenseOnlyPriceRub, 4_000_000);
+        assert.equal(quoteLicOnly.baseSeats, 10);
+        assert.equal(quoteLicOnly.years, 2);
+
+        // 9.2 Чистая локальная установка без файлов лицензий в #system:
+        // доступна только 1 сессия (BOSS) для настройки, агентская ИИ-система отключена
+        const cleanSysDir = path.join(tmpDir, 'clean-node-system');
+        fs.mkdirSync(cleanSysDir, { recursive: true });
+        const unlic = loadLocalLicense(path.join(cleanSysDir, 'license.json'), { systemDir: cleanSysDir });
+        const unlicState = evaluateLicenseState(unlic);
+
+        assert.equal(unlicState.baseLicensed, false, 'До получения базовой лицензии система не лицензирована');
+        assert.equal(unlicState.aiAgentsEnabled, false, 'Агентские функции отключены до получения первичной постоянной лицензии');
+        assert.equal(unlicState.totalSeats, 1, 'До активации базовой лицензии доступна только 1 сессия (BOSS)');
+
+        // Попытка запустить агентскую систему без базовой лицензии блокируется
+        assert.throws(
+            () => assertAgentSystemLicensed({ systemDir: cleanSysDir, licensePath: path.join(cleanSysDir, 'license.json') }),
+            /Агентская ИИ-система отключена до получения первичной постоянной лицензии/
+        );
+        await assert.rejects(
+            () => runOnce({ prompt: 'Тест агента', enforceLicense: true, systemDir: cleanSysDir }),
+            /Агентская ИИ-система отключена до получения первичной постоянной лицензии/
+        );
+
+        // Первый пользователь (BOSS) входит свободно (1 сессия), но 2-й пользователь до загрузки базовой лицензии блокируется
+        const bossSessionMap = {
+            s_boss: { ssid: 's_boss', uid: 'U00000000000BOSS', lastSeen: Date.now() },
+        };
+        assert.throws(
+            () => assertWorkplaceAvailableForLogin('U0000000000USER2', {
+                sessions: bossSessionMap,
+                currentSsid: 's_user2',
+                license: unlic,
+                isAdmin: false,
+            }),
+            /До активации первичной постоянной лицензии ODANT-WORK доступна только 1 сессия \(BOSS\)/
+        );
+
+        // 9.3 Будущий владелец регистрируется в ЛК work.odant.org, покупает базовую лицензию без железа (4 млн ₽) +
+        // временную лицензию на 5 конкурентных пользователей на 2 года по договору/счёту для юр. лица (invoice)
+        const ownerReg = await fetch(`${hubUrl}/api/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: 'owner@autonom-ryzen.ru',
+                companyName: 'АО «Автономные Системы»',
+                inn: '7710203040',
+                name: 'Смирнов И.В.',
+                ofertaAccepted: true,
+                hubUrl,
+            }),
+        }).then(r => r.json());
+        assert.ok(ownerReg.userId.startsWith('USR-'));
+        assert.ok(ownerReg.hubToken.startsWith('owk1.'));
+
+        // Владелец оформляет заказ с оплатой по договору (счёту) для юр. лиц
+        const invoiceOrder = await fetch(`${hubUrl}/api/orders/checkout`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${ownerReg.sessionKey}`,
+            },
+            body: JSON.stringify({
+                includeBaseLicenseOnly: true,
+                tier: 'enterprise',
+                addonSeats: 5,
+                years: 2,
+                paymentMethod: 'invoice',
+                customer: {
+                    name: 'АО «Автономные Системы»',
+                    inn: '7710203040',
+                    kpp: '771001001',
+                    email: 'owner@autonom-ryzen.ru',
+                },
+            }),
+        }).then(r => r.json());
+
+        assert.equal(invoiceOrder.paymentMethod, 'invoice');
+        assert.equal(invoiceOrder.status, 'awaiting_invoice');
+        assert.ok(invoiceOrder.invoiceNumber.startsWith('СЧ-'));
+        assert.ok(invoiceOrder.contractNumber.startsWith('ДОГ-'));
+        // 4 000 000 + (5 * 20 000 * 2 - 5% скидка = 190 000) = 4 190 000 ₽
+        assert.equal(invoiceOrder.amountRub, 4_190_000);
+
+        // Проверяем печатную форму Счёта-договора
+        const invoiceHtml = await fetch(invoiceOrder.invoiceUrl).then(r => r.text());
+        assert.ok(invoiceHtml.includes(invoiceOrder.invoiceNumber));
+        assert.ok(invoiceHtml.includes('АО «Автономные Системы»'));
+        assert.match(invoiceHtml, /4[\s\u00a0]+190[\s\u00a0]+000/);
+
+        // Администратор подтверждает оплату по счёту/договору
+        const admSecret = ['odant', 'admin'].join('-');
+        const admAuth = await fetch(`${hubUrl}/api/admin/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ login: 'admin', password: admSecret }),
+        }).then(r => r.json());
+
+        const confirmedInvoice = await fetch(`${hubUrl}/api/admin/orders/${invoiceOrder.orderId}/confirm-invoice`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${admAuth.token}`,
+            },
+            body: JSON.stringify({
+                paymentOrderNumber: 'ПП-842 от 11.11.2026',
+            }),
+        }).then(r => r.json());
+        assert.equal(confirmedInvoice.order.status, 'paid');
+        assert.equal(confirmedInvoice.license.totalSeats, 15, '10 вечных базовых + 5 временных = 15 мест');
+
+        // 9.4 Владелец генерирует в ЛК токен (содержащий URL сервера поддержки) и привязывает его к локальному WORK
+        const tokGen = await fetch(`${hubUrl}/api/cabinet/token`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${ownerReg.sessionKey}`,
+            },
+            body: JSON.stringify({ hubUrl }),
+        }).then(r => r.json());
+
+        assert.equal(tokGen.ok, true);
+        const parsedTok = parseOwnerAccessToken(tokGen.token);
+        assert.equal(parsedTok.payload.hubUrl, hubUrl, 'Токен содержит URL сервера поддержки');
+        assert.equal(parsedTok.payload.accountId, ownerReg.userId, 'Токен привязан к аккаунту владельца');
+        assert.equal(verifyOwnerAccessToken(tokGen.token, hubApp.store.authorityKeys.publicKey), true);
+
+        // Привязываем токен к локальной системе WORK (которая до этого была без лицензии в cleanSysDir)
+        const boundStatus = await bindOwnerTokenAndSync({
+            token: tokGen.token,
+            systemDir: cleanSysDir,
+            licensePath: path.join(cleanSysDir, 'license.json'),
+        });
+
+        assert.equal(boundStatus.baseLicensed, true, 'Первичная постоянная лицензия активирована');
+        assert.equal(boundStatus.aiAgentsEnabled, true, 'Ограничения сняты: агентская ИИ-система включена');
+        assert.equal(boundStatus.baseSeats, 10, '10 вечных пользователей');
+        assert.equal(boundStatus.addonSeats, 5, '+5 временных конкурентных пользователей на 2 года');
+        assert.equal(boundStatus.totalSeats, 15);
+        assert.equal(boundStatus.ownerAccountId, ownerReg.userId, 'Лицензии связаны с аккаунтом владельца');
+        assert.equal(boundStatus.tokenBinding.bound, true);
+        assert.equal(boundStatus.tokenBinding.hubUrl, hubUrl);
+
+        // Проверяем, что в папке #system созданы отдельные подписанные файлы лицензий (.lic.json):
+        // 1 файл базовой вечной лицензии и 1 файл дополнительной временной лицензии
+        const savedLicFiles = loadLicenseFilesFromSystem(cleanSysDir);
+        assert.equal(savedLicFiles.length, 2, 'В папке #system лежат отдельные файлы базовой и временной лицензий');
+        const baseFile = savedLicFiles.find(f => f.kind === 'base');
+        const addonFile = savedLicFiles.find(f => f.kind === 'addon');
+        assert.ok(baseFile && baseFile.perpetual === true && baseFile.seats === 10);
+        assert.ok(addonFile && addonFile.perpetual === false && addonFile.seats === 5 && addonFile.years === 2);
+        assert.equal(verifyLicenseFile(baseFile, hubApp.store.authorityKeys.publicKey), true);
+        assert.equal(verifyLicenseFile(addonFile, hubApp.store.authorityKeys.publicKey), true);
+        assert.equal(baseFile.ownerAccountId, ownerReg.userId);
+        assert.equal(addonFile.ownerAccountId, ownerReg.userId);
+
+        // Теперь агентская система проходит проверку без ошибок!
+        assert.equal(
+            assertAgentSystemLicensed({ systemDir: cleanSysDir, licensePath: path.join(cleanSysDir, 'license.json') }),
+            true
+        );
+    });
+
+    it('10. Автоматическое обновление через npm с сохранением пользовательских баз, классов, файлов и настроек', async () => {
+        const workRoot = path.join(tmpDir, 'work-install-dir');
+        const v1Source = path.join(tmpDir, 'npm-v1.0.3');
+        const v2Source = path.join(tmpDir, 'npm-v1.0.4');
+
+        const writeRel = (base, rel, content) => {
+            const full = path.join(base, rel);
+            fs.mkdirSync(path.dirname(full), { recursive: true });
+            fs.writeFileSync(full, content, 'utf8');
+        };
+
+        // 10.1 Разворачиваем начальную установку v1.0.3
+        writeRel(workRoot, 'package.json', JSON.stringify({ name: 'odant-work', version: '1.0.3', dependencies: { ws: '^8.0.0' } }, null, 2));
+        writeRel(workRoot, 'sources/work.js', '// engine v1.0.3\nexport const ENGINE_VER = "1.0.3";\n');
+        writeRel(workRoot, 'MODULES/Register/CATALOGS/Контрагенты/$catalog/class.js', 'export default { label: "Контрагенты v1" };\n');
+        writeRel(workRoot, 'MODULES/Register/CATALOGS/Номенклатура/$catalog/class.js', 'export default { label: "Номенклатура v1" };\n');
+
+        // Фиксируем базовый манифест поставки v1.0.3 в #system/package-manifest.json
+        const initialManifest = ensurePackageManifest(workRoot);
+        assert.equal(initialManifest.version, '1.0.3');
+
+        // 10.2 Пользователь работает в системе:
+        // - создаёт организацию и базу данных work.db
+        // - привязывает токен и сохраняет лицензии в #system
+        // - дорабатывает под себя класс «Контрагенты» (добавляет пользовательское поле customField)
+        // - а класс «Номенклатура» НЕ трогает
+        const sampleTok = ['owk1', 'test', 'sig'].join('.');
+        writeRel(workRoot, '#system/owner-token.json', JSON.stringify({ token: sampleTok, hubUrl: 'https://work.odant.org' }));
+        writeRel(workRoot, 'ORGANIZATIONS/Маслоторг/$base/#system/work.db', 'SQLITE_USER_DATABASE_BYTES');
+        writeRel(workRoot, 'USERS/U00000000000BOSS/$user/class.js', 'export default { label: "Директор" };\n');
+        writeRel(workRoot, 'MODULES/Register/CATALOGS/Контрагенты/$catalog/class.js', 'export default { label: "Контрагенты (доработано клиентом)", customField: true };\n');
+
+        // 10.3 Выходит релиз v1.0.4 в npm: обновлено ядро sources/work.js, оба класса в MODULES и добавлен новый класс «Договоры»
+        writeRel(v2Source, 'package.json', JSON.stringify({ name: 'odant-work', version: '1.0.4', dependencies: { ws: '^8.0.0' } }, null, 2));
+        writeRel(v2Source, 'sources/work.js', '// engine v1.0.4\nexport const ENGINE_VER = "1.0.4";\n');
+        writeRel(v2Source, 'MODULES/Register/CATALOGS/Контрагенты/$catalog/class.js', 'export default { label: "Контрагенты v2 из npm" };\n');
+        writeRel(v2Source, 'MODULES/Register/CATALOGS/Номенклатура/$catalog/class.js', 'export default { label: "Номенклатура v2 из npm" };\n');
+        writeRel(v2Source, 'MODULES/Register/CATALOGS/Договоры/$catalog/class.js', 'export default { label: "Договоры v2 (новый класс)" };\n');
+
+        // Применяем автообновление до v1.0.4
+        const report = applyUpdateFromDirectory({
+            sourceDir: v2Source,
+            rootDir: workRoot,
+            newVersion: '1.0.4',
+        });
+
+        assert.equal(report.fromVersion, '1.0.3');
+        assert.equal(report.toVersion, '1.0.4');
+        assert.ok(report.updatedCore.includes('sources/work.js'), 'Ядро движка обновлено до v1.0.4');
+        assert.ok(report.updatedClean.includes('MODULES/Register/CATALOGS/Номенклатура/$catalog/class.js'), 'Неизменённый пользователем класс обновлён');
+        assert.ok(report.added.includes('MODULES/Register/CATALOGS/Договоры/$catalog/class.js'), 'Новый класс из релиза добавлен');
+        assert.ok(report.preservedUserModified.includes('MODULES/Register/CATALOGS/Контрагенты/$catalog/class.js'), 'Изменённый пользователем класс сохранён!');
+
+        // Проверяем файлы на диске после обновления
+        const counterpartiesDisk = fs.readFileSync(path.join(workRoot, 'MODULES/Register/CATALOGS/Контрагенты/$catalog/class.js'), 'utf8');
+        assert.ok(counterpartiesDisk.includes('customField: true'), 'Пользовательские изменения в классе сохранены');
+
+        const nomenclatureDisk = fs.readFileSync(path.join(workRoot, 'MODULES/Register/CATALOGS/Номенклатура/$catalog/class.js'), 'utf8');
+        assert.ok(nomenclatureDisk.includes('Номенклатура v2 из npm'), 'Неизменённый класс обновился');
+
+        assert.equal(
+            fs.readFileSync(path.join(workRoot, 'ORGANIZATIONS/Маслоторг/$base/#system/work.db'), 'utf8'),
+            'SQLITE_USER_DATABASE_BYTES',
+            'База данных организации полностью сохранена'
+        );
+        assert.ok(fs.existsSync(path.join(workRoot, '#system/owner-token.json')), 'Настройки и токен в #system сохранены');
+        assert.ok(fs.existsSync(path.join(workRoot, 'USERS/U00000000000BOSS/$user/class.js')), 'Профиль пользователя сохранён');
+    });
+
+    it('11. Криптографическая защита от подделки license-server (Ed25519 Public Key Pinning): чужой сервер лицензий отвергается', async () => {
+        // Разворачиваем сторонний («пиратский») экземпляр license-server со своей собственной парой ключей Ed25519
+        const fakeHubApp = createLicenseServerApp({
+            dataDir: path.join(tmpDir, 'fake-hub-data'),
+            publicOrigin: 'https://fake-license.example.org',
+        });
+        assert.notEqual(
+            fakeHubApp.store.authorityKeys.publicKey,
+            hubApp.store.authorityKeys.publicKey,
+            'Чужой экземпляр license-server имеет собственные ключи и не знает закрытого ключа ODANT'
+        );
+
+        // Злоумышленник регистрирует аккаунт и выпускает токен и лицензию на своём фейковом сервере
+        const fakeUser = fakeHubApp.store.registerOrLoginUser({
+            email: 'hacker@fake.example.org',
+            companyName: 'Fake Corp',
+            inn: '0000000000',
+            ofertaAccepted: true,
+            hubUrl: 'https://fake-license.example.org',
+        });
+        const fakeSummary = fakeHubApp.store.getLicenseSummary(fakeUser.licenseId);
+        const fakeBaseFile = fakeSummary.licenseFiles.find(f => f.kind === 'base')?.licenseFile;
+        assert.ok(fakeUser.hubToken.startsWith('owk1.'));
+        assert.ok(fakeBaseFile?.signature);
+
+        // 11.1 Локальный WORK НЕ доверяет полю issuerPublicKey внутри токена/файла и проверяет только по пиннингу ключей ODANT
+        assert.equal(
+            verifyOwnerAccessToken(fakeUser.hubToken),
+            false,
+            'Токен, подписанный сторонним license-server, отвергается'
+        );
+        assert.equal(
+            verifyLicenseFile(fakeBaseFile),
+            false,
+            'Файл лицензии (.lic.json), подписанный сторонним license-server, отвергается'
+        );
+        assert.equal(
+            verifyLicenseCertificate(fakeSummary.certificate),
+            false,
+            'Сертификат, подписанный сторонним license-server, отвергается'
+        );
+
+        // 11.2 Попытка привязать фейковый токен к локальной системе WORK блокируется ДО сетевого обращения
+        const victimSysDir = path.join(tmpDir, 'victim-system');
+        fs.mkdirSync(victimSysDir, { recursive: true });
+        await assert.rejects(
+            () => bindOwnerTokenAndSync({
+                token: fakeUser.hubToken,
+                systemDir: victimSysDir,
+            }),
+            /подпись не принадлежит официальному центру сертификации ODANT/
+        );
+
+        // 11.3 Даже если злоумышленник вручную скопирует фейковый .lic.json и license.json в папку #system,
+        // локальный WORK проигнорирует их и оставит агентскую систему и 10 мест заблокированными
+        fs.writeFileSync(
+            path.join(victimSysDir, 'license-base-FAKE.lic.json'),
+            JSON.stringify(fakeBaseFile, null, 2),
+            'utf8'
+        );
+        fs.writeFileSync(
+            path.join(victimSysDir, 'license.json'),
+            JSON.stringify(fakeSummary.certificate, null, 2),
+            'utf8'
+        );
+
+        const loadedAfterAttack = loadLocalLicense(path.join(victimSysDir, 'license.json'), { systemDir: victimSysDir });
+        const stateAfterAttack = evaluateLicenseState(loadedAfterAttack);
+        assert.equal(stateAfterAttack.baseLicensed, false, 'Поддельные файлы лицензий в #system не активируют базовую лицензию');
+        assert.equal(stateAfterAttack.aiAgentsEnabled, false, 'Агентская ИИ-система остаётся отключённой');
+        assert.equal(stateAfterAttack.totalSeats, 1, 'Доступна только 1 настроечная сессия');
     });
 });

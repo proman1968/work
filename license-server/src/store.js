@@ -10,6 +10,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {
     PAK_PRODUCT,
+    BASE_LICENSE_PRODUCT,
+    ADDITIONAL_PRODUCTS,
+    VENDOR_CONTACTS,
     SLA_TIERS,
     calculateOrderQuote,
     FRANCHISE_PROGRAM,
@@ -19,7 +22,14 @@ import {
     calculatePartnerDiscount,
     PUBLIC_OFERTA,
 } from './catalog.js';
-import { loadOrCreateAuthorityKeys, signCertificate } from './crypto.js';
+import {
+    loadOrCreateAuthorityKeys,
+    signCertificate,
+    signLicenseFile,
+    createOwnerAccessToken,
+    parseOwnerAccessToken,
+    verifyOwnerAccessToken,
+} from './crypto.js';
 
 const ONE_YEAR_MS = 365 * 24 * 3600_000;
 
@@ -130,10 +140,14 @@ export class LicenseStore {
         hwid = '',
         nodeFingerprint = '',
         customer = {},
+        ownerAccountId = '',
+        ownerEmail = '',
         partnerId = '',
         hardwareWarrantyYears = 1,
         partnerAddons = {},
         baseSeats = PAK_PRODUCT.baseSeats,
+        baseActivated = undefined,
+        baseSku = '',
         includedSupportTier = PAK_PRODUCT.includedSupportTier,
     } = {}) {
         const now = Date.now();
@@ -149,11 +163,19 @@ export class LicenseStore {
         const issuedAt = existing?.issuedAt || now;
         const bindCode = existing?.support?.bindCode || ('BIND-' + crypto.randomBytes(3).toString('hex').toUpperCase());
 
+        const isBaseActivated = baseActivated !== undefined
+            ? Boolean(baseActivated)
+            : (existing?.baseActivated !== undefined ? Boolean(existing.baseActivated) : true);
+
         const record = {
             licenseId: id,
             issuedAt,
             updatedAt: now,
             issuer: 'work.odant.org',
+            ownerAccountId: String(ownerAccountId || existing?.ownerAccountId || ''),
+            ownerEmail: String(ownerEmail || customer.email || existing?.ownerEmail || existing?.customer?.email || '').toLowerCase(),
+            baseActivated: isBaseActivated,
+            baseSku: String(baseSku || existing?.baseSku || PAK_PRODUCT.sku),
             customer: {
                 name: customer.name || existing?.customer?.name || 'Организация ПАК WORK',
                 inn: customer.inn || existing?.customer?.inn || '',
@@ -163,7 +185,7 @@ export class LicenseStore {
             hardware: {
                 hwid: hwid || existing?.hardware?.hwid || ('PAK-' + crypto.randomBytes(6).toString('hex').toUpperCase()),
                 nodeFingerprint: nodeFingerprint || existing?.hardware?.nodeFingerprint || '',
-                sku: PAK_PRODUCT.sku,
+                sku: String(baseSku || existing?.hardware?.sku || PAK_PRODUCT.sku),
                 cpu: PAK_PRODUCT.hardware.cpu,
                 ramGb: PAK_PRODUCT.hardware.ramGb,
                 ssdTb: PAK_PRODUCT.hardware.ssdTb,
@@ -201,6 +223,95 @@ export class LicenseStore {
         this.state.licenses[id] = signed;
         this._save();
         return this.getLicenseSummary(id);
+    }
+
+    /**
+     * Сформировать отдельные подписанные файлы лицензий (.lic.json) для размещения в папке #system локальной системы:
+     *  - файл первичной постоянной лицензии (10 вечных пользователей + разрешение агентской системы);
+     *  - отдельные файлы для каждой активной временной лицензии (на количество конкурентных пользователей и период).
+     */
+    buildLicenseFiles(licenseIdOrCode, now = Date.now()) {
+        const lic = this.findLicense(licenseIdOrCode);
+        if (!lic)
+            return [];
+
+        const files = [];
+        const ownerAccountId = lic.ownerAccountId || '';
+        const ownerEmail = (lic.ownerEmail || lic.customer?.email || '').toLowerCase();
+
+        if (lic.baseActivated !== false) {
+            const baseFileObj = signLicenseFile({
+                fileId: `BASE-${lic.licenseId}`,
+                kind: 'base',
+                licenseId: lic.licenseId,
+                ownerAccountId,
+                ownerEmail,
+                issuer: lic.issuer || 'work.odant.org',
+                issuedAt: lic.issuedAt || now,
+                expiresAt: null,
+                perpetual: true,
+                seats: Number(lic.baseSeats ?? PAK_PRODUCT.baseSeats),
+                years: 0,
+                tier: String(lic.support?.tier || 'enterprise').toLowerCase(),
+                aiAgentsEnabled: true,
+                orderId: lic.baseOrderId || '',
+                hardware: {
+                    hwid: String(lic.hardware?.hwid || ''),
+                    nodeFingerprint: String(lic.hardware?.nodeFingerprint || ''),
+                    sku: String(lic.baseSku || lic.hardware?.sku || PAK_PRODUCT.sku),
+                },
+                customer: {
+                    name: String(lic.customer?.name || ''),
+                    inn: String(lic.customer?.inn || ''),
+                    email: String(lic.customer?.email || ''),
+                },
+            }, this.authorityKeys);
+
+            files.push({
+                fileName: `license-base-${lic.licenseId}.lic.json`,
+                kind: 'base',
+                licenseFile: baseFileObj,
+            });
+        }
+
+        for (const sub of (lic.addonSubscriptions || [])) {
+            if (!sub || sub.status === 'canceled' || sub.status === 'revoked')
+                continue;
+            const addonFileObj = signLicenseFile({
+                fileId: sub.id,
+                kind: 'addon',
+                licenseId: lic.licenseId,
+                ownerAccountId,
+                ownerEmail,
+                issuer: lic.issuer || 'work.odant.org',
+                issuedAt: Number(sub.issuedAt || now),
+                expiresAt: Number(sub.expiresAt || 0),
+                perpetual: false,
+                seats: Number(sub.seats || 0),
+                years: Number(sub.years || 1),
+                tier: String(sub.tier || 'business').toLowerCase(),
+                aiAgentsEnabled: true,
+                orderId: String(sub.orderId || ''),
+                hardware: {
+                    hwid: String(lic.hardware?.hwid || ''),
+                    nodeFingerprint: String(lic.hardware?.nodeFingerprint || ''),
+                    sku: String(lic.hardware?.sku || PAK_PRODUCT.sku),
+                },
+                customer: {
+                    name: String(lic.customer?.name || ''),
+                    inn: String(lic.customer?.inn || ''),
+                    email: String(lic.customer?.email || ''),
+                },
+            }, this.authorityKeys);
+
+            files.push({
+                fileName: `license-addon-${sub.id}.lic.json`,
+                kind: 'addon',
+                licenseFile: addonFileObj,
+            });
+        }
+
+        return files;
     }
 
     /**
@@ -328,13 +439,18 @@ export class LicenseStore {
             licenseId: lic.licenseId,
             issuedAt: lic.issuedAt,
             updatedAt: lic.updatedAt,
+            ownerAccountId: lic.ownerAccountId || '',
+            ownerEmail: lic.ownerEmail || lic.customer?.email || '',
+            baseActivated: lic.baseActivated !== false,
+            baseSku: lic.baseSku || PAK_PRODUCT.sku,
             customer: lic.customer,
             hardware: lic.hardware,
             partner: lic.partner || null,
-            baseSeats,
-            perpetualBase: true,
+            baseSeats: lic.baseActivated !== false ? baseSeats : 0,
+            perpetualBase: lic.baseActivated !== false,
+            aiAgentsEnabled: lic.baseActivated !== false,
             addonSeats,
-            totalSeats: baseSeats + addonSeats,
+            totalSeats: (lic.baseActivated !== false ? baseSeats : 1) + addonSeats,
             baseSupportUntil,
             baseSupportActive,
             activeAddons,
@@ -351,6 +467,7 @@ export class LicenseStore {
                 bindCode: lic.support?.bindCode || '',
             },
             certificate: lic,
+            licenseFiles: this.buildLicenseFiles(lic.licenseId, now),
         };
     }
 
@@ -381,21 +498,33 @@ export class LicenseStore {
     }
 
     /**
-     * Создать заказ на покупку ПАК и/или дополнительных годовых лицензий.
+     * Создать заказ на покупку ПАК (5 млн ₽), отдельно базовой постоянной лицензии без железа (4 млн ₽),
+     * дополнительных годовых лицензий и прочих товаров/услуг (оплата через ЮKassa или по счёту/договору для юрлиц).
      */
     createOrder({
         licenseId = '',
         hwid = '',
         nodeFingerprint = '',
         includeBasePak = false,
+        includeBaseLicenseOnly = false,
         tier = 'business',
         addonSeats = 0,
         years = 1,
+        extraProductIds = [],
+        paymentMethod = 'yookassa',
         customer = {},
+        ownerAccountId = '',
         partnerId = '',
         returnUrl = '',
     } = {}) {
-        const quote = calculateOrderQuote({ includeBasePak, tier, addonSeats, years });
+        const quote = calculateOrderQuote({
+            includeBasePak,
+            includeBaseLicenseOnly,
+            tier,
+            addonSeats,
+            years,
+            extraProductIds,
+        });
         if (quote.totalAmountRub <= 0)
             throw new Error('Сумма заказа должна быть больше 0 ₽');
 
@@ -406,6 +535,8 @@ export class LicenseStore {
                 hwid,
                 nodeFingerprint,
                 customer,
+                ownerAccountId,
+                ownerEmail: customer.email || '',
             });
         }
 
@@ -413,31 +544,49 @@ export class LicenseStore {
         const partnerDiscountPercent = partner ? partner.discountPercent : 0;
         const partnerMarginRub = partner ? Math.round(quote.totalAmountRub * (partnerDiscountPercent / 100)) : 0;
 
-        const orderId = 'ORD-' + Date.now().toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+        const now = Date.now();
+        const orderId = 'ORD-' + now.toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+        const method = String(paymentMethod || 'yookassa').toLowerCase() === 'invoice' ? 'invoice' : 'yookassa';
+        const dateTag = new Date(now).toISOString().slice(0, 10).replace(/-/g, '');
+        const shortRand = crypto.randomBytes(2).toString('hex').toUpperCase();
+
         const order = {
             orderId,
             licenseId: targetLic.licenseId,
+            ownerAccountId: ownerAccountId || targetLic.ownerAccountId || '',
             partnerId: partner ? partner.partnerId : '',
             partnerDiscountPercent,
             partnerMarginRub,
             includeBasePak: quote.includeBasePak,
+            includeBaseLicenseOnly: quote.includeBaseLicenseOnly,
+            basePakPriceRub: quote.basePakPriceRub,
+            baseLicenseOnlyPriceRub: quote.baseLicenseOnlyPriceRub,
             tier: quote.tier,
             tierName: quote.tierName,
             addonSeats: quote.addonSeats,
             years: quote.years,
+            extraProductIds: Array.isArray(extraProductIds) ? extraProductIds : [],
+            extraAmountRub: quote.extraAmountRub || 0,
             amountRub: quote.totalAmountRub,
             items: quote.items,
+            paymentMethod: method,
+            invoiceNumber: method === 'invoice' ? `СЧ-${dateTag}-${shortRand}` : '',
+            contractNumber: method === 'invoice' ? `ДОГ-${dateTag}-${shortRand}` : '',
+            invoiceUrl: method === 'invoice' ? `/api/orders/${orderId}/invoice` : '',
             customer: {
                 name: customer.name || targetLic.customer?.name || 'Организация WORK',
                 inn: customer.inn || targetLic.customer?.inn || '',
+                kpp: customer.kpp || '',
+                legalAddress: customer.legalAddress || '',
                 email: customer.email || targetLic.customer?.email || 'billing@odant.org',
                 phone: customer.phone || targetLic.customer?.phone || '',
             },
-            status: 'pending',
+            status: method === 'invoice' ? 'awaiting_invoice' : 'pending',
             paymentId: '',
-            confirmationUrl: '',
+            paymentOrderNumber: '',
+            confirmationUrl: method === 'invoice' ? `/api/orders/${orderId}/invoice` : '',
             returnUrl: returnUrl || 'https://work.odant.org',
-            createdAt: Date.now(),
+            createdAt: now,
             paidAt: null,
         };
 
@@ -509,6 +658,22 @@ export class LicenseStore {
             };
         }
 
+        // Если заказ включает базовый комплект с железом (5 млн ₽) или базовую лицензию без железа (4 млн ₽) —
+        // активируем базовую постоянную лицензию на 10 вечных пользователей
+        if (ord.includeBasePak || ord.includeBaseLicenseOnly) {
+            const rawLic = this.state.licenses[ord.licenseId];
+            if (rawLic) {
+                rawLic.baseActivated = true;
+                rawLic.baseSeats = PAK_PRODUCT.baseSeats;
+                rawLic.perpetualBase = true;
+                rawLic.baseSku = ord.includeBasePak ? PAK_PRODUCT.sku : BASE_LICENSE_PRODUCT.sku;
+                rawLic.baseOrderId = ord.orderId;
+                if (ord.ownerAccountId) rawLic.ownerAccountId = ord.ownerAccountId;
+                if (ord.customer?.email) rawLic.ownerEmail = String(ord.customer.email).toLowerCase();
+                this.state.licenses[ord.licenseId] = signCertificate(rawLic, this.authorityKeys);
+            }
+        }
+
         const license = this.grantAddonSubscription(ord.licenseId, {
             tier: ord.tier,
             seats: ord.addonSeats,
@@ -522,6 +687,93 @@ export class LicenseStore {
         }
         this._save();
         return { order: ord, license, partner, alreadyProcessed: false };
+    }
+
+    /**
+     * Подтвердить оплату заказа по договору (счёту) для юридических лиц (безналичный расчёт).
+     */
+    confirmInvoicePayment(orderId, { paymentOrderNumber = '', paidAt = Date.now(), comment = '' } = {}) {
+        const ord = this.state.orders[orderId];
+        if (!ord)
+            throw new Error(`Заказ ${orderId} не найден`);
+        ord.paymentOrderNumber = String(paymentOrderNumber || ord.invoiceNumber || `ПП-${orderId}`).trim();
+        if (comment)
+            ord.invoiceComment = String(comment).trim();
+        if (paidAt)
+            ord.invoiceConfirmedAt = Number(paidAt) || Date.now();
+        return this.completePaidOrder(orderId, { paymentId: ord.paymentOrderNumber });
+    }
+
+    /**
+     * Сформировать печатную форму Счёта-договора на оплату для юридических лиц.
+     */
+    renderOrderInvoiceHtml(orderId) {
+        const ord = this.state.orders[orderId];
+        if (!ord)
+            return null;
+        const dateStr = new Date(ord.createdAt || Date.now()).toLocaleDateString('ru-RU');
+        const rowsHtml = (ord.items || []).map((it, idx) => `
+            <tr>
+                <td style="text-align:center;">${idx + 1}</td>
+                <td>${it.title}</td>
+                <td style="text-align:center;">${it.quantity}</td>
+                <td style="text-align:right;">${Number(it.unitPriceRub || 0).toLocaleString('ru-RU')} ₽</td>
+                <td style="text-align:right;font-weight:700;">${Number(it.totalRub || 0).toLocaleString('ru-RU')} ₽</td>
+            </tr>
+        `).join('');
+
+        return `<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>Счёт-договор № ${ord.invoiceNumber || ord.orderId} от ${dateStr}</title>
+    <style>
+        body { font-family: Arial, sans-serif; color: #111827; max-width: 860px; margin: 24px auto; padding: 20px; line-height: 1.45; }
+        h1 { font-size: 20px; margin-bottom: 6px; }
+        table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
+        th, td { border: 1px solid #cbd5e1; padding: 8px 10px; }
+        th { background: #f1f5f9; text-align: left; }
+        .meta { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; font-size: 13px; }
+        .status { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: ${ord.status === 'paid' ? '#dcfce7' : '#fef3c7'}; color: ${ord.status === 'paid' ? '#166534' : '#92400e'}; }
+    </style>
+</head>
+<body>
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+            <h1>Счёт-договор № ${ord.invoiceNumber || ord.orderId} от ${dateStr}</h1>
+            <div>Договор № ${ord.contractNumber || ord.orderId} · Заказ № ${ord.orderId}</div>
+        </div>
+        <span class="status">${ord.status === 'paid' ? 'ОПЛАЧЕН' : 'ОЖИДАЕТ ОПЛАТЫ ПО СЧЁТУ'}</span>
+    </div>
+    <div class="meta" style="margin-top:14px;">
+        <div><strong>Поставщик (Правообладатель):</strong> ООО «${VENDOR_CONTACTS.company}», адрес: ${VENDOR_CONTACTS.address}, тел.: ${VENDOR_CONTACTS.phones.join(', ')}</div>
+        <div style="margin-top:6px;"><strong>Покупатель (Лицензиат):</strong> ${ord.customer?.name || '—'}, ИНН: ${ord.customer?.inn || '—'}${ord.customer?.kpp ? ', КПП: ' + ord.customer.kpp : ''}, Email: ${ord.customer?.email || '—'}</div>
+    </div>
+    <table>
+        <thead>
+            <tr>
+                <th style="width:40px;">№</th>
+                <th>Наименование товара / лицензии / услуги</th>
+                <th style="width:70px;">Кол-во</th>
+                <th style="width:130px;">Цена</th>
+                <th style="width:140px;">Сумма</th>
+            </tr>
+        </thead>
+        <tbody>${rowsHtml}</tbody>
+        <tfoot>
+            <tr>
+                <td colspan="4" style="text-align:right;font-weight:700;">ИТОГО К ОПЛАТЕ (без НДС):</td>
+                <td style="text-align:right;font-weight:800;font-size:15px;">${Number(ord.amountRub || 0).toLocaleString('ru-RU')} ₽</td>
+            </tr>
+        </tfoot>
+    </table>
+    <p style="font-size:12.5px;color:#475569;">
+        Оплата настоящего счёта-договора означает полное согласие Лицензиата с условиями Публичной оферты ODANT-WORK.
+        После зачисления средств лицензии автоматически формируются в личном кабинете владельца (${ord.customer?.email || ''})
+        и загружаются локальной системой по привязанному токену.
+    </p>
+</body>
+</html>`;
     }
 
     /**
@@ -697,6 +949,9 @@ export class LicenseStore {
             phone: user.phone || '',
             licenseId: user.licenseId,
             sessionKey: user.sessionKey,
+            hubToken: user.hubToken || '',
+            hubTokenId: user.hubTokenId || '',
+            hubUrl: user.hubUrl || 'https://work.odant.org',
             ofertaAccepted: Boolean(user.ofertaAccepted),
             ofertaAcceptedAt: user.ofertaAcceptedAt || null,
             ofertaVersion: user.ofertaVersion || '',
@@ -722,6 +977,7 @@ export class LicenseStore {
         phone = '',
         licenseId = '',
         ofertaAccepted = false,
+        hubUrl = 'https://work.odant.org',
     } = {}) {
         const cleanEmail = String(email || '').trim().toLowerCase();
         if (!cleanEmail || !cleanEmail.includes('@'))
@@ -729,10 +985,14 @@ export class LicenseStore {
 
         let user = this.state.users[cleanEmail];
         const now = Date.now();
+        const userId = user?.userId || ('USR-' + crypto.createHash('sha256').update(cleanEmail).digest('hex').slice(0, 10).toUpperCase());
+
         if (!user) {
             let lic = licenseId ? this.findLicense(licenseId) : null;
             if (!lic) {
                 const summary = this.issueOrUpdateLicense({
+                    ownerAccountId: userId,
+                    ownerEmail: cleanEmail,
                     customer: {
                         name: companyName || name || 'Организация ODANT-WORK',
                         inn: inn || '',
@@ -742,8 +1002,15 @@ export class LicenseStore {
                 });
                 lic = summary.certificate;
             }
+            const tokData = createOwnerAccessToken({
+                hubUrl: hubUrl || 'https://work.odant.org',
+                accountId: userId,
+                email: cleanEmail,
+                issuedAt: now,
+            }, this.authorityKeys);
+
             user = {
-                userId: 'USR-' + crypto.createHash('sha256').update(cleanEmail).digest('hex').slice(0, 10).toUpperCase(),
+                userId,
                 email: cleanEmail,
                 name: String(name || companyName || cleanEmail.split('@')[0]).trim(),
                 position: String(position || '').trim(),
@@ -752,6 +1019,10 @@ export class LicenseStore {
                 phone: String(phone || lic.customer?.phone || '').trim(),
                 licenseId: lic.licenseId,
                 sessionKey: 'wks_' + crypto.randomBytes(16).toString('hex'),
+                hubToken: tokData.token,
+                hubTokenId: tokData.payload.tokenId,
+                hubTokenSecret: tokData.payload.secret,
+                hubUrl: tokData.payload.hubUrl,
                 ofertaAccepted: false,
                 ofertaAcceptedAt: null,
                 ofertaVersion: '',
@@ -772,6 +1043,18 @@ export class LicenseStore {
             if (licenseId && this.findLicense(licenseId)) {
                 user.licenseId = this.findLicense(licenseId).licenseId;
             }
+            if (!user.hubToken) {
+                const tokData = createOwnerAccessToken({
+                    hubUrl: hubUrl || user.hubUrl || 'https://work.odant.org',
+                    accountId: user.userId,
+                    email: user.email,
+                    issuedAt: now,
+                }, this.authorityKeys);
+                user.hubToken = tokData.token;
+                user.hubTokenId = tokData.payload.tokenId;
+                user.hubTokenSecret = tokData.payload.secret;
+                user.hubUrl = tokData.payload.hubUrl;
+            }
         }
 
         if (ofertaAccepted && !user.ofertaAccepted) {
@@ -782,9 +1065,11 @@ export class LicenseStore {
             user.ofertaSignatureId = 'PEP-' + crypto.randomBytes(4).toString('hex').toUpperCase();
         }
 
-        // Синхронизируем реквизиты клиента с привязанной лицензией
+        // Синхронизируем реквизиты клиента и привязку аккаунта владельца с лицензией
         if (user.licenseId && this.state.licenses[user.licenseId]) {
             const rawLic = this.state.licenses[user.licenseId];
+            rawLic.ownerAccountId = user.userId;
+            rawLic.ownerEmail = user.email;
             if (user.companyName) rawLic.customer.name = user.companyName;
             if (user.inn) rawLic.customer.inn = user.inn;
             if (user.email) rawLic.customer.email = user.email;
@@ -794,6 +1079,130 @@ export class LicenseStore {
 
         this._save();
         return this._formatUserResponse(user);
+    }
+
+    /**
+     * Сгенерировать (или перевыпустить) токен владельца в личном кабинете (содержит URL сервера поддержки).
+     */
+    generateUserHubToken(sessionKeyOrEmail = '', { hubUrl = 'https://work.odant.org' } = {}) {
+        const key = String(sessionKeyOrEmail || '').trim();
+        const user = Object.values(this.state.users).find(
+            u => u.sessionKey === key || u.email === key.toLowerCase() || u.userId === key
+        );
+        if (!user)
+            throw new Error('Аккаунт владельца не найден в личном кабинете');
+
+        const tokData = createOwnerAccessToken({
+            hubUrl: hubUrl || user.hubUrl || 'https://work.odant.org',
+            accountId: user.userId,
+            email: user.email,
+            issuedAt: Date.now(),
+        }, this.authorityKeys);
+
+        user.hubToken = tokData.token;
+        user.hubTokenId = tokData.payload.tokenId;
+        user.hubTokenSecret = tokData.payload.secret;
+        user.hubUrl = tokData.payload.hubUrl;
+        this._save();
+
+        return {
+            ok: true,
+            token: tokData.token,
+            tokenId: tokData.payload.tokenId,
+            accountId: user.userId,
+            email: user.email,
+            hubUrl: tokData.payload.hubUrl,
+            issuedAt: tokData.payload.issuedAt,
+            licenseId: user.licenseId,
+        };
+    }
+
+    /**
+     * Проверить токен владельца (owk1...), привязать локальную систему (HWID / nodeFingerprint) к аккаунту
+     * владельца и выдать подписанные файлы лицензий (базовую на 10 вечных мест и дополнительные временные)
+     * для сохранения в папке #system.
+     */
+    syncByOwnerToken({
+        token = '',
+        hwid = '',
+        nodeFingerprint = '',
+        nodePublicKey = '',
+        serverId = '',
+        canonicalHubUrl = '',
+    } = {}) {
+        const parsed = parseOwnerAccessToken(token);
+        if (!verifyOwnerAccessToken(token, this.authorityKeys.publicKey)) {
+            const err = new Error('Подпись токена владельца не прошла криптографическую проверку');
+            err.statusCode = 401;
+            throw err;
+        }
+
+        const { accountId, email, tokenId, secret, hubUrl } = parsed.payload;
+        const user = Object.values(this.state.users).find(
+            u => u.userId === accountId || (email && u.email === email.toLowerCase())
+        );
+        if (!user) {
+            const err = new Error('Владелец, указанный в токене, не найден на сервере поддержки');
+            err.statusCode = 404;
+            throw err;
+        }
+        if (user.hubTokenId && (user.hubTokenId !== tokenId || user.hubTokenSecret !== secret)) {
+            const err = new Error('Токен владельца был отозван или перевыпущен в личном кабинете');
+            err.statusCode = 401;
+            throw err;
+        }
+
+        // Обновляем привязку оборудования к лицензии владельца
+        const summary = this.issueOrUpdateLicense({
+            licenseId: user.licenseId,
+            hwid: hwid || undefined,
+            nodeFingerprint: nodeFingerprint || undefined,
+            ownerAccountId: user.userId,
+            ownerEmail: user.email,
+            customer: {
+                name: user.companyName,
+                inn: user.inn,
+                email: user.email,
+                phone: user.phone,
+            },
+        });
+
+        user.boundNodes ??= [];
+        const existingNode = user.boundNodes.find(n => n.hwid === summary.hardware?.hwid);
+        if (existingNode) {
+            existingNode.nodeFingerprint = nodeFingerprint || existingNode.nodeFingerprint;
+            existingNode.serverId = serverId || existingNode.serverId;
+            existingNode.lastSyncAt = Date.now();
+        }
+        else if (hwid || nodeFingerprint) {
+            user.boundNodes.push({
+                hwid: summary.hardware?.hwid || hwid,
+                nodeFingerprint,
+                nodePublicKey,
+                serverId,
+                boundAt: Date.now(),
+                lastSyncAt: Date.now(),
+            });
+        }
+        this._save();
+
+        const resolvedHubUrl = String(canonicalHubUrl || user.hubUrl || hubUrl || 'https://work.odant.org').replace(/\/+$/, '');
+        return {
+            ok: true,
+            accountId: user.userId,
+            ownerEmail: user.email,
+            companyName: user.companyName,
+            canonicalHubUrl: resolvedHubUrl,
+            licenseId: summary.licenseId,
+            baseActivated: summary.baseActivated,
+            baseSeats: summary.baseSeats,
+            addonSeats: summary.addonSeats,
+            totalSeats: summary.totalSeats,
+            aiAgentsEnabled: summary.aiAgentsEnabled,
+            certificate: summary.certificate,
+            licenseFiles: summary.licenseFiles,
+            license: summary,
+        };
     }
 
     /**

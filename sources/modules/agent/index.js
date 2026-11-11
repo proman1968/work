@@ -45,6 +45,23 @@ import { loadDocs, loadSystem, loadConfig, loadHooks, isPrivatePlace } from './r
 import { auditHook } from './hooks.js';
 import { clip } from './util.js';
 import { audit } from '../../server/access/audit.js';
+import { assertAgentSystemLicensed } from '../license/index.js';
+
+export function shouldEnforceAgentLicense(options = {}) {
+    if (options?.enforceLicense === true || process.env.WORK_ENFORCE_LICENSE === '1')
+        return true;
+    if (options?.enforceLicense === false || process.env.WORK_ENFORCE_LICENSE === '0')
+        return false;
+    if (
+        process.env.WORK_TEST
+        || process.env.NODE_TEST_CONTEXT
+        || process.execArgv.some(a => a.startsWith('--test'))
+        || process.argv.some(a => a.startsWith('--test'))
+    ) {
+        return false;
+    }
+    return true;
+}
 
 export { runLoop } from './loop.js';
 export * as voice from './voice.js';
@@ -612,7 +629,10 @@ export function stableToolOrder(tools) {
  * @param {RunOnceParams} [p]
  * @returns {Promise<RunResult & { items: any[] }>}
  */
-export async function runOnce({ place, session, prompt, model, agent, mode = 'auto', signal, role } = {}) {
+export async function runOnce({ place, session, prompt, model, agent, mode = 'auto', signal, role, enforceLicense, license, systemDir } = {}) {
+    if (shouldEnforceAgentLicense({ enforceLicense })) {
+        assertAgentSystemLicensed({ license, systemDir });
+    }
     const host = {
         mode,
         signal,

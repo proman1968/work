@@ -303,6 +303,7 @@
         $('#tileAddons').style.display = isUserReadyForOrders() ? '' : 'none';
         $('#btnAuthText').textContent = currentUser.companyName || currentUser.email;
         if ($('#inpLicId')) $('#inpLicId').value = currentUser.licenseId || '';
+        if ($('#inpCabinetHubToken')) $('#inpCabinetHubToken').value = currentUser.hubToken || '';
         if ($('#authEmail')) $('#authEmail').value = currentUser.email || '';
         if ($('#authCompany')) $('#authCompany').value = currentUser.companyName || '';
         if ($('#authInn') && currentUser.inn) $('#authInn').value = currentUser.inn;
@@ -372,67 +373,96 @@
         recalcAddons();
     }
     function recalcBaseOrder() {
+        const variant = $('#segPakVariant button.on')?.dataset.variant || 'pak';
+        const isLicenseOnly = variant === 'license_only';
+        const basePrice = isLicenseOnly ? (D.product.baseLicensePriceRub || 4_000_000) : D.product.basePriceRub;
         const extra = Math.max(0, Number($('#inpPakExtraSeats').value) || 0);
         const tier = tierById(segValue('segPakTier'));
         const disc = volumeDiscount(extra);
         const gross = extra * tier.pricePerUserYearRub;
         const net = gross - Math.round(gross * disc.discountPercent / 100);
         $('#lblPakSeats').textContent = extra;
-        $('#lblPakTotal').textContent = rub(D.product.basePriceRub + net);
+        $('#lblPakTotal').textContent = rub(basePrice + net);
         const rows = [
-            ['Комплекс ODANT-WORK', rub(D.product.basePriceRub)],
+            [isLicenseOnly ? 'Базовая лицензия (без железа)' : 'Комплекс ODANT-WORK (с машиной)', rub(basePrice)],
             ['Вечные рабочие места', String(D.product.baseSeats)],
             ['Поддержка в комплекте', '1 год · Enterprise (далее — по желанию)'],
         ];
         if (extra > 0) rows.push([`Доп. места · ${esc(tier.name)}${disc.discountPercent ? ' · −' + disc.discountPercent + '%' : ''}`, `${extra} · ${rub(net)}`]);
         $('#lblPakBreakdown').innerHTML = lines(rows);
     }
-    async function submitBasePakOrder() {
+    async function submitBasePakOrder(paymentMethod = 'yookassa') {
         if (!isUserReadyForOrders()) {
-            requireAuthAndOferta(() => submitBasePakOrder(), {
+            requireAuthAndOferta(() => submitBasePakOrder(paymentMethod), {
                 companyName: $('#inpPakOrg')?.value.trim(),
                 inn: $('#inpPakInn')?.value.trim(),
                 email: $('#inpPakEmail')?.value.trim(),
             });
             return;
         }
+        const variant = $('#segPakVariant button.on')?.dataset.variant || 'pak';
+        const isLicenseOnly = variant === 'license_only';
         const st = $('#pakOrderStatus');
-        st.textContent = 'Формируем счёт ЮKassa…';
+        st.textContent = paymentMethod === 'invoice' ? 'Формируем счёт-договор для юр. лица…' : 'Формируем счёт ЮKassa…';
         try {
             const data = await api('/api/orders/checkout', {
                 sessionKey: currentUser?.sessionKey || '',
-                includeBasePak: true,
+                includeBasePak: !isLicenseOnly,
+                includeBaseLicenseOnly: isLicenseOnly,
+                paymentMethod,
                 tier: segValue('segPakTier'),
                 addonSeats: Number($('#inpPakExtraSeats').value) || 0,
                 years: 1,
                 customer: { name: $('#inpPakOrg').value.trim(), inn: $('#inpPakInn').value.trim(), email: $('#inpPakEmail').value.trim() },
             });
-            st.innerHTML = `Счёт <b>${esc(data.orderId)}</b> сформирован, лицензия <b>${esc(data.licenseId)}</b>. <a href="${esc(data.confirmationUrl)}" target="_blank" rel="noopener">Перейти к оплате →</a>`;
+            if (paymentMethod === 'invoice') {
+                st.innerHTML = `Счёт-договор <b>${esc(data.invoiceNumber || data.orderId)}</b> сформирован, лицензия <b>${esc(data.licenseId)}</b>. <a href="${esc(data.invoiceUrl || data.confirmationUrl)}" target="_blank" rel="noopener">Открыть печатную форму счёта →</a>`;
+            }
+            else {
+                st.innerHTML = `Счёт <b>${esc(data.orderId)}</b> сформирован, лицензия <b>${esc(data.licenseId)}</b>. <a href="${esc(data.confirmationUrl)}" target="_blank" rel="noopener">Перейти к оплате →</a>`;
+            }
             refreshCatalogRegions();
         }
         catch (err) { st.textContent = err.message; }
     }
-    async function submitAddonOrder() {
+    async function submitAddonOrder(paymentMethod = 'yookassa') {
         if (!isUserReadyForOrders()) {
-            requireAuthAndOferta(() => submitAddonOrder());
+            requireAuthAndOferta(() => submitAddonOrder(paymentMethod));
             return;
         }
         const st = $('#orderStatus');
-        st.textContent = 'Формируем счёт ЮKassa…';
+        st.textContent = paymentMethod === 'invoice' ? 'Формируем счёт-договор для юр. лица…' : 'Формируем счёт ЮKassa…';
         try {
             const data = await api('/api/orders/checkout', {
                 sessionKey: currentUser?.sessionKey || '',
                 includeBasePak: false,
+                paymentMethod,
                 tier: segValue('segTier'),
                 addonSeats: Number($('#inpSeats').value) || 1,
                 years: Number($('#inpYears').value) || 1,
                 licenseId: $('#inpLicId').value.trim(),
                 customer: { name: currentUser?.companyName || '', inn: currentUser?.inn || '', email: currentUser?.email || '' },
             });
-            st.innerHTML = `Заказ <b>${esc(data.orderId)}</b> на <b>${rub(data.amountRub)}</b>. <a href="${esc(data.confirmationUrl)}" target="_blank" rel="noopener">Перейти к оплате →</a>`;
+            if (paymentMethod === 'invoice') {
+                st.innerHTML = `Счёт-договор <b>${esc(data.invoiceNumber || data.orderId)}</b> на <b>${rub(data.amountRub)}</b>. <a href="${esc(data.invoiceUrl || data.confirmationUrl)}" target="_blank" rel="noopener">Открыть счёт на оплату →</a>`;
+            }
+            else {
+                st.innerHTML = `Заказ <b>${esc(data.orderId)}</b> на <b>${rub(data.amountRub)}</b>. <a href="${esc(data.confirmationUrl)}" target="_blank" rel="noopener">Перейти к оплате →</a>`;
+            }
             refreshCatalogRegions();
         }
         catch (err) { st.textContent = err.message; }
+    }
+    async function generateCabinetToken() {
+        if (!currentUser?.sessionKey) return;
+        try {
+            const res = await api('/api/cabinet/token', { sessionKey: currentUser.sessionKey });
+            if (res?.token) {
+                currentUser.hubToken = res.token;
+                if ($('#inpCabinetHubToken')) $('#inpCabinetHubToken').value = res.token;
+            }
+        }
+        catch (err) { alert(err.message); }
     }
 
     function recalcPartner() {
@@ -1130,8 +1160,11 @@
                     if (isUserReadyForOrders()) switchStage('addons');
                     else requireAuthAndOferta(() => switchStage('addons'));
                     break;
-                case 'order-pak': submitBasePakOrder(); break;
-                case 'order-addons': submitAddonOrder(); break;
+                case 'order-pak': submitBasePakOrder('yookassa'); break;
+                case 'order-pak-invoice': submitBasePakOrder('invoice'); break;
+                case 'order-addons': submitAddonOrder('yookassa'); break;
+                case 'order-addons-invoice': submitAddonOrder('invoice'); break;
+                case 'gen-hub-token': generateCabinetToken(); break;
                 case 'reserve-selected': reserveRegionFranchise(selectedCode); break;
                 case 'bot-send': sendBot(); break;
                 case 'cert-close': $('#certModal')?.classList.remove('open'); break;
@@ -1159,6 +1192,7 @@
         $('#inpRegionFilter')?.addEventListener('input', renderRegionsTable);
         bindSeg('segTier', recalcAddons);
         bindSeg('segPakTier', recalcBaseOrder);
+        bindSeg('segPakVariant', recalcBaseOrder);
         window.addEventListener('resize', moveIndicator);
         window.addEventListener('hashchange', () => { const id = location.hash.slice(1); if (id && id !== currentStage) switchStage(id, { scroll: false }); });
     }

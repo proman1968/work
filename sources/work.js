@@ -103,6 +103,24 @@ if (process.env.WORK_SWEEP !== '0') {
     }, 2 * 60_000).unref?.();
 }
 
+// Автообновление из npm (с сохранением пользовательских баз, классов, файлов и настроек)
+// и периодическая синхронизация лицензий по привязанному токену владельца (#system/owner-token.json)
+if (process.env.WORK_AUTO_UPDATE !== '0' && !process.env.WORK_TEST) {
+    import('./host/auto-updater.js')
+        .then(m => m.startAutoUpdateDaemon())
+        .catch(e => console.warn('[auto-updater]', e?.message || e));
+
+    setInterval(async () => {
+        try {
+            const { loadOwnerTokenBinding, syncWithLicenseHub } = await import('./modules/license/index.js');
+            if (loadOwnerTokenBinding()?.token) {
+                await syncWithLicenseHub();
+            }
+        }
+        catch { /* сервер поддержки временно недоступен — работаем по локальным файлам в #system */ }
+    }, 60 * 60_000).unref?.();
+}
+
 globalThis.ODA = function (prototype) {};
 if (DEV_MODE)
     console.warn(`WORK_DEV=${process.env.WORK_DEV}: security visibility and method guards are DISABLED`);

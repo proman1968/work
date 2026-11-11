@@ -195,6 +195,14 @@ export default {
                         <span class="kv-label">Номер лицензии</span>
                         <span class="kv-val">{{status?.licenseId || '—'}}</span>
                     </div>
+                    <div class="kv-row">
+                        <span class="kv-label">Статус агентской ИИ-системы</span>
+                        <span class="kv-val">{{status?.aiAgentsEnabled ? 'АКТИВНА (Базовая лицензия 10 мест)' : 'ОТКЛЮЧЕНА (Требуется базовая лицензия)'}}</span>
+                    </div>
+                    <div class="kv-row">
+                        <span class="kv-label">Аккаунт владельца (ЛК)</span>
+                        <span class="kv-val">{{status?.tokenBinding?.email || status?.ownerEmail || 'Не привязан'}}</span>
+                    </div>
                 </div>
             </div>
 
@@ -204,11 +212,11 @@ export default {
                         <oda-icon icon="carbon:user-multiple" :icon-size="20"></oda-icon>
                         <span>Одновременные сессии (рабочие места)</span>
                     </div>
-                    <span class="badge">Вечная база: {{status?.baseSeats || 10}} мест</span>
+                    <span class="badge" :class="status?.baseLicensed ? '' : 'warn'">{{status?.baseLicensed ? ('Вечная база: ' + (status?.baseSeats || 10) + ' мест') : 'Режим настройки: 1 сессия (BOSS)'}}</span>
                 </div>
                 <div class="seats-meter">
-                    <span class="seats-big">{{status?.activeSeatsCount || 0}} / {{status?.totalSeats || 10}}</span>
-                    <span>активных сессий ({{status?.baseSeats || 10}} вечных + {{status?.addonSeats || 0}} срочных годовых)</span>
+                    <span class="seats-big">{{status?.activeSeatsCount || 0}} / {{status?.totalSeats || 1}}</span>
+                    <span>активных сессий ({{status?.baseLicensed ? ((status?.baseSeats || 10) + ' вечных + ' + (status?.addonSeats || 0) + ' срочных годовых') : '1 сессия BOSS до загрузки базовой лицензии'}})</span>
                 </div>
                 <div class="kv-list">
                     <div class="kv-row">
@@ -220,22 +228,39 @@ export default {
                         <span class="kv-val">{{baseSupportText}}</span>
                     </div>
                     <div class="kv-row">
-                        <span class="kv-label">Лимит обращений в год</span>
-                        <span class="kv-val">{{status?.support?.ticketsRemaining ?? 0}} из {{status?.support?.ticketsQuota ?? 0}}</span>
+                        <span class="kv-label">Файлов лицензий в папке #system</span>
+                        <span class="kv-val">{{(status?.licenseFiles || []).length}} шт.</span>
                     </div>
                     <div class="kv-row">
-                        <span class="kv-label">Код привязки ботов поддержки (MAX · TG · VK)</span>
-                        <span class="kv-val">{{status?.support?.bindCode || status?.licenseId || '—'}}</span>
-                    </div>
-                    <div class="kv-row">
-                        <span class="kv-label">Каналы поддержки</span>
-                        <span class="kv-val">MAX · Telegram · VK</span>
+                        <span class="kv-label">URL сервера поддержки (из токена)</span>
+                        <span class="kv-val">{{status?.tokenBinding?.hubUrl || status?.hubUrl || 'https://work.odant.org'}}</span>
                     </div>
                 </div>
                 <div class="controls-row">
-                    <input type="text" ::value="hubUrl" placeholder="https://work.odant.org" style="min-width:210px;" title="Адрес центра лицензирования">
-                    <button class="btn-secondary" @tap="syncHub">Синхронизировать с центром лицензий</button>
+                    <input type="text" ::value="ownerTokenInput" placeholder="Вставьте токен владельца (owk1...) из ЛК work.odant.org" style="flex:1; min-width:220px; font-family:monospace;" title="Токен владельца с URL сервера поддержки">
+                    <button class="btn-primary" @tap="bindOwnerToken">Привязать токен</button>
+                    <button class="btn-secondary" @tap="syncHub">Проверить лицензии</button>
                 </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <div class="card-title">
+                    <oda-icon icon="carbon:renew" :icon-size="20"></oda-icon>
+                    <span>Автоматическое обновление системы через npm (с сохранением данных)</span>
+                </div>
+                <span class="badge">Пакет: {{status?.autoUpdate?.packageName || 'odant-work'}}</span>
+            </div>
+            <div style="font-size:12.5px; color:var(--text-muted, #64748b);">
+                При обновлении из npm все пользовательские базы данных, файлы, настройки (<code>#system</code>) и изменённые пользователем классы гарантированно сохраняются по контрольным суммам манифеста.
+            </div>
+            <div class="controls-row">
+                <button class="btn-secondary" @tap="checkNpmUpdates">Проверить обновления на npm</button>
+                <button class="btn-primary" @tap="applyNpmUpdate">Обновить систему сейчас</button>
+                <span style="font-size:12.5px; color:var(--muted-color);" ~if="status?.autoUpdate?.latestAvailableVersion">
+                    Доступная версия в npm: <strong>{{status.autoUpdate.latestAvailableVersion}}</strong>
+                </span>
             </div>
         </div>
 
@@ -286,10 +311,11 @@ export default {
                     Итого к оплате: {{calculatedTotalText}}
                 </div>
                 <button class="btn-primary" @tap="checkoutYooKassa">Оплатить через ЮKassa</button>
+                <button class="btn-secondary" @tap="checkoutInvoice">Счёт-договор (для юр. лиц)</button>
             </div>
             <div class="controls-row" style="border-top:1px dashed var(--subtle-border); padding-top:10px; margin-top:4px;">
-                <textarea ::value="certJsonInput" rows="2" placeholder="Вставьте подписанный сертификат Ed25519 (JSON) для ручной установки…" style="flex:1; min-width:240px; font-family:monospace;"></textarea>
-                <button class="btn-secondary" @tap="installCertJson">Установить сертификат</button>
+                <textarea ::value="certJsonInput" rows="2" placeholder="Вставьте подписанный файл лицензии (.lic.json) или сертификат Ed25519 для ручной установки в #system…" style="flex:1; min-width:240px; font-family:monospace;"></textarea>
+                <button class="btn-secondary" @tap="installCertJson">Установить в #system</button>
             </div>
             <div class="notice" ~if="message">{{message}}</div>
         </div>
@@ -299,6 +325,7 @@ export default {
     addonSeats: 1,
     years: 1,
     hubUrl: '',
+    ownerTokenInput: '',
     certJsonInput: '',
     message: '',
     get baseSupportText() {
@@ -348,10 +375,52 @@ export default {
         try {
             this.message = 'Синхронизация с сервером лицензий…';
             this.status = await this.$item?.fetch('license_sync', { hubUrl: this.hubUrl || undefined });
-            this.message = 'Лицензия успешно синхронизирована.';
+            this.message = 'Лицензии из личного кабинета успешно проверены и обновлены в #system.';
         }
         catch (err) {
             this.message = 'Не удалось связаться с сервером лицензий: ' + (err?.message || err);
+        }
+    },
+    async bindOwnerToken() {
+        const tok = String(this.ownerTokenInput || '').trim();
+        if (!tok) {
+            this.message = 'Введите токен владельца (owk1...), сгенерированный в личном кабинете work.odant.org.';
+            return;
+        }
+        try {
+            this.message = 'Привязка токена владельца и загрузка лицензий из личного кабинета…';
+            this.status = await this.$item?.fetch('license_bind_token', { token: tok });
+            this.ownerTokenInput = '';
+            this.message = 'Токен владельца успешно привязан, файлы лицензий сохранены в #system!';
+        }
+        catch (err) {
+            this.message = 'Ошибка привязки токена: ' + (err?.message || err);
+        }
+    },
+    async checkNpmUpdates() {
+        try {
+            this.message = 'Проверка обновлений пакета в npm…';
+            const res = await this.$item?.fetch('updater_check');
+            await this.reload();
+            this.message = res?.updateAvailable
+                ? `Доступна новая версия в npm: ${res.latestVersion} (текущая: ${res.currentVersion})`
+                : `Установлена актуальная версия (${res?.currentVersion || '—'})`;
+        }
+        catch (err) {
+            this.message = 'Ошибка проверки обновлений npm: ' + (err?.message || err);
+        }
+    },
+    async applyNpmUpdate() {
+        try {
+            this.message = 'Загрузка и установка обновления из npm (с сохранением пользовательских данных)…';
+            const res = await this.$item?.fetch('updater_apply');
+            await this.reload();
+            this.message = res?.updated
+                ? `Система обновлена до версии ${res.latestVersion}. Пользовательские данные и классы сохранены.`
+                : 'Обновление не требуется — установлена актуальная версия.';
+        }
+        catch (err) {
+            this.message = 'Ошибка обновления: ' + (err?.message || err);
         }
     },
     async installCertJson() {
@@ -363,7 +432,7 @@ export default {
         try {
             this.status = await this.$item?.fetch('license_install', { certificate: raw });
             this.certJsonInput = '';
-            this.message = 'Сертификат лицензии успешно установлен и проверен.';
+            this.message = 'Файл лицензии успешно установлен в #system и проверен.';
         }
         catch (err) {
             this.message = 'Ошибка установки сертификата: ' + (err?.message || err);
@@ -377,6 +446,7 @@ export default {
                 tier: this.selectedTier,
                 addonSeats: Number(this.addonSeats || 1),
                 years: Number(this.years || 1),
+                paymentMethod: 'yookassa',
                 returnUrl: location.href,
             });
             if (res?.confirmationUrl) {
@@ -389,6 +459,29 @@ export default {
         }
         catch (err) {
             this.message = 'Ошибка создания платежа: ' + (err?.message || err);
+        }
+    },
+    async checkoutInvoice() {
+        try {
+            this.message = 'Формирование счёта-договора для юр. лица…';
+            const res = await this.$item?.fetch('license_checkout', {
+                hubUrl: this.hubUrl || undefined,
+                tier: this.selectedTier,
+                addonSeats: Number(this.addonSeats || 1),
+                years: Number(this.years || 1),
+                paymentMethod: 'invoice',
+                returnUrl: location.href,
+            });
+            if (res?.invoiceUrl) {
+                this.message = `Счёт-договор № ${res.invoiceNumber || res.orderId} сформирован: ${res.invoiceUrl}`;
+                window.open(res.invoiceUrl, '_blank');
+            }
+            else {
+                this.message = 'Счёт создан: ' + (res?.orderId || '');
+            }
+        }
+        catch (err) {
+            this.message = 'Ошибка формирования счёта: ' + (err?.message || err);
         }
     },
 };

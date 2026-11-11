@@ -19,7 +19,8 @@
  */
 import { log } from './log.js';
 import { runLoop, maybeCompact } from './loop.js';
-import { createEnv } from './index.js';
+import { createEnv, shouldEnforceAgentLicense } from './index.js';
+import { assertAgentSystemLicensed } from '../license/index.js';
 import { genId } from './util.js';
 import { collectUndo, applyUndo } from './undo.js';
 import { getItem, callAs, writeFile } from './tools/work.js';
@@ -566,6 +567,9 @@ function applyOffline(body, reply) {
  */
 export async function prompt(file, params = {}) {
     params = argsOf(params);
+    if (shouldEnforceAgentLicense(params)) {
+        assertAgentSystemLicensed({ license: params.license, systemDir: params.systemDir });
+    }
     await assertTaskOwner(file, params);
     const s = stateOf(file);
     const session = params.session;
