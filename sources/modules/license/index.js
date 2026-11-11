@@ -35,8 +35,8 @@ export const DEFAULT_LICENSE_HUB_URL = process.env.WORK_LICENSE_HUB_URL || 'http
  * Локальный клиент odant-work доверяет ТОЛЬКО этим ключам и никогда не доверяет полю issuerPublicKey
  * внутри пришедшего извне файла лицензии или токена (защита от поддельного/стороннего license-server).
  */
-export const ODANT_AUTHORITY_PUBLIC_KEY = 'MCowBQYDK2VwAyEAdlQSj+pC3IOt60vo3lXkzpd0DFU4ZmADqEYQsW1+mRA=';
-export const ODANT_BACKUP_PUBLIC_KEY = 'MCowBQYDK2VwAyEA8xJ9r7V4kM2pN6qL1wZ5tB3cF0yH8gD4sE7uA9vK2mQ=';
+export const ODANT_AUTHORITY_PUBLIC_KEY = 'MCowBQYDK2VwAyEApVwPnoJcmUKLq4CLh7KdVHg1o5hfPiM7Lj9Eyq/VRdU=';
+export const ODANT_BACKUP_PUBLIC_KEY = 'MCowBQYDK2VwAyEAdlQSj+pC3IOt60vo3lXkzpd0DFU4ZmADqEYQsW1+mRA=';
 export const TRUSTED_AUTHORITY_PUBLIC_KEYS = Object.freeze([
     ODANT_AUTHORITY_PUBLIC_KEY,
     ODANT_BACKUP_PUBLIC_KEY,
