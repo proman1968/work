@@ -68,11 +68,13 @@ export function loadOrCreateAuthorityKeys(keyFilePath, { allowGenerateInProd = f
         catch { /* создадим заново ниже */ }
     }
 
-    if (process.env.NODE_ENV === 'production' && !allowGenerateInProd) {
+    if (process.env.WORK_REQUIRE_AUTHORITY_ENV === '1' && !allowGenerateInProd) {
         throw new Error(
-            'Безопасность: в production-режиме запрещена автогенерация случайных ключей лицензирования. '
-            + 'Задайте секретный ключ правообладателя в переменной окружения WORK_AUTHORITY_PRIVATE_KEY.'
+            'Безопасность: требуется явно заданный секретный ключ правообладателя в переменной окружения WORK_AUTHORITY_PRIVATE_KEY.'
         );
+    }
+    if (process.env.NODE_ENV === 'production') {
+        console.warn('[work.odant.org] WORK_AUTHORITY_PRIVATE_KEY не задан в окружении — используется локальный ключ контейнера.');
     }
 
     const pair = crypto.generateKeyPairSync('ed25519');
