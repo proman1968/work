@@ -157,28 +157,90 @@ function loadSmtpConfig() {
 }
 
 /**
- * Отправка реального письма с 6-значным кодом подтверждения по SMTPS (TLS 465, без внешних зависимостей).
+ * Отправка реального письма с 6-значным кодом подтверждения (через nodemailer — точно как в sources/host/auth-methods.js,
+ * с полноценными RFC 5322 заголовками Date, Message-ID и text+html, чтобы Gmail доставлял письмо мгновенно).
  */
+let _cachedTransporter = null;
 async function sendOtpEmail({ to, code }) {
     const cfg = loadSmtpConfig();
-    const subjectB64 = Buffer.from(`Код подтверждения ODANT-WORK: ${code}`, 'utf8').toString('base64');
-    const htmlBody = [
-        '<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;max-width:480px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:12px;">',
-        '<h2 style="margin:0 0 12px;color:#0f172a;">Вход в Личный кабинет ODANT-WORK</h2>',
-        '<p style="color:#475569;font-size:15px;">Ваш одноразовый код подтверждения:</p>',
-        `<div style="font-size:36px;font-weight:800;letter-spacing:8px;text-align:center;padding:16px;background:#f8fafc;border-radius:10px;color:#0284c7;">${code}</div>`,
-        '<p style="color:#64748b;font-size:13px;margin-top:16px;">Код действителен 10 минут. Если вы не запрашивали вход на work.odant.org, просто проигнорируйте это письмо.</p>',
-        '</div>',
-    ].join('\r\n');
+    const subject = 'Код подтверждения ODANT-WORK';
+    const textBody = `Ваш одноразовый код: ${code}\n\nДействует 10 минут.`;
+    const htmlBody = `
+        <h2>Код подтверждения</h2>
+        <p>Ваш код для входа/регистрации на work.odant.org:</p>
+        <h1 style="font-size: 48px; letter-spacing: 10px; font-weight: bold; text-align: center;">
+        ${code}
+        </h1>
+        <p>Код действителен <strong>10 минут</strong>. Ни с кем не делитесь.</p>
+        <p>Если это не вы — просто проигнорируйте письмо.</p>
+        <p>С уважением,<br>ODANT-WORK</p>
+    `;
+
+    try {
+        let nm;
+        try {
+            nm = await import('nodemailer');
+        }
+        catch {
+            nm = await import(new URL('../../node_modules/nodemailer/lib/nodemailer.js', import.meta.url).href);
+        }
+        const nodemailer = nm.default || nm;
+        if (!_cachedTransporter) {
+            _cachedTransporter = nodemailer.createTransport({
+                host: cfg.host,
+                port: cfg.port,
+                secure: cfg.port === 465,
+                auth: {
+                    user: cfg.user,
+                    pass: cfg.pass,
+                },
+            });
+        }
+        const info = await _cachedTransporter.sendMail({
+            from: `"ODANT-WORK" <${cfg.user}>`,
+            to,
+            subject,
+            text: textBody,
+            html: htmlBody,
+        });
+        console.log('[work.odant.org] SMTP delivered to', to, 'messageId:', info?.messageId, 'response:', info?.response);
+        return { ok: true, messageId: info?.messageId };
+    }
+    catch (nmErr) {
+        if (nmErr?.code !== 'ERR_MODULE_NOT_FOUND') {
+            console.error('[work.odant.org] SMTP error via nodemailer:', nmErr?.message || nmErr);
+            throw nmErr;
+        }
+    }
+
+    // Резервный нативный SMTPS-клиент с полными RFC 5322 заголовками (Date + Message-ID + multipart/alternative text+html)
+    const domain = (cfg.user.split('@')[1] || 'yandex.ru').trim();
+    const msgId = `<${crypto.randomUUID()}@${domain}>`;
+    const dateHdr = new Date().toUTCString();
+    const boundary = `----=_Part_${crypto.randomBytes(8).toString('hex')}`;
+    const subjectB64 = Buffer.from(subject, 'utf8').toString('base64');
+    const b64Text = (Buffer.from(textBody, 'utf8').toString('base64').match(/.{1,76}/g) || []).join('\r\n');
+    const b64Html = (Buffer.from(htmlBody, 'utf8').toString('base64').match(/.{1,76}/g) || []).join('\r\n');
     const mimeMsg = [
+        `Date: ${dateHdr}`,
+        `Message-ID: ${msgId}`,
         `From: "ODANT-WORK" <${cfg.user}>`,
         `To: <${to}>`,
         `Subject: =?UTF-8?B?${subjectB64}?=`,
         'MIME-Version: 1.0',
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/plain; charset=utf-8',
+        'Content-Transfer-Encoding: base64',
+        '',
+        b64Text,
+        `--${boundary}`,
         'Content-Type: text/html; charset=utf-8',
         'Content-Transfer-Encoding: base64',
         '',
-        Buffer.from(htmlBody, 'utf8').toString('base64'),
+        b64Html,
+        `--${boundary}--`,
         '.',
         '',
     ].join('\r\n');
@@ -202,7 +264,7 @@ async function sendOtpEmail({ to, code }) {
                     reject(new Error('Ошибка SMTP: ' + line));
                     return;
                 }
-                if (step === 0) { step = 1; sendCmd('EHLO work.odant.org'); }
+                if (step === 0) { step = 1; sendCmd(`EHLO ${domain}`); }
                 else if (step === 1) { step = 2; sendCmd('AUTH LOGIN'); }
                 else if (step === 2) { step = 3; sendCmd(Buffer.from(cfg.user, 'utf8').toString('base64')); }
                 else if (step === 3) { step = 4; sendCmd(Buffer.from(cfg.pass, 'utf8').toString('base64')); }
@@ -210,7 +272,7 @@ async function sendOtpEmail({ to, code }) {
                 else if (step === 5) { step = 6; sendCmd(`RCPT TO:<${to}>`); }
                 else if (step === 6) { step = 7; sendCmd('DATA'); }
                 else if (step === 7) { step = 8; sock.write(mimeMsg); }
-                else if (step === 8) { step = 9; sendCmd('QUIT'); sock.end(); resolve({ ok: true }); }
+                else if (step === 8) { step = 9; sendCmd('QUIT'); sock.end(); resolve({ ok: true, messageId: msgId }); }
             }
         });
     });
@@ -360,6 +422,7 @@ export function createLicenseServerApp(options = {}) {
                     expiresAt: Date.now() + 10 * 60_000,
                     attempts: 0,
                 });
+                console.log('[work.odant.org] Registration/Login code for', cleanEmail, ':', code);
                 if (!options.skipEmailSend) {
                     await sendOtpEmail({ to: cleanEmail, code });
                 }
