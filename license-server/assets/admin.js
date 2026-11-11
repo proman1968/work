@@ -14,7 +14,12 @@
     let currentCertLic = null;
 
     function getStoredToken() {
-        try { return sessionStorage.getItem(TOKEN_KEY) || localStorage.getItem(TOKEN_KEY) || ''; }
+        try {
+            return sessionStorage.getItem(TOKEN_KEY)
+                || localStorage.getItem(TOKEN_KEY)
+                || localStorage.getItem('odant_work_session')
+                || '';
+        }
         catch { return ''; }
     }
     function setStoredToken(tok) {
@@ -23,6 +28,9 @@
             if (tok) {
                 sessionStorage.setItem(TOKEN_KEY, tok);
                 localStorage.setItem(TOKEN_KEY, tok);
+                if (tok.startsWith('wks_')) {
+                    localStorage.setItem('odant_work_session', tok);
+                }
             }
             else {
                 sessionStorage.removeItem(TOKEN_KEY);
@@ -62,48 +70,106 @@
         applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
     }
 
-    /* ================= Авторизация администратора ================= */
+    /* ================= Авторизация администратора (по Email и 6-значному коду из письма) ================= */
     function showLoginGate(errMsg = '') {
         $('#adminLoginScreen').style.display = '';
         $('#adminAppShell').style.display = 'none';
         if ($('#admLoginError')) $('#admLoginError').textContent = errMsg;
-        setTimeout(() => $('#admLoginPass')?.focus(), 50);
+        setTimeout(() => $('#admLoginEmail')?.focus(), 50);
     }
 
-    function showAdminApp(login = 'admin') {
+    function resetAdmStep() {
+        if ($('#admStepEmail')) $('#admStepEmail').style.display = '';
+        if ($('#admStepCode')) $('#admStepCode').style.display = 'none';
+        if ($('#admLoginCode')) $('#admLoginCode').value = '';
+        if ($('#admLoginError')) $('#admLoginError').textContent = '';
+        setTimeout(() => $('#admLoginEmail')?.focus(), 50);
+    }
+
+    function showAdminApp(login = 'BOSS') {
         $('#adminLoginScreen').style.display = 'none';
         $('#adminAppShell').style.display = '';
         if ($('#admUserLabel')) $('#admUserLabel').textContent = `Выйти (${login})`;
     }
 
-    async function submitAdminLogin() {
-        const login = $('#admLoginUser')?.value.trim() || 'admin';
-        const password = $('#admLoginPass')?.value || '';
+    async function sendAdminOtpCode() {
+        const email = $('#admLoginEmail')?.value.trim() || '';
         const errBox = $('#admLoginError');
         if (errBox) errBox.textContent = '';
+        if (!email || !email.includes('@')) {
+            if (errBox) errBox.textContent = 'Введите ваш корректный email адрес.';
+            return;
+        }
+        const btn = $('#btnAdmSendCode');
+        if (btn) btn.disabled = true;
         try {
-            const res = await fetch('/api/admin/login', {
+            const res = await fetch('/api/auth/send-code', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ login, password }),
+                body: JSON.stringify({ email }),
             });
             const data = await res.json().catch(() => ({}));
-            if (!res.ok || !data.token) {
-                throw new Error(data.error || 'Неверный логин или ключ администратора');
+            if (!res.ok) throw new Error(data.error || 'Ошибка отправки кода');
+            if ($('#admStepEmail')) $('#admStepEmail').style.display = 'none';
+            if ($('#admStepCode')) $('#admStepCode').style.display = '';
+            if ($('#admCodeSentNotice')) {
+                $('#admCodeSentNotice').textContent = data.message || `Код отправлен на ${email}. Введите его ниже.`;
             }
-            setStoredToken(data.token);
-            if ($('#admLoginPass')) $('#admLoginPass').value = '';
-            showAdminApp(data.login || login);
+            if ($('#admLoginCode')) {
+                $('#admLoginCode').value = '';
+                setTimeout(() => $('#admLoginCode')?.focus(), 50);
+            }
+        }
+        catch (err) {
+            if (errBox) errBox.textContent = err.message || String(err);
+        }
+        finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    async function verifyAdminOtpCode() {
+        const email = $('#admLoginEmail')?.value.trim() || '';
+        const code = $('#admLoginCode')?.value.trim() || '';
+        const errBox = $('#admLoginError');
+        if (errBox) errBox.textContent = '';
+        if (!code || code.length < 6) {
+            if (errBox) errBox.textContent = 'Введите 6-значный код из письма.';
+            return;
+        }
+        const btn = $('#btnAdmVerifyCode');
+        if (btn) btn.disabled = true;
+        try {
+            const res = await fetch('/api/auth/verify-code', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, code }),
+            });
+            const user = await res.json().catch(() => ({}));
+            if (!res.ok || !user.sessionKey) {
+                throw new Error(user.error || 'Неверный код подтверждения');
+            }
+            if (!user.isAdmin) {
+                throw new Error(`Аккаунт ${user.email} не обладает правами администратора (BOSS) сервера лицензирования.`);
+            }
+            setStoredToken(user.sessionKey);
+            resetAdmStep();
+            showAdminApp(user.email);
             await refreshRegistry();
         }
         catch (err) {
             if (errBox) errBox.textContent = err.message || String(err);
+        }
+        finally {
+            if (btn) btn.disabled = false;
         }
     }
 
     async function logoutAdmin() {
         try { await api('/api/admin/logout', {}); } catch { /* ignore */ }
         setStoredToken('');
+        try { localStorage.removeItem('odant_work_session'); } catch { /* ignore */ }
+        resetAdmStep();
         showLoginGate('');
     }
 
@@ -293,12 +359,16 @@
             }).join('') || '<tr><td colspan="5" class="muted">Обращений пока нет</td></tr>';
         }
 
-        // 5. Клиенты и оферты (ПЭП)
+        // 5. Клиенты, роли BOSS и оферты (ПЭП)
         if ($('#admUsersBody')) {
             $('#admUsersBody').innerHTML = users.map(u => `<tr>
                 <td><b>${esc(u.userId)}</b><div class="small muted">${esc(u.email)}</div></td>
+                <td>
+                    ${u.isAdmin
+                        ? `<span class="tag ok">BOSS · Администратор</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="0">Снять права</button>`
+                        : `<span class="tag">Клиент</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="1">Сделать админом</button>`}
+                </td>
                 <td><b>${esc(u.companyName || '—')}</b><div class="small muted">ИНН ${esc(u.inn || '—')}</div></td>
-                <td><b>${esc(u.name || '—')}</b><div class="small muted">${esc(u.position || '')} ${esc(u.phone || '')}</div></td>
                 <td><code>${esc(u.licenseId || '—')}</code></td>
                 <td>
                     ${u.ofertaAccepted
@@ -308,6 +378,17 @@
                 <td class="small muted">${fmtDateTime(u.ofertaAcceptedAt || u.createdAt)}</td>
             </tr>`).join('') || '<tr><td colspan="6" class="muted">Зарегистрированных клиентов пока нет</td></tr>';
         }
+    }
+
+    async function adminToggleUserRole(userId, makeAdmin) {
+        try {
+            await api('/api/admin/users/role', {
+                userId,
+                isAdmin: Boolean(makeAdmin),
+            });
+            refreshRegistry();
+        }
+        catch (err) { alert(err.message); }
     }
 
     /* ================= Действия администратора ================= */
@@ -518,14 +599,10 @@
     }
 
     function bind() {
-        $('#adminLoginForm')?.addEventListener('submit', (e) => {
-            e.preventDefault();
-            submitAdminLogin();
-        });
         $('#btnTheme')?.addEventListener('click', toggleTheme);
 
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-action],[data-adm-tab],[data-adm-ask],[data-cert],[data-pay-order],[data-cancel-order],[data-activate-res],[data-certify-partner],[data-partner-issue],[data-reply-ticket],[data-close-ticket]');
+            const el = e.target.closest('[data-action],[data-adm-tab],[data-adm-ask],[data-cert],[data-pay-order],[data-cancel-order],[data-activate-res],[data-certify-partner],[data-partner-issue],[data-reply-ticket],[data-close-ticket],[data-toggle-admin]');
             if (!el) return;
             if (el.matches('[data-adm-tab]')) { switchAdminTab(el.dataset.admTab); return; }
             if (el.matches('[data-adm-ask]')) { sendAdminAi(el.dataset.admAsk); return; }
@@ -537,8 +614,12 @@
             if (el.matches('[data-partner-issue]')) { adminPartnerIssueLicense(el.dataset.partnerIssue); return; }
             if (el.matches('[data-reply-ticket]')) { adminReplyTicket(el.dataset.replyTicket); return; }
             if (el.matches('[data-close-ticket]')) { adminCloseTicket(el.dataset.closeTicket); return; }
+            if (el.matches('[data-toggle-admin]')) { adminToggleUserRole(el.dataset.toggleAdmin, el.dataset.makeAdmin === '1'); return; }
 
             switch (el.dataset.action) {
+                case 'adm-send-code': sendAdminOtpCode(); break;
+                case 'adm-verify-code': verifyAdminOtpCode(); break;
+                case 'adm-reset-step': resetAdmStep(); break;
                 case 'registry': refreshRegistry(); break;
                 case 'demo-pak': createDemoPak(); break;
                 case 'admin-logout': logoutAdmin(); break;
@@ -548,6 +629,13 @@
                 case 'cert-close': $('#certModal')?.classList.remove('open'); break;
                 case 'cert-copy': navigator.clipboard?.writeText($('#certJsonBox')?.textContent || ''); break;
                 case 'cert-download': downloadCurrentCert(); break;
+            }
+        });
+
+        $('#adminLoginScreen')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') {
+                if ($('#admStepCode')?.style.display !== 'none') verifyAdminOtpCode();
+                else sendAdminOtpCode();
             }
         });
 

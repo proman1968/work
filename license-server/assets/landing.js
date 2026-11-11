@@ -248,8 +248,13 @@
     function performLogout() {
         currentUser = null;
         pendingAuthAction = null;
-        try { localStorage.removeItem('odant_work_session'); } catch { /* ignore */ }
+        try {
+            localStorage.removeItem('odant_work_session');
+            localStorage.removeItem('odant_work_admin_token');
+            sessionStorage.removeItem('odant_work_admin_token');
+        } catch { /* ignore */ }
         if ($('#tileAddons')) $('#tileAddons').style.display = 'none';
+        if ($('#tileAdmin')) $('#tileAdmin').style.display = 'none';
         if ($('#btnAuthText')) $('#btnAuthText').textContent = 'Войти / Регистрация';
         if ($('#btnLogoutModal')) $('#btnLogoutModal').style.display = 'none';
         closeAuth();
@@ -275,13 +280,21 @@
     function onAuthenticated() {
         if (!currentUser) return;
         if ($('#tileAddons')) $('#tileAddons').style.display = isUserReadyForOrders() ? '' : 'none';
+        if ($('#tileAdmin')) $('#tileAdmin').style.display = currentUser.isAdmin ? '' : 'none';
+        if (currentUser.isAdmin && currentUser.sessionKey) {
+            try {
+                localStorage.setItem('odant_work_admin_token', currentUser.sessionKey);
+                sessionStorage.setItem('odant_work_admin_token', currentUser.sessionKey);
+            } catch { /* ignore */ }
+        }
         if ($('#btnAuthText')) $('#btnAuthText').textContent = currentUser.companyName || currentUser.email;
         if ($('#inpCabinetHubToken')) $('#inpCabinetHubToken').value = currentUser.hubToken || '';
         if ($('#authEmail')) $('#authEmail').value = currentUser.email || '';
         if ($('#authOfertaCheck')) $('#authOfertaCheck').checked = Boolean(currentUser.ofertaAccepted);
         if ($('#userBadgeBox')) {
             const orgInfo = currentUser.companyName ? `${esc(currentUser.companyName)}${currentUser.inn ? ' (ИНН ' + esc(currentUser.inn) + ')' : ''} · ` : '';
-            $('#userBadgeBox').innerHTML = `${orgInfo}Аккаунт: <b>${esc(currentUser.email)}</b> · <a href="#" data-action="logout" style="color:var(--muted)">Выйти</a>`;
+            const bossBadge = currentUser.isAdmin ? `<span class="tag ok" style="margin-right:6px">BOSS · Администратор</span> <a href="/admin" style="font-weight:700;margin-right:8px">Открыть Админ-панель →</a> · ` : '';
+            $('#userBadgeBox').innerHTML = `${bossBadge}${orgInfo}Аккаунт: <b>${esc(currentUser.email)}</b> · <a href="#" data-action="logout" style="color:var(--muted)">Выйти</a>`;
         }
         renderCabinetOrders();
         renderCabinetLicenses();

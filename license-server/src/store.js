@@ -90,19 +90,85 @@ export class LicenseStore {
     }
 
     verifyAdminToken(token = '') {
+        return Boolean(this.getAdminIdentity(token)?.authenticated);
+    }
+
+    getAdminIdentity(token = '') {
         const clean = String(token || '').trim();
         if (!clean)
-            return false;
-        if (clean === this.adminPassword && this.adminPassword.length >= 6)
-            return true;
+            return null;
+        const adminUser = Object.values(this.state.users || {}).find(u => u.sessionKey === clean && u.isAdmin);
+        if (adminUser) {
+            return {
+                authenticated: true,
+                login: adminUser.email,
+                email: adminUser.email,
+                userId: adminUser.userId,
+                role: 'BOSS',
+            };
+        }
+        if (clean === this.adminPassword && this.adminPassword.length >= 6) {
+            return {
+                authenticated: true,
+                login: this.adminLogin,
+                role: 'BOSS',
+            };
+        }
         const sess = this.adminSessions.get(clean);
         if (!sess)
-            return false;
+            return null;
         if (sess.expiresAt < Date.now()) {
             this.adminSessions.delete(clean);
-            return false;
+            return null;
         }
-        return true;
+        return {
+            authenticated: true,
+            login: sess.login || this.adminLogin,
+            role: 'BOSS',
+        };
+    }
+
+    /**
+     * Гарантировать, что первый зарегистрированный на сервере пользователь является главным Администратором (BOSS).
+     */
+    _ensureBootstrapAdmin() {
+        const allUsers = Object.values(this.state.users || {});
+        if (!allUsers.length)
+            return null;
+        const existingAdmin = allUsers.find(u => u.isAdmin);
+        if (existingAdmin) {
+            existingAdmin.role = 'BOSS';
+            return existingAdmin;
+        }
+        const firstUser = [...allUsers].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0];
+        if (firstUser) {
+            firstUser.isAdmin = true;
+            firstUser.role = 'BOSS';
+        }
+        return firstUser || null;
+    }
+
+    /**
+     * Назначить или снять права администратора (BOSS) у пользователя по Email или userId.
+     */
+    setUserAdminRole(emailOrUserId = '', isAdmin = true) {
+        const key = String(emailOrUserId || '').trim();
+        const user = Object.values(this.state.users || {}).find(
+            u => u.userId === key || String(u.email || '').toLowerCase() === key.toLowerCase()
+        );
+        if (!user)
+            throw new Error('Пользователь не найден');
+        const nextAdmin = Boolean(isAdmin);
+        if (!nextAdmin && user.isAdmin) {
+            const otherAdmins = Object.values(this.state.users || {}).filter(u => u.isAdmin && u.userId !== user.userId);
+            if (!otherAdmins.length) {
+                throw new Error('Нельзя снять права BOSS у единственного администратора сервера');
+            }
+        }
+        user.isAdmin = nextAdmin;
+        user.role = nextAdmin ? 'BOSS' : 'USER';
+        this._save();
+        return this._formatUserResponse(user);
     }
 
     _load() {
@@ -119,6 +185,7 @@ export class LicenseStore {
                 this.state.reservations = raw.reservations || {};
                 this.state.certificates = raw.certificates || {};
                 this.state.users = raw.users || {};
+                this._ensureBootstrapAdmin();
             }
         }
         catch { /* начинаем с чистого состояния */ }
@@ -956,6 +1023,8 @@ export class LicenseStore {
         return {
             userId: user.userId,
             email: user.email,
+            isAdmin: Boolean(user.isAdmin),
+            role: user.isAdmin ? 'BOSS' : 'USER',
             authProvider: user.authProvider || 'email',
             name: user.name,
             position: user.position || '',
@@ -1082,6 +1151,12 @@ export class LicenseStore {
                 user.hubTokenSecret = tokData.payload.secret;
                 user.hubUrl = tokData.payload.hubUrl;
             }
+        }
+
+        const isFirstAdmin = !Object.values(this.state.users || {}).some(u => u.isAdmin);
+        if (isFirstAdmin) {
+            user.isAdmin = true;
+            user.role = 'BOSS';
         }
 
         if (ofertaAccepted !== false && !user.ofertaAccepted) {

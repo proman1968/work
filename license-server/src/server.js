@@ -753,9 +753,19 @@ export function createLicenseServerApp(options = {}) {
 
             if (req.method === 'GET' && pathname === '/api/admin/me') {
                 const tok = extractBearerToken(req, null, url);
-                if (!store.verifyAdminToken(tok))
+                const identity = store.getAdminIdentity(tok);
+                if (!identity?.authenticated)
                     return sendJson(res, 401, { authenticated: false });
-                return sendJson(res, 200, { authenticated: true, login: store.adminLogin });
+                return sendJson(res, 200, identity);
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/users/role') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (BOSS)' });
+                const updated = store.setUserAdminRole(body.userId || body.email, body.isAdmin !== false);
+                return sendJson(res, 200, { ok: true, user: updated });
             }
 
             if (req.method === 'GET' && pathname === '/api/admin/overview') {

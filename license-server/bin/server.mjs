@@ -14,4 +14,4 @@ const server = await app.listen(port);
 const addr = server.address();
 const actualPort = typeof addr === 'object' && addr ? addr.port : port;
 console.log(`[work.odant.org] Витрина ODANT-WORK: http://localhost:${actualPort}/`);
-console.log(`[work.odant.org] Панель администратора (отдельная страница): http://localhost:${actualPort}/admin (логин: ${app.store.adminLogin})`);
+console.log(`[work.odant.org] Панель администратора (BOSS): http://localhost:${actualPort}/admin (первый вошедший по Email становится BOSS)`);

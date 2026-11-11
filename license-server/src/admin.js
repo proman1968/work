@@ -53,31 +53,44 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
     <div class="bg-grid" aria-hidden="true"></div>
     <div class="bg-vignette" aria-hidden="true"></div>
 
-    <!-- Экран защищённого входа администратора -->
+    <!-- Экран защищённого входа администратора (по Email и одноразовому коду из письма) -->
     <div class="admin-auth-gate" id="adminLoginScreen">
         <div class="card card-glow admin-login-card">
             <div class="modal-head" style="margin-bottom:18px">
                 <img src="/assets/odant-logo.png" alt="ODANT">
                 <div>
-                    <span class="kicker">Защищённый контур</span>
+                    <span class="kicker">Защищённый контур BOSS</span>
                     <h1 class="h3" style="margin:4px 0 2px;font-size:21px">Админ-панель ODANT-WORK</h1>
-                    <div class="small muted">Центр сертификации Ed25519 и биллинга ЮKassa</div>
+                    <div class="small muted">Вход по вашему Email администратора с 6-значным кодом из письма</div>
                 </div>
             </div>
-            <form id="adminLoginForm" onsubmit="return false;">
+            <div id="admStepEmail">
                 <div class="field">
-                    <label for="admLoginUser">Логин администратора</label>
-                    <input type="text" id="admLoginUser" value="admin" autocomplete="username" required>
+                    <label for="admLoginEmail">Email администратора (BOSS)</label>
+                    <input type="email" id="admLoginEmail" value="" placeholder="Введите ваш email…" autocomplete="email" required>
                 </div>
-                <div class="field">
-                    <label for="admLoginPass">Пароль / Ключ администратора (WORK_ADMIN_PASSWORD)</label>
-                    <input type="password" id="admLoginPass" placeholder="Введите ключ администратора…" autocomplete="current-password" required>
-                </div>
-                <div class="status" id="admLoginError" style="color:var(--danger);margin:6px 0 12px;min-height:18px"></div>
-                <button type="submit" class="btn btn-primary btn-lg" style="width:100%" id="btnAdminLoginSubmit">
-                    ${icon('lock')} Войти в панель администратора
+                <button type="button" class="btn btn-primary btn-lg" style="width:100%" id="btnAdmSendCode" data-action="adm-send-code">
+                    Получить 6-значный код на Email
                 </button>
-            </form>
+            </div>
+            <div id="admStepCode" style="display:none">
+                <div class="small" id="admCodeSentNotice" style="padding:10px 12px;border-radius:10px;background:rgba(16,185,129,.12);color:var(--ok);margin-bottom:10px"></div>
+                <div class="field">
+                    <label for="admLoginCode">Одноразовый код из письма (6 цифр)</label>
+                    <input type="text" id="admLoginCode" value="" placeholder="000000" maxlength="6" inputmode="numeric" autocomplete="one-time-code" style="font-size:20px;letter-spacing:6px;text-align:center;font-family:monospace">
+                </div>
+                <button type="button" class="btn btn-primary btn-lg" style="width:100%" id="btnAdmVerifyCode" data-action="adm-verify-code">
+                    ${icon('lock')} Подтвердить код и войти в админ-панель
+                </button>
+                <div style="display:flex;justify-content:space-between;margin-top:8px">
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="adm-reset-step">← Изменить Email</button>
+                    <button type="button" class="btn btn-ghost btn-sm" data-action="adm-send-code">Отправить код повторно</button>
+                </div>
+            </div>
+            <div class="status" id="admLoginError" style="color:var(--danger);margin:8px 0 6px;min-height:18px"></div>
+            <div style="margin-top:8px;text-align:center">
+                <a href="/" class="small muted">← Вернуться на главную страницу work.odant.org</a>
+            </div>
             <div class="small muted" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
                 Ключ ЦС Ed25519: <code>${esc(publicKey.slice(0, 26))}…</code>
             </div>
@@ -87,15 +100,16 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
     <!-- Основная консоль администратора (скрыта до успешной авторизации) -->
     <div class="shell" id="adminAppShell" style="display:none">
         <header class="topbar" style="grid-template-columns: auto 1fr auto">
-            <div class="brand" style="cursor:default">
+            <a href="/" class="brand" style="text-decoration:none">
                 <img src="/assets/odant-logo.png" alt="ODANT">
                 <span>
-                    <span class="brand-name">ODANT<b>·</b>WORK <span class="tag" style="margin-left:6px;vertical-align:middle">ADMIN</span></span><br>
+                    <span class="brand-name">ODANT<b>·</b>WORK <span class="tag ok" style="margin-left:6px;vertical-align:middle">BOSS · ADMIN</span></span><br>
                     <span class="brand-sub">центр сертификации Ed25519 · биллинг ЮKassa · франшизы · SLA</span>
                 </span>
-            </div>
+            </a>
             <div></div>
             <div class="top-actions">
+                <a href="/#addons" class="btn btn-ghost btn-sm" style="text-decoration:none">← Личный кабинет</a>
                 <button class="icon-btn" id="btnTheme" title="Светлая / тёмная тема" aria-label="Переключить тему">${icon('sun')}</button>
                 <button class="btn btn-ghost btn-sm" data-action="registry">${icon('server')}<span>Обновить реестр</span></button>
                 <button class="btn btn-ok btn-sm" data-action="demo-pak">+ Демо-лицензия ПАК</button>
@@ -267,18 +281,18 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                         </div>
                     </div>
 
-                    <!-- 5. КЛИЕНТЫ И ОФЕРТЫ ПЭП -->
+                    <!-- 5. КЛИЕНТЫ И РОЛИ BOSS -->
                     <div class="card" data-adm-sec="users">
-                        <h3 class="h3" style="margin:0 0 12px">Зарегистрированные клиенты и подписанные договоры-оферты (ПЭП)</h3>
+                        <h3 class="h3" style="margin:0 0 12px">Зарегистрированные клиенты, администраторы (BOSS) и договоры-оферты</h3>
                         <div class="table-wrap">
                             <table class="t">
                                 <thead><tr>
                                     <th>ID / Email</th>
+                                    <th>Роль на сервере</th>
                                     <th>Организация / ИНН</th>
-                                    <th>Представитель</th>
                                     <th>Лицензия комплекса</th>
                                     <th>Статус оферты (ПЭП)</th>
-                                    <th>Дата акцепта</th>
+                                    <th>Дата регистрации</th>
                                 </tr></thead>
                                 <tbody id="admUsersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
                             </table>

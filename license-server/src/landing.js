@@ -184,6 +184,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <button class="tab" data-stage="clients">Клиентам</button>
                 <button class="tab" data-stage="franchise">Франшиза</button>
                 <button class="tab" id="tileAddons" data-stage="addons" style="display:none;">Личный кабинет</button>
+                <a class="tab" id="tileAdmin" href="/admin" style="display:none;text-decoration:none;">Админ-панель</a>
             </nav>
 
             <div class="top-actions">
