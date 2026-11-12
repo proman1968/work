@@ -236,7 +236,7 @@
             if ($('#authLoggedEmail')) $('#authLoggedEmail').textContent = currentUser.email || '';
             if ($('#authLoggedRoleBadge')) {
                 $('#authLoggedRoleBadge').innerHTML = currentUser.isAdmin
-                    ? '<span class="tag ok">BOSS · Главный администратор</span>'
+                    ? '<span class="tag ok">Администратор портала</span>'
                     : '<span class="tag">Клиент ODANT-WORK</span>';
             }
             if ($('#btnGoAdminModal')) $('#btnGoAdminModal').style.display = currentUser.isAdmin ? '' : 'none';
@@ -420,8 +420,8 @@
         if ($('#authOfertaCheck')) $('#authOfertaCheck').checked = Boolean(currentUser.ofertaAccepted);
         if ($('#userBadgeBox')) {
             const orgInfo = currentUser.companyName ? `${esc(currentUser.companyName)}${currentUser.inn ? ' (ИНН ' + esc(currentUser.inn) + ')' : ''} · ` : '';
-            const bossBadge = currentUser.isAdmin ? `<span class="tag ok" style="margin-right:6px">BOSS · Администратор</span> <a href="/admin" style="font-weight:700;margin-right:8px">Открыть Админ-панель →</a> · ` : '';
-            $('#userBadgeBox').innerHTML = `${bossBadge}${orgInfo}Аккаунт: <b>${esc(currentUser.email)}</b> · <a href="#" data-action="logout" style="color:var(--muted)">Выйти</a>`;
+            const adminBadge = currentUser.isAdmin ? `<span class="tag ok" style="margin-right:6px">Администратор</span> <a href="/admin" style="font-weight:700;margin-right:8px">Открыть Админ-панель →</a> · ` : '';
+            $('#userBadgeBox').innerHTML = `${adminBadge}${orgInfo}Аккаунт: <b>${esc(currentUser.email)}</b> · <a href="#" data-action="logout" style="color:var(--muted)">Выйти</a>`;
         }
         syncClientServerPicker();
         renderCabinetServers();
@@ -506,7 +506,7 @@
 
             const baseBadge = s.baseActivated
                 ? `<span class="tag ok">✓ Базовая: ${s.baseSeats || 10} вечн. мест + ИИ</span>`
-                : `<span class="tag">Базовая не активна (1 сессия BOSS)</span>`;
+                : `<span class="tag">Базовая не активирована (1 сессия)</span>`;
 
             const files = s.licenseFiles || [];
             const activeAddons = s.activeAddons || [];

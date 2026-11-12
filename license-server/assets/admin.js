@@ -125,7 +125,7 @@
         ind.style.width = active.offsetWidth + 'px';
     }
 
-    function showAdminApp(login = 'BOSS') {
+    function showAdminApp(login = 'Администратор') {
         $('#adminLoginScreen').style.display = 'none';
         $('#adminAppShell').style.display = '';
         if ($('#admUserLabel')) $('#admUserLabel').textContent = login;
@@ -191,7 +191,7 @@
                 throw new Error(user.error || 'Неверный код подтверждения');
             }
             if (!user.isAdmin) {
-                throw new Error(`Аккаунт ${user.email} не обладает правами администратора (BOSS) сервера лицензирования.`);
+                throw new Error(`Аккаунт ${user.email} не обладает правами администратора сервера лицензирования.`);
             }
             setStoredToken(user.sessionKey, user.email, user);
             resetAdmStep();
@@ -309,7 +309,7 @@
         if ($('#navAdmServers')) $('#navAdmServers').textContent = `Серверы и лицензии (${licenses.length})`;
         if ($('#navAdmFranchises')) $('#navAdmFranchises').textContent = `Франшизы (${activeFranchises.length})`;
         if ($('#navAdmOrders')) $('#navAdmOrders').textContent = `Заказы и счета (${orders.length})`;
-        if ($('#navAdmUsers')) $('#navAdmUsers').textContent = `Клиенты и роли (${users.length})`;
+        if ($('#navAdmUsers')) $('#navAdmUsers').textContent = `Клиенты и администраторы (${users.length})`;
         if ($('#navAdmTickets')) $('#navAdmTickets').textContent = `Тикеты поддержки (${openTickets.length})`;
 
         renderServersTable(licenses);
@@ -351,7 +351,7 @@
             const baseHtml = l.baseActivated
                 ? `<span class="tag ok">✓ Активна (${l.baseSeats || 10} вечн. + ИИ)</span>
                    <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px;color:var(--danger)" data-adm-base="${esc(lid)}" data-activate="0">Отозвать базовую</button></div>`
-                : `<span class="tag">Не активирована (1 сессия BOSS)</span>
+                : `<span class="tag">Не активирована (1 сессия)</span>
                    <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-base="${esc(lid)}" data-activate="1">Активировать базовую</button></div>`;
 
             const hwidHtml = hwidBound
@@ -543,7 +543,7 @@
         }).join('') || '<tr><td colspan="6" class="muted">Заказов по заданному фильтру не найдено</td></tr>';
     }
 
-    /* 4. Таблица клиентов и ролей BOSS */
+    /* 4. Таблица клиентов и администраторов */
     function renderUsersTable(users = []) {
         const tbody = $('#admUsersBody');
         if (!tbody) return;
@@ -562,8 +562,8 @@
                 <td><b>${esc(u.email)}</b><div class="small muted"><code>${esc(u.userId)}</code></div></td>
                 <td>
                     ${u.isAdmin
-                        ? `<span class="tag ok">BOSS · Администратор</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="0">Снять права</button>`
-                        : `<span class="tag">Клиент</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="1">Назначить BOSS</button>`}
+                        ? `<span class="tag ok">Администратор</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="0">Снять права</button>`
+                        : `<span class="tag">Клиент</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="1">Сделать администратором</button>`}
                 </td>
                 <td><b>${esc(u.companyName || '—')}</b><div class="small muted">ИНН ${esc(u.inn || '—')}</div></td>
                 <td>Серверов: <b>${srvCount}</b> · Франшиз: <b>${frCount}</b></td>

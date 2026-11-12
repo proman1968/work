@@ -499,12 +499,13 @@ export function getHardwareIdentity() {
  * Если ни одного файла лицензии в #system ещё нет — возвращает состояние неактивированной системы
  * (baseActivated: false, 1 сессия для BOSS, агентская система отключена).
  */
-export function loadLocalLicense(customPath = LICENSE_FILE, { systemDir, trustedPublicKey = '' } = {}) {
-    const resolvedSystemDir = systemDir || (customPath !== LICENSE_FILE ? path.dirname(customPath) : SYSTEM_DIR);
+export function loadLocalLicense(customPath, { systemDir, trustedPublicKey = '' } = {}) {
+    const resolvedSystemDir = systemDir || (customPath && customPath !== LICENSE_FILE ? path.dirname(customPath) : SYSTEM_DIR);
+    const resolvedCustomPath = customPath || path.join(resolvedSystemDir, 'license.json');
     let certFromJson = null;
     try {
-        if (fs.existsSync(customPath)) {
-            const parsed = JSON.parse(fs.readFileSync(customPath, 'utf8'));
+        if (fs.existsSync(resolvedCustomPath)) {
+            const parsed = JSON.parse(fs.readFileSync(resolvedCustomPath, 'utf8'));
             if (parsed && typeof parsed === 'object') {
                 const sigOk = parsed.signature
                     ? (verifyLicenseCertificate(parsed, trustedPublicKey) || verifyLicenseFile(parsed, trustedPublicKey))

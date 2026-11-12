@@ -149,14 +149,14 @@ export class LicenseStore {
                 login: userFromTok.email,
                 email: userFromTok.email,
                 userId: userFromTok.userId,
-                role: 'BOSS',
+                role: 'ADMIN',
             };
         }
         if (clean === this.adminPassword && this.adminPassword.length >= 6) {
             return {
                 authenticated: true,
                 login: this.adminLogin,
-                role: 'BOSS',
+                role: 'ADMIN',
             };
         }
         const sess = this.adminSessions.get(clean);
@@ -169,12 +169,12 @@ export class LicenseStore {
         return {
             authenticated: true,
             login: sess.login || this.adminLogin,
-            role: 'BOSS',
+            role: 'ADMIN',
         };
     }
 
     /**
-     * Гарантировать, что первый зарегистрированный на сервере пользователь является главным Администратором (BOSS).
+     * Гарантировать, что первый зарегистрированный на сервере пользователь является администратором портала.
      */
     _ensureBootstrapAdmin() {
         const allUsers = Object.values(this.state.users || {});
@@ -182,19 +182,19 @@ export class LicenseStore {
             return null;
         const existingAdmin = allUsers.find(u => u.isAdmin);
         if (existingAdmin) {
-            existingAdmin.role = 'BOSS';
+            existingAdmin.role = 'ADMIN';
             return existingAdmin;
         }
         const firstUser = [...allUsers].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0))[0];
         if (firstUser) {
             firstUser.isAdmin = true;
-            firstUser.role = 'BOSS';
+            firstUser.role = 'ADMIN';
         }
         return firstUser || null;
     }
 
     /**
-     * Назначить или снять права администратора (BOSS) у пользователя по Email или userId.
+     * Назначить или снять права администратора у пользователя по Email или userId.
      */
     setUserAdminRole(emailOrUserId = '', isAdmin = true) {
         const key = String(emailOrUserId || '').trim();
@@ -207,11 +207,11 @@ export class LicenseStore {
         if (!nextAdmin && user.isAdmin) {
             const otherAdmins = Object.values(this.state.users || {}).filter(u => u.isAdmin && u.userId !== user.userId);
             if (!otherAdmins.length) {
-                throw new Error('Нельзя снять права BOSS у единственного администратора сервера');
+                throw new Error('Нельзя снять права у единственного администратора сервера');
             }
         }
         user.isAdmin = nextAdmin;
-        user.role = nextAdmin ? 'BOSS' : 'USER';
+        user.role = nextAdmin ? 'ADMIN' : 'CLIENT';
         this._save();
         return this._formatUserResponse(user);
     }
@@ -1229,7 +1229,7 @@ export class LicenseStore {
             if (user) {
                 if (verifiedPayload.isAdmin) {
                     user.isAdmin = true;
-                    user.role = 'BOSS';
+                    user.role = 'ADMIN';
                 }
                 user.sessionKey = key;
                 try { this._save(); } catch { /* ignore */ }
@@ -1456,7 +1456,7 @@ export class LicenseStore {
             userId: user.userId,
             email: user.email,
             isAdmin: Boolean(user.isAdmin),
-            role: user.isAdmin ? 'BOSS' : 'USER',
+            role: user.isAdmin ? 'ADMIN' : 'CLIENT',
             authProvider: user.authProvider || 'email',
             name: user.name,
             position: user.position || '',
@@ -1590,7 +1590,7 @@ export class LicenseStore {
         const isFirstAdmin = !Object.values(this.state.users || {}).some(u => u.isAdmin);
         if (isFirstAdmin) {
             user.isAdmin = true;
-            user.role = 'BOSS';
+            user.role = 'ADMIN';
         }
 
         // Выпускаем криптографически подписанный бессрочный токен сессии (wks_1...), устойчивый к перезапускам сервера

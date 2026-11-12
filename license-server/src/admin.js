@@ -58,14 +58,14 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
             <div class="modal-head" style="margin-bottom:18px">
                 <img src="/assets/odant-logo.png" alt="ODANT">
                 <div>
-                    <span class="kicker">Защищённый контур BOSS</span>
+                    <span class="kicker">Защищённый контур</span>
                     <h1 class="h3" style="margin:4px 0 2px;font-size:21px">Админ-панель ODANT-WORK</h1>
                     <div class="small muted">Вход по вашему Email администратора с 6-значным кодом из письма</div>
                 </div>
             </div>
             <div id="admStepEmail">
                 <div class="field">
-                    <label for="admLoginEmail">Email администратора (BOSS)</label>
+                    <label for="admLoginEmail">Email администратора</label>
                     <input type="email" id="admLoginEmail" value="" placeholder="Введите ваш email…" autocomplete="email" required>
                 </div>
                 <button type="button" class="btn btn-primary btn-lg" style="width:100%" id="btnAdmSendCode" data-action="adm-send-code">
@@ -115,7 +115,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
 
             <div class="top-actions">
                 <button class="icon-btn" id="btnTheme" title="Светлая / тёмная тема" aria-label="Переключить тему">${icon('sun')}</button>
-                <button class="btn btn-primary btn-sm" data-action="open-adm-profile" title="Аккаунт администратора">${icon('user')}<span id="admUserLabel">BOSS</span></button>
+                <button class="btn btn-primary btn-sm" data-action="open-adm-profile" title="Аккаунт администратора">${icon('user')}<span id="admUserLabel">Администратор</span></button>
             </div>
         </header>
 
@@ -127,7 +127,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                     <button type="button" class="sec-nav-item" data-adm-tab="franchises" id="navAdmFranchises">Франшизы (0)</button>
                     <div class="sec-nav-sep"></div>
                     <button type="button" class="sec-nav-item" data-adm-tab="orders" id="navAdmOrders">Заказы и счета (0)</button>
-                    <button type="button" class="sec-nav-item" data-adm-tab="users" id="navAdmUsers">Клиенты и роли (0)</button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="users" id="navAdmUsers">Клиенты и администраторы (0)</button>
                     <button type="button" class="sec-nav-item" data-adm-tab="tickets" id="navAdmTickets">Тикеты поддержки (0)</button>
                 </aside>
 
@@ -223,10 +223,10 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                         </div>
                     </div>
 
-                    <!-- 4. КЛИЕНТЫ И РОЛИ BOSS -->
+                    <!-- 4. КЛИЕНТЫ И АДМИНИСТРАТОРЫ -->
                     <div data-adm-sec="users" style="display:none">
                         <div class="sec-bar" style="margin-bottom:12px">
-                            <h2 class="sec-title">Зарегистрированные клиенты и права администраторов (BOSS)</h2>
+                            <h2 class="sec-title">Зарегистрированные клиенты и администраторы</h2>
                             <div class="sec-controls">
                                 <input type="search" id="inpFilterUsers" placeholder="Поиск по Email, организации, ИНН…">
                             </div>
@@ -416,7 +416,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
             <div style="padding:14px 16px;border-radius:12px;border:1px solid var(--line-strong);background:var(--field);margin-bottom:14px">
                 <div class="small muted">Вы вошли как</div>
                 <div style="font-size:16px;font-weight:700;margin-top:2px" id="admProfileEmail">—</div>
-                <div style="margin-top:6px"><span class="tag ok">BOSS · Главный администратор</span></div>
+                <div style="margin-top:6px"><span class="tag ok">Администратор портала</span></div>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px">
                 <a class="btn btn-primary" href="/#addons" style="width:100%;text-decoration:none">Перейти в Личный кабинет</a>

@@ -940,7 +940,7 @@ export function createLicenseServerApp(options = {}) {
                 const body = await readJsonBody(req);
                 const tok = extractBearerToken(req, body, url);
                 if (!store.verifyAdminToken(tok))
-                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (BOSS)' });
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
                 const updated = store.setUserAdminRole(body.userId || body.email, body.isAdmin !== false);
                 return sendJson(res, 200, { ok: true, user: updated });
             }
