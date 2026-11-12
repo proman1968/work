@@ -397,12 +397,92 @@
 
     let franchiseCountdownTimer = null;
     let activeCabinetTab = 'servers';
+    const openServerAddonBuilders = new Map();
+    const openInvoiceOrderIds = new Set();
+
+    function cleanCompanyName(val = '') {
+        const s = String(val || '').trim();
+        if (!s || s.includes('@') || s === 'Организация WORK' || s === 'Клиент ODANT-WORK') return '';
+        return s;
+    }
 
     function switchCabinetTab(tab = 'servers') {
-        activeCabinetTab = tab === 'franchises' ? 'franchises' : 'servers';
+        activeCabinetTab = (tab === 'franchises' || tab === 'requisites') ? tab : 'servers';
         $$('[data-cab-tab]').forEach(b => b.classList.toggle('active', b.dataset.cabTab === activeCabinetTab));
         if ($('#cabSecServers')) $('#cabSecServers').style.display = activeCabinetTab === 'servers' ? '' : 'none';
         if ($('#cabSecFranchises')) $('#cabSecFranchises').style.display = activeCabinetTab === 'franchises' ? '' : 'none';
+        if ($('#cabSecRequisites')) $('#cabSecRequisites').style.display = activeCabinetTab === 'requisites' ? '' : 'none';
+        if (activeCabinetTab === 'requisites') renderCabinetRequisites();
+    }
+
+    function renderCabinetRequisites() {
+        const u = currentUser || {};
+        const comp = cleanCompanyName(u.companyName);
+        const hasReq = Boolean(comp && u.inn);
+        if ($('#navCabRequisites')) {
+            $('#navCabRequisites').textContent = hasReq ? `Реквизиты организации (✓)` : `Реквизиты организации`;
+        }
+        if ($('#reqCompanyName')) $('#reqCompanyName').value = comp;
+        if ($('#reqInn')) $('#reqInn').value = u.inn || '';
+        if ($('#reqKpp')) $('#reqKpp').value = u.kpp || '';
+        if ($('#reqLegalAddress')) $('#reqLegalAddress').value = u.legalAddress || '';
+        if ($('#reqSignerPosition')) $('#reqSignerPosition').value = u.signerPosition || u.position || '';
+        if ($('#reqSignerName')) $('#reqSignerName').value = u.signerName || '';
+        if ($('#reqBankName')) $('#reqBankName').value = u.bankName || '';
+        if ($('#reqBik')) $('#reqBik').value = u.bik || '';
+        if ($('#reqPhone')) $('#reqPhone').value = u.phone || '';
+        if ($('#reqBankAccount')) $('#reqBankAccount').value = u.bankAccount || '';
+        if ($('#reqCorrAccount')) $('#reqCorrAccount').value = u.corrAccount || '';
+    }
+
+    async function saveCabinetRequisites() {
+        if (!currentUser?.sessionKey) return;
+        const st = $('#reqSaveStatus');
+        const companyName = $('#reqCompanyName')?.value.trim() || '';
+        const inn = $('#reqInn')?.value.trim() || '';
+        if (!companyName || !inn) {
+            if (st) {
+                st.style.color = 'var(--danger)';
+                st.textContent = 'Укажите как минимум Наименование организации и ИНН.';
+            }
+            (!companyName ? $('#reqCompanyName') : $('#reqInn'))?.focus();
+            return;
+        }
+        if (st) {
+            st.style.color = 'var(--muted)';
+            st.textContent = 'Сохранение реквизитов…';
+        }
+        try {
+            const res = await api('/api/cabinet/profile', {
+                sessionKey: currentUser.sessionKey,
+                companyName,
+                inn,
+                kpp: $('#reqKpp')?.value.trim() || '',
+                legalAddress: $('#reqLegalAddress')?.value.trim() || '',
+                signerPosition: $('#reqSignerPosition')?.value.trim() || '',
+                signerName: $('#reqSignerName')?.value.trim() || '',
+                bankName: $('#reqBankName')?.value.trim() || '',
+                bik: $('#reqBik')?.value.trim() || '',
+                phone: $('#reqPhone')?.value.trim() || '',
+                bankAccount: $('#reqBankAccount')?.value.trim() || '',
+                corrAccount: $('#reqCorrAccount')?.value.trim() || '',
+            });
+            if (res.user) {
+                currentUser = { ...res.user, sessionKey: res.user.sessionKey || currentUser.sessionKey };
+                persistSessionInBrowser(currentUser.sessionKey, currentUser.email, currentUser.isAdmin, currentUser);
+                onAuthenticated();
+            }
+            if (st) {
+                st.style.color = 'var(--ok)';
+                st.textContent = '✓ Реквизиты организации сохранены в Личном кабинете и применены к вашим счетам.';
+            }
+        }
+        catch (err) {
+            if (st) {
+                st.style.color = 'var(--danger)';
+                st.textContent = err.message;
+            }
+        }
     }
 
     function onAuthenticated() {
@@ -415,17 +495,19 @@
                 sessionStorage.setItem('odant_work_admin_token', currentUser.sessionKey);
             } catch { /* ignore */ }
         }
-        if ($('#btnAuthText')) $('#btnAuthText').textContent = currentUser.companyName || currentUser.email;
+        const comp = cleanCompanyName(currentUser.companyName);
+        if ($('#btnAuthText')) $('#btnAuthText').textContent = comp || currentUser.email;
         if ($('#authEmail')) $('#authEmail').value = currentUser.email || '';
         if ($('#authOfertaCheck')) $('#authOfertaCheck').checked = Boolean(currentUser.ofertaAccepted);
         if ($('#userBadgeBox')) {
-            const orgInfo = currentUser.companyName ? `${esc(currentUser.companyName)}${currentUser.inn ? ' (ИНН ' + esc(currentUser.inn) + ')' : ''} · ` : '';
+            const orgInfo = comp ? `${esc(comp)}${currentUser.inn ? ' (ИНН ' + esc(currentUser.inn) + ')' : ''} · ` : '';
             const adminBadge = currentUser.isAdmin ? `<span class="tag ok" style="margin-right:6px">Администратор</span> <a href="/admin" style="font-weight:700;margin-right:8px">Открыть Админ-панель →</a> · ` : '';
             $('#userBadgeBox').innerHTML = `${adminBadge}${orgInfo}Аккаунт: <b>${esc(currentUser.email)}</b> · <a href="#" data-action="logout" style="color:var(--muted)">Выйти</a>`;
         }
         syncClientServerPicker();
         renderCabinetServers();
         renderCabinetFranchises();
+        renderCabinetRequisites();
         moveIndicator();
     }
 
@@ -482,6 +564,116 @@
         }
     }
 
+    function formatOrderSummaryHtml(o = {}) {
+        const parts = [];
+        if (o.includeBasePak) {
+            parts.push(`<b>Комплекс ODANT-WORK с сервером</b> (10 вечных мест + ИИ)`);
+        }
+        else if (o.includeBaseLicenseOnly) {
+            parts.push(`<b>Базовая лицензия ODANT-WORK</b> (10 вечных мест + ИИ)`);
+        }
+        const seats = Number(o.addonSeats || 0);
+        if (seats > 0) {
+            const years = Number(o.years || 1);
+            const tierObj = tierById(o.tier || 'business');
+            const tierName = o.tierName || tierObj?.name || 'Business';
+            const disc = volumeDiscount(seats).discountPercent;
+            const gross = seats * (tierObj?.pricePerUserYearRub || 15_000) * years;
+            const net = (!o.includeBasePak && !o.includeBaseLicenseOnly && o.amountRub)
+                ? Number(o.amountRub)
+                : Math.round(gross * (1 - disc / 100));
+            const perSeat = Math.round(net / seats);
+            const discStr = disc > 0 ? `, скидка −${disc}%` : '';
+            parts.push(`Дополнительные рабочие места: <b>${seats} мест</b> × <b>${years} г.</b> · тариф <b>${esc(tierName)}</b> (${rub(perSeat)}/место${discStr})`);
+        }
+        if (!parts.length && Array.isArray(o.items) && o.items.length) {
+            for (const it of o.items) {
+                const q = Number(it.quantity || 1);
+                const hasQtyInTitle = /\b\d+\s*(раб\.?\s*мест|мест|шт)/i.test(String(it.title || ''));
+                parts.push(`${(!hasQtyInTitle && q > 1) ? `<b>${q} мест</b> · ` : ''}${esc(it.title)}`);
+            }
+        }
+        return parts.join(' + ') || esc(o.tierName || o.orderId);
+    }
+
+    function calcInlineAddonQuote(cfg = {}) {
+        const seats = Math.max(1, Math.min(2000, Math.floor(Number(cfg.seats) || 10)));
+        const years = Math.max(1, Math.min(5, Math.floor(Number(cfg.years) || 1)));
+        const tier = tierById(cfg.tier || 'business');
+        const disc = volumeDiscount(seats).discountPercent;
+        const gross = seats * tier.pricePerUserYearRub * years;
+        const saved = Math.round(gross * disc / 100);
+        const net = gross - saved;
+        const perSeat = Math.round(net / seats);
+        return { seats, years, tier, disc, gross, saved, net, perSeat };
+    }
+
+    function renderServerAddonBuilderHtml(lid, srvName) {
+        const cfg = openServerAddonBuilders.get(lid);
+        if (!cfg) return '';
+        const q = calcInlineAddonQuote(cfg);
+        const presets = [5, 10, 25, 50, 100];
+        const tiers = D.tiers || [
+            { id: 'start', name: 'Start', pricePerUserYearRub: 10_000 },
+            { id: 'business', name: 'Business', pricePerUserYearRub: 15_000 },
+            { id: 'enterprise', name: 'Enterprise', pricePerUserYearRub: 20_000 },
+        ];
+        const yearOpts = [1, 2, 3, 5];
+
+        return `<div style="margin-top:12px;padding:14px 16px;border-radius:10px;border:1px solid var(--brand);background:color-mix(in srgb, var(--brand) 6%, var(--panel-solid))">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+                <div style="font-weight:700;font-size:14px">Докупка дополнительных рабочих мест для «${esc(srvName)}»</div>
+                <button type="button" class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-close-addon-builder="${esc(lid)}">✕ Закрыть</button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end">
+                <div>
+                    <div class="small muted" style="margin-bottom:6px">1. Количество дополнительных мест:</div>
+                    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                        <input type="number" min="1" max="2000" value="${q.seats}" data-addon-seats-input="${esc(lid)}" style="width:90px;padding:6px 10px;font-weight:700;font-size:14px">
+                        ${presets.map(p => {
+                            const d = volumeDiscount(p).discountPercent;
+                            const active = q.seats === p;
+                            return `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-ghost'} btn-sm" style="padding:5px 9px;font-size:12px" data-addon-preset="${esc(lid)}" data-seats="${p}">${p}${d ? ` (−${d}%)` : ''}</button>`;
+                        }).join('')}
+                    </div>
+                </div>
+
+                <div>
+                    <div class="small muted" style="margin-bottom:6px">2. Уровень поддержки (SLA):</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        ${tiers.map(t => {
+                            const active = q.tier.id === t.id;
+                            return `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-ghost'} btn-sm" style="padding:5px 10px;font-size:12px" data-addon-tier="${esc(lid)}" data-tier="${esc(t.id)}">${esc(t.name)} · ${rub(t.pricePerUserYearRub)}/г.</button>`;
+                        }).join('')}
+                    </div>
+                </div>
+
+                <div>
+                    <div class="small muted" style="margin-bottom:6px">3. Срок действия лицензий:</div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        ${yearOpts.map(y => {
+                            const active = q.years === y;
+                            const lbl = y === 1 ? '1 год' : (y < 5 ? `${y} года` : '5 лет');
+                            return `<button type="button" class="btn ${active ? 'btn-primary' : 'btn-ghost'} btn-sm" style="padding:5px 10px;font-size:12px" data-addon-years="${esc(lid)}" data-years="${y}">${lbl}</button>`;
+                        }).join('')}
+                    </div>
+                </div>
+            </div>
+
+            <div id="addonQuoteSummary-${esc(lid)}" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--field);border:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                <div class="small">
+                    Выбрано: <b>${q.seats} раб. мест</b> × <b>${q.years} г.</b> · Тариф <b>${esc(q.tier.name)}</b> · Цена за место: <b>${rub(q.perSeat)}</b>${q.disc > 0 ? ` <span class="tag ok" style="margin-left:4px">скидка −${q.disc}% (−${rub(q.saved)})</span>` : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span style="font-size:15px;font-weight:800;margin-right:4px">Итого: ${rub(q.net)}</span>
+                    <button type="button" class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12.5px" data-submit-addon="${esc(lid)}" data-pay-mode="yookassa">Оплатить ЮKassa</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="padding:6px 12px;font-size:12.5px" data-submit-addon="${esc(lid)}" data-pay-mode="invoice">Счёт юрлицу</button>
+                </div>
+            </div>
+        </div>`;
+    }
+
     function renderCabinetServers() {
         const box = $('#cabinetServersRegistry');
         if (!box) return;
@@ -494,6 +686,11 @@
             </div>`;
             return;
         }
+
+        const savedCompany = cleanCompanyName(currentUser?.companyName);
+        const savedInn = currentUser?.inn || '';
+        const savedKpp = currentUser?.kpp || '';
+        const savedAddr = currentUser?.legalAddress || '';
 
         box.innerHTML = servers.map((s, idx) => {
             const lid = s.licenseId;
@@ -516,8 +713,8 @@
             const canDelete = !s.baseActivated && !activeAddons.length && !paidOrders.length;
 
             const baseActionsHtml = !s.baseActivated
-                ? `<button class="btn btn-primary btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="license_only">Купить базовую (${rub(D.product?.baseLicensePriceRub || 4_000_000)})</button>
-                   <button class="btn btn-ghost btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="pak">Купить ПАК с сервером (${rub(D.product?.basePriceRub || 5_000_000)})</button>`
+                ? `<button type="button" class="btn btn-primary btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="license_only">Купить базовую (${rub(D.product?.baseLicensePriceRub || 4_000_000)})</button>
+                   <button type="button" class="btn btn-ghost btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="pak">Купить ПАК с сервером (${rub(D.product?.basePriceRub || 5_000_000)})</button>`
                 : '';
 
             const addonsSummaryHtml = activeAddons.length
@@ -530,27 +727,59 @@
             const filesHtml = files.length
                 ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
                     <span class="small muted">Файлы лицензий (<code>#system</code>):</span>
-                    ${files.map((f, fIdx) => `<button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-download-lic="${esc(lid)}" data-file-idx="${fIdx}">↓ ${esc(f.fileName || 'license.lic.json')}</button>`).join('')}
+                    ${files.map((f, fIdx) => `<button type="button" class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-download-lic="${esc(lid)}" data-file-idx="${fIdx}">↓ ${esc(f.fileName || 'license.lic.json')}</button>`).join('')}
                    </div>`
                 : '';
 
+            const addonBuilderHtml = renderServerAddonBuilderHtml(lid, name);
+
             const pendingOrdersHtml = pendingOrders.length
-                ? `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line-strong);background:color-mix(in srgb, var(--warn) 6%, transparent)">
+                ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
                     ${pendingOrders.map(o => {
-                        const title = (o.items && o.items.length) ? o.items.map(it => esc(it.title)).join(' + ') : esc(o.tierName || o.orderId);
-                        return `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
-                            <div class="small"><b>Ожидает оплаты:</b> ${title} · <b>${rub(o.amountRub)}</b></div>
-                            <div style="display:flex;gap:6px;flex-wrap:wrap">
-                                <button class="btn btn-primary btn-sm" style="padding:5px 10px;font-size:12px" data-pay-order="${esc(o.orderId)}" data-pay-method="yookassa">Оплатить ЮKassa</button>
-                                <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-invoice-toggle="${esc(o.orderId)}">Счёт юрлицу</button>
-                                <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px;color:var(--danger)" data-cancel-order="${esc(o.orderId)}">Отменить</button>
+                        const summaryHtml = formatOrderSummaryHtml(o);
+                        const ordComp = cleanCompanyName(o.customer?.name) || savedCompany;
+                        const ordInn = o.customer?.inn || savedInn;
+                        const ordKpp = o.customer?.kpp || savedKpp;
+                        const ordAddr = o.customer?.legalAddress || savedAddr;
+                        const isInvOpen = openInvoiceOrderIds.has(o.orderId) || (o.paymentMethod === 'invoice' && (!ordComp || !ordInn));
+                        const hasReadyInvoice = Boolean(o.invoiceNumber && ordComp && ordInn);
+
+                        return `<div style="padding:12px 14px;border-radius:10px;border:1px solid var(--line-strong);background:color-mix(in srgb, var(--warn) 6%, transparent)">
+                            <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+                                <div class="small"><b>Ожидает оплаты:</b> ${summaryHtml} · <b style="font-size:14px">${rub(o.amountRub)}</b></div>
+                                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                                    <button type="button" class="btn btn-primary btn-sm" style="padding:5px 10px;font-size:12px" data-pay-order="${esc(o.orderId)}" data-pay-method="yookassa">Оплатить ЮKassa</button>
+                                    <button type="button" class="btn ${isInvOpen ? 'btn-primary' : 'btn-ghost'} btn-sm" style="padding:5px 10px;font-size:12px" data-invoice-toggle="${esc(o.orderId)}">Счёт юрлицу</button>
+                                    ${hasReadyInvoice ? `<a class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px;text-decoration:none" href="/api/orders/${encodeURIComponent(o.orderId)}/invoice" target="_blank" rel="noopener">📄 Счёт № ${esc(o.invoiceNumber)} ↗</a>` : ''}
+                                    <button type="button" class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px;color:var(--danger)" data-cancel-order="${esc(o.orderId)}">Отменить</button>
+                                </div>
                             </div>
-                        </div>
-                        <div id="invBox-${esc(o.orderId)}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
-                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                                <input type="text" id="invCompany-${esc(o.orderId)}" value="${esc(o.customer?.name || currentUser?.companyName || '')}" placeholder="Организация (ООО «Маслоторг»)" style="width:240px;padding:6px 10px;font-size:13px">
-                                <input type="text" id="invInn-${esc(o.orderId)}" value="${esc(o.customer?.inn || currentUser?.inn || '')}" placeholder="ИНН" style="width:150px;padding:6px 10px;font-size:13px">
-                                <button class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12.5px" data-pay-order="${esc(o.orderId)}" data-pay-method="invoice">Открыть счёт-договор →</button>
+
+                            <div id="invBox-${esc(o.orderId)}" style="display:${isInvOpen ? '' : 'none'};margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+                                    <span class="small"><b>Реквизиты организации (Лицензиата) для выставления счёта-договора:</b> <span class="muted">(автоматически сохраняются в ЛК)</span></span>
+                                    <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-cab-tab="requisites">Полные банковские реквизиты →</button>
+                                </div>
+                                <div style="display:grid;grid-template-columns:2fr 1fr 1fr 2fr auto;gap:8px;align-items:end">
+                                    <div class="field" style="margin:0">
+                                        <label style="font-size:11.5px">Организация / ИП *</label>
+                                        <input type="text" id="invCompany-${esc(o.orderId)}" value="${esc(ordComp)}" placeholder="ООО «Маслоторг»" style="padding:6px 10px;font-size:13px">
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label style="font-size:11.5px">ИНН *</label>
+                                        <input type="text" id="invInn-${esc(o.orderId)}" value="${esc(ordInn)}" placeholder="10 или 12 цифр" maxlength="12" style="padding:6px 10px;font-size:13px">
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label style="font-size:11.5px">КПП</label>
+                                        <input type="text" id="invKpp-${esc(o.orderId)}" value="${esc(ordKpp)}" placeholder="9 цифр" maxlength="9" style="padding:6px 10px;font-size:13px">
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label style="font-size:11.5px">Юридический адрес</label>
+                                        <input type="text" id="invAddr-${esc(o.orderId)}" value="${esc(ordAddr)}" placeholder="Город, улица, дом" style="padding:6px 10px;font-size:13px">
+                                    </div>
+                                    <button type="button" class="btn btn-primary btn-sm" style="padding:8px 14px;font-size:12.5px;height:36px;white-space:nowrap" data-pay-order="${esc(o.orderId)}" data-pay-method="invoice">Открыть счёт-договор ↗</button>
+                                </div>
+                                <div id="invErr-${esc(o.orderId)}" class="small" style="color:var(--danger);margin-top:6px;display:none"></div>
                             </div>
                         </div>`;
                     }).join('')}
@@ -566,8 +795,8 @@
                     </div>
                     <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                         <span class="small muted" style="margin-right:4px">Сессий: <b>${s.totalSeats}</b></span>
-                        <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-rename-server="${esc(lid)}" data-current-name="${esc(name)}">Переименовать</button>
-                        ${canDelete ? `<button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px;color:var(--danger)" data-delete-server="${esc(lid)}">Удалить</button>` : ''}
+                        <button type="button" class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-rename-server="${esc(lid)}" data-current-name="${esc(name)}">Переименовать</button>
+                        ${canDelete ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px;color:var(--danger)" data-delete-server="${esc(lid)}">Удалить</button>` : ''}
                     </div>
                 </div>
 
@@ -575,8 +804,8 @@
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
                     <span class="small muted" style="min-width:115px">Токен привязки:</span>
                     <input type="text" id="srvTok-${esc(lid)}" readonly value="${esc(tok)}" style="flex:1;min-width:200px;max-width:440px;padding:6px 10px;font-family:monospace;font-size:12px;border-radius:8px">
-                    <button class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12px" data-copy-server-token="${esc(lid)}">Скопировать токен</button>
-                    <button class="btn btn-ghost btn-sm" style="padding:6px 10px;font-size:12px" data-regen-server-token="${esc(lid)}">Перевыпустить</button>
+                    <button type="button" class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12px" data-copy-server-token="${esc(lid)}">Скопировать токен</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="padding:6px 10px;font-size:12px" data-regen-server-token="${esc(lid)}">Перевыпустить</button>
                     <span class="small" id="srvTokStatus-${esc(lid)}" style="color:var(--ok)"></span>
                 </div>
 
@@ -588,10 +817,11 @@
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
                         ${baseActionsHtml}
-                        <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-buy-for-server="${esc(lid)}" data-buy-variant="addons_only">+ Докупить рабочие места</button>
+                        <button type="button" class="btn ${openServerAddonBuilders.has(lid) ? 'btn-primary' : 'btn-ghost'} btn-sm" style="padding:5px 10px;font-size:12px" data-buy-for-server="${esc(lid)}" data-buy-variant="addons_only">+ Докупить рабочие места</button>
                     </div>
                 </div>
 
+                ${addonBuilderHtml}
                 ${filesHtml}
                 ${pendingOrdersHtml}
             </div>`;
@@ -865,10 +1095,13 @@
 
     async function buyForSpecificServer(licenseId, variant = 'license_only') {
         if (variant === 'addons_only') {
-            $$('#segPakVariant button').forEach(b => b.classList.toggle('on', b.dataset.variant === 'addons_only'));
-            syncClientSeats(5);
-            syncClientServerPicker(licenseId);
-            switchStage('clients');
+            if (openServerAddonBuilders.has(licenseId)) {
+                openServerAddonBuilders.delete(licenseId);
+            }
+            else {
+                openServerAddonBuilders.set(licenseId, { seats: 10, tier: 'business', years: 1 });
+            }
+            renderCabinetServers();
             return;
         }
         try {
@@ -883,10 +1116,76 @@
             });
             if (data.user) {
                 currentUser = { ...data.user, sessionKey: currentUser.sessionKey };
+                persistSessionInBrowser(currentUser.sessionKey, currentUser.email, currentUser.isAdmin, currentUser);
                 onAuthenticated();
             }
         }
         catch (err) {
+            alert(err.message);
+        }
+    }
+
+    function updateServerAddonConfig(licenseId, patch = {}, { focusInput = false } = {}) {
+        const prev = openServerAddonBuilders.get(licenseId) || { seats: 10, tier: 'business', years: 1 };
+        const next = {
+            seats: Math.max(1, Math.min(2000, Math.floor(Number(patch.seats ?? prev.seats) || 10))),
+            tier: String(patch.tier ?? prev.tier ?? 'business'),
+            years: Math.max(1, Math.min(5, Math.floor(Number(patch.years ?? prev.years) || 1))),
+        };
+        openServerAddonBuilders.set(licenseId, next);
+        renderCabinetServers();
+        if (focusInput) {
+            const inp = $(`[data-addon-seats-input="${licenseId}"]`);
+            if (inp) {
+                inp.focus();
+                try { inp.setSelectionRange(inp.value.length, inp.value.length); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    async function submitServerAddonOrder(licenseId, payMode = 'yookassa') {
+        const cfg = openServerAddonBuilders.get(licenseId) || { seats: 10, tier: 'business', years: 1 };
+        const q = calcInlineAddonQuote(cfg);
+        const isDirectInvoice = payMode === 'invoice' && Boolean(cleanCompanyName(currentUser?.companyName) && currentUser?.inn);
+        const popupWin = isDirectInvoice ? window.open('about:blank', '_blank') : null;
+        try {
+            const data = await api('/api/cabinet/orders/draft', {
+                sessionKey: currentUser?.sessionKey || '',
+                licenseId,
+                includeBasePak: false,
+                includeBaseLicenseOnly: false,
+                tier: q.tier.id,
+                addonSeats: q.seats,
+                years: q.years,
+                paymentMethod: payMode === 'invoice' ? 'invoice' : 'yookassa',
+            });
+            openServerAddonBuilders.delete(licenseId);
+            if (data.user) {
+                currentUser = { ...data.user, sessionKey: currentUser.sessionKey };
+                persistSessionInBrowser(currentUser.sessionKey, currentUser.email, currentUser.isAdmin, currentUser);
+            }
+            const createdOrderId = data.order?.orderId;
+            if (payMode === 'invoice' && createdOrderId) {
+                openInvoiceOrderIds.add(createdOrderId);
+                onAuthenticated();
+                if (isDirectInvoice && (data.invoiceUrl || data.order?.invoiceUrl)) {
+                    const invUrl = data.invoiceUrl || data.order.invoiceUrl;
+                    if (popupWin) popupWin.location.href = invUrl;
+                    else window.open(invUrl, '_blank');
+                }
+                else {
+                    if (popupWin) popupWin.close();
+                    setTimeout(() => $(`#invCompany-${createdOrderId}`)?.focus(), 40);
+                }
+                return;
+            }
+            onAuthenticated();
+            if (payMode === 'yookassa' && createdOrderId) {
+                await payCabinetOrder(createdOrderId, 'yookassa');
+            }
+        }
+        catch (err) {
+            if (popupWin) popupWin.close();
             alert(err.message);
         }
     }
@@ -1046,16 +1345,38 @@
         if (!orderId) return;
         let companyName = '';
         let inn = '';
+        let kpp = '';
+        let legalAddress = '';
+        const errBox = $(`#invErr-${orderId}`);
+        if (errBox) {
+            errBox.style.display = 'none';
+            errBox.textContent = '';
+        }
+
         if (paymentMethod === 'invoice') {
-            companyName = $(`#invCompany-${orderId}`)?.value.trim() || currentUser?.companyName || '';
+            openInvoiceOrderIds.add(orderId);
+            const invBox = $(`#invBox-${orderId}`);
+            if (invBox) invBox.style.display = '';
+            companyName = cleanCompanyName($(`#invCompany-${orderId}`)?.value) || cleanCompanyName(currentUser?.companyName);
             inn = $(`#invInn-${orderId}`)?.value.trim() || currentUser?.inn || '';
+            kpp = $(`#invKpp-${orderId}`)?.value.trim() || currentUser?.kpp || '';
+            legalAddress = $(`#invAddr-${orderId}`)?.value.trim() || currentUser?.legalAddress || '';
+
             if (!companyName || !inn) {
-                const invBox = $(`#invBox-${orderId}`);
-                if (invBox) invBox.style.display = '';
-                $(`#invCompany-${orderId}`)?.focus();
+                if (errBox) {
+                    errBox.style.display = '';
+                    errBox.textContent = !companyName
+                        ? 'Укажите наименование организации или ИП (например, ООО «Маслоторг») для выставления счёта-договора.'
+                        : 'Укажите ИНН организации (10 или 12 цифр) для выставления счёта-договора.';
+                }
+                (!companyName ? $(`#invCompany-${orderId}`) : $(`#invInn-${orderId}`))?.focus();
                 return;
             }
         }
+
+        // Открываем вкладку синхронно в момент клика пользователя (до await), чтобы браузер не блокировал окно
+        const popupWin = window.open('about:blank', '_blank');
+
         try {
             const data = await api('/api/cabinet/orders/pay', {
                 sessionKey: currentUser?.sessionKey || '',
@@ -1063,16 +1384,32 @@
                 paymentMethod,
                 companyName,
                 inn,
+                kpp,
+                legalAddress,
             });
             if (data.user) {
-                currentUser = { ...data.user, sessionKey: currentUser.sessionKey };
+                currentUser = { ...data.user, sessionKey: data.user.sessionKey || currentUser.sessionKey };
+                persistSessionInBrowser(currentUser.sessionKey, currentUser.email, currentUser.isAdmin, currentUser);
                 onAuthenticated();
             }
-            const url = data.invoiceUrl || data.confirmationUrl;
-            if (url) window.open(url, '_blank', 'noopener');
+            const url = data.invoiceUrl || data.confirmationUrl || (paymentMethod === 'invoice' ? `/api/orders/${encodeURIComponent(orderId)}/invoice` : '');
+            if (url) {
+                if (popupWin) popupWin.location.href = url;
+                else location.href = url;
+            }
+            else if (popupWin) {
+                popupWin.close();
+            }
         }
         catch (err) {
-            alert(err.message);
+            if (popupWin) popupWin.close();
+            if (errBox) {
+                errBox.style.display = '';
+                errBox.textContent = err.message;
+            }
+            else {
+                alert(err.message);
+            }
         }
     }
 
@@ -1766,15 +2103,26 @@
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-stage],[data-cab-tab],[data-action],[data-reserve],[data-pay-order],[data-invoice-toggle],[data-cancel-order],[data-copy-server-token],[data-regen-server-token],[data-rename-server],[data-delete-server],[data-download-lic],[data-buy-for-server],[data-pay-installment],[data-cancel-franchise],[data-ask],[data-district],th[data-sort],#regionsTableBody tr');
+            const el = e.target.closest('[data-stage],[data-cab-tab],[data-action],[data-reserve],[data-pay-order],[data-invoice-toggle],[data-cancel-order],[data-copy-server-token],[data-regen-server-token],[data-rename-server],[data-delete-server],[data-download-lic],[data-buy-for-server],[data-close-addon-builder],[data-addon-preset],[data-addon-tier],[data-addon-years],[data-submit-addon],[data-pay-installment],[data-cancel-franchise],[data-ask],[data-district],th[data-sort],#regionsTableBody tr');
             if (!el) return;
             if (el.matches('[data-cab-tab]')) { e.preventDefault(); switchCabinetTab(el.dataset.cabTab); return; }
             if (el.matches('[data-reserve]')) { e.stopPropagation(); reserveRegionFranchise(el.dataset.reserve); return; }
             if (el.matches('[data-pay-order]')) { e.stopPropagation(); payCabinetOrder(el.dataset.payOrder, el.dataset.payMethod || 'yookassa'); return; }
             if (el.matches('[data-invoice-toggle]')) {
                 e.stopPropagation();
-                const box = $(`#invBox-${el.dataset.invoiceToggle}`);
-                if (box) box.style.display = box.style.display === 'none' ? '' : 'none';
+                const oid = el.dataset.invoiceToggle;
+                const box = $(`#invBox-${oid}`);
+                if (box) {
+                    const nextVisible = box.style.display === 'none';
+                    box.style.display = nextVisible ? '' : 'none';
+                    if (nextVisible) {
+                        openInvoiceOrderIds.add(oid);
+                        setTimeout(() => $(`#invCompany-${oid}`)?.focus(), 30);
+                    }
+                    else {
+                        openInvoiceOrderIds.delete(oid);
+                    }
+                }
                 return;
             }
             if (el.matches('[data-cancel-order]')) { e.stopPropagation(); cancelCabinetOrder(el.dataset.cancelOrder); return; }
@@ -1784,6 +2132,32 @@
             if (el.matches('[data-delete-server]')) { e.stopPropagation(); deleteCabinetServer(el.dataset.deleteServer); return; }
             if (el.matches('[data-download-lic]')) { e.stopPropagation(); downloadServerLicFile(el.dataset.downloadLic, el.dataset.fileIdx || 0); return; }
             if (el.matches('[data-buy-for-server]')) { e.stopPropagation(); buyForSpecificServer(el.dataset.buyForServer, el.dataset.buyVariant || 'license_only'); return; }
+            if (el.matches('[data-close-addon-builder]')) {
+                e.stopPropagation();
+                openServerAddonBuilders.delete(el.dataset.closeAddonBuilder);
+                renderCabinetServers();
+                return;
+            }
+            if (el.matches('[data-addon-preset]')) {
+                e.stopPropagation();
+                updateServerAddonConfig(el.dataset.addonPreset, { seats: Number(el.dataset.seats || 10) });
+                return;
+            }
+            if (el.matches('[data-addon-tier]')) {
+                e.stopPropagation();
+                updateServerAddonConfig(el.dataset.addonTier, { tier: el.dataset.tier || 'business' });
+                return;
+            }
+            if (el.matches('[data-addon-years]')) {
+                e.stopPropagation();
+                updateServerAddonConfig(el.dataset.addonYears, { years: Number(el.dataset.years || 1) });
+                return;
+            }
+            if (el.matches('[data-submit-addon]')) {
+                e.stopPropagation();
+                submitServerAddonOrder(el.dataset.submitAddon, el.dataset.payMode || 'yookassa');
+                return;
+            }
             if (el.matches('[data-pay-installment]')) {
                 e.stopPropagation();
                 payFranchiseInstallment(el.dataset.payInstallment, {
@@ -1841,6 +2215,7 @@
                     break;
                 case 'buy-client-config': buyClientConfig(); break;
                 case 'create-server': createCabinetServer(); break;
+                case 'save-requisites': saveCabinetRequisites(); break;
                 case 'gen-hub-token': generateCabinetToken(); break;
                 case 'refresh-cabinet': refreshCabinetUser(); break;
                 case 'reserve-selected': reserveRegionFranchise(selectedCode); break;
@@ -1863,6 +2238,31 @@
                 if ($('#authStepCode')?.style.display !== 'none') verifyAuthCode();
                 else sendAuthCode();
             }
+        });
+        document.addEventListener('input', (e) => {
+            const inp = e.target.closest?.('[data-addon-seats-input]');
+            if (!inp) return;
+            const lid = inp.dataset.addonSeatsInput;
+            const prev = openServerAddonBuilders.get(lid) || { seats: 10, tier: 'business', years: 1 };
+            const seats = Math.max(1, Math.min(2000, Math.floor(Number(inp.value) || 1)));
+            prev.seats = seats;
+            openServerAddonBuilders.set(lid, prev);
+            const q = calcInlineAddonQuote(prev);
+            const sumBox = $(`#addonQuoteSummary-${lid}`);
+            if (sumBox) {
+                sumBox.innerHTML = `<div class="small">
+                    Выбрано: <b>${q.seats} раб. мест</b> × <b>${q.years} г.</b> · Тариф <b>${esc(q.tier.name)}</b> · Цена за место: <b>${rub(q.perSeat)}</b>${q.disc > 0 ? ` <span class="tag ok" style="margin-left:4px">скидка −${q.disc}% (−${rub(q.saved)})</span>` : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span style="font-size:15px;font-weight:800;margin-right:4px">Итого: ${rub(q.net)}</span>
+                    <button type="button" class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12.5px" data-submit-addon="${esc(lid)}" data-pay-mode="yookassa">Оплатить ЮKassa</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="padding:6px 12px;font-size:12.5px" data-submit-addon="${esc(lid)}" data-pay-mode="invoice">Счёт юрлицу</button>
+                </div>`;
+            }
+            $$(`[data-addon-preset="${lid}"]`).forEach(btn => {
+                btn.classList.toggle('btn-primary', Number(btn.dataset.seats) === q.seats);
+                btn.classList.toggle('btn-ghost', Number(btn.dataset.seats) !== q.seats);
+            });
         });
         $('#aiInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAi(); });
         $('#inpPakExtraSeats')?.addEventListener('input', (e) => syncClientSeats(e.target.value));

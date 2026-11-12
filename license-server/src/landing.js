@@ -343,6 +343,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <aside class="sec-nav" aria-label="Разделы Личного кабинета">
                     <button type="button" class="sec-nav-item active" data-cab-tab="servers" id="navCabServers">Серверы и устройства (0)</button>
                     <button type="button" class="sec-nav-item" data-cab-tab="franchises" id="navCabFranchises">Региональные франшизы (0)</button>
+                    <div class="sec-nav-sep"></div>
+                    <button type="button" class="sec-nav-item" data-cab-tab="requisites" id="navCabRequisites">Реквизиты организации</button>
                 </aside>
 
                 <div class="sec-main">
@@ -367,6 +369,77 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                             </div>
                         </div>
                         <div class="sec-box" id="cabinetFranchisesRegistry"></div>
+                    </div>
+
+                    <!-- 1.3 РЕКВИЗИТЫ ОРГАНИЗАЦИИ (ЮРЛИЦА / ИП) ДЛЯ СЧЕТОВ И ДОГОВОРОВ -->
+                    <div id="cabSecRequisites" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Реквизиты организации (Лицензиата)</h2>
+                            <div class="sec-controls">
+                                <button type="button" class="btn btn-primary btn-sm" data-action="save-requisites">Сохранить реквизиты</button>
+                            </div>
+                        </div>
+                        <div class="sec-box">
+                            <div class="sec-item">
+                                <div class="small muted" style="margin-bottom:14px">
+                                    Сохранённые реквизиты автоматически подставляются во все счета-договоры и закрывающие документы в Личном кабинете.
+                                </div>
+                                <div class="grid g2" style="gap:14px">
+                                    <div class="field" style="margin:0">
+                                        <label for="reqCompanyName">Наименование организации / ИП *</label>
+                                        <input type="text" id="reqCompanyName" placeholder="ООО «Маслоторг»">
+                                    </div>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                                        <div class="field" style="margin:0">
+                                            <label for="reqInn">ИНН *</label>
+                                            <input type="text" id="reqInn" placeholder="10 или 12 цифр" maxlength="12">
+                                        </div>
+                                        <div class="field" style="margin:0">
+                                            <label for="reqKpp">КПП (для ООО)</label>
+                                            <input type="text" id="reqKpp" placeholder="9 цифр" maxlength="9">
+                                        </div>
+                                    </div>
+                                    <div class="field" style="margin:0;grid-column:1 / -1">
+                                        <label for="reqLegalAddress">Юридический адрес</label>
+                                        <input type="text" id="reqLegalAddress" placeholder="Индекс, город, улица, дом, офис">
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label for="reqSignerPosition">Должность руководителя (подписанта)</label>
+                                        <input type="text" id="reqSignerPosition" placeholder="Генеральный директор">
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label for="reqSignerName">ФИО руководителя (подписанта)</label>
+                                        <input type="text" id="reqSignerName" placeholder="Иванов Иван Иванович">
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label for="reqBankName">Наименование банка</label>
+                                        <input type="text" id="reqBankName" placeholder="ПАО Сбербанк">
+                                    </div>
+                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                                        <div class="field" style="margin:0">
+                                            <label for="reqBik">БИК</label>
+                                            <input type="text" id="reqBik" placeholder="9 цифр" maxlength="9">
+                                        </div>
+                                        <div class="field" style="margin:0">
+                                            <label for="reqPhone">Контактный телефон</label>
+                                            <input type="text" id="reqPhone" placeholder="+7 (___) ___-__-__">
+                                        </div>
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label for="reqBankAccount">Расчётный счёт (р/с)</label>
+                                        <input type="text" id="reqBankAccount" placeholder="40702810..." maxlength="20">
+                                    </div>
+                                    <div class="field" style="margin:0">
+                                        <label for="reqCorrAccount">Корреспондентский счёт (к/с)</label>
+                                        <input type="text" id="reqCorrAccount" placeholder="30101810..." maxlength="20">
+                                    </div>
+                                </div>
+                                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;gap:12px;flex-wrap:wrap">
+                                    <div class="small" id="reqSaveStatus" style="color:var(--ok);font-weight:600"></div>
+                                    <button type="button" class="btn btn-primary" data-action="save-requisites">Сохранить реквизиты в Личном кабинете</button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

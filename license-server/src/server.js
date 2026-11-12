@@ -539,6 +539,14 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, result);
             }
 
+            if (req.method === 'POST' && pathname === '/api/cabinet/profile') {
+                const body = await readJsonBody(req);
+                const key = extractBearerToken(req, body, url) || body.email || body.accountId || '';
+                const user = store.updateUserProfile(key, body);
+                res.setHeader('Set-Cookie', `odant_work_session=${encodeURIComponent(user.sessionKey)}; Path=/; Max-Age=31536000; SameSite=Lax`);
+                return sendJson(res, 200, { ok: true, user });
+            }
+
             if (req.method === 'POST' && pathname === '/api/auth/accept-oferta') {
                 const body = await readJsonBody(req);
                 const key = extractBearerToken(req, body, url) || body.email || '';
@@ -641,8 +649,16 @@ export function createLicenseServerApp(options = {}) {
                         createNewServer: Boolean(body.createNewServer || body.licenseId === 'NEW'),
                         ownerAccountId: user?.userId || '',
                         customer: {
-                            name: body.customer?.name || user?.companyName || user?.email || '',
+                            name: body.customer?.name || user?.companyName || '',
                             inn: body.customer?.inn || user?.inn || '',
+                            kpp: body.customer?.kpp || user?.kpp || '',
+                            legalAddress: body.customer?.legalAddress || user?.legalAddress || '',
+                            signerName: body.customer?.signerName || user?.signerName || '',
+                            signerPosition: body.customer?.signerPosition || user?.signerPosition || '',
+                            bankName: body.customer?.bankName || user?.bankName || '',
+                            bik: body.customer?.bik || user?.bik || '',
+                            bankAccount: body.customer?.bankAccount || user?.bankAccount || '',
+                            corrAccount: body.customer?.corrAccount || user?.corrAccount || '',
                             email: body.customer?.email || user?.email || '',
                             phone: body.customer?.phone || user?.phone || '',
                         },
@@ -652,6 +668,10 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, {
                     ok: true,
                     ...(payment || {}),
+                    ...(order?.paymentMethod === 'invoice' ? {
+                        invoiceUrl: `${reqOrigin}${order.invoiceUrl}`,
+                        confirmationUrl: `${reqOrigin}${order.invoiceUrl}`,
+                    } : {}),
                     order,
                     reservation,
                     user: updatedUser,
@@ -715,8 +735,20 @@ export function createLicenseServerApp(options = {}) {
                     paymentMethod: body.paymentMethod || 'yookassa',
                     companyName: body.companyName || user?.companyName || '',
                     inn: body.inn || user?.inn || '',
+                    kpp: body.kpp ?? user?.kpp ?? '',
+                    legalAddress: body.legalAddress ?? user?.legalAddress ?? '',
+                    signerName: body.signerName ?? user?.signerName ?? '',
+                    signerPosition: body.signerPosition ?? user?.signerPosition ?? '',
+                    bankName: body.bankName ?? user?.bankName ?? '',
+                    bik: body.bik ?? user?.bik ?? '',
+                    bankAccount: body.bankAccount ?? user?.bankAccount ?? '',
+                    corrAccount: body.corrAccount ?? user?.corrAccount ?? '',
+                    phone: body.phone ?? user?.phone ?? '',
                 });
                 const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                if (updatedUser?.sessionKey) {
+                    res.setHeader('Set-Cookie', `odant_work_session=${encodeURIComponent(updatedUser.sessionKey)}; Path=/; Max-Age=31536000; SameSite=Lax`);
+                }
                 if (order.paymentMethod === 'invoice') {
                     return sendJson(res, 200, {
                         ok: true,

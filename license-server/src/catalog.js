@@ -315,7 +315,7 @@ export function calculateOrderQuote({
         const discSuffix = volumeDiscountPercent > 0 ? `, скидка −${volumeDiscountPercent}% за объём` : '';
         items.push({
             sku: `WORK-LIC-ADDON-${tierSpec.id.toUpperCase()}`,
-            title: `Годовая лицензия ODANT-WORK на доп. рабочее место (уровень ${tierSpec.name}, ${periodYears} г.${discSuffix})`,
+            title: `Дополнительные лицензии ODANT-WORK: ${seats} раб. мест × ${periodYears} г. (уровень ${tierSpec.name}, ${effectiveUnitPriceRub.toLocaleString('ru-RU')} ₽/место${discSuffix})`,
             quantity: seats,
             unitPriceRub: effectiveUnitPriceRub,
             totalRub: addonsAmountRub,

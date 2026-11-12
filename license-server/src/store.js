@@ -789,10 +789,16 @@ export class LicenseStore {
             contractNumber: method === 'invoice' ? `ДОГ-${dateTag}-${shortRand}` : '',
             invoiceUrl: method === 'invoice' ? `/api/orders/${orderId}/invoice` : '',
             customer: {
-                name: customer.name || targetLic.customer?.name || 'Организация WORK',
+                name: (customer.name && !String(customer.name).includes('@')) ? customer.name : ((targetLic.customer?.name && !String(targetLic.customer.name).includes('@')) ? targetLic.customer.name : ''),
                 inn: customer.inn || targetLic.customer?.inn || '',
-                kpp: customer.kpp || '',
-                legalAddress: customer.legalAddress || '',
+                kpp: customer.kpp || targetLic.customer?.kpp || '',
+                legalAddress: customer.legalAddress || targetLic.customer?.legalAddress || '',
+                signerName: customer.signerName || targetLic.customer?.signerName || '',
+                signerPosition: customer.signerPosition || targetLic.customer?.signerPosition || '',
+                bankName: customer.bankName || targetLic.customer?.bankName || '',
+                bik: customer.bik || targetLic.customer?.bik || '',
+                bankAccount: customer.bankAccount || targetLic.customer?.bankAccount || '',
+                corrAccount: customer.corrAccount || targetLic.customer?.corrAccount || '',
                 email: customer.email || targetLic.customer?.email || 'billing@odant.org',
                 phone: customer.phone || targetLic.customer?.phone || '',
             },
@@ -977,11 +983,13 @@ export class LicenseStore {
         if (!ord)
             return null;
         const dateStr = new Date(ord.createdAt || Date.now()).toLocaleDateString('ru-RU');
+        const c = ord.customer || {};
+        const custName = (c.name && !String(c.name).includes('@')) ? c.name : 'Организация (не указана)';
         const rowsHtml = (ord.items || []).map((it, idx) => `
             <tr>
                 <td style="text-align:center;">${idx + 1}</td>
                 <td>${it.title}</td>
-                <td style="text-align:center;">${it.quantity}</td>
+                <td style="text-align:center;font-weight:700;">${it.quantity}</td>
                 <td style="text-align:right;">${Number(it.unitPriceRub || 0).toLocaleString('ru-RU')} ₽</td>
                 <td style="text-align:right;font-weight:700;">${Number(it.totalRub || 0).toLocaleString('ru-RU')} ₽</td>
             </tr>
@@ -993,50 +1001,81 @@ export class LicenseStore {
     <meta charset="utf-8">
     <title>Счёт-договор № ${ord.invoiceNumber || ord.orderId} от ${dateStr}</title>
     <style>
-        body { font-family: Arial, sans-serif; color: #111827; max-width: 860px; margin: 24px auto; padding: 20px; line-height: 1.45; }
-        h1 { font-size: 20px; margin-bottom: 6px; }
+        body { font-family: Arial, sans-serif; color: #111827; max-width: 880px; margin: 20px auto; padding: 20px; line-height: 1.45; }
+        h1 { font-size: 20px; margin: 0 0 4px; }
         table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px; }
         th, td { border: 1px solid #cbd5e1; padding: 8px 10px; }
         th { background: #f1f5f9; text-align: left; }
-        .meta { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px 16px; font-size: 13px; }
-        .status { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: ${ord.status === 'paid' ? '#dcfce7' : '#fef3c7'}; color: ${ord.status === 'paid' ? '#166534' : '#92400e'}; }
+        .meta { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px 16px; font-size: 13px; }
+        .status { display: inline-block; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; background: ${ord.status === 'paid' ? '#dcfce7' : '#fef3c7'}; color: ${ord.status === 'paid' ? '#166534' : '#92400e'}; }
+        .toolbar { display: flex; justify-content: space-between; align-items: center; background: #0f172a; color: #f8fafc; padding: 10px 16px; border-radius: 10px; margin-bottom: 18px; }
+        .toolbar button { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 8px 14px; font-size: 13px; font-weight: 700; cursor: pointer; }
+        .toolbar button.sec { background: #334155; margin-left: 8px; }
+        .sig-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 28px; font-size: 13px; }
+        .sig-box { border-top: 1px solid #cbd5e1; padding-top: 10px; }
+        @media print { .no-print { display: none !important; } body { margin: 0; padding: 10px; } }
     </style>
 </head>
 <body>
-    <div style="display:flex;justify-content:space-between;align-items:center;">
+    <div class="toolbar no-print">
+        <div style="font-size:13.5px;font-weight:700;">Счёт-договор № ${ord.invoiceNumber || ord.orderId} · ODANT-WORK</div>
+        <div>
+            <button type="button" onclick="window.print()">Печать / Сохранить в PDF</button>
+            <button type="button" class="sec" onclick="window.close()">Закрыть вкладку</button>
+        </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;">
         <div>
             <h1>Счёт-договор № ${ord.invoiceNumber || ord.orderId} от ${dateStr}</h1>
-            <div>Договор № ${ord.contractNumber || ord.orderId} · Заказ № ${ord.orderId}</div>
+            <div style="font-size:13px;color:#475569;">Договор № ${ord.contractNumber || ord.orderId} · Заказ № ${ord.orderId} · Сервер: ${ord.licenseId || '—'}</div>
         </div>
         <span class="status">${ord.status === 'paid' ? 'ОПЛАЧЕН' : 'ОЖИДАЕТ ОПЛАТЫ ПО СЧЁТУ'}</span>
     </div>
     <div class="meta" style="margin-top:14px;">
-        <div><strong>Поставщик (Правообладатель):</strong> ООО «${VENDOR_CONTACTS.company}», адрес: ${VENDOR_CONTACTS.address}, тел.: ${VENDOR_CONTACTS.phones.join(', ')}</div>
-        <div style="margin-top:6px;"><strong>Покупатель (Лицензиат):</strong> ${ord.customer?.name || '—'}, ИНН: ${ord.customer?.inn || '—'}${ord.customer?.kpp ? ', КПП: ' + ord.customer.kpp : ''}, Email: ${ord.customer?.email || '—'}</div>
+        <div><strong>Поставщик (Лицензиар):</strong> ООО «${VENDOR_CONTACTS.company}», адрес: ${VENDOR_CONTACTS.address}, тел.: ${VENDOR_CONTACTS.phones.join(', ')}</div>
+        <div style="margin-top:8px;">
+            <strong>Покупатель (Лицензиат):</strong> ${custName}, ИНН: ${c.inn || '—'}${c.kpp ? ', КПП: ' + c.kpp : ''}
+            ${c.legalAddress ? `<br><strong>Юридический адрес:</strong> ${c.legalAddress}` : ''}
+            ${c.bankName || c.bankAccount ? `<br><strong>Банковские реквизиты:</strong> р/с ${c.bankAccount || '—'} в ${c.bankName || '—'}${c.bik ? ', БИК ' + c.bik : ''}${c.corrAccount ? ', к/с ' + c.corrAccount : ''}` : ''}
+            ${c.signerName ? `<br><strong>Уполномоченное лицо:</strong> ${c.signerPosition ? c.signerPosition + ' ' : ''}${c.signerName}` : ''}
+            <br><strong>Контакты:</strong> Email: ${c.email || '—'}${c.phone ? ', тел.: ' + c.phone : ''}
+        </div>
     </div>
     <table>
         <thead>
             <tr>
                 <th style="width:40px;">№</th>
-                <th>Наименование товара / лицензии / услуги</th>
-                <th style="width:70px;">Кол-во</th>
-                <th style="width:130px;">Цена</th>
-                <th style="width:140px;">Сумма</th>
+                <th>Наименование лицензии / программно-аппаратного комплекса / услуги</th>
+                <th style="width:85px;text-align:center;">Кол-во мест / шт.</th>
+                <th style="width:130px;text-align:right;">Цена за ед.</th>
+                <th style="width:140px;text-align:right;">Сумма</th>
             </tr>
         </thead>
         <tbody>${rowsHtml}</tbody>
         <tfoot>
             <tr>
-                <td colspan="4" style="text-align:right;font-weight:700;">ИТОГО К ОПЛАТЕ (без НДС):</td>
+                <td colspan="4" style="text-align:right;font-weight:700;">ИТОГО К ОПЛАТЕ (НДС не облагается на основании пп. 26 п. 2 ст. 149 НК РФ / УСН):</td>
                 <td style="text-align:right;font-weight:800;font-size:15px;">${Number(ord.amountRub || 0).toLocaleString('ru-RU')} ₽</td>
             </tr>
         </tfoot>
     </table>
     <p style="font-size:12.5px;color:#475569;">
-        Оплата настоящего счёта-договора означает полное согласие Лицензиата с условиями Публичной оферты ODANT-WORK.
-        После зачисления средств лицензии автоматически формируются в личном кабинете владельца (${ord.customer?.email || ''})
-        и загружаются локальной системой по привязанному токену.
+        1. Оплата настоящего счёта-договора означает акцепт Лицензиатом условий Публичного договора-оферты ODANT-WORK (${PUBLIC_OFERTA.version}).<br>
+        2. В назначении платежа обязательно укажите: «Оплата по счёту-договору № ${ord.invoiceNumber || ord.orderId} от ${dateStr} за лицензии ODANT-WORK (заказ ${ord.orderId}). Без НДС».<br>
+        3. После зачисления средств файлы лицензий (<code>.lic.json</code>) автоматически активируются в Личном кабинете (${c.email || ''}) для сервера <code>${ord.licenseId || ''}</code>.
     </p>
+    <div class="sig-grid">
+        <div class="sig-box">
+            <strong>От Поставщика (Лицензиара):</strong><br>
+            ООО «${VENDOR_CONTACTS.company}»<br><br>
+            ______________________ / Руководитель /
+        </div>
+        <div class="sig-box">
+            <strong>От Покупателя (Лицензиата):</strong><br>
+            ${custName}<br><br>
+            ______________________ / ${c.signerName || 'Руководитель'} /
+        </div>
+    </div>
 </body>
 </html>`;
     }
@@ -1295,8 +1334,10 @@ export class LicenseStore {
             ownerEmail: user.email,
             hubUrl: hubUrl || user.hubUrl || 'https://work.odant.org',
             customer: {
-                name: user.companyName || user.name || user.email,
+                name: (user.companyName && !String(user.companyName).includes('@')) ? user.companyName : '',
                 inn: user.inn || '',
+                kpp: user.kpp || '',
+                legalAddress: user.legalAddress || '',
                 email: user.email,
                 phone: user.phone || '',
             },
@@ -1452,6 +1493,7 @@ export class LicenseStore {
             .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
         const userFranchises = this.listUserFranchises(user, now);
         const userServers = this.listUserServers(user, now);
+        const cleanCompany = (user.companyName && !String(user.companyName).includes('@')) ? user.companyName : '';
         return {
             userId: user.userId,
             email: user.email,
@@ -1460,8 +1502,16 @@ export class LicenseStore {
             authProvider: user.authProvider || 'email',
             name: user.name,
             position: user.position || '',
-            companyName: user.companyName,
-            inn: user.inn,
+            companyName: cleanCompany,
+            inn: user.inn || '',
+            kpp: user.kpp || '',
+            legalAddress: user.legalAddress || '',
+            signerName: user.signerName || '',
+            signerPosition: user.signerPosition || user.position || '',
+            bankName: user.bankName || '',
+            bik: user.bik || '',
+            bankAccount: user.bankAccount || '',
+            corrAccount: user.corrAccount || '',
             phone: user.phone || '',
             licenseId: user.licenseId,
             sessionKey: user.sessionKey,
@@ -1481,6 +1531,89 @@ export class LicenseStore {
             orders: userOrders,
             reservations: userFranchises,
         };
+    }
+
+    /**
+     * Обновить и сохранить реквизиты организации (юридического лица / ИП) в профиле Личного кабинета.
+     */
+    updateUserProfile(sessionKeyOrEmail = '', {
+        companyName = undefined,
+        inn = undefined,
+        kpp = undefined,
+        legalAddress = undefined,
+        signerName = undefined,
+        signerPosition = undefined,
+        bankName = undefined,
+        bik = undefined,
+        bankAccount = undefined,
+        corrAccount = undefined,
+        phone = undefined,
+    } = {}) {
+        const user = this._findUser(sessionKeyOrEmail);
+        if (!user)
+            throw new Error('Пользователь не найден. Пожалуйста, войдите в Личный кабинет.');
+        if (companyName !== undefined) {
+            const c = String(companyName || '').trim();
+            user.companyName = c.includes('@') ? '' : c;
+        }
+        if (inn !== undefined) user.inn = String(inn || '').trim();
+        if (kpp !== undefined) user.kpp = String(kpp || '').trim();
+        if (legalAddress !== undefined) user.legalAddress = String(legalAddress || '').trim();
+        if (signerName !== undefined) user.signerName = String(signerName || '').trim();
+        if (signerPosition !== undefined) {
+            user.signerPosition = String(signerPosition || '').trim();
+            user.position = user.signerPosition;
+        }
+        if (bankName !== undefined) user.bankName = String(bankName || '').trim();
+        if (bik !== undefined) user.bik = String(bik || '').trim();
+        if (bankAccount !== undefined) user.bankAccount = String(bankAccount || '').trim();
+        if (corrAccount !== undefined) user.corrAccount = String(corrAccount || '').trim();
+        if (phone !== undefined) user.phone = String(phone || '').trim();
+
+        // Синхронизируем реквизиты со всеми серверами и неоплаченными заказами этого клиента
+        for (const lic of Object.values(this.state.licenses || {})) {
+            if (!lic) continue;
+            if (lic.ownerAccountId === user.userId || String(lic.ownerEmail || '').toLowerCase() === user.email) {
+                lic.customer = lic.customer || {};
+                if (user.companyName) lic.customer.name = user.companyName;
+                if (user.inn) lic.customer.inn = user.inn;
+                if (user.kpp !== undefined) lic.customer.kpp = user.kpp;
+                if (user.legalAddress !== undefined) lic.customer.legalAddress = user.legalAddress;
+                if (user.phone !== undefined) lic.customer.phone = user.phone;
+                this.state.licenses[lic.licenseId] = signCertificate(lic, this.authorityKeys);
+            }
+        }
+        for (const ord of Object.values(this.state.orders || {})) {
+            if (!ord || ord.status === 'paid') continue;
+            if (ord.ownerAccountId === user.userId || String(ord.customer?.email || '').toLowerCase() === user.email) {
+                ord.customer = ord.customer || {};
+                if (user.companyName) ord.customer.name = user.companyName;
+                if (user.inn) ord.customer.inn = user.inn;
+                if (user.kpp !== undefined) ord.customer.kpp = user.kpp;
+                if (user.legalAddress !== undefined) ord.customer.legalAddress = user.legalAddress;
+                if (user.signerName !== undefined) ord.customer.signerName = user.signerName;
+                if (user.signerPosition !== undefined) ord.customer.signerPosition = user.signerPosition;
+                if (user.bankName !== undefined) ord.customer.bankName = user.bankName;
+                if (user.bik !== undefined) ord.customer.bik = user.bik;
+                if (user.bankAccount !== undefined) ord.customer.bankAccount = user.bankAccount;
+                if (user.corrAccount !== undefined) ord.customer.corrAccount = user.corrAccount;
+                if (user.phone !== undefined) ord.customer.phone = user.phone;
+            }
+        }
+
+        // Обновляем подписанный токен сессии с новыми реквизитами
+        user.sessionKey = createSessionToken({
+            userId: user.userId,
+            email: user.email,
+            name: user.name,
+            companyName: user.companyName,
+            inn: user.inn,
+            isAdmin: Boolean(user.isAdmin),
+            issuedAt: Date.now(),
+        }, this.authorityKeys);
+
+        this._save();
+        return this._formatUserResponse(user);
     }
 
     /**
@@ -1515,6 +1648,7 @@ export class LicenseStore {
         const userId = user?.userId || ('USR-' + crypto.createHash('sha256').update(cleanEmail).digest('hex').slice(0, 10).toUpperCase());
 
         if (!user) {
+            const safeCompany = (companyName && !String(companyName).includes('@')) ? String(companyName).trim() : '';
             let lic = licenseId ? this.findLicense(licenseId) : null;
             if (!lic) {
                 const summary = this.issueOrUpdateLicense({
@@ -1522,7 +1656,7 @@ export class LicenseStore {
                     ownerEmail: cleanEmail,
                     baseActivated: false,
                     customer: {
-                        name: companyName || name || cleanEmail,
+                        name: safeCompany,
                         inn: inn || '',
                         email: cleanEmail,
                         phone: phone || '',
@@ -1541,10 +1675,18 @@ export class LicenseStore {
                 userId,
                 email: cleanEmail,
                 authProvider: cleanProvider,
-                name: String(name || companyName || cleanEmail.split('@')[0]).trim(),
+                name: String(name || safeCompany || cleanEmail.split('@')[0]).trim(),
                 position: String(position || '').trim(),
-                companyName: String(companyName || '').trim(),
+                companyName: safeCompany,
                 inn: String(inn || '').trim(),
+                kpp: '',
+                legalAddress: '',
+                signerName: '',
+                signerPosition: String(position || '').trim(),
+                bankName: '',
+                bik: '',
+                bankAccount: '',
+                corrAccount: '',
                 phone: String(phone || '').trim(),
                 licenseId: lic.licenseId,
                 sessionKey: 'wks_' + crypto.randomBytes(16).toString('hex'),
@@ -2285,7 +2427,7 @@ export class LicenseStore {
     }
 
     /**
-     * Обновить способ оплаты и реквизиты юрлица для существующего заказа из Личного кабинета.
+     * Обновить способ оплаты и реквизиты юрлица для существующего заказа из Личного кабинета (и запомнить реквизиты в ЛК).
      */
     prepareOrderPayment(orderId, {
         paymentMethod = 'yookassa',
@@ -2293,16 +2435,31 @@ export class LicenseStore {
         inn = '',
         kpp = '',
         legalAddress = '',
+        signerName = '',
+        signerPosition = '',
+        bankName = '',
+        bik = '',
+        bankAccount = '',
+        corrAccount = '',
+        phone = '',
     } = {}) {
         const order = this.state.orders[orderId];
         if (!order)
             throw new Error(`Заказ ${orderId} не найден`);
         order.paymentMethod = paymentMethod === 'invoice' ? 'invoice' : 'yookassa';
         order.customer = order.customer || {};
-        if (companyName) order.customer.name = String(companyName).trim();
+        const cleanComp = (companyName && !String(companyName).includes('@')) ? String(companyName).trim() : '';
+        if (cleanComp) order.customer.name = cleanComp;
         if (inn) order.customer.inn = String(inn).trim();
-        if (kpp) order.customer.kpp = String(kpp).trim();
-        if (legalAddress) order.customer.legalAddress = String(legalAddress).trim();
+        if (kpp !== undefined && kpp !== '') order.customer.kpp = String(kpp).trim();
+        if (legalAddress !== undefined && legalAddress !== '') order.customer.legalAddress = String(legalAddress).trim();
+        if (signerName !== undefined && signerName !== '') order.customer.signerName = String(signerName).trim();
+        if (signerPosition !== undefined && signerPosition !== '') order.customer.signerPosition = String(signerPosition).trim();
+        if (bankName !== undefined && bankName !== '') order.customer.bankName = String(bankName).trim();
+        if (bik !== undefined && bik !== '') order.customer.bik = String(bik).trim();
+        if (bankAccount !== undefined && bankAccount !== '') order.customer.bankAccount = String(bankAccount).trim();
+        if (corrAccount !== undefined && corrAccount !== '') order.customer.corrAccount = String(corrAccount).trim();
+        if (phone !== undefined && phone !== '') order.customer.phone = String(phone).trim();
         if (!order.invoiceNumber) {
             order.invoiceNumber = 'СЧ-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + orderId.slice(-4);
         }
@@ -2313,14 +2470,26 @@ export class LicenseStore {
             order.invoiceUrl = `/api/orders/${encodeURIComponent(orderId)}/invoice`;
         }
         if (order.reservationId && this.state.reservations[order.reservationId]) {
-            if (companyName) this.state.reservations[order.reservationId].companyName = String(companyName).trim();
+            if (cleanComp) this.state.reservations[order.reservationId].companyName = cleanComp;
             if (inn) this.state.reservations[order.reservationId].inn = String(inn).trim();
         }
         if (order.ownerAccountId) {
             const u = Object.values(this.state.users).find(usr => usr.userId === order.ownerAccountId);
             if (u) {
-                if (companyName) u.companyName = String(companyName).trim();
+                if (cleanComp) u.companyName = cleanComp;
                 if (inn) u.inn = String(inn).trim();
+                if (kpp) u.kpp = String(kpp).trim();
+                if (legalAddress) u.legalAddress = String(legalAddress).trim();
+                if (signerName) u.signerName = String(signerName).trim();
+                if (signerPosition) {
+                    u.signerPosition = String(signerPosition).trim();
+                    u.position = u.signerPosition;
+                }
+                if (bankName) u.bankName = String(bankName).trim();
+                if (bik) u.bik = String(bik).trim();
+                if (bankAccount) u.bankAccount = String(bankAccount).trim();
+                if (corrAccount) u.corrAccount = String(corrAccount).trim();
+                if (phone) u.phone = String(phone).trim();
             }
         }
         this._save();
