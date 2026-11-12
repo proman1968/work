@@ -13,10 +13,13 @@ export default {
     roles: ['BOSS'],
     async execute(filter) {
         const $context = await this.$item.$context;
+        const isOrgsRoot = $context?.path === '/ORGANIZATIONS';
         const props = {
             $item: $context,
-            name: 'new',
-            message: `Введите имя создаваемого item'а и выберите тип`,
+            name: isOrgsRoot ? 'Моё предприятие' : 'new',
+            message: isOrgsRoot
+                ? `Введите название организации и выберите уровень наполнения`
+                : `Введите имя создаваемого item'а и выберите тип`,
             filter,
             'name-changed': (e) => {
                 e.target.parentElement.enable = !e.target.validity
@@ -62,8 +65,12 @@ export default {
                 if (!owner)
                     throw new Error('create класса: нужен контекст $class');
                 const createParams = { type, id: name, label: el.moduleLabel || el.name };
-                if (type === '$base' && Array.isArray(el.selectedModules) && el.selectedModules.length)
-                    createParams.modules = el.selectedModules.join(',');
+                if (type === '$base') {
+                    if (el.basePreset)
+                        createParams.preset = el.basePreset;
+                    if (Array.isArray(el.selectedModules))
+                        createParams.modules = el.selectedModules.join(',');
+                }
                 return owner.create(createParams);
             }
             if (type === '$folder') {
@@ -282,6 +289,32 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             .mod-chip:hover {
                 background: var(--accent-soft);
             }
+            .preset-card {
+                @apply --horizontal;
+                align-items: flex-start;
+                gap: 8px;
+                padding: 6px 8px;
+                border-radius: 8px;
+                cursor: pointer;
+                border: 1px solid var(--subtle-border, var(--border-color));
+                transition: border-color .15s, background .15s;
+            }
+            .preset-card:hover {
+                background: var(--accent-soft);
+            }
+            .preset-card[active] {
+                border-color: var(--accent-color);
+                background: var(--accent-soft);
+            }
+            .preset-title {
+                font-size: small;
+                font-weight: 600;
+            }
+            .preset-desc {
+                font-size: 11.5px;
+                opacity: 0.78;
+                line-height: 1.3;
+            }
         </style>
         <label ~if="message" ~html="message" class="message"></label>
         <fieldset class="flex" :invalid="_dirty && !!validity">
@@ -303,6 +336,16 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             <legend>Type:</legend>
             <type-node flex :row="typeRow" title="Выберите тип создаваемого item'а" @tap="_selectType"></type-node>
             <oda-icon class="chevron" icon="icons:chevron-right:90" title="Выберите тип создаваемого item'а" @tap="_selectType"></oda-icon>
+        </fieldset>
+        <fieldset ~if="showBasePreset" class="modules-box">
+            <legend>Наполнение организации (BASE_TEMPLATE):</legend>
+            <label ~for="basePresets" class="preset-card" :active="basePreset === $for.item.id" @tap="_selectPreset($for.item.id)">
+                <input type="radio" name="basePreset" :checked="basePreset === $for.item.id" style="margin-top:3px;flex:0 0 auto;">
+                <div class="vertical" style="gap:2px;min-width:0;">
+                    <span class="preset-title">{{$for.item.label}}</span>
+                    <span class="preset-desc">{{$for.item.desc}}</span>
+                </div>
+            </label>
         </fieldset>
         <fieldset ~if="showBaseModules" class="modules-box">
             <legend>Подключить модули:</legend>
@@ -326,17 +369,33 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
     message: '',
     filter: '',
     availableModules: [],
-    selectedModules: ['Register'],
+    selectedModules: ['Register', 'Geo'],
+    basePreset: 'standard',
+    basePresets: [
+        { id: 'empty', label: '1. Пустая', desc: 'Только паспорт организации ($base) без предустановленных отделов и демоданных' },
+        { id: 'standard', label: '2. С типовой конфигурацией', desc: '8 типовых подразделений и рабочих мест + справочники, операции и полный план счетов' },
+        { id: 'demo', label: '3. С демоданными', desc: 'Типовая конфигурация + контрагенты, номенклатура, сотрудники и проведённые операции' },
+    ],
     moduleLabel: '',
     get isInOrganizations() {
         const p = String(this.$item?.path || '');
         return p === '/ORGANIZATIONS' || p.startsWith('/ORGANIZATIONS/');
+    },
+    get showBasePreset() {
+        return this.isInOrganizations && this.type === '$base';
     },
     get showBaseModules() {
         return this.isInOrganizations && this.type === '$base' && this.availableModules?.length > 0;
     },
     get showModulePicker() {
         return this.isInOrganizations && this.type === '$module' && this.availableModules?.length > 0;
+    },
+    _selectPreset(id) {
+        this.basePreset = id;
+        if (id === 'empty')
+            this.selectedModules = [];
+        else if (!this.selectedModules?.length)
+            this.selectedModules = ['Register', 'Geo'];
     },
     _toggleModule(id, e) {
         const set = new Set(this.selectedModules || []);

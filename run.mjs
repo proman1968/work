@@ -100,34 +100,6 @@ if (workRoot !== pkgRoot) {
 }
 
 /**
- * При первом запуске в чистой папке автоматически засеваем демонстрационную базу Маслоторг,
- * если класс организации присутствует, а файла work.db ещё нет.
- */
-const maslotorgClass = path.join(workRoot, 'ORGANIZATIONS', 'Маслоторг', '$base', 'class.js');
-const maslotorgDb = path.join(workRoot, 'ORGANIZATIONS', 'Маслоторг', '$base', '#system', 'work.db');
-if (!process.env.WORK_TEST && fs.existsSync(maslotorgClass) && !fs.existsSync(maslotorgDb)) {
-    try {
-        const { openDataDb } = await import('./sources/data/db.js');
-        const { refreshClasses } = await import('./sources/data/classes.js');
-        const { queryObjects } = await import('./sources/data/objects.js');
-        const { seedDemo, seedDemoOperations } = await import('./scripts/demo-seed.mjs');
-        const prefix = '/ORGANIZATIONS/Маслоторг/MODULES/Register';
-        const orgBase = '/ORGANIZATIONS/Маслоторг';
-        const db = await openDataDb(maslotorgDb);
-        await refreshClasses(db, workRoot);
-        if (!queryObjects(db, { cid: `${prefix}/CATALOGS/Виды нормативов`, limit: 1 }).total) {
-            const ids = seedDemo(db, { prefix });
-            seedDemoOperations(db, ids, { prefix, orgBase });
-            console.log('[WORK] Инициализирована демонстрационная база данных /ORGANIZATIONS/Маслоторг.');
-        }
-        db.close();
-    }
-    catch (err) {
-        console.warn('[WORK] Не удалось засеять демо-базу Маслоторг:', err?.message || err);
-    }
-}
-
-/**
  * Если предыдущий экземпляр `run.mjs` остался висеть в фоне и держит порт 8001 / STUN 3478,
  * аккуратно завершаем его перед стартом нового экземпляра.
  */

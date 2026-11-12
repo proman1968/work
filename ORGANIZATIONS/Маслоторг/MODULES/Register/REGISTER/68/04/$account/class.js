@@ -1,0 +1,4 @@
+export default {
+    label: '04',
+    icon: 'carbon:receipt',
+}

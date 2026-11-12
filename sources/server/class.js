@@ -37,6 +37,11 @@ import {
     parseCreateDevice,
     findChildWithModel,
 } from './class/scaffold.js';
+import {
+    buildBasePassportClassJs,
+    scaffoldBaseOrganizationSync,
+    seedBaseTemplateDemoData,
+} from './class/base-template.js';
 import { classScriptStatics } from './class/script.js';
 import { classFeedMethods } from './class/feed.js';
 import { classSecurityMethods } from './class/security.js';
@@ -576,6 +581,8 @@ export class $class extends $folder {
             assertClassId(id);
 
         const inOrg = this.path === '/ORGANIZATIONS' || String(this.path || '').startsWith('/ORGANIZATIONS/');
+        const rawPreset = (type === '$base' && inOrg && typeof p.preset === 'string') ? p.preset.trim().toLowerCase() : '';
+        const basePreset = ['empty', 'standard', 'demo'].includes(rawPreset) ? rawPreset : '';
         const srcModDir = (type === '$module' && inOrg) ? path.join('./MODULES', id) : '';
         const srcModClassFile = srcModDir ? path.join(srcModDir, '$module', 'class.js') : '';
 
@@ -583,7 +590,15 @@ export class $class extends $folder {
         const explicitIcon = typeof p.icon === 'string' ? p.icon.trim() : '';
         const defaultIcon = explicitIcon || (type === '$structure' ? inferStructureIcon(p.label, id) : '');
         if (post == null) {
-            if (srcModClassFile && fs.existsSync(srcModClassFile)) {
+            if (type === '$base' && basePreset) {
+                post = buildBasePassportClassJs({
+                    id,
+                    label: p.label || id,
+                    preset: basePreset,
+                    bossUid: $class.resolveUid(p) || '',
+                });
+            }
+            else if (srcModClassFile && fs.existsSync(srcModClassFile)) {
                 const customLabel = (p.label && p.label !== id && p.label !== rawId) ? p.label : '';
                 post = extractStubClassJsSync(srcModClassFile, customLabel);
                 if (explicitIcon)
@@ -633,19 +648,39 @@ export class $class extends $folder {
                 this.reset();
             }
             else if (type === '$base') {
-                ensureBaseModulesDomainSync(targetDir);
-                for (const modId of parseModuleList(p.modules)) {
-                    const modSrc = path.join('./MODULES', modId);
-                    const modSrcClass = path.join(modSrc, '$module', 'class.js');
-                    if (!fs.existsSync(modSrcClass))
-                        continue;
-                    const modDst = path.join(targetDir, 'MODULES', modId);
-                    const modDstClass = path.join(modDst, '$module', 'class.js');
-                    if (!fs.existsSync(modDstClass)) {
-                        fs.mkdirSync(path.dirname(modDstClass), { recursive: true });
-                        fs.writeFileSync(modDstClass, extractStubClassJsSync(modSrcClass, modId), 'utf-8');
+                if (basePreset) {
+                    const explicitMods = p.modules !== undefined
+                        ? parseModuleList(p.modules, [])
+                        : (basePreset === 'empty' ? [] : ['Register', 'Geo']);
+                    scaffoldBaseOrganizationSync({
+                        targetDir,
+                        orgId: id,
+                        preset: basePreset,
+                        modules: explicitMods,
+                    });
+                    if (basePreset === 'demo') {
+                        await seedBaseTemplateDemoData({
+                            rootDir: process.cwd(),
+                            orgId: id,
+                            author: $class.resolveUid(p) || 'demo',
+                        });
                     }
-                    scaffoldModuleTreeSync(modSrc, modDst);
+                }
+                else {
+                    ensureBaseModulesDomainSync(targetDir);
+                    for (const modId of parseModuleList(p.modules)) {
+                        const modSrc = path.join('./MODULES', modId);
+                        const modSrcClass = path.join(modSrc, '$module', 'class.js');
+                        if (!fs.existsSync(modSrcClass))
+                            continue;
+                        const modDst = path.join(targetDir, 'MODULES', modId);
+                        const modDstClass = path.join(modDst, '$module', 'class.js');
+                        if (!fs.existsSync(modDstClass)) {
+                            fs.mkdirSync(path.dirname(modDstClass), { recursive: true });
+                            fs.writeFileSync(modDstClass, extractStubClassJsSync(modSrcClass, modId), 'utf-8');
+                        }
+                        scaffoldModuleTreeSync(modSrc, modDst);
+                    }
                 }
                 const createdItem = await this._get_next_item(id, ctor);
                 createdItem?.reset?.();

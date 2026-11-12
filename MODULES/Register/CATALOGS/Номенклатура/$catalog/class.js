@@ -4,7 +4,7 @@ export default {
     METADATA: {
         FIELDS: [
             { id: 'sku', label: 'Артикул' },
-            { id: 'kind', label: 'Вид', type: 'enum', values: ['Масло', 'Топливо', 'Тара'], required: true },
+            { id: 'kind', label: 'Вид', type: 'enum', values: ['Масло', 'Топливо', 'Тара', 'Товар', 'Материал', 'Услуга', 'Продукция', 'ОС'], required: true },
             { id: 'base_unit', label: 'Базовая единица', required: true },
             { id: 'density', label: 'Плотность (кг/л)', type: 'Number' },
             { id: 'units', label: 'Единицы измерения', type: '/MODULES/Register/STRUCTS/Единица измерения', table: true },

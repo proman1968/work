@@ -1243,10 +1243,12 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(meAfterLogout.status, 401, 'После нажатия «Выйти» сессия завершается');
     });
 
-    it('13. Развёртывание в чистую папку (D:\\WORK -> npx odant-work): sources/data/api.js на месте, обёртка package.json защищена от ENOSELF', async () => {
+    it('13. Развёртывание в чистую папку (D:\\WORK -> npx odant-work): sources/data/api.js на месте, локальные организации исключены из .npmignore, обёртка package.json защищена от ENOSELF', async () => {
         const npmIgnore = fs.readFileSync(path.resolve('C:/ODANT Web framework/web/work/.npmignore'), 'utf8');
         assert.ok(!/^data\/$/m.test(npmIgnore), 'В .npmignore нет глобального правила data/, съедавшего sources/data/*');
         assert.ok(/^\/data\/$/m.test(npmIgnore), 'В .npmignore используется корневое правило /data/');
+        assert.ok(/^\/ORGANIZATIONS\/\*\/$/m.test(npmIgnore), 'В .npmignore исключены все организации из /ORGANIZATIONS/*/');
+        assert.ok(/^!\/ORGANIZATIONS\/\$domain\/$/m.test(npmIgnore), 'В .npmignore оставлена только системная метапапка /ORGANIZATIONS/$domain/');
 
         const hostWorkDir = path.join(tmpDir, 'd-work-host');
         const pkgSourceDir = path.join(tmpDir, 'nm-odant-work');
@@ -1257,22 +1259,126 @@ describe('ПАК WORK: спецификация, лицензирование, �
         };
 
         // Эмулируем папку D:\WORK после `npm i odant-work`
-        writeRel(hostWorkDir, 'package.json', JSON.stringify({ dependencies: { 'odant-work': '^1.0.13' } }, null, 2));
-        writeRel(pkgSourceDir, 'package.json', JSON.stringify({ name: 'odant-work', version: '1.0.13', type: 'module', dependencies: { ws: '^8.21.0' } }, null, 2));
+        writeRel(hostWorkDir, 'package.json', JSON.stringify({ dependencies: { 'odant-work': '^1.0.14' } }, null, 2));
+        writeRel(pkgSourceDir, 'package.json', JSON.stringify({ name: 'odant-work', version: '1.0.14', type: 'module', dependencies: { ws: '^8.21.0' } }, null, 2));
         writeRel(pkgSourceDir, 'sources/data/api.js', 'export const DATA_METHODS = {};\n');
-        writeRel(pkgSourceDir, '$server/$folder/class.js', 'export default {};\n');
+        writeRel(pkgSourceDir, '$server/$folder/class.js', 'export default { label: "v1" };\n');
 
         const report = applyUpdateFromDirectory({
             sourceDir: pkgSourceDir,
             rootDir: hostWorkDir,
-            newVersion: '1.0.13',
+            newVersion: '1.0.14',
         });
 
-        assert.equal(report.toVersion, '1.0.13');
+        assert.equal(report.toVersion, '1.0.14');
         assert.ok(fs.existsSync(path.join(hostWorkDir, 'sources/data/api.js')), 'sources/data/api.js развёрнут в рабочую папку');
         assert.ok(fs.existsSync(path.join(hostWorkDir, '$server/$folder/class.js')), '$server/$folder/class.js развёрнут в рабочую папку');
         const hostPkgAfter = JSON.parse(fs.readFileSync(path.join(hostWorkDir, 'package.json'), 'utf8'));
         assert.notEqual(hostPkgAfter.name, 'odant-work', 'Имя пакета в рабочей папке не конфликтует с odant-work (защита от npm ENOSELF)');
-        assert.equal(hostPkgAfter.version, '1.0.13');
+        assert.equal(hostPkgAfter.version, '1.0.14');
+
+        // Пользователь модифицирует $server/$folder/class.js и проходит через ДВА обновления подряд (1.0.15 и 1.0.16)
+        writeRel(hostWorkDir, '$server/$folder/class.js', 'export default { label: "user-custom-server" };\n');
+        writeRel(pkgSourceDir, '$server/$folder/class.js', 'export default { label: "v2" };\n');
+        const rep15 = applyUpdateFromDirectory({ sourceDir: pkgSourceDir, rootDir: hostWorkDir, newVersion: '1.0.15' });
+        assert.ok(rep15.preservedUserModified.includes('$server/$folder/class.js'));
+
+        writeRel(pkgSourceDir, '$server/$folder/class.js', 'export default { label: "v3" };\n');
+        const rep16 = applyUpdateFromDirectory({ sourceDir: pkgSourceDir, rootDir: hostWorkDir, newVersion: '1.0.16' });
+        assert.ok(rep16.preservedUserModified.includes('$server/$folder/class.js'), 'И на втором подряд обновлении кастомизированный файл остаётся защищённым');
+        assert.ok(fs.readFileSync(path.join(hostWorkDir, '$server/$folder/class.js'), 'utf8').includes('user-custom-server'));
+    });
+
+    it('14. Шаблон организации BASE_TEMPLATE: 3 уровня создания организации (1. Пустая, 2. С типовой конфигурацией, 3. С демоданными «Моё предприятие»)', async () => {
+        const {
+            BASE_TEMPLATE_PRESETS,
+            buildBasePassportClassJs,
+            scaffoldBaseOrganizationSync,
+            seedBaseTemplateDemoData,
+        } = await import('../sources/server/class/base-template.js');
+        const { openDataDb } = await import('../sources/data/db.js');
+        const { refreshClasses, getClass } = await import('../sources/data/classes.js');
+        const { queryObjects } = await import('../sources/data/objects.js');
+        const { trialBalance } = await import('../sources/data/reports.js');
+
+        assert.deepEqual(BASE_TEMPLATE_PRESETS.map(p => p.id), ['empty', 'standard', 'demo']);
+
+        const orgsTestRoot = path.join(tmpDir, 'base-template-root');
+        fs.mkdirSync(path.join(orgsTestRoot, 'ORGANIZATIONS', '$domain'), { recursive: true });
+        fs.writeFileSync(path.join(orgsTestRoot, 'ORGANIZATIONS', '$domain', 'class.js'), 'export default { label: "Организации" };\n');
+        // Копируем эталонные модули Register и Geo
+        fs.cpSync(path.resolve('C:/ODANT Web framework/web/work/MODULES'), path.join(orgsTestRoot, 'MODULES'), { recursive: true });
+
+        // 1) Режим «empty» (1. Пустая)
+        const emptyDir = path.join(orgsTestRoot, 'ORGANIZATIONS', 'ПустаяОрг');
+        fs.mkdirSync(path.join(emptyDir, '$base'), { recursive: true });
+        fs.writeFileSync(path.join(emptyDir, '$base', 'class.js'), buildBasePassportClassJs({ id: 'ПустаяОрг', preset: 'empty' }));
+        scaffoldBaseOrganizationSync({
+            targetDir: emptyDir,
+            orgId: 'ПустаяОрг',
+            modulesRoot: path.join(orgsTestRoot, 'MODULES'),
+            preset: 'empty',
+        });
+        assert.ok(fs.existsSync(path.join(emptyDir, 'MODULES', '$domain', 'class.js')));
+        assert.ok(!fs.existsSync(path.join(emptyDir, 'accounting')), 'В пустой организации нет предустановленных подразделений');
+
+        // 2) Режим «standard» (2. С типовой конфигурацией)
+        const stdDir = path.join(orgsTestRoot, 'ORGANIZATIONS', 'ТиповаяОрг');
+        fs.mkdirSync(path.join(stdDir, '$base'), { recursive: true });
+        fs.writeFileSync(path.join(stdDir, '$base', 'class.js'), buildBasePassportClassJs({ id: 'ТиповаяОрг', preset: 'standard' }));
+        scaffoldBaseOrganizationSync({
+            targetDir: stdDir,
+            orgId: 'ТиповаяОрг',
+            modulesRoot: path.join(orgsTestRoot, 'MODULES'),
+            preset: 'standard',
+        });
+        for (const deptId of ['administration', 'accounting', 'sales', 'purchasing', 'warehouse', 'production', 'logistics', 'hr']) {
+            assert.ok(fs.existsSync(path.join(stdDir, deptId, '$structure', 'class.js')), `Создано подразделение ${deptId}`);
+        }
+        assert.ok(fs.existsSync(path.join(stdDir, 'MODULES', 'Register', 'REGISTER', '01', '$account', 'class.js')), 'Развёрнут полный план счетов (01..99)');
+        assert.ok(fs.existsSync(path.join(stdDir, 'MODULES', 'Register', 'REGISTER', '50', '$account', 'class.js')), 'Развёрнут счёт 50 Касса');
+
+        // 3) Режим «demo» (3. С демоданными — «Моё предприятие»)
+        const demoId = 'Моё предприятие';
+        const demoDir = path.join(orgsTestRoot, 'ORGANIZATIONS', demoId);
+        fs.mkdirSync(path.join(demoDir, '$base'), { recursive: true });
+        fs.writeFileSync(path.join(demoDir, '$base', 'class.js'), buildBasePassportClassJs({ id: demoId, preset: 'demo' }));
+        scaffoldBaseOrganizationSync({
+            targetDir: demoDir,
+            orgId: demoId,
+            modulesRoot: path.join(orgsTestRoot, 'MODULES'),
+            preset: 'demo',
+        });
+        const seedRes = await seedBaseTemplateDemoData({ rootDir: orgsTestRoot, orgId: demoId });
+        assert.equal(seedRes.seeded, true);
+
+        const dbFile = path.join(demoDir, '$base', '#system', 'work.db');
+        assert.ok(fs.existsSync(dbFile), 'Создана изолированная БД Моё предприятие/$base/#system/work.db');
+        const db = await openDataDb(dbFile);
+        try {
+            await refreshClasses(db, orgsTestRoot);
+            // Проверим, что все ссылки LINKS во всех 8 подразделениях ведут на реально существующие классы
+            for (const deptId of ['administration', 'accounting', 'sales', 'purchasing', 'warehouse', 'production', 'logistics', 'hr']) {
+                const cls = getClass(db, `/ORGANIZATIONS/${demoId}/${deptId}`);
+                assert.ok(cls, `Класс подразделения ${deptId} загружен в БД`);
+                const checkLinks = (roles) => {
+                    for (const r of roles || []) {
+                        assert.deepEqual(r.USERS, ['USERS']);
+                        for (const l of r.LINKS || []) {
+                            assert.ok(getClass(db, l.id), `Ссылка ${l.id} в ${deptId}/${r.id} указывает на существующий класс`);
+                        }
+                        checkLinks(r.ROLES);
+                    }
+                };
+                checkLinks(cls.own?.['#security']?.ROLES);
+            }
+            const items = queryObjects(db, { cid: `/ORGANIZATIONS/${demoId}/MODULES/Register/CATALOGS/Номенклатура` });
+            assert.ok(items.total >= 4, 'Справочник Номенклатура заполнен демо-объектами');
+            const tb = trialBalance(db, { prefix: `/ORGANIZATIONS/${demoId}/MODULES/Register/REGISTER` });
+            assert.ok(tb.rows.length >= 10, 'Оборотно-сальдовая ведомость «Моего предприятия» содержит проводки по счетам');
+        }
+        finally {
+            db.close();
+        }
     });
 });

@@ -38,7 +38,7 @@
 **/*.onnx
 sources/modules/*/.venv/
 
-# 4. Локальные базы данных, индексы, логи и сессии пользователей
+# 4. Локальные базы данных, индексы, логи, организации и сессии пользователей
 # ВАЖНО: только корневые /data/ и /.data/, чтобы НЕ зацепить исходники sources/data/!
 /data/
 /data/**
@@ -54,11 +54,10 @@ sources/modules/*/.venv/
 **/$*/work/
 **/$*/task/
 **/$*/call/
-ORGANIZATIONS/**/$*/pdf/
-ORGANIZATIONS/**/$*/docx/
-ORGANIZATIONS/**/$*/xlsx/
-ORGANIZATIONS/**/$*/pptx/
-ORGANIZATIONS/**/$*/video/
+# В чистой поставке в /ORGANIZATIONS публикуется только системная метапапка $domain (организации создаются пользователем из BASE_TEMPLATE)
+/ORGANIZATIONS/*/
+!/ORGANIZATIONS/$domain/
+!/ORGANIZATIONS/$domain/**
 /$server/task/
 /$server/xlsx/
 /$server/docx/

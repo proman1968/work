@@ -538,7 +538,10 @@ export function applyUpdateFromDirectory({
             const isModifiedByUser = !baselineHash || (diskHash !== baselineHash);
 
             if (isModifiedByUser) {
-                // Пользователь менял этот класс/файл — НЕ затираем его работу!
+                // Пользователь менял этот класс/файл — НЕ затираем его работу и сохраняем прежний baselineHash,
+                // чтобы и при последующих обновлениях этот файл оставался защищённым!
+                if (baselineHash)
+                    newManifestFiles[rel] = baselineHash;
                 report.preservedUserModified.push(rel);
                 if (diskHash !== newHash) {
                     const upstreamCopy = path.join(upstreamBackupRoot, rel);
@@ -659,6 +662,7 @@ let updateTimer = null;
 export function startAutoUpdateDaemon({
     rootDir = '.',
     intervalMs,
+    runOnStart = true,
     fetchImpl = globalThis.fetch,
 } = {}) {
     ensurePackageManifest(rootDir);
@@ -667,8 +671,7 @@ export function startAutoUpdateDaemon({
         clearInterval(updateTimer);
         updateTimer = null;
     }
-    const period = Number(intervalMs || (state.checkIntervalHours || 6) * 3600_000 || DEFAULT_CHECK_INTERVAL_MS);
-    updateTimer = setInterval(async () => {
+    const runCheck = async () => {
         try {
             const cur = loadAutoUpdateState(rootDir);
             if (!cur.enabled) return;
@@ -677,7 +680,13 @@ export function startAutoUpdateDaemon({
         catch (err) {
             console.warn('[auto-updater]', err?.message || err);
         }
-    }, period);
+    };
+    if (runOnStart) {
+        const bootTimer = setTimeout(runCheck, 5_000);
+        bootTimer.unref?.();
+    }
+    const period = Number(intervalMs || (state.checkIntervalHours || 6) * 3600_000 || DEFAULT_CHECK_INTERVAL_MS);
+    updateTimer = setInterval(runCheck, period);
     updateTimer.unref?.();
     return updateTimer;
 }
