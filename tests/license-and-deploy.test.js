@@ -1381,4 +1381,55 @@ describe('ПАК WORK: спецификация, лицензирование, �
             db.close();
         }
     });
+
+    it('15. Регистрация первого пользователя (BOSS) на новом компьютере без настроенного почтового сервера + горячий подхват $server/#secret/email.json', async () => {
+        await import('../sources/reactor.js');
+        await import('../sources/server/server.js');
+        const { authMethods, uidOfEmail } = await import('../sources/host/auth-methods.js');
+        const { getMailer } = await import('../sources/host/mail.js');
+
+        const prevNoMail = process.env.WORK_NO_MAIL;
+        process.env.WORK_NO_MAIL = '1';
+        try {
+            assert.equal(getMailer(), null, 'Почтовый сервер отключён (эмуляция чистого ПК)');
+            const firstEmail = 'boss@new-pc.local';
+            const firstUid = uidOfEmail(firstEmail);
+            const mockServerFirst = {
+                $users: Promise.resolve({ items: Promise.resolve([]) }),
+            };
+            const prevWork = globalThis.WORK;
+            globalThis.WORK = { init: Promise.resolve(), DATA: { '#security': { BOSS: [] } } };
+            try {
+                const session1 = {};
+                const res1 = await authMethods.user_register_start.call(mockServerFirst, {
+                    post: { email: firstEmail, uid: firstUid },
+                    session: session1,
+                });
+                assert.ok(res1 && typeof res1 === 'object' && /^\d{6}$/.test(res1.autoCode), 'Первому пользователю (BOSS) сразу возвращается autoCode для 1-клик регистрации без SMTP');
+                assert.equal(session1.registration.code, res1.autoCode);
+
+                // После того как первый BOSS зарегистрирован, второй пользователь без почтового сервера получает понятную подсказку
+                const mockServerSecond = {
+                    $users: Promise.resolve({ items: Promise.resolve([{ id: firstUid }]) }),
+                };
+                globalThis.WORK = { init: Promise.resolve(), DATA: { '#security': { BOSS: [firstUid] } } };
+                await assert.rejects(
+                    () => authMethods.user_register_start.call(mockServerSecond, {
+                        post: { email: 'user2@new-pc.local' },
+                        session: {},
+                    }),
+                    /Почтовый сервер не настроен/
+                );
+            }
+            finally {
+                globalThis.WORK = prevWork;
+            }
+        }
+        finally {
+            if (prevNoMail === undefined)
+                delete process.env.WORK_NO_MAIL;
+            else
+                process.env.WORK_NO_MAIL = prevNoMail;
+        }
+    });
 });

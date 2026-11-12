@@ -277,7 +277,13 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
             case 'changed':
             case 'unregistered': {
                 try {
-                    this.text = await WORK.fetch("/", 'user_register_start', {}, this.params);
+                    const res = await WORK.fetch("/", 'user_register_start', {}, this.params);
+                    if (res && typeof res === 'object' && res.autoCode) {
+                        this.text = res.message || 'Идет процесс регистрации ключа безопасности...';
+                        await this._onCode({ detail: { value: res.autoCode } });
+                        break;
+                    }
+                    this.text = typeof res === 'string' ? res : (res?.message || '');
                     this.showCode = true;
                 }
                 catch (e) {

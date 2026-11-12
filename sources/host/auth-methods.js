@@ -1,7 +1,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import { DEV_MODE, HOST, CHALLENGE_TTL_MS } from './config.js';
-import { mailer } from './mail.js';
+import { getMailer } from './mail.js';
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 import { audit } from '../server/access/audit.js';
@@ -56,6 +56,25 @@ function mcpUser(params = {}) {
     return s.uid;
 }
 
+/**
+ * Проверить, является ли регистрируемый пользователь первым администратором (BOSS) на сервере
+ * (в /USERS ещё нет ни одного зарегистрированного BOSS) или уже действующим BOSS сервера.
+ */
+async function isFirstOrBossUser(uid) {
+    try {
+        const $users = await this.$users;
+        const users = await $users.items;
+        await WORK.init;
+        const existingUserIds = new Set((users || []).map(u => u?.id).filter(Boolean));
+        const currentBosses = Array.isArray(WORK?.DATA?.['#security']?.BOSS) ? WORK.DATA['#security'].BOSS : [];
+        const isFirstUser = !users?.length || !currentBosses.some(id => existingUserIds.has(id));
+        return isFirstUser || (Boolean(uid) && currentBosses.includes(uid));
+    }
+    catch {
+        return false;
+    }
+}
+
 export const authMethods = {
     async user_register_start(params = {}) {
         let { uid, email } = params.post || {};
@@ -73,13 +92,21 @@ export const authMethods = {
         if (DEV_MODE) {
             console.log('[DEV] Registration code for', email, ':', code);
         }
-        if (!mailer) {
+        const activeMailer = getMailer();
+        if (!activeMailer) {
+            const firstOrBoss = await isFirstOrBossUser.call(this, uid);
+            if (firstOrBoss && !DEV_MODE) {
+                return {
+                    autoCode: code,
+                    message: 'Регистрация первого администратора (BOSS) выполняется напрямую без почтового сервера.',
+                };
+            }
             if (DEV_MODE) {
                 return "На Вашу почту отправлено письмо с одноразовым кодом, введите его для продолжения регистрации.";
             }
-            throw new Error('Почтовый сервер не настроен (#system/mail.json)');
+            throw new Error('Почтовый сервер не настроен. Администратор (BOSS) может настроить почтовый ящик в корне WORK → представление «Почта» (⚙️ Почтовые ящики) или в файле #system/mail.json');
         }
-        const fromUser = mailer?.options?.auth?.user || 'noreply@localhost';
+        const fromUser = activeMailer.fromUser || activeMailer.transport?.options?.auth?.user || 'noreply@localhost';
         const mailOptions = {
             from: `"ODANT-WORK" <${fromUser}>`,
             to: email,
@@ -96,7 +123,7 @@ export const authMethods = {
                 <p>С уважением,<br>WORK</p>
             `,
         };
-        await mailer.sendMail(mailOptions);
+        await activeMailer.transport.sendMail(mailOptions);
         return "На Вашу почту отправлено письмо с одноразовым кодом, введите его для продолжения регистрации.";
     },
 
