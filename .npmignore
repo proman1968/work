@@ -1,13 +1,27 @@
 # Исключения при публикации пакета work в npm:
 # 1. Исключаем torus и отдельное приложение лицензионного сервера (оно публикуется своим пакетом из license-server/)
-torus/
-torus/**
-license-server/
-license-server/**
+/torus/
+/torus/**
+/license-server/
+/license-server/**
 
-# 2. Секреты, системные ключи и локальные настройки узла
-/#system/
-**/#system/
+# 2. Секреты, системные ключи, лицензии и локальные настройки узла
+# (эталонные файлы #system/certs/*, #system/sandbox.json, #system/package-manifest.json и *.example сохраняются в пакете)
+/#system/mail.json
+/#system/server.json
+/#system/vapid_keys.json
+/#system/node-key.json
+/#system/settings.json
+/#system/os.json
+/#system/run.pid
+/#system/auto-update.json
+/#system/updates/
+/#system/lan/
+/#system/oauth/
+/#system/license*.json
+/#system/owner-token.json
+**/#system/email.json
+**/#system/work.db*
 **/#secret/
 .env
 .env.*
@@ -25,14 +39,15 @@ license-server/**
 sources/modules/*/.venv/
 
 # 4. Локальные базы данных, индексы, логи и сессии пользователей
-data/
-data/**
-.data/
-.data/**
+# ВАЖНО: только корневые /data/ и /.data/, чтобы НЕ зацепить исходники sources/data/!
+/data/
+/data/**
+/.data/
+/.data/**
 **/*.db
 **/*.db-wal
 **/*.db-shm
-.index/
+/.index/
 **/.RAG/
 **/logs/
 **/history/
@@ -43,6 +58,7 @@ ORGANIZATIONS/**/$*/pdf/
 ORGANIZATIONS/**/$*/docx/
 ORGANIZATIONS/**/$*/xlsx/
 ORGANIZATIONS/**/$*/pptx/
+ORGANIZATIONS/**/$*/video/
 /$server/task/
 /$server/xlsx/
 /$server/docx/
@@ -58,15 +74,16 @@ ORGANIZATIONS/**/$*/pptx/
 **/USER/text/
 **/BOSS/task/
 .progress.md/
-USERS/*/
-!USERS/$users/
+/USERS/*/
+!/USERS/$users/
 test_tts.wav
 
 # 5. Разработка, тесты и служебные каталоги VCS
-.git/
-.svn/
-tests/
-docs/
+/.git/
+/.svn/
+/.vscode/
+/tests/
+/docs/
 .DS_Store
 Thumbs.db
 *.log

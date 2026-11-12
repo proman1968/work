@@ -8,6 +8,10 @@ node_modules/
 /#system/settings.json
 /#system/os.json
 /#system/run.pid
+/#system/auto-update.json
+/#system/updates/
+/#system/license*.json
+/#system/owner-token.json
 /#system/lan/
 .env
 **/#secret/

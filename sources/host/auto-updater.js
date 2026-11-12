@@ -192,17 +192,38 @@ export function scanTrackedFiles(rootDir = '.') {
 }
 
 /**
- * Прочитать текущую версию из package.json.
+ * Прочитать текущую версию из package.json (или #system/package-manifest.json, если в корне лежит package.json хост-проекта).
  */
 export function readLocalPackageVersion(rootDir = '.') {
+    const absRoot = path.resolve(rootDir);
     try {
-        const pkgPath = path.join(path.resolve(rootDir), 'package.json');
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-        return String(pkg.version || '1.0.0');
+        const pkgPath = path.join(absRoot, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (pkg.version)
+                return String(pkg.version);
+        }
     }
-    catch {
-        return '1.0.0';
+    catch { /* ignore */ }
+    try {
+        const manifestPath = path.join(absRoot, MANIFEST_REL_PATH);
+        if (fs.existsSync(manifestPath)) {
+            const raw = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            if (raw?.version)
+                return String(raw.version);
+        }
     }
+    catch { /* ignore */ }
+    try {
+        const nmPkgPath = path.join(absRoot, 'node_modules', PACKAGE_NAME, 'package.json');
+        if (fs.existsSync(nmPkgPath)) {
+            const nmPkg = JSON.parse(fs.readFileSync(nmPkgPath, 'utf8'));
+            if (nmPkg?.version)
+                return String(nmPkg.version);
+        }
+    }
+    catch { /* ignore */ }
+    return '1.0.0';
 }
 
 /**
@@ -428,14 +449,24 @@ export function applyUpdateFromDirectory({
     const upstreamBackupRoot = path.join(absRoot, '#system', 'updates', `upstream-${targetVersion}`);
 
     // Проверим, изменились ли dependencies в package.json
+    let oldPkg = null;
+    let newPkg = null;
     try {
-        const oldPkg = JSON.parse(fs.readFileSync(path.join(absRoot, 'package.json'), 'utf8'));
-        const newPkg = JSON.parse(fs.readFileSync(path.join(absSource, 'package.json'), 'utf8'));
-        if (JSON.stringify(oldPkg.dependencies || {}) !== JSON.stringify(newPkg.dependencies || {})) {
+        if (fs.existsSync(path.join(absRoot, 'package.json')))
+            oldPkg = JSON.parse(fs.readFileSync(path.join(absRoot, 'package.json'), 'utf8'));
+        if (fs.existsSync(path.join(absSource, 'package.json')))
+            newPkg = JSON.parse(fs.readFileSync(path.join(absSource, 'package.json'), 'utf8'));
+        if (oldPkg && newPkg && JSON.stringify(oldPkg.dependencies || {}) !== JSON.stringify(newPkg.dependencies || {})) {
             report.dependenciesChanged = true;
         }
     }
     catch { /* ignore */ }
+    const isHostWrapperPkg = Boolean(
+        oldPkg && (
+            (oldPkg.name && oldPkg.name !== PACKAGE_NAME)
+            || (!oldPkg.name && oldPkg.dependencies?.[PACKAGE_NAME])
+        )
+    );
 
     const walkSource = (currSourceDir) => {
         for (const entry of fs.readdirSync(currSourceDir)) {
@@ -453,7 +484,18 @@ export function applyUpdateFromDirectory({
                 continue;
 
             const dstFile = path.join(absRoot, rel);
-            const newBuf = fs.readFileSync(srcFile);
+            let newBuf = fs.readFileSync(srcFile);
+            if (rel === 'package.json' && isHostWrapperPkg && newPkg) {
+                const mergedPkg = {
+                    ...newPkg,
+                    name: oldPkg.name || 'odant-work-workspace',
+                    dependencies: {
+                        ...(newPkg.dependencies || {}),
+                        ...(oldPkg.dependencies?.[PACKAGE_NAME] ? { [PACKAGE_NAME]: `^${targetVersion}` } : {}),
+                    },
+                };
+                newBuf = Buffer.from(JSON.stringify(mergedPkg, null, 2) + '\n', 'utf8');
+            }
             const newHash = sha256Buffer(newBuf);
 
             // 1. Защищённые пользовательские данные никогда не перезаписываются, если уже существуют

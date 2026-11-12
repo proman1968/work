@@ -23,19 +23,36 @@ function readVersion(file) {
 
 /**
  * Нужна ли установка зависимостей.
- * Сравниваем ВЕРСИИ, а не mtime файлов: git checkout/revert/reset (и svn update) переписывают
- * package.json и package-lock.json, из-за чего прежняя проверка по времени считала пакет
- * «устаревшим» на каждом старте, запускала `npm i --production` и завершала процесс кодом 1.
+ * 1) Проверяем, разрешаются ли все dependencies из package.json через import.meta.resolve
+ *    (учитывает как локальный node_modules, так и поднятый родительский node_modules при установке через npm/npx).
+ * 2) Если рядом есть package-lock.json (репозиторий Git/SVN), дополнительно сверяем версии package.json и package-lock.json.
  */
 function isPackageActual() {
-    const nodeModules = path.join(currentDirectory, 'node_modules');
-    if (!fs.existsSync(nodeModules))
+    try {
+        const pkgFile = path.join(currentDirectory, 'package.json');
+        if (!fs.existsSync(pkgFile))
+            return false;
+        const pkg = JSON.parse(fs.readFileSync(pkgFile, 'utf8'));
+        const deps = Object.keys(pkg.dependencies || {});
+        for (const dep of deps) {
+            try {
+                import.meta.resolve(dep);
+            }
+            catch {
+                return false;
+            }
+        }
+        const lockFile = path.join(currentDirectory, 'package-lock.json');
+        if (fs.existsSync(lockFile)) {
+            const lockVersion = readVersion(lockFile);
+            if (pkg.version && lockVersion && pkg.version !== lockVersion)
+                return false;
+        }
+        return true;
+    }
+    catch {
         return false;
-    const packageVersion = readVersion(path.join(currentDirectory, 'package.json'));
-    const lockVersion = readVersion(path.join(currentDirectory, 'package-lock.json'));
-    if (!packageVersion || !lockVersion)
-        return false;
-    return packageVersion === lockVersion;
+    }
 }
 
 if (!isPackageActual()) {
@@ -60,12 +77,62 @@ if (!isPackageActual()) {
     await npmInstall;
 }
 
+const workRoot = path.resolve(process.cwd());
+const pkgRoot = path.resolve(currentDirectory);
+
+/**
+ * Если запуск выполнен через `npx odant-work` или из `node_modules/odant-work` в рабочей папке (например, D:\WORK),
+ * автоматически разворачиваем или безопасно обновляем рабочую директорию из установленного пакета.
+ */
+if (workRoot !== pkgRoot) {
+    const pkgVersion = readVersion(path.join(pkgRoot, 'package.json'));
+    const manifestVersion = readVersion(path.join(workRoot, '#system', 'package-manifest.json'));
+    const hasServerTree = fs.existsSync(path.join(workRoot, '$server', '$folder'));
+    if (!hasServerTree || (pkgVersion && manifestVersion !== pkgVersion)) {
+        const { applyUpdateFromDirectory } = await import('./sources/host/auto-updater.js');
+        const report = applyUpdateFromDirectory({
+            sourceDir: pkgRoot,
+            rootDir: workRoot,
+            newVersion: pkgVersion || '',
+        });
+        console.log(`[WORK] Рабочая директория синхронизирована с пакетом odant-work@${report.toVersion} (${workRoot})`);
+    }
+}
+
+/**
+ * При первом запуске в чистой папке автоматически засеваем демонстрационную базу Маслоторг,
+ * если класс организации присутствует, а файла work.db ещё нет.
+ */
+const maslotorgClass = path.join(workRoot, 'ORGANIZATIONS', 'Маслоторг', '$base', 'class.js');
+const maslotorgDb = path.join(workRoot, 'ORGANIZATIONS', 'Маслоторг', '$base', '#system', 'work.db');
+if (!process.env.WORK_TEST && fs.existsSync(maslotorgClass) && !fs.existsSync(maslotorgDb)) {
+    try {
+        const { openDataDb } = await import('./sources/data/db.js');
+        const { refreshClasses } = await import('./sources/data/classes.js');
+        const { queryObjects } = await import('./sources/data/objects.js');
+        const { seedDemo, seedDemoOperations } = await import('./scripts/demo-seed.mjs');
+        const prefix = '/ORGANIZATIONS/Маслоторг/MODULES/Register';
+        const orgBase = '/ORGANIZATIONS/Маслоторг';
+        const db = await openDataDb(maslotorgDb);
+        await refreshClasses(db, workRoot);
+        if (!queryObjects(db, { cid: `${prefix}/CATALOGS/Виды нормативов`, limit: 1 }).total) {
+            const ids = seedDemo(db, { prefix });
+            seedDemoOperations(db, ids, { prefix, orgBase });
+            console.log('[WORK] Инициализирована демонстрационная база данных /ORGANIZATIONS/Маслоторг.');
+        }
+        db.close();
+    }
+    catch (err) {
+        console.warn('[WORK] Не удалось засеять демо-базу Маслоторг:', err?.message || err);
+    }
+}
+
 /**
  * Если предыдущий экземпляр `run.mjs` остался висеть в фоне и держит порт 8001 / STUN 3478,
  * аккуратно завершаем его перед стартом нового экземпляра.
  */
 async function releasePreviousInstance() {
-    const pidFile = path.join(currentDirectory, '#system', 'run.pid');
+    const pidFile = path.join(workRoot, '#system', 'run.pid');
     try {
         if (fs.existsSync(pidFile)) {
             const oldPid = Number(fs.readFileSync(pidFile, 'utf8').trim());

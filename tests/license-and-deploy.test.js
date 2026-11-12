@@ -1242,4 +1242,37 @@ describe('ПАК WORK: спецификация, лицензирование, �
         });
         assert.equal(meAfterLogout.status, 401, 'После нажатия «Выйти» сессия завершается');
     });
+
+    it('13. Развёртывание в чистую папку (D:\\WORK -> npx odant-work): sources/data/api.js на месте, обёртка package.json защищена от ENOSELF', async () => {
+        const npmIgnore = fs.readFileSync(path.resolve('C:/ODANT Web framework/web/work/.npmignore'), 'utf8');
+        assert.ok(!/^data\/$/m.test(npmIgnore), 'В .npmignore нет глобального правила data/, съедавшего sources/data/*');
+        assert.ok(/^\/data\/$/m.test(npmIgnore), 'В .npmignore используется корневое правило /data/');
+
+        const hostWorkDir = path.join(tmpDir, 'd-work-host');
+        const pkgSourceDir = path.join(tmpDir, 'nm-odant-work');
+        const writeRel = (base, rel, content) => {
+            const full = path.join(base, rel);
+            fs.mkdirSync(path.dirname(full), { recursive: true });
+            fs.writeFileSync(full, content, 'utf8');
+        };
+
+        // Эмулируем папку D:\WORK после `npm i odant-work`
+        writeRel(hostWorkDir, 'package.json', JSON.stringify({ dependencies: { 'odant-work': '^1.0.13' } }, null, 2));
+        writeRel(pkgSourceDir, 'package.json', JSON.stringify({ name: 'odant-work', version: '1.0.13', type: 'module', dependencies: { ws: '^8.21.0' } }, null, 2));
+        writeRel(pkgSourceDir, 'sources/data/api.js', 'export const DATA_METHODS = {};\n');
+        writeRel(pkgSourceDir, '$server/$folder/class.js', 'export default {};\n');
+
+        const report = applyUpdateFromDirectory({
+            sourceDir: pkgSourceDir,
+            rootDir: hostWorkDir,
+            newVersion: '1.0.13',
+        });
+
+        assert.equal(report.toVersion, '1.0.13');
+        assert.ok(fs.existsSync(path.join(hostWorkDir, 'sources/data/api.js')), 'sources/data/api.js развёрнут в рабочую папку');
+        assert.ok(fs.existsSync(path.join(hostWorkDir, '$server/$folder/class.js')), '$server/$folder/class.js развёрнут в рабочую папку');
+        const hostPkgAfter = JSON.parse(fs.readFileSync(path.join(hostWorkDir, 'package.json'), 'utf8'));
+        assert.notEqual(hostPkgAfter.name, 'odant-work', 'Имя пакета в рабочей папке не конфликтует с odant-work (защита от npm ENOSELF)');
+        assert.equal(hostPkgAfter.version, '1.0.13');
+    });
 });

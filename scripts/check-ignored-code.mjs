@@ -66,4 +66,28 @@ if (ignored.length) {
         console.error('   ' + f);
     process.exit(1);
 }
-console.log('Код не игнорируется: ' + candidates.length + ' файлов проверено, потерь нет.');
+
+// Проверяем также .npmignore через npm pack --dry-run --json (кроме tests и license-server)
+const NPM_CODE_ROOTS = new Set(['$server', 'sources', 'oda', 'scripts', 'rules', 'MODELS', 'NODES', 'SERVICES']);
+const npmCandidates = candidates.filter(f => {
+    const top = f.split('/')[0];
+    return NPM_CODE_ROOTS.has(top) || !f.includes('/');
+});
+const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+const packRes = spawnSync(npmCmd, ['pack', '--dry-run', '--json'], { cwd: ROOT, encoding: 'utf-8', shell: process.platform === 'win32' });
+if (!packRes.error && packRes.status === 0 && packRes.stdout) {
+    try {
+        const packJson = JSON.parse(packRes.stdout);
+        const packedLower = new Set((packJson[0]?.files || []).map(f => String(f.path || '').toLowerCase()));
+        const missingFromNpm = npmCandidates.filter(f => !packedLower.has(f.toLowerCase()));
+        if (missingFromNpm.length) {
+            console.error('check-ignored-code: ФАЙЛЫ КОДА ПОДПАДАЮТ ПОД .npmignore и НЕ попадут в пакет npm:');
+            for (const f of missingFromNpm)
+                console.error('   ' + f);
+            process.exit(1);
+        }
+    }
+    catch { /* ignore json parse error */ }
+}
+
+console.log('Код не игнорируется (.gitignore и .npmignore): ' + candidates.length + ' файлов проверено, потерь нет.');
