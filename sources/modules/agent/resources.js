@@ -93,25 +93,58 @@ async function enabledPluginsOf(aiDir, scope) {
     return out;
 }
 
-/** Документы *.md каталога sub по слоям (включая включённые плагины ai/plugins/<id>) → Map(name → { name, meta, body, path, scope }). */
+/** Документы *.md и папочные <id>/SKILL.md каталога sub по слоям (включая включённые плагины ai/plugins/<id>) → Map(name → { name, meta, body, path, scope }). */
 export async function loadDocs(place, sub) {
     const out = new Map();
     for (const { dir, scope } of await aiDirs(place)) {
         // 9.9: сначала документы из включённых плагинов этого слоя, затем собственные файлы слоя (могут уточнить плагин)
         for (const p of await enabledPluginsOf(dir, scope)) {
             const subDir = path.join(p.dir, sub);
-            let files;
+            let entries;
             try {
-                files = await fsp.readdir(subDir);
+                entries = await fsp.readdir(subDir, { withFileTypes: true });
             }
             catch { continue; }
-            for (const f of files.sort()) {
+            for (const ent of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+                if (ent.isDirectory()) {
+                    const skillFile = ['SKILL.md', 'skill.md', ent.name + '.md'].find(fn => {
+                        try { return !ent.name.startsWith('.') && path.join(subDir, ent.name, fn); } catch { return false; }
+                    });
+                    if (!skillFile)
+                        continue;
+                    const text = await safe(() => fsp.readFile(path.join(subDir, ent.name, 'SKILL.md'), 'utf-8'), '')
+                        || await safe(() => fsp.readFile(path.join(subDir, ent.name, 'skill.md'), 'utf-8'), '');
+                    if (!text)
+                        continue;
+                    const { meta, body } = parseFrontmatter(text);
+                    const name = String(meta.name || ent.name);
+                    out.set(name, { name, meta, body, path: p.workPath + '/' + sub + '/' + ent.name + '/SKILL.md', scope: p.scope, baseDir: path.join(subDir, ent.name) });
+                    continue;
+                }
+                const f = ent.name;
                 if (!/\.md$/i.test(f) || /^readme\.md$/i.test(f))
                     continue;
                 const text = await safe(() => fsp.readFile(path.join(subDir, f), 'utf-8'), '');
                 const { meta, body } = parseFrontmatter(text);
                 const name = String(meta.name || f.replace(/\.md$/i, ''));
                 out.set(name, { name, meta, body, path: p.workPath + '/' + sub + '/' + f, scope: p.scope });
+            }
+        }
+        // Читаем также папочные навыки <id>/SKILL.md напрямую с диска слоя (для совместимости со стандартом OpenCode/Claude)
+        if (dir?.dir) {
+            const diskSub = path.join(dir.dir, sub);
+            const diskEntries = await safe(() => fsp.readdir(diskSub, { withFileTypes: true }), []);
+            for (const ent of (diskEntries || []).sort((a, b) => a.name.localeCompare(b.name))) {
+                if (!ent.isDirectory() || ent.name.startsWith('.'))
+                    continue;
+                const text = await safe(() => fsp.readFile(path.join(diskSub, ent.name, 'SKILL.md'), 'utf-8'), '')
+                    || await safe(() => fsp.readFile(path.join(diskSub, ent.name, 'skill.md'), 'utf-8'), '');
+                if (!text)
+                    continue;
+                const { meta, body } = parseFrontmatter(text);
+                const name = String(meta.name || ent.name);
+                const workPath = (dir.path || ENGINE_AI) + '/' + sub + '/' + ent.name + '/SKILL.md';
+                out.set(name, { name, meta, body, path: workPath, scope, baseDir: path.join(diskSub, ent.name) });
             }
         }
         const folder = await safe(() => dir.get_item(sub));

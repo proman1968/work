@@ -17,7 +17,7 @@ import { FS } from '../../../server/index.js';
 import { getItem, callAs, writeBinary, absPath, markUntrustedByPaths } from './work.js';
 import { run } from '../system.js';
 import { assertZipSafe } from '../../../server/zip-guard.js';
-import { buildPresentationBuffer, buildSpreadsheetBuffer, buildDocumentBuffer } from '../../office/index.js';
+import { buildPresentationBuffer, buildSpreadsheetBuffer, buildDocumentBuffer, spreadsheetToRows } from '../../office/index.js';
 
 const IMPORT_MAX = 1000;
 const PDF_SOURCE_MAX = 5 * 1024 * 1024;
@@ -401,15 +401,7 @@ async function tableRows(file, ctx, sheet) {
     if (buf.length > TABLE_MAX_BYTES)
         throw new Error('таблица больше ' + Math.round(TABLE_MAX_BYTES / 1048576) + ' МБ — упрости или разреж (F16)');
     assertZipSafe(buf); // xlsx/ods — zip: бомба не должна дойти до разбора
-    const XLSX = await import('xlsx');
-    const wb = ext === 'csv' || ext === 'tsv'
-        ? XLSX.read(buf.toString('utf-8').replace(/^\uFEFF/, ''), { type: 'string', raw: false, FS: ext === 'tsv' ? '\t' : undefined })
-        : XLSX.read(buf, { type: 'buffer', cellDates: true });
-    const name = sheet && wb.SheetNames.includes(sheet) ? sheet : wb.SheetNames[0];
-    if (sheet && name !== sheet)
-        throw new Error('лист «' + sheet + '» не найден; есть: ' + wb.SheetNames.join(', '));
-    const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { defval: '', raw: false });
-    return { sheet: name, sheets: wb.SheetNames, rows };
+    return spreadsheetToRows(buf, ext, sheet);
 }
 
 function coerce(value, type) {

@@ -148,13 +148,13 @@ describe('отчёты и права', () => {
             sheets: { 'Данные': [{ отдел: 'ORG', записей: 7 }], 'Итоги': [['Всего', 7]] },
         }, as(IVAN));
         assert.match(res, /сохранено/);
-        const XLSX = await import('xlsx');
+        const { parseSpreadsheet } = await import('../sources/modules/office/index.js');
         const zone = path.join(tmp, 'ORG/$class');
         const file = fs.readdirSync(zone, { recursive: true })
             .find(f => path.basename(String(f)) === 'итоги.xlsx' && fs.statSync(path.join(zone, f)).isFile());
         assert.ok(file, 'файл в едином хранилище точки');
-        const wb = XLSX.read(fs.readFileSync(path.join(tmp, 'ORG/$class', file)));
-        assert.deepEqual(wb.SheetNames, ['Данные', 'Итоги']);
+        const parsed = parseSpreadsheet(fs.readFileSync(path.join(tmp, 'ORG/$class', file)), 'xlsx');
+        assert.deepEqual(parsed.sheets.map(s => s.name), ['Данные', 'Итоги']);
         await assert.rejects(tool('write_table').run({ path: '/ORG/x.txt', rows: [[1]] }, as(IVAN)), /xlsx или .csv/);
     });
 

@@ -2,10 +2,9 @@ import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import { $item } from '../core.js';
 import * as mime from "mime-types";
-import * as kreuzberg from '@kreuzberg/node';
 import { DOMParser } from 'linkedom';
-import * as XLSX from 'xlsx';
 import { assertZipSafe } from './zip-guard.js';
+import { extractOfficeOrPdfText, spreadsheetToText } from '../modules/office/index.js';
 import { FS } from './index.js';
 import { $folder } from './folder.js';
 import { MERGE } from "../host/babel-merge.js";
@@ -60,22 +59,7 @@ function markupText(buf, kind) {
     return s;
 }
 
-function kreuzbergText(result) {
-    if (typeof result?.content === 'string' && result.content.trim())
-        return result.content.trim();
-    return (result?.chunks || []).map(c => c.content || c.text || '').filter(Boolean).join('\n\n').trim();
-}
-
-function sheetText(buf) {
-    const wb = XLSX.read(buf, { type: 'buffer', cellDates: true, raw: false });
-    return (wb.SheetNames || []).map(name => {
-        const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name] || {}).trim();
-        if (!csv) return '';
-        return (wb.SheetNames.length > 1 ? name + '\n' : '') + csv;
-    }).filter(Boolean).join('\n\n');
-}
-
-async function extractText(buf, ext, path) {
+async function extractText(buf, ext, _path) {
     const kind = sniffKind(buf, ext);
     // zip-архивы (docx/xlsx/pptx/odt) — проверить до любого распаковщика (F16)
     if (kind === 'zip')
@@ -84,7 +68,7 @@ async function extractText(buf, ext, path) {
         return markupText(buf, kind);
     let lastErr;
     try {
-        const text = kreuzbergText(await kreuzberg.extractFile(path));
+        const text = extractOfficeOrPdfText(buf, ext);
         if (text) return text;
     } catch (e) {
         lastErr = e;
@@ -94,7 +78,7 @@ async function extractText(buf, ext, path) {
         return htmlToText(buf.toString('utf8'));
     if (kind === 'zip' || kind === 'ole' || SHEET_EXTS.has(String(ext || '').toLowerCase())) {
         try {
-            const text = sheetText(buf);
+            const text = spreadsheetToText(buf, ext);
             if (text) return text;
         } catch (e) {
             lastErr = e;

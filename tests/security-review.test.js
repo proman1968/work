@@ -321,13 +321,18 @@ describe('R13 журнал безопасности: цепочка хешей �
     });
 });
 
-describe('R16 xlsx — исправленная версия из репозитория, не уязвимый реестр npm (F15)', () => {
-    it('установлен SheetJS >= 0.20.3 (закрыты загрязнение прототипа и ReDoS) из vendor/, spec не указывает на npm', () => {
-        const installed = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules/xlsx/package.json'), 'utf-8'));
-        const [maj, min] = String(installed.version).split('.').map(Number);
-        assert.ok(maj > 0 || min >= 20, 'установлен уязвимый xlsx ' + installed.version + ' (npm-реестр застрял на 0.18.5)');
-        const spec = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8')).dependencies.xlsx;
-        assert.match(String(spec), /^file:vendor\/|cdn\.sheetjs\.com/, 'зависимость указывает на уязвимый npm-реестр: ' + spec);
+describe('R16 xlsx — отказ от уязвимого пакета xlsx в пользу встроенного OOXML-движка (F15)', () => {
+    it('в package.json нет уязвимых/нестандартных пакетов xlsx, xmldom, esprima, @kreuzberg/node; таблицы разбираются через office/index.js', async () => {
+        const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+        const allDeps = { ...(pkg.dependencies || {}), ...(pkg.optionalDependencies || {}) };
+        assert.equal(allDeps.xlsx, undefined, 'внешний пакет xlsx не должен быть в dependencies');
+        assert.equal(allDeps.xmldom, undefined, 'устаревший пакет xmldom должен быть удалён');
+        assert.equal(allDeps.esprima, undefined, 'неиспользуемый пакет esprima должен быть удалён');
+        assert.equal(allDeps['@kreuzberg/node'], undefined, '@kreuzberg/node должен быть удалён');
+        const { buildSpreadsheetBuffer, parseSpreadsheet } = await import('../sources/modules/office/index.js');
+        const buf = buildSpreadsheetBuffer({ sheets: [{ name: 'Проверка', cells: { '0:0': { v: 'OK' } } }] }, 'xlsx');
+        const parsed = parseSpreadsheet(buf, 'xlsx');
+        assert.equal(parsed.sheets[0].cells['0:0'].v, 'OK');
     });
 });
 

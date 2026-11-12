@@ -25,6 +25,10 @@ license-server/**
 sources/modules/*/.venv/
 
 # 4. Локальные базы данных, индексы, логи и сессии пользователей
+data/
+data/**
+.data/
+.data/**
 **/*.db
 **/*.db-wal
 **/*.db-shm
@@ -32,6 +36,18 @@ sources/modules/*/.venv/
 **/.RAG/
 **/logs/
 **/history/
+**/$*/work/
+**/$*/task/
+**/$*/call/
+ORGANIZATIONS/**/$*/pdf/
+ORGANIZATIONS/**/$*/docx/
+ORGANIZATIONS/**/$*/xlsx/
+ORGANIZATIONS/**/$*/pptx/
+/$server/task/
+/$server/xlsx/
+/$server/docx/
+/$server/pdf/
+/$server/pptx/
 **/ADMIN/task/
 **/ADMIN/image/
 **/ADMIN/text/
@@ -55,6 +71,4 @@ docs/
 Thumbs.db
 *.log
 *.tgz
-!vendor/*.tgz
-current_session.json
 current_session.json

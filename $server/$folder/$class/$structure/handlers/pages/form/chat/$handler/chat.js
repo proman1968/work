@@ -332,7 +332,7 @@ ODA({is: 'oda-chat',
             <oda-button :hidden="$('#ribbon').scrollTop < 0" content shadow icon="icons:chevron-right:270" @tap="$('#ribbon').scrollTop = -($('#ribbon').scrollHeight)"></oda-button>
             <oda-button :hidden="$('#ribbon').scrollTop > 0" content shadow icon="icons:chevron-right:90"  @tap="$('#ribbon').scrollTop = 0"></oda-button>
         </div>
-        <div  vertical shadow content style="z-index: 1; max-height: 50%;">
+        <div vertical shadow content style="z-index: 10; max-height: 50%; overflow: visible;">
             <div ~if="replyTarget" horizontal accent-invert style="padding: 4px;">
                 <div horizontal flex style="overflow: auto; align-self: center;"></div>
                 <oda-button icon="icons:close" @tap="clear" style="padding: 0"></oda-button>
@@ -340,7 +340,6 @@ ODA({is: 'oda-chat',
             <div ~if="replyTarget" light vertical style="overflow-y: auto;" disabled>
                 <chat-item reply :$file="replyTarget"></chat-item>
             </div>
-            <skill-tree ~if="skillSelectMode" hide-roots="2" hide-tops="1" allow-focus :$item="skillFolder"></skill-tree>
             <microchat-voice ~if="voiceOn"></microchat-voice>
             <work-prompt-bar style="margin: 8px;" @tap="focusedItem = null"
                 ::value ::files :ai="isAIMode" :placeholder :pending="awaitTask"
@@ -349,12 +348,6 @@ ODA({is: 'oda-chat',
                 @send="onBarSend" @stop="onBarStop" @clear="clear" @prompt-key="_onPromptKey"></work-prompt-bar>
         </div>
     `,
-    get skillFolder(){
-        return this.$pdp.chat.$item.get_item('/~/skills')
-    },
-    get skillSelectMode(){
-        return this.value === '@';
-    },
     get background(){
         return `linear-gradient(145deg, var(--info-background), var(--info-color))`
     },
@@ -475,18 +468,10 @@ ODA({is: 'oda-chat',
     async _onPromptKey(e){
         e = e?.detail instanceof Event ? e.detail : e;
         if (e.keyCode === 38 || e.code === 'ArrowUp') {
-            if (this.skillSelectMode) {
-                e.preventDefault();
-                this.$('skill-tree').up(e);
-            }
             this.value = await this.$('chat-ribbon').getFromHistory(this.value, -1);
             this.$('work-prompt-bar')?.selectInput();
         }
         else if (e.keyCode === 40 || e.code === 'ArrowDown') {
-            if (this.skillSelectMode) {
-                e.preventDefault();
-                this.$('skill-tree').down(e);
-            }
             this.value = await this.$('chat-ribbon').getFromHistory(this.value, 1);
             this.$('work-prompt-bar')?.selectInput();
         }

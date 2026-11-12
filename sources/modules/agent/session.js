@@ -471,7 +471,7 @@ function start(s, session, file, licenseOpts = {}) {
             const llm = await env.llmFor(model); // 9.1: с запасными моделями (fallbackModels)
             const res = await runLoop({
                 llm,
-                system: () => env.makeSystemParts(def),
+                system: () => env.makeSystemParts(def, body.items),
                 hooks: env.hooks,
                 items: body.items,
                 // R3 (8.31): ограничение call родителя из тела задачи (agent_start записал callRestrict)

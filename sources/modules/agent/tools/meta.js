@@ -449,6 +449,34 @@ export const metaTools = [
         },
     },
     {
+        name: 'install_skill',
+        risk: 'write',
+        outbound: true,
+        target: args => (args?.scope && args.scope !== 'global' ? String(args.scope) : ENGINE_AI) + '/skills/' + String(args?.id || args?.hostId || 'external'),
+        description: 'Установить внешний навык (SKILL.md) в WORK: из локального каталога OpenCode / Claude на этом ПК (hostId, например "grill-me"), по прямой или GitHub-ссылке (url), либо из готового Markdown (content).',
+        parameters: {
+            type: 'object',
+            properties: {
+                hostId: { type: 'string', description: 'Имя навыка, установленного на ПК в OpenCode/Claude (~/.config/opencode/skills, ~/.claude/skills), например "grill-me"' },
+                url: { type: 'string', description: 'URL файла SKILL.md или папки навыка на GitHub' },
+                id: { type: 'string', description: 'Имя навыка латиницей (если не указано во фронтматтере)' },
+                description: { type: 'string', description: 'Описание навыка (если не указано во фронтматтере)' },
+                content: { type: 'string', description: 'Содержимое SKILL.md (при установке из текста)' },
+                scope: { type: 'string', description: 'global (по умолчанию — для всего WORK) или place (для текущей точки)' },
+            },
+        },
+        async run(args, ctx) {
+            const { installExternalSkill } = await import('../extensions.js');
+            const res = await installExternalSkill({
+                ...args,
+                place: ctx?.env?.place,
+            }, ctx);
+            if (ctx?.entry)
+                ctx.entry.path = res.path;
+            return `Навык «${res.name}» установлен в ${res.path} (источник: ${res.source}). Теперь его можно вызывать через @${res.name} или инструмент skill.`;
+        },
+    },
+    {
         name: 'generate_image',
         risk: 'write',
         target: args => absPath(args?.path, null),

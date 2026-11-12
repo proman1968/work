@@ -193,6 +193,14 @@ export const CONSULTANT_PROMPTS = Object.freeze([
         label: 'Модели ИИ и дообучение на данных организации (/MODELS)',
         prompt: 'Какие модели ИИ сейчас подключены в /MODELS (включая /MODELS/Local и /MODELS/Halogen) и как собрать датасет организации для локального дообучения LoRA / SFT / GRPO?',
     },
+    {
+        id: 'sys-mcp-skills',
+        category: 'system',
+        scenario: 7,
+        icon: 'carbon:plug',
+        label: 'Прожарка архитектуры (@grill-me), внешние навыки и MCP (/SERVICES)',
+        prompt: '@grill-me Давай проведём архитектурное интервью по нашей задаче и проверим подключённые MCP-серверы в /SERVICES и навыки ИИ.',
+    },
 ]);
 
 export default {
@@ -540,6 +548,7 @@ ODA({
             <button class="dialog-btn" no-flex ~if="uiReady && canVoice" :on="voiceOn" :title="voiceOn ? 'Выключить живой голосовой диалог' : 'Живой голосовой диалог (с взаимным перебиванием)'" :aria-pressed="voiceOn ? 'true' : 'false'" @tap="toggleVoice()">
                 <work-voice-bars :on="voiceOn"></work-voice-bars>
             </button>
+            <oda-button no-flex icon="carbon:plug" :icon-size="16" title="Центр расширений ИИ: MCP-серверы (/SERVICES) и Навыки (Skills)" @tap="openMcpAndSkills"></oda-button>
             <oda-button no-flex icon="carbon:idea" :icon-size="16" title="Типовые сценарии и промпты" @tap="togglePrompts"></oda-button>
             <oda-button no-flex icon="carbon:recently-viewed" :icon-size="16" title="Мои консультации (из личных логов)" @tap="toggleHistory"></oda-button>
             <oda-button no-flex icon="carbon:chat" :icon-size="16" title="Открыть ленту пользователя" @tap="openUserFeed"></oda-button>
@@ -1359,6 +1368,15 @@ ODA({
         const exec = window.top?.execute || window.execute;
         if (typeof exec === 'function')
             exec(cabinet, { view: 'chat' });
+    },
+
+    async openMcpAndSkills() {
+        const srv = await WORK.get_item('/SERVICES').catch(() => null);
+        if (!srv)
+            return;
+        const exec = window.top?.execute || window.execute;
+        if (typeof exec === 'function')
+            exec(srv, { view: 'mcp' });
     },
 
     async toggleHistory() {

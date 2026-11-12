@@ -227,11 +227,128 @@ ODA({ is: 'work-voice-bars',
     },
 });
 
+const DEFAULT_MENTION_ITEMS = [
+    // Навыки (Skills)
+    { kind: 'skill', id: 'grill-me', icon: 'carbon:notebook', description: 'Grill the user relentlessly about a plan, decision, or idea until reaching shared understanding («прожарь идею»)' },
+    { kind: 'skill', id: 'office-documents', icon: 'carbon:notebook', description: 'Создание и редактирование таблиц Excel (.xlsx), документов Word (.docx) и презентаций (.pptx)' },
+    { kind: 'skill', id: 'import-table', icon: 'carbon:notebook', description: 'Импорт таблиц (.xlsx / .csv) в справочники учётного ядра с проверкой дублей и dry_run' },
+    { kind: 'skill', id: 'org-structure', icon: 'carbon:notebook', description: 'Проектирование и развёртывание оргструктуры подразделений ($structure) и рабочих мест (ROLES)' },
+    { kind: 'skill', id: 'work-scenarios', icon: 'carbon:notebook', description: 'Типовые сценарии работы с регистрами учёта, справочниками и операциями WORK' },
+    { kind: 'skill', id: 'delegate-task', icon: 'carbon:notebook', description: 'Постановка поручений сотрудникам со сроком исполнения и отслеживанием ответа' },
+    { kind: 'skill', id: 'summarize-feed', icon: 'carbon:notebook', description: 'Сводка событий, сообщений, задач и документов по ленте подразделения за период' },
+    { kind: 'skill', id: 'scheduled-report', icon: 'carbon:notebook', description: 'Настройка регулярных отчётов и регламентных задач по расписанию' },
+    { kind: 'skill', id: 'doc-from-template', icon: 'carbon:notebook', description: 'Генерация договоров, писем и актов по шаблонам .docx / .md с подстановкой реквизитов' },
+    { kind: 'skill', id: 'skill-authoring', icon: 'carbon:notebook', description: 'Сохранение удачно выполненной работы как нового навыка ИИ (SKILL.md)' },
+    // Субагенты (Agents)
+    { kind: 'agent', id: 'general', icon: 'bootstrap:robot', description: 'Универсальный субагент для многошаговых задач и параллельного выполнения' },
+    { kind: 'agent', id: 'explore', icon: 'bootstrap:robot', description: 'Быстрая разведка по дереву классов, файлам и коду без внесения изменений' },
+    { kind: 'agent', id: 'analyst', icon: 'bootstrap:robot', description: 'Финансовый и управленческий аналитик: отчёты, ОСВ, сверка таблиц и расчётов' },
+    { kind: 'agent', id: 'operator', icon: 'bootstrap:robot', description: 'Учётный оператор: регистрация первичных документов, проверка аналитик и проводок' },
+    { kind: 'agent', id: 'auditor', icon: 'bootstrap:robot', description: 'Аудитор учёта и безопасности: проверка корректности проводок, прав доступа и сторно' },
+    { kind: 'agent', id: 'developer', icon: 'bootstrap:robot', description: 'Разработчик классов, методов, форм ODA и серверных модулей WORK' },
+    { kind: 'agent', id: 'builder', icon: 'bootstrap:robot', description: 'Архитектор схемы данных: настройка METADATA.FIELDS, ANALYTICS и структуры классов' },
+    { kind: 'agent', id: 'secretary', icon: 'bootstrap:robot', description: 'Делопроизводитель: подготовка писем, документов по шаблонам и протоколов встреч' },
+    { kind: 'agent', id: 'web', icon: 'bootstrap:robot', description: 'Веб-исследователь: поиск информации и анализ внешних источников' },
+    // Инструменты и MCP (Tools)
+    { kind: 'tool', id: 'report', icon: 'carbon:tools', description: 'Учётный отчёт: Ведомость (sheet), Обороты (turnovers), Анализ счёта (analysis), Проводки (postings)' },
+    { kind: 'tool', id: 'register_operation', icon: 'carbon:tools', description: 'Зарегистрировать и провести хозяйственную операцию с двойной записью' },
+    { kind: 'tool', id: 'find_objects', icon: 'carbon:tools', description: 'Найти объекты в справочниках и журналах операций по фильтрам' },
+    { kind: 'tool', id: 'describe_class', icon: 'carbon:tools', description: 'Прочитать схему класса (METADATA.FIELDS, ANALYTICS, OVERLAY) и доступные виды' },
+    { kind: 'tool', id: 'write_table', icon: 'carbon:tools', description: 'Сохранить таблицу или выгрузку в файл Excel (.xlsx) или .csv' },
+    { kind: 'tool', id: 'read_table', icon: 'carbon:tools', description: 'Прочитать строки и листы из таблицы .xlsx или .csv' },
+    { kind: 'tool', id: 'create_office_file', icon: 'carbon:tools', description: 'Создать офисный документ Word (.docx), таблицу Excel (.xlsx) или презентацию (.pptx)' },
+    { kind: 'tool', id: 'web_search', icon: 'carbon:tools', description: 'Поиск актуальной информации в интернете через коннекторы /SERVICES' },
+    { kind: 'tool', id: 'install_skill', icon: 'carbon:plug', description: 'Установить внешний навык (SKILL.md) из OpenCode, Claude или GitHub' },
+];
+
+let _cachedServerMentions = null;
+let _cachedServerMentionsAt = 0;
+
+async function fetchServerMentionsCatalog() {
+    if (_cachedServerMentions && Date.now() - _cachedServerMentionsAt < 60_000)
+        return _cachedServerMentions;
+    try {
+        const srv = await globalThis.WORK?.get_item?.('/SERVICES');
+        if (!srv || typeof srv.fetch !== 'function')
+            return null;
+        const res = await srv.fetch('mentions_catalog', {});
+        if (res && (Array.isArray(res.skills) || Array.isArray(res.agents))) {
+            _cachedServerMentions = res;
+            _cachedServerMentionsAt = Date.now();
+            return res;
+        }
+    }
+    catch { /* fallback to DEFAULT_MENTION_ITEMS */ }
+    return null;
+}
+
 ODA({ is: 'work-prompt-bar',
     imports: 'oda//button, oda//icon, ~/lib//tree, ~/lib//user, ~/lib//class-picker',
     template: /* html */`
         <style>
-            :host { @apply --vertical; }
+            :host { @apply --vertical; position: relative; }
+            .mention-popup {
+                position: absolute;
+                left: 0;
+                right: 0;
+                bottom: calc(100% + 6px);
+                z-index: 250;
+                max-height: 292px;
+                overflow-y: auto;
+                background: var(--content-background, #1e293b);
+                color: var(--content-color, #f8fafc);
+                border: 1px solid var(--border-color, rgba(148, 163, 184, 0.28));
+                border-radius: 12px;
+                padding: 5px;
+                box-shadow: 0 10px 28px -6px rgba(0, 0, 0, 0.28), 0 2px 8px rgba(0, 0, 0, 0.12);
+                display: flex;
+                flex-direction: column;
+                gap: 1px;
+            }
+            .mention-item {
+                display: flex;
+                align-items: center;
+                gap: 9px;
+                padding: 7px 10px;
+                border-radius: 8px;
+                cursor: pointer;
+                font-size: 13.5px;
+                line-height: 1.35;
+                min-width: 0;
+                user-select: none;
+            }
+            .mention-item:hover,
+            .mention-item[active] {
+                background: var(--accent-soft, rgba(59, 130, 246, 0.14));
+            }
+            .mention-ic {
+                flex-shrink: 0;
+                opacity: 0.78;
+            }
+            .mention-id {
+                font-weight: 600;
+                flex-shrink: 0;
+                white-space: nowrap;
+                color: var(--content-color);
+            }
+            .mention-desc {
+                flex: 1 1 auto;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                color: var(--muted-color, #94a3b8);
+                font-size: 13px;
+            }
+            .mention-tag {
+                flex-shrink: 0;
+                font-size: 10.5px;
+                font-weight: 600;
+                padding: 1px 6px;
+                border-radius: 999px;
+                opacity: 0.7;
+                background: var(--subtle-background, rgba(148, 163, 184, 0.14));
+            }
             .box {
                 @apply --vertical; @apply --content;
                 border: 1px solid var(--subtle-border, var(--border-color)); border-radius: var(--radius-l, 16px);
@@ -278,6 +395,15 @@ ODA({ is: 'work-prompt-bar',
             .send[disabled] { opacity: .3; cursor: default; }
             item-user { flex-shrink: 0; }
         </style>
+        <div class="mention-popup" ~if="mentionOpen && mentionFiltered.length" @mousedown.prevent>
+            <div class="mention-item" ~for="mentionFiltered" :active="$for.index === mentionIndex"
+                @mouseenter="mentionIndex = $for.index" @tap.stop="applyMention($for.item)">
+                <oda-icon class="mention-ic" no-flex :icon="$for.item.icon || 'carbon:notebook'" :icon-size="16"></oda-icon>
+                <span class="mention-id">@{{$for.item.id}}</span>
+                <span class="mention-desc" :title="$for.item.description">{{$for.item.description}}</span>
+                <span class="mention-tag">{{$for.item.tagLabel}}</span>
+            </div>
+        </div>
         <div class="box" :error :drag @dragover="onDragOver" @dragleave="drag = false" @drop="onDrop">
             <div class="chips" ~if="files.length">
                 <div class="file" ~for="files" :title="$for.item.name">
@@ -287,7 +413,7 @@ ODA({ is: 'work-prompt-bar',
                 </div>
             </div>
             <textarea id="text" rows="1" :placeholder="recording ? 'Говорите…' : placeholder" :value="value" :readonly="recording"
-                @input="onInput" @keydown="_onKeydown" @paste="_onPaste"></textarea>
+                @input="onInput" @keydown="_onKeydown" @click="_onCaretMove" @keyup="_onCaretMove" @blur="_onBlur" @paste="_onPaste"></textarea>
             <div class="row">
                 <oda-button class="icon-btn" icon="carbon:add" :icon-size="20" title="Действия: прикрепить файлы, выбрать получателей, создать операцию" @tap="onPlusTap($event)"></oda-button>
                 <oda-button class="icon-btn" ~if="deptUsers?.length" icon="icons:supervisor-account" :icon-size="18" title="Получатели подразделения (если не выбраны — создаётся задача ИИ)" @tap="chooseReceivers($event)"></oda-button>
@@ -313,11 +439,71 @@ ODA({ is: 'work-prompt-bar',
     `,
     value: {
         $def: '',
-        set() {
+        set(v) {
+            if (!v)
+                this.mentionOpen = false;
             this.async(() => this._autosize());
         },
     },
     files: [],
+    mentionOpen: false,
+    mentionQuery: '',
+    mentionIndex: 0,
+    _mentionStart: -1,
+    _mentionEnd: -1,
+    serverMentions: null,
+    get mentionFiltered() {
+        const srv = this.serverMentions;
+        const rawList = [];
+        const seen = new Set();
+        const addItem = (it, tagLabel) => {
+            if (!it?.id) return;
+            const key = it.kind + ':' + String(it.id).toLowerCase();
+            if (seen.has(key)) return;
+            seen.add(key);
+            rawList.push({
+                ...it,
+                tagLabel: tagLabel || (it.kind === 'skill' ? 'skill' : it.kind === 'agent' ? 'agent' : it.kind === 'user' ? 'сотрудник' : 'tool'),
+            });
+        };
+
+        if (srv) {
+            for (const s of (srv.skills || [])) addItem(s, 'skill');
+            for (const a of (srv.agents || [])) addItem(a, 'agent');
+            for (const t of (srv.tools || [])) addItem(t, t.kind === 'mcp' ? 'mcp' : 'tool');
+        }
+        for (const d of DEFAULT_MENTION_ITEMS)
+            addItem(d);
+
+        for (const u of (this.deptUsers || [])) {
+            const uid = u?.id || '';
+            const label = u?.label || uid;
+            if (!uid) continue;
+            addItem({
+                kind: 'user',
+                id: label.replace(/\s+/g, '_'),
+                userObj: u,
+                icon: 'icons:person',
+                description: (u._placeLabel ? u._placeLabel + ' · ' : '') + 'Получатель сообщения в подразделении',
+            }, 'сотрудник');
+        }
+
+        const q = String(this.mentionQuery || '').trim().toLowerCase();
+        if (!q)
+            return rawList.slice(0, 30);
+
+        const starts = [];
+        const contains = [];
+        for (const it of rawList) {
+            const idLow = String(it.id || '').toLowerCase();
+            const descLow = String(it.description || '').toLowerCase();
+            if (idLow.startsWith(q))
+                starts.push(it);
+            else if (idLow.includes(q) || descLow.includes(q))
+                contains.push(it);
+        }
+        return [...starts, ...contains].slice(0, 25);
+    },
     ai: false,
     /** Вместо микрофона-диктовки — кнопка голосового диалога со спектром (форма задачи); событие dialog с новым состоянием. */
     dialog: { $attr: true, $def: false },
@@ -381,6 +567,12 @@ ODA({ is: 'work-prompt-bar',
     },
     attached() {
         this.async(() => this._autosize(), 50);
+        this._ensureMentionsLoaded();
+    },
+    async _ensureMentionsLoaded() {
+        const cat = await fetchServerMentionsCatalog();
+        if (cat)
+            this.serverMentions = cat;
     },
     _autosize() {
         const ta = this.$('#text');
@@ -393,6 +585,73 @@ ODA({ is: 'work-prompt-bar',
     },
     onInput(e) {
         this.value = e.target.value;
+        this._updateMentionState(e.target);
+    },
+    _onCaretMove(e) {
+        if (e?.key && ['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'].includes(e.key))
+            return;
+        this._updateMentionState(e?.target || this.$('#text'));
+    },
+    _onBlur() {
+        setTimeout(() => { this.mentionOpen = false; }, 160);
+    },
+    _updateMentionState(ta) {
+        ta = ta || this.$('#text');
+        if (!ta) {
+            this.mentionOpen = false;
+            return;
+        }
+        const text = String(ta.value ?? '');
+        const pos = typeof ta.selectionStart === 'number' ? ta.selectionStart : text.length;
+        const before = text.slice(0, pos);
+        const m = /(?:^|[\s(])@([^\s@]*)$/.exec(before);
+        if (!m) {
+            this.mentionOpen = false;
+            return;
+        }
+        const query = m[1] || '';
+        const atPos = before.lastIndexOf('@');
+        this._mentionStart = atPos;
+        this._mentionEnd = pos;
+        if (this.mentionQuery !== query)
+            this.mentionIndex = 0;
+        this.mentionQuery = query;
+        this.mentionOpen = true;
+        if (!this.serverMentions)
+            this._ensureMentionsLoaded();
+    },
+    applyMention(item) {
+        if (!item)
+            return;
+        const ta = this.$('#text');
+        const text = String(this.value ?? '');
+        const start = this._mentionStart >= 0 ? this._mentionStart : text.lastIndexOf('@');
+        const end = this._mentionEnd >= start ? this._mentionEnd : text.length;
+        if (item.kind === 'user' && item.userObj) {
+            this.toggleReceiver(item.userObj);
+        }
+        const replacement = '@' + item.id + ' ';
+        const nextValue = start >= 0
+            ? text.slice(0, start) + replacement + text.slice(end)
+            : (text ? text + ' ' + replacement : replacement);
+        this.mentionOpen = false;
+        this.value = nextValue;
+        this.async(() => {
+            if (ta) {
+                ta.value = nextValue;
+                const caret = (start >= 0 ? start : text.length) + replacement.length;
+                ta.focus();
+                ta.setSelectionRange?.(caret, caret);
+                this._autosize();
+            }
+        }, 15);
+    },
+    _scrollMentionIntoView() {
+        this.async(() => {
+            const popup = this.$('.mention-popup');
+            const active = popup?.querySelector?.('.mention-item[active]');
+            active?.scrollIntoView?.({ block: 'nearest' });
+        }, 10);
     },
     focusInput() {
         this.async(() => this.$('#text')?.focus(), 30);
@@ -466,6 +725,36 @@ ODA({ is: 'work-prompt-bar',
         this._addFiles([...list]);
     },
     _onKeydown(e) {
+        if (this.mentionOpen && this.mentionFiltered.length) {
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.mentionIndex = (this.mentionIndex + 1) % this.mentionFiltered.length;
+                this._scrollMentionIntoView();
+                return;
+            }
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.mentionIndex = (this.mentionIndex - 1 + this.mentionFiltered.length) % this.mentionFiltered.length;
+                this._scrollMentionIntoView();
+                return;
+            }
+            if ((e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey) || e.key === 'Tab') {
+                e.preventDefault();
+                e.stopPropagation();
+                const chosen = this.mentionFiltered[this.mentionIndex] || this.mentionFiltered[0];
+                if (chosen)
+                    this.applyMention(chosen);
+                return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                this.mentionOpen = false;
+                return;
+            }
+        }
         if (e.code === 'Space' && e.ctrlKey) {
             this.value = this.value.fixKeyboardLayout();
             return;

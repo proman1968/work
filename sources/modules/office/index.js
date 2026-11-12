@@ -2,15 +2,16 @@
  * Локальный OOXML-движок офисных документов WORK (`sources/modules/office/index.js`).
  *
  * Обеспечивает 100% локальное чтение и сохранение офисных форматов без Docker и внешних серверов:
- *  - Таблицы (`.xlsx`, `.xls`, `.csv`, `.ods`, `.tsv`) — через SheetJS (`xlsx`);
- *  - Документы Word (`.docx`, `.doc`, `.rtf`, `.odt`) — через OOXML (`adm-zip` + `xmldom`);
- *  - Презентации PowerPoint (`.pptx`, `.ppt`, `.odp`) — через OOXML (`adm-zip` + `xmldom`);
+ *  - Таблицы (`.xlsx`, `.xls`, `.csv`, `.ods`, `.tsv`) — через собственный OOXML-движок (`adm-zip` + `linkedom`);
+ *  - Документы Word (`.docx`, `.doc`, `.rtf`, `.odt`) — через OOXML (`adm-zip` + `linkedom`);
+ *  - Презентации PowerPoint (`.pptx`, `.ppt`, `.odp`) — через OOXML (`adm-zip` + `linkedom`);
+ *  - Извлечение текста из `.xlsx`, `.docx`, `.pptx`, `.csv`, `.tsv`, `.rtf`, `.pdf` (`extractOfficeOrPdfText`);
  *  - Прямое редактирование в десктопном MS Office / LibreOffice / Р7 / МойОфис по WebDAV (`ms-word:ofe|u|...`).
  */
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import AdmZip from 'adm-zip';
-import * as XLSX from 'xlsx';
-import { DOMParser } from 'xmldom';
+import { DOMParser } from 'linkedom';
 import { assertZipSafe, isZip } from '../../server/zip-guard.js';
 
 const SPREADSHEET_EXTS = new Set(['xlsx', 'xls', 'xlsm', 'xlsb', 'csv', 'tsv', 'ods']);
@@ -111,8 +112,173 @@ function getAttr(el, localName) {
 }
 
 // ============================================================================
-// 1. ТАБЛИЦЫ (.xlsx / .xls / .csv)
+// 1. ТАБЛИЦЫ (.xlsx / .xls / .csv) — нативный OOXML / RFC 4180 движок
 // ============================================================================
+
+function colIdxToLetters(col) {
+    let n = Number(col) + 1;
+    let out = '';
+    while (n > 0) {
+        const rem = (n - 1) % 26;
+        out = String.fromCharCode(65 + rem) + out;
+        n = Math.floor((n - 1) / 26);
+    }
+    return out || 'A';
+}
+
+function lettersToColIdx(str) {
+    const s = String(str || '').toUpperCase().replace(/[^A-Z]/g, '');
+    let n = 0;
+    for (let i = 0; i < s.length; i++)
+        n = n * 26 + (s.charCodeAt(i) - 64);
+    return Math.max(0, n - 1);
+}
+
+function encodeCellAddr({ r, c }) {
+    return `${colIdxToLetters(c)}${Number(r) + 1}`;
+}
+
+function decodeCellAddr(ref) {
+    const m = /^\$?([A-Za-z]+)\$?(\d+)$/.exec(String(ref || '').trim());
+    if (!m)
+        return { r: 0, c: 0 };
+    return {
+        r: Math.max(0, Number(m[2]) - 1),
+        c: lettersToColIdx(m[1]),
+    };
+}
+
+function decodeRangeAddr(rangeStr) {
+    const parts = String(rangeStr || 'A1').split(':');
+    const s = decodeCellAddr(parts[0]);
+    const e = parts[1] ? decodeCellAddr(parts[1]) : { ...s };
+    return { s, e };
+}
+
+function parseCsvTo2D(text, delimiter = ',') {
+    const clean = String(text ?? '').replace(/^\uFEFF/, '');
+    const rows = [];
+    let row = [];
+    let field = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < clean.length; i++) {
+        const ch = clean[i];
+        if (inQuotes) {
+            if (ch === '"') {
+                if (clean[i + 1] === '"') {
+                    field += '"';
+                    i++;
+                }
+                else {
+                    inQuotes = false;
+                }
+            }
+            else {
+                field += ch;
+            }
+        }
+        else if (ch === '"') {
+            inQuotes = true;
+        }
+        else if (ch === delimiter) {
+            row.push(field);
+            field = '';
+        }
+        else if (ch === '\r') {
+            if (clean[i + 1] === '\n')
+                i++;
+            row.push(field);
+            rows.push(row);
+            row = [];
+            field = '';
+        }
+        else if (ch === '\n') {
+            row.push(field);
+            rows.push(row);
+            row = [];
+            field = '';
+        }
+        else {
+            field += ch;
+        }
+    }
+    if (field !== '' || row.length > 0) {
+        row.push(field);
+        rows.push(row);
+    }
+    while (rows.length && rows[rows.length - 1].length === 1 && rows[rows.length - 1][0] === '')
+        rows.pop();
+    return rows;
+}
+
+function serialize2DToCsv(rows2D, delimiter = ',') {
+    return (rows2D || []).map(row => (row || []).map(val => {
+        const s = val == null ? '' : String(val);
+        if (s.includes(delimiter) || s.includes('"') || s.includes('\n') || s.includes('\r') || /^'[=+@-]/.test(s))
+            return '"' + s.replace(/"/g, '""') + '"';
+        return s;
+    }).join(delimiter)).join('\n');
+}
+
+function parseSharedStringsXml(xmlStr) {
+    if (!xmlStr)
+        return [];
+    const dom = new DOMParser().parseFromString(xmlStr, 'text/xml');
+    const siNodes = findAllElements(dom, 'si');
+    return siNodes.map(si => {
+        const rNodes = childElements(si, 'r');
+        if (rNodes.length) {
+            return rNodes.map(r => {
+                const tEl = findFirstElement(r, 't');
+                return tEl ? String(tEl.textContent ?? '') : '';
+            }).join('');
+        }
+        const tEl = findFirstElement(si, 't');
+        return tEl ? String(tEl.textContent ?? '') : String(si.textContent ?? '');
+    });
+}
+
+function getWorkbookSheetTargets(zip) {
+    const wbEntry = zip.getEntry('xl/workbook.xml');
+    const relsEntry = zip.getEntry('xl/_rels/workbook.xml.rels');
+    const relMap = new Map();
+    if (relsEntry) {
+        try {
+            const relsDom = new DOMParser().parseFromString(relsEntry.getData().toString('utf-8'), 'text/xml');
+            for (const rel of findAllElements(relsDom, 'Relationship')) {
+                const id = getAttr(rel, 'Id');
+                let target = getAttr(rel, 'Target').replace(/^\/+/, '');
+                if (target && !target.startsWith('xl/'))
+                    target = 'xl/' + target;
+                if (id && target)
+                    relMap.set(id, target);
+            }
+        }
+        catch { /* ignore */ }
+    }
+    const sheets = [];
+    if (wbEntry) {
+        try {
+            const wbDom = new DOMParser().parseFromString(wbEntry.getData().toString('utf-8'), 'text/xml');
+            const sheetNodes = findAllElements(wbDom, 'sheet');
+            sheetNodes.forEach((sn, idx) => {
+                const name = getAttr(sn, 'name') || `Лист${idx + 1}`;
+                const rId = getAttr(sn, 'id');
+                const entryPath = (rId && relMap.get(rId)) || `xl/worksheets/sheet${idx + 1}.xml`;
+                sheets.push({ name, entryPath });
+            });
+        }
+        catch { /* ignore */ }
+    }
+    if (!sheets.length) {
+        const wsEntries = zip.getEntries()
+            .filter(e => /^xl\/worksheets\/sheet\d+\.xml$/i.test(e.entryName))
+            .sort((a, b) => Number(a.entryName.match(/\d+/)?.[0] || 0) - Number(b.entryName.match(/\d+/)?.[0] || 0));
+        wsEntries.forEach((e, idx) => sheets.push({ name: `Лист${idx + 1}`, entryPath: e.entryName }));
+    }
+    return sheets;
+}
 
 export function parseSpreadsheet(buf, ext = 'xlsx') {
     const defaultSheet = () => ({
@@ -127,84 +293,211 @@ export function parseSpreadsheet(buf, ext = 'xlsx') {
     if (!buf || !buf.length)
         return { kind: 'spreadsheet', ext, sheets: [defaultSheet()] };
 
-    if (isZip(buf))
-        assertZipSafe(buf);
+    const e = String(ext || 'xlsx').replace(/^\./, '').toLowerCase();
+    if (e === 'csv' || e === 'tsv' || !isZip(buf)) {
+        if (isZip(buf))
+            assertZipSafe(buf);
+        const text = Buffer.isBuffer(buf) ? buf.toString('utf-8') : String(buf);
+        const delim = e === 'tsv' ? '\t' : ',';
+        const rows2D = parseCsvTo2D(text, delim);
+        if (!rows2D.length)
+            return { kind: 'spreadsheet', ext, sheets: [defaultSheet()] };
 
-    let wb;
-    try {
-        wb = XLSX.read(buf, {
-            type: 'buffer',
-            cellFormula: true,
-            cellNF: true,
-            cellStyles: true,
+        let maxC = 0;
+        const cells = {};
+        rows2D.forEach((row, r) => {
+            if (row.length - 1 > maxC)
+                maxC = row.length - 1;
+            row.forEach((rawVal, c) => {
+                if (rawVal === '' || rawVal == null)
+                    return;
+                const trimmed = String(rawVal).trim();
+                const isNum = trimmed !== '' && /^-?\d+(\.\d+)?$/.test(trimmed) && !/^0\d+/.test(trimmed);
+                cells[`${r}:${c}`] = isNum
+                    ? { v: Number(trimmed), t: 'n' }
+                    : { v: String(rawVal), t: 's' };
+            });
         });
+        const totalR = Math.min(2000, Math.max(29, (rows2D.length - 1) + 8));
+        const totalC = Math.min(52, Math.max(11, maxC + 4));
+        return {
+            kind: 'spreadsheet',
+            ext,
+            sheets: [{
+                name: 'Лист1',
+                rowCount: totalR + 1,
+                colCount: totalC + 1,
+                colWidths: Array(totalC + 1).fill(110),
+                merges: [],
+                cells,
+            }],
+        };
+    }
+
+    assertZipSafe(buf);
+    let zip;
+    try {
+        zip = new AdmZip(buf);
     }
     catch {
         return { kind: 'spreadsheet', ext, sheets: [defaultSheet()] };
     }
 
-    if (!wb?.SheetNames?.length)
+    let savedMeta = null;
+    try {
+        const entry = zip.getEntry('xl/work-styles.json');
+        if (entry)
+            savedMeta = JSON.parse(entry.getData().toString('utf-8'));
+    }
+    catch { /* ignore */ }
+
+    let sharedStrings = [];
+    try {
+        const ssEntry = zip.getEntry('xl/sharedStrings.xml');
+        if (ssEntry)
+            sharedStrings = parseSharedStringsXml(ssEntry.getData().toString('utf-8'));
+    }
+    catch { /* ignore */ }
+
+    const sheetTargets = getWorkbookSheetTargets(zip);
+    if (!sheetTargets.length)
         return { kind: 'spreadsheet', ext, sheets: [defaultSheet()] };
 
-    // Достаём наш расширенный JSON стилей, если он есть в архиве
-    let savedMeta = null;
-    if (isZip(buf)) {
-        try {
-            const zip = new AdmZip(buf);
-            const entry = zip.getEntry('xl/work-styles.json');
-            if (entry)
-                savedMeta = JSON.parse(entry.getData().toString('utf-8'));
+    const sheets = sheetTargets.map((target, sheetIdx) => {
+        const wsEntry = zip.getEntry(target.entryPath)
+            || zip.getEntries().find(en => en.entryName.toLowerCase() === target.entryPath.toLowerCase());
+        if (!wsEntry) {
+            return { ...defaultSheet(), name: target.name };
         }
-        catch { /* ignore */ }
-    }
 
-    const sheets = wb.SheetNames.map((name, sheetIdx) => {
-        const ws = wb.Sheets[name] || {};
-        const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : { s: { r: 0, c: 0 }, e: { r: 0, c: 0 } };
-        const maxR = Math.min(2000, Math.max(29, (ref.e?.r || 0) + 8));
-        const maxC = Math.min(52, Math.max(11, (ref.e?.c || 0) + 4));
+        let dom;
+        try {
+            dom = new DOMParser().parseFromString(wsEntry.getData().toString('utf-8'), 'text/xml');
+        }
+        catch {
+            return { ...defaultSheet(), name: target.name };
+        }
+
+        const savedSheetMeta = savedMeta?.sheets?.[sheetIdx] || {};
+        const savedSheetStyles = savedSheetMeta.styles || {};
+
+        let maxR = 0;
+        let maxC = 0;
+        const dimEl = findFirstElement(dom, 'dimension');
+        const dimRef = getAttr(dimEl, 'ref');
+        if (dimRef) {
+            const dr = decodeRangeAddr(dimRef);
+            maxR = Math.max(maxR, dr.e.r);
+            maxC = Math.max(maxC, dr.e.c);
+        }
+
+        const rawCells = [];
+        for (const cNode of findAllElements(dom, 'c')) {
+            const rAttr = getAttr(cNode, 'r');
+            const pos = rAttr ? decodeCellAddr(rAttr) : { r: 0, c: 0 };
+            if (pos.r > maxR) maxR = pos.r;
+            if (pos.c > maxC) maxC = pos.c;
+            rawCells.push({ cNode, pos });
+        }
+
+        const rawMerges = [];
+        for (const mNode of findAllElements(dom, 'mergeCell')) {
+            const ref = getAttr(mNode, 'ref');
+            if (!ref) continue;
+            const mr = decodeRangeAddr(ref);
+            if (mr.e.r > maxR) maxR = mr.e.r;
+            if (mr.e.c > maxC) maxC = mr.e.c;
+            rawMerges.push(mr);
+        }
+
+        const boundR = Math.min(2000, Math.max(29, maxR + 8));
+        const boundC = Math.min(52, Math.max(11, maxC + 4));
+
+        const colWidthMap = new Map();
+        for (const colNode of findAllElements(dom, 'col')) {
+            const min = Math.max(1, Number(getAttr(colNode, 'min')) || 1) - 1;
+            const max = Math.max(min, (Number(getAttr(colNode, 'max')) || (min + 1)) - 1);
+            const wpxAttr = Number(getAttr(colNode, 'wpx'));
+            const widthAttr = Number(getAttr(colNode, 'width'));
+            const px = wpxAttr > 0 ? wpxAttr : (widthAttr > 0 ? Math.round((widthAttr - 1.6) * 7.5) : 110);
+            for (let c = min; c <= Math.min(boundC, max); c++)
+                colWidthMap.set(c, Math.max(50, Math.min(500, px || 110)));
+        }
 
         const colWidths = [];
-        const wsCols = ws['!cols'] || [];
-        for (let c = 0; c <= maxC; c++) {
-            const cw = wsCols[c];
-            const px = cw?.wpx ? Number(cw.wpx) : cw?.wch ? Math.round(Number(cw.wch) * 7.5 + 12) : 110;
-            colWidths.push(Math.max(50, Math.min(500, px || 110)));
+        for (let c = 0; c <= boundC; c++) {
+            const savedW = Number(savedSheetMeta.colWidths?.[c]);
+            const w = savedW > 0 ? savedW : (colWidthMap.get(c) || 110);
+            colWidths.push(Math.max(50, Math.min(500, w)));
         }
 
-        const merges = (ws['!merges'] || [])
-            .filter(m => m?.s && m?.e && m.s.r <= maxR && m.s.c <= maxC)
+        const merges = rawMerges
+            .filter(m => m.s.r <= boundR && m.s.c <= boundC)
             .map(m => ({
                 s: { r: m.s.r, c: m.s.c },
-                e: { r: Math.min(maxR, m.e.r), c: Math.min(maxC, m.e.c) },
+                e: { r: Math.min(boundR, m.e.r), c: Math.min(boundC, m.e.c) },
             }));
 
         const cells = {};
-        const savedSheetStyles = savedMeta?.sheets?.[sheetIdx]?.styles || {};
-
-        for (const key of Object.keys(ws)) {
-            if (key[0] === '!')
-                continue;
-            const cell = ws[key];
-            if (!cell)
-                continue;
-            const pos = XLSX.utils.decode_cell(key);
-            if (pos.r > maxR || pos.c > maxC)
+        for (const { cNode, pos } of rawCells) {
+            if (pos.r > boundR || pos.c > boundC)
                 continue;
             const coord = `${pos.r}:${pos.c}`;
             const st = savedSheetStyles[coord] || {};
-            const rawV = (cell.t === 'e' && !cell.f) ? '' : (cell.v ?? '');
+            const tAttr = getAttr(cNode, 't');
+            const fEl = findFirstElement(cNode, 'f');
+            const vEl = findFirstElement(cNode, 'v');
+            const isEl = findFirstElement(cNode, 'is');
+
+            const formula = fEl ? String(fEl.textContent ?? '').trim() : '';
+            let rawV = '';
+            let cellType = 's';
+
+            if (tAttr === 'e' && !formula) {
+                rawV = '';
+            }
+            else if (tAttr === 'inlineStr' || isEl) {
+                const tNodes = isEl ? findAllElements(isEl, 't') : [];
+                rawV = tNodes.length ? tNodes.map(t => t.textContent || '').join('') : String(isEl?.textContent ?? '');
+                cellType = 's';
+            }
+            else if (tAttr === 's') {
+                const ssIdx = Number(vEl?.textContent ?? -1);
+                rawV = (ssIdx >= 0 && ssIdx < sharedStrings.length) ? sharedStrings[ssIdx] : String(vEl?.textContent ?? '');
+                cellType = 's';
+            }
+            else if (tAttr === 'b') {
+                const vt = String(vEl?.textContent ?? '').trim();
+                rawV = vt === '1' || vt.toLowerCase() === 'true';
+                cellType = 'b';
+            }
+            else if (tAttr === 'str') {
+                rawV = String(vEl?.textContent ?? '');
+                cellType = 's';
+            }
+            else if (vEl && vEl.textContent !== undefined && vEl.textContent !== '') {
+                const vt = String(vEl.textContent).trim();
+                const num = Number(vt);
+                if (Number.isFinite(num) && vt !== '') {
+                    rawV = num;
+                    cellType = 'n';
+                }
+                else {
+                    rawV = vt;
+                    cellType = 's';
+                }
+            }
+
             const hasStyle = Boolean(st.bold || st.italic || st.align || st.color || st.bg || st.numFmt);
-            if (rawV === '' && !cell.f && !hasStyle)
+            if (rawV === '' && !formula && !hasStyle)
                 continue;
+
             const entry = {
                 v: rawV,
-                t: cell.t === 'e' ? 's' : (cell.t || (typeof rawV === 'number' ? 'n' : 's')),
+                t: cellType,
             };
-            if (cell.f)
-                entry.f = String(cell.f);
-            if (cell.w !== undefined && cell.w !== String(cell.v ?? ''))
-                entry.w = String(cell.w);
+            if (formula)
+                entry.f = formula;
             if (st.bold)
                 entry.bold = true;
             if (st.italic)
@@ -221,9 +514,9 @@ export function parseSpreadsheet(buf, ext = 'xlsx') {
         }
 
         return {
-            name,
-            rowCount: maxR + 1,
-            colCount: maxC + 1,
+            name: target.name,
+            rowCount: boundR + 1,
+            colCount: boundC + 1,
             colWidths,
             merges,
             cells,
@@ -233,21 +526,66 @@ export function parseSpreadsheet(buf, ext = 'xlsx') {
     return { kind: 'spreadsheet', ext, sheets };
 }
 
+function sheetCellsTo2D(sheet) {
+    const cells = sheet?.cells || {};
+    let maxR = -1;
+    let maxC = -1;
+    for (const [coord, cell] of Object.entries(cells)) {
+        if (!cell) continue;
+        const [r, c] = coord.split(':').map(Number);
+        if (!Number.isFinite(r) || !Number.isFinite(c) || r < 0 || c < 0) continue;
+        if (cell.v === '' && !cell.f) continue;
+        if (r > maxR) maxR = r;
+        if (c > maxC) maxC = c;
+    }
+    if (maxR < 0 || maxC < 0)
+        return [];
+    const rows = Array.from({ length: maxR + 1 }, () => Array(maxC + 1).fill(''));
+    for (const [coord, cell] of Object.entries(cells)) {
+        if (!cell) continue;
+        const [r, c] = coord.split(':').map(Number);
+        if (r >= 0 && r <= maxR && c >= 0 && c <= maxC)
+            rows[r][c] = cell.v ?? '';
+    }
+    return rows;
+}
+
 export function buildSpreadsheetBuffer(data, ext = 'xlsx') {
     const sheets = Array.isArray(data?.sheets) && data.sheets.length
         ? data.sheets
         : [{ name: 'Лист1', colWidths: [], merges: [], cells: {} }];
 
-    const wb = XLSX.utils.book_new();
+    const e = String(ext || 'xlsx').replace(/^\./, '').toLowerCase();
+    if (e === 'csv' || e === 'tsv') {
+        const rows2D = sheetCellsTo2D(sheets[0]);
+        const csv = serialize2DToCsv(rows2D, e === 'tsv' ? '\t' : ',');
+        return Buffer.from(csv, 'utf-8');
+    }
+
+    const zip = new AdmZip();
+    const sharedStrings = [];
+    const sharedMap = new Map();
+    const getSharedStringIdx = (str) => {
+        const s = String(str ?? '');
+        if (sharedMap.has(s))
+            return sharedMap.get(s);
+        const idx = sharedStrings.length;
+        sharedStrings.push(s);
+        sharedMap.set(s, idx);
+        return idx;
+    };
+
     const styleMeta = { sheets: [] };
+    const sheetMetaList = [];
 
     for (let idx = 0; idx < sheets.length; idx++) {
         const s = sheets[idx] || {};
-        const ws = {};
+        const sheetName = String(s.name || `Лист${idx + 1}`).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || `Лист${idx + 1}`;
+        const cells = s.cells || {};
+        const styles = {};
+        const rowsMap = new Map();
         let maxR = 0;
         let maxC = 0;
-        const styles = {};
-        const cells = s.cells || {};
 
         for (const [coord, cell] of Object.entries(cells)) {
             if (!cell)
@@ -257,45 +595,15 @@ export function buildSpreadsheetBuffer(data, ext = 'xlsx') {
             const c = Number(cStr);
             if (!Number.isFinite(r) || !Number.isFinite(c) || r < 0 || c < 0)
                 continue;
+
             const rawVal = cell.v ?? '';
             const formula = cell.f ? String(cell.f).replace(/^=/, '').trim() : '';
             const hasStyle = Boolean(cell.bold || cell.italic || cell.align || cell.color || cell.bg || cell.numFmt);
             if (rawVal === '' && !formula && !hasStyle)
                 continue;
 
-            if (r > maxR)
-                maxR = r;
-            if (c > maxC)
-                maxC = c;
-
-            const addr = XLSX.utils.encode_cell({ r, c });
-            const num = typeof rawVal === 'number'
-                ? rawVal
-                : (typeof rawVal === 'string' && rawVal.trim() !== '' && /^-?\d+([.,]\d+)?$/.test(rawVal.trim())
-                    ? Number(rawVal.trim().replace(',', '.'))
-                    : NaN);
-
-            const cellObj = {};
-            if (formula) {
-                cellObj.f = formula;
-                if (Number.isFinite(num)) {
-                    cellObj.t = 'n';
-                    cellObj.v = num;
-                }
-                else {
-                    cellObj.t = 's';
-                    cellObj.v = String(rawVal ?? '');
-                }
-            }
-            else if (Number.isFinite(num)) {
-                cellObj.t = 'n';
-                cellObj.v = num;
-            }
-            else {
-                cellObj.t = 's';
-                cellObj.v = String(rawVal ?? '');
-            }
-            ws[addr] = cellObj;
+            if (r > maxR) maxR = r;
+            if (c > maxC) maxC = c;
 
             if (hasStyle) {
                 styles[coord] = {
@@ -307,46 +615,237 @@ export function buildSpreadsheetBuffer(data, ext = 'xlsx') {
                     ...(cell.numFmt ? { numFmt: cell.numFmt } : {}),
                 };
             }
+
+            if (!rowsMap.has(r))
+                rowsMap.set(r, []);
+            rowsMap.get(r).push({ r, c, rawVal, formula, cell });
         }
 
         const merges = Array.isArray(s.merges) ? s.merges : [];
         for (const m of merges) {
-            if (m?.e?.r > maxR)
-                maxR = m.e.r;
-            if (m?.e?.c > maxC)
-                maxC = m.e.c;
+            if (m?.e?.r > maxR) maxR = m.e.r;
+            if (m?.e?.c > maxC) maxC = m.e.c;
         }
 
-        ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
-        if (Array.isArray(s.colWidths) && s.colWidths.length)
-            ws['!cols'] = s.colWidths.map(wpx => ({ wpx: Number(wpx) || 110 }));
-        if (merges.length)
-            ws['!merges'] = merges;
+        const colWidths = Array.isArray(s.colWidths) ? s.colWidths.map(w => Number(w) || 110) : [];
+        const colsXml = colWidths.length
+            ? `<cols>${colWidths.map((wpx, cIdx) => {
+                const widthChars = ((wpx / 7.5) + 1.6).toFixed(2);
+                return `<col min="${cIdx + 1}" max="${cIdx + 1}" width="${widthChars}" wpx="${wpx}" customWidth="1"/>`;
+            }).join('')}</cols>`
+            : '';
 
-        const sheetName = String(s.name || `Лист${idx + 1}`).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || `Лист${idx + 1}`;
-        XLSX.utils.book_append_sheet(wb, ws, sheetName);
-        styleMeta.sheets.push({ name: sheetName, styles });
+        const sortedRows = [...rowsMap.keys()].sort((a, b) => a - b);
+        const sheetDataXml = sortedRows.map(r => {
+            const rowCells = rowsMap.get(r).sort((a, b) => a.c - b.c);
+            const cellsXml = rowCells.map(({ r: cr, c: cc, rawVal, formula }) => {
+                const addr = encodeCellAddr({ r: cr, c: cc });
+                const num = typeof rawVal === 'number'
+                    ? rawVal
+                    : (typeof rawVal === 'string' && rawVal.trim() !== '' && /^-?\d+([.,]\d+)?$/.test(rawVal.trim()) && !/^0\d+/.test(rawVal.trim())
+                        ? Number(rawVal.trim().replace(',', '.'))
+                        : NaN);
+
+                if (formula) {
+                    const fTag = `<f>${escapeXml(formula)}</f>`;
+                    if (Number.isFinite(num))
+                        return `<c r="${addr}" t="n">${fTag}<v>${num}</v></c>`;
+                    return `<c r="${addr}" t="str">${fTag}<v>${escapeXml(String(rawVal ?? ''))}</v></c>`;
+                }
+                if (typeof rawVal === 'boolean')
+                    return `<c r="${addr}" t="b"><v>${rawVal ? 1 : 0}</v></c>`;
+                if (Number.isFinite(num))
+                    return `<c r="${addr}" t="n"><v>${num}</v></c>`;
+                const ssIdx = getSharedStringIdx(String(rawVal ?? ''));
+                return `<c r="${addr}" t="s"><v>${ssIdx}</v></c>`;
+            }).join('');
+            return `<row r="${r + 1}">${cellsXml}</row>`;
+        }).join('');
+
+        const mergesXml = merges.length
+            ? `<mergeCells count="${merges.length}">${merges.map(m => `<mergeCell ref="${encodeCellAddr(m.s)}:${encodeCellAddr(m.e)}"/>`).join('')}</mergeCells>`
+            : '';
+
+        const dimRef = `A1:${encodeCellAddr({ r: maxR, c: maxC })}`;
+        const wsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <dimension ref="${dimRef}"/>
+  ${colsXml}
+  <sheetData>${sheetDataXml}</sheetData>
+  ${mergesXml}
+</worksheet>`;
+
+        zip.addFile(`xl/worksheets/sheet${idx + 1}.xml`, Buffer.from(wsXml, 'utf-8'));
+        sheetMetaList.push({ name: sheetName, idx: idx + 1 });
+        styleMeta.sheets.push({ name: sheetName, colWidths, styles });
     }
 
+    const sheetOverrides = sheetMetaList.map(m =>
+        `  <Override PartName="/xl/worksheets/sheet${m.idx}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
+    ).join('\n');
+
+    zip.addFile('[Content_Types].xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="json" ContentType="application/json"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+${sheetOverrides}
+</Types>`, 'utf-8'));
+
+    zip.addFile('_rels/.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`, 'utf-8'));
+
+    const sheetsXml = sheetMetaList.map(m =>
+        `    <sheet name="${escapeXml(m.name)}" sheetId="${m.idx}" r:id="rId${m.idx}"/>`
+    ).join('\n');
+
+    zip.addFile('xl/workbook.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+${sheetsXml}
+  </sheets>
+</workbook>`, 'utf-8'));
+
+    const wbRelsXml = sheetMetaList.map(m =>
+        `  <Relationship Id="rId${m.idx}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${m.idx}.xml"/>`
+    ).join('\n');
+
+    zip.addFile('xl/_rels/workbook.xml.rels', Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${wbRelsXml}
+  <Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rIdStrings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+</Relationships>`, 'utf-8'));
+
+    zip.addFile('xl/styles.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+  <fills count="1"><fill><patternFill patternType="none"/></fill></fills>
+  <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+  <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>
+</styleSheet>`, 'utf-8'));
+
+    const ssItemsXml = sharedStrings.map(s => `<si><t xml:space="preserve">${escapeXml(s)}</t></si>`).join('');
+    zip.addFile('xl/sharedStrings.xml', Buffer.from(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sharedStrings.length}" uniqueCount="${sharedStrings.length}">${ssItemsXml}</sst>`, 'utf-8'));
+
+    zip.addFile('xl/work-styles.json', Buffer.from(JSON.stringify(styleMeta), 'utf-8'));
+    return zip.toBuffer();
+}
+
+/**
+ * Прочитать лист таблицы (.xlsx/.csv/.tsv) как массив объектов по заголовкам первой строки.
+ */
+export function spreadsheetToRows(buf, ext = 'xlsx', requestedSheet = '') {
+    const parsed = parseSpreadsheet(buf, ext);
+    const sheetNames = parsed.sheets.map(s => s.name);
+    const targetName = requestedSheet && sheetNames.includes(requestedSheet) ? requestedSheet : sheetNames[0];
+    if (requestedSheet && targetName !== requestedSheet)
+        throw new Error('лист «' + requestedSheet + '» не найден; есть: ' + sheetNames.join(', '));
+    const sheetObj = parsed.sheets.find(s => s.name === targetName) || parsed.sheets[0];
+    const grid = sheetCellsTo2D(sheetObj);
+    if (!grid.length)
+        return { sheet: targetName, sheets: sheetNames, rows: [] };
+    const headers = grid[0].map((h, idx) => String(h ?? '').trim() || `Колонка_${idx + 1}`);
+    const rows = [];
+    for (let r = 1; r < grid.length; r++) {
+        const line = grid[r];
+        if (!line || line.every(v => v === '' || v == null))
+            continue;
+        const obj = {};
+        for (let c = 0; c < headers.length; c++)
+            obj[headers[c]] = line[c] === undefined || line[c] === null ? '' : String(line[c]);
+        rows.push(obj);
+    }
+    return { sheet: targetName, sheets: sheetNames, rows };
+}
+
+/**
+ * Собрать буфер таблицы (.xlsx или .csv) из словаря листов `{ ИмяЛиста: rows }`
+ * (где `rows` — массив объектов или массив массивов) со щитом формул R4.
+ */
+export function rowsToSpreadsheetBuffer(sheetsMap, ext = 'xlsx', { shieldFormulas = true } = {}) {
     const e = String(ext || 'xlsx').replace(/^\./, '').toLowerCase();
+    const shieldCell = v => (shieldFormulas && typeof v === 'string' && /^[=+@-]/.test(v)) ? "'" + v : v;
+
+    const to2D = (rows) => {
+        if (!Array.isArray(rows) || !rows.length)
+            throw new Error('write_table: пустая таблица');
+        if (rows.length > 100_000)
+            throw new Error('write_table: больше 100 000 строк');
+        if (Array.isArray(rows[0]))
+            return rows.map(r => (Array.isArray(r) ? r.map(shieldCell) : [shieldCell(r)]));
+        const cols = [];
+        const colSet = new Set();
+        for (const r of rows) {
+            if (r && typeof r === 'object') {
+                for (const k of Object.keys(r)) {
+                    if (!colSet.has(k)) {
+                        colSet.add(k);
+                        cols.push(k);
+                    }
+                }
+            }
+        }
+        const out = [cols.map(shieldCell)];
+        for (const r of rows) {
+            out.push(cols.map(k => shieldCell(r?.[k] ?? '')));
+        }
+        return out;
+    };
+
     if (e === 'csv' || e === 'tsv') {
-        const firstWs = wb.Sheets[wb.SheetNames[0]];
-        const csv = XLSX.utils.sheet_to_csv(firstWs, { FS: e === 'tsv' ? '\t' : ',' });
-        return Buffer.from(csv, 'utf-8');
+        const firstRows = Object.values(sheetsMap)[0];
+        const rows2D = to2D(firstRows);
+        const csv = serialize2DToCsv(rows2D, e === 'tsv' ? '\t' : ',');
+        return Buffer.from('\uFEFF' + csv, 'utf-8');
     }
 
-    const rawBuf = XLSX.write(wb, { type: 'buffer', bookType: e === 'xls' ? 'biff8' : 'xlsx' });
-    if (e !== 'xls' && isZip(rawBuf)) {
-        try {
-            const zip = new AdmZip(rawBuf);
-            zip.addFile('xl/work-styles.json', Buffer.from(JSON.stringify(styleMeta), 'utf-8'));
-            return zip.toBuffer();
-        }
-        catch {
-            return rawBuf;
-        }
-    }
-    return rawBuf;
+    const sheets = Object.entries(sheetsMap).map(([name, rows], idx) => {
+        const rows2D = to2D(rows);
+        const cells = {};
+        rows2D.forEach((row, r) => {
+            row.forEach((val, c) => {
+                if (val === undefined || val === null || val === '')
+                    return;
+                cells[`${r}:${c}`] = {
+                    v: val,
+                    t: typeof val === 'number' ? 'n' : (typeof val === 'boolean' ? 'b' : 's'),
+                    ...(r === 0 ? { bold: true } : {}),
+                };
+            });
+        });
+        return {
+            name: String(name || `Лист${idx + 1}`).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || `Лист${idx + 1}`,
+            colWidths: [],
+            merges: [],
+            cells,
+        };
+    });
+
+    return buildSpreadsheetBuffer({ sheets }, 'xlsx');
+}
+
+/**
+ * Извлечь плоский текст (CSV по листам) из таблицы (.xlsx/.csv/.tsv).
+ */
+export function spreadsheetToText(buf, ext = 'xlsx') {
+    const parsed = parseSpreadsheet(buf, ext);
+    return (parsed.sheets || []).map(sh => {
+        const rows2D = sheetCellsTo2D(sh);
+        const csv = serialize2DToCsv(rows2D, ',').trim();
+        if (!csv)
+            return '';
+        return (parsed.sheets.length > 1 ? sh.name + '\n' : '') + csv;
+    }).filter(Boolean).join('\n\n');
 }
 
 // ============================================================================
@@ -1603,4 +2102,178 @@ export async function handleOfficeWebDav(request, response, session, item, readB
     }
     return false;
 }
+
+// ============================================================================
+// 6. ИЗВЛЕЧЕНИЕ ТЕКСТА ИЗ ДОКУМЕНТОВ (.docx, .pptx, .xlsx, .csv, .rtf, .odt, .pdf)
+// ============================================================================
+
+function decodePdfLiteralString(raw) {
+    let s = '';
+    for (let i = 0; i < raw.length; i++) {
+        const ch = raw[i];
+        if (ch !== '\\') {
+            s += ch;
+            continue;
+        }
+        const next = raw[++i];
+        if (next === undefined) break;
+        if (next === 'n') s += '\n';
+        else if (next === 'r') s += '\r';
+        else if (next === 't') s += '\t';
+        else if (next === 'b') s += '\b';
+        else if (next === 'f') s += '\f';
+        else if (next >= '0' && next <= '7') {
+            let oct = next;
+            if (raw[i + 1] >= '0' && raw[i + 1] <= '7') oct += raw[++i];
+            if (raw[i + 1] >= '0' && raw[i + 1] <= '7') oct += raw[++i];
+            s += String.fromCharCode(parseInt(oct, 8));
+        }
+        else {
+            s += next;
+        }
+    }
+    if (s.length >= 2 && s.charCodeAt(0) === 0xFE && s.charCodeAt(1) === 0xFF) {
+        let out = '';
+        for (let i = 2; i + 1 < s.length; i += 2)
+            out += String.fromCharCode((s.charCodeAt(i) << 8) | s.charCodeAt(i + 1));
+        return out;
+    }
+    return s;
+}
+
+function decodePdfHexString(hex) {
+    const clean = String(hex || '').replace(/\s+/g, '');
+    if (!clean) return '';
+    const padded = clean.length % 2 === 1 ? clean + '0' : clean;
+    const bytes = Buffer.from(padded, 'hex');
+    if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+        let out = '';
+        for (let i = 2; i + 1 < bytes.length; i += 2)
+            out += String.fromCharCode((bytes[i] << 8) | bytes[i + 1]);
+        return out;
+    }
+    return bytes.toString('utf-8');
+}
+
+function extractPdfTextFromContentStream(streamStr) {
+    const parts = [];
+    const blocks = streamStr.match(/BT[\s\S]*?ET/g) || [streamStr];
+    for (const block of blocks) {
+        const lineChunks = [];
+        const tokenRe = /\((?:\\.|[^\\()])*\)|<([0-9A-Fa-f\s]+)>|\b(Td|TD|T\*|'|")\b/g;
+        let m;
+        while ((m = tokenRe.exec(block)) !== null) {
+            if (m[0][0] === '(') {
+                const txt = decodePdfLiteralString(m[0].slice(1, -1));
+                if (txt) lineChunks.push(txt);
+            }
+            else if (m[1] !== undefined) {
+                const txt = decodePdfHexString(m[1]);
+                if (txt) lineChunks.push(txt);
+            }
+            else if (m[2]) {
+                lineChunks.push('\n');
+            }
+        }
+        const joined = lineChunks.join('').replace(/[ \t]+\n/g, '\n').trim();
+        if (joined)
+            parts.push(joined);
+    }
+    return parts.join('\n');
+}
+
+export function extractPdfText(buf) {
+    if (!Buffer.isBuffer(buf) || buf.length < 8)
+        return '';
+    const raw = buf.toString('latin1');
+    const out = [];
+    let pos = 0;
+    while (pos < raw.length) {
+        const sIdx = raw.indexOf('stream', pos);
+        if (sIdx < 0) break;
+        let dataStart = sIdx + 6;
+        if (raw[dataStart] === '\r' && raw[dataStart + 1] === '\n') dataStart += 2;
+        else if (raw[dataStart] === '\n' || raw[dataStart] === '\r') dataStart += 1;
+        else {
+            pos = sIdx + 6;
+            continue;
+        }
+        const eIdx = raw.indexOf('endstream', dataStart);
+        if (eIdx < 0) break;
+        let dataEnd = eIdx;
+        if (raw[dataEnd - 1] === '\n') dataEnd--;
+        if (raw[dataEnd - 1] === '\r') dataEnd--;
+
+        const headerSlice = raw.slice(Math.max(0, sIdx - 300), sIdx);
+        const streamBuf = buf.subarray(dataStart, dataEnd);
+        let decodedStr = '';
+        if (/\/FlateDecode\b/.test(headerSlice)) {
+            try {
+                decodedStr = zlib.inflateSync(streamBuf).toString('latin1');
+            }
+            catch {
+                try {
+                    decodedStr = zlib.inflateRawSync(streamBuf).toString('latin1');
+                }
+                catch { /* ignore */ }
+            }
+        }
+        else if (!/\/(DCTDecode|JPXDecode|JBIG2Decode|CCITTFaxDecode)\b/.test(headerSlice)) {
+            decodedStr = streamBuf.toString('latin1');
+        }
+        if (decodedStr && (decodedStr.includes('Tj') || decodedStr.includes('TJ') || decodedStr.includes('BT'))) {
+            const txt = extractPdfTextFromContentStream(decodedStr);
+            if (txt)
+                out.push(txt);
+        }
+        pos = eIdx + 9;
+    }
+    return out.join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+export function extractOfficeOrPdfText(buf, ext = '') {
+    if (!Buffer.isBuffer(buf) || !buf.length)
+        return '';
+    const e = String(ext || '').replace(/^\./, '').toLowerCase();
+    const isPdf = e === 'pdf' || (buf.length >= 5 && buf.subarray(0, 5).toString('ascii') === '%PDF-');
+    if (isPdf)
+        return extractPdfText(buf);
+
+    if (isZip(buf)) {
+        assertZipSafe(buf);
+        const zip = new AdmZip(buf);
+        if (zip.getEntry('word/document.xml')) {
+            const doc = parseDocument(buf, 'docx');
+            const dom = new DOMParser().parseFromString(`<!DOCTYPE html><html><body>${doc.html || ''}</body></html>`, 'text/html');
+            const rawText = dom.body?.textContent || dom.documentElement?.textContent || String(doc.html || '').replace(/<[^>]+>/g, ' ');
+            return rawText.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+        }
+        if (zip.getEntry('ppt/presentation.xml')) {
+            const pres = parsePresentation(buf, 'pptx');
+            return (pres.slides || []).map(sl =>
+                (sl.elements || []).map(el => String(el.text || '').trim()).filter(Boolean).join('\n')
+            ).filter(Boolean).join('\n\n').trim();
+        }
+        if (zip.getEntry('xl/workbook.xml')) {
+            return spreadsheetToText(buf, 'xlsx');
+        }
+        if (zip.getEntry('content.xml')) {
+            const xml = zip.getEntry('content.xml').getData().toString('utf-8');
+            const dom = new DOMParser().parseFromString(xml, 'text/xml');
+            return (dom.documentElement?.textContent || '').replace(/\s+/g, ' ').trim();
+        }
+    }
+
+    if (SPREADSHEET_EXTS.has(e))
+        return spreadsheetToText(buf, e);
+
+    if (e === 'rtf') {
+        const doc = parseDocument(buf, 'rtf');
+        const dom = new DOMParser().parseFromString(`<!DOCTYPE html><html><body>${doc.html || ''}</body></html>`, 'text/html');
+        return (dom.body?.textContent || dom.documentElement?.textContent || '').trim();
+    }
+
+    return '';
+}
+
 

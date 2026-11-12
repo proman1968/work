@@ -69,32 +69,8 @@ export const writeTable = {
             if (!['xlsx', 'csv'].includes(ext))
                 throw new Error('write_table: расширение .xlsx или .csv');
             const sheets = args.sheets && typeof args.sheets === 'object' ? args.sheets : { 'Лист1': args.rows };
-            const XLSX = await import('xlsx');
-            const toSheet = rows => {
-                if (!Array.isArray(rows) || !rows.length)
-                    throw new Error('write_table: пустая таблица');
-                if (rows.length > 100_000)
-                    throw new Error('write_table: больше 100 000 строк');
-                // R4 (8.32): щит формул — КАЖДАЯ строковая ячейка (=,+,-,@ в начале Excel исполняет
-                // при открытии; данные приходят из чужих писем/таблиц). Числа не трогаем:
-                // -5 остаётся числом, строка '-5' становится текстом '-5
-                const cell = v => typeof v === 'string' && /^[=+@-]/.test(v) ? "'" + v : v;
-                const shielded = rows.map(r => Array.isArray(r) ? r.map(cell)
-                    : (r && typeof r === 'object' ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k, cell(v)])) : r));
-                return Array.isArray(shielded[0]) ? XLSX.utils.aoa_to_sheet(shielded) : XLSX.utils.json_to_sheet(shielded);
-            };
-            let buf;
-            if (ext === 'csv') {
-                const first = Object.values(sheets)[0];
-                // щит уже в каждой ячейке (toSheet) — сюда чужие значения не попадают
-                buf = Buffer.from('\uFEFF' + XLSX.utils.sheet_to_csv(toSheet(first)), 'utf-8');
-            }
-            else {
-                const wb = XLSX.utils.book_new();
-                for (const [name, rows] of Object.entries(sheets))
-                    XLSX.utils.book_append_sheet(wb, toSheet(rows), String(name).replace(/[\\/?*[\]:]/g, ' ').slice(0, 31) || 'Лист');
-                buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-            }
+            const { rowsToSpreadsheetBuffer } = await import('../../../office/index.js');
+            const buf = rowsToSpreadsheetBuffer(sheets, ext, { shieldFormulas: true });
             const real = await writeBinary(args.path, buf, ctx);
             if (ctx.entry)
                 ctx.entry.path = real;

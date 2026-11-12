@@ -10,7 +10,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { PreTrainedTokenizer } from '@huggingface/transformers';
 import { dataStore } from '../../data/api.js';
 import { classesOfType } from '../../data/classes.js';
 import { classSchema } from '../../data/schema.js';
@@ -54,9 +53,10 @@ function hasSafetensorsAndTokenizer(weightsDir) {
     }
 }
 
-function getTokenizer(weightsDir) {
+async function getTokenizer(weightsDir) {
     if (_tokenizerCache.has(weightsDir))
         return _tokenizerCache.get(weightsDir);
+    const { PreTrainedTokenizer } = await import('@huggingface/transformers');
     const tjPath = path.join(weightsDir, 'tokenizer.json');
     const tj = JSON.parse(fs.readFileSync(tjPath, 'utf-8'));
     const tok = new PreTrainedTokenizer(tj, {
@@ -223,7 +223,7 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
     const grounding = await buildCompactGrounding(lastQuestion);
 
     if (hasSafetensorsAndTokenizer(weightsDir)) {
-        const tokenizer = getTokenizer(weightsDir);
+        const tokenizer = await getTokenizer(weightsDir);
         const enableThinking = Boolean(options?.effort && options.effort !== 'off');
         const promptText = buildChatMlPrompt(turns.length ? turns : [{ role: 'user', content: 'Привет!' }], grounding, enableThinking);
         const inputIds = Array.from(tokenizer.encode(promptText), Number);

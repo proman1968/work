@@ -15,9 +15,21 @@
  */
 export default {
     icon: 'carbon:api',
-    description: 'Внешние сервисы и коннекторы',
+    label: 'Сервисы и MCP',
+    description: 'Внешние сервисы, MCP-серверы и навыки ИИ',
+    form: 'mcp',
     // F23: чтение объявлено явно (имя метода больше не считается гарантией)
-    ACCESS: { mcp_list_tools: 'read' },
+    ACCESS: {
+        mcp_list_tools: 'read',
+        mcp_catalog: 'read',
+        mentions_catalog: 'read',
+        mcp_inspect: 'read',
+        mcp_install: 'write',
+        mcp_toggle: 'write',
+        mcp_remove: 'write',
+        skill_install: 'write',
+        skill_remove: 'write',
+    },
 
     METADATA: {
         STATIC: [{
@@ -62,7 +74,77 @@ export default {
             return result;
         return result?.result ?? result;
     },
+
+    /** Быстрый каталог @-упоминаний (навыки, субагенты, инструменты и MCP) для work-prompt-bar. */
+    async mentions_catalog(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        return ext.getPromptMentionsCatalog(params.place || null);
+    },
+
+    /** Полный каталог MCP-серверов, коннекторов /SERVICES, пресетов и навыков ИИ (включая OpenCode/Claude на ПК). */
+    async mcp_catalog(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        const [mcpData, skillsData] = await Promise.all([
+            ext.listMcpCatalog(),
+            ext.listSkillsCatalog(params.place || null),
+        ]);
+        return {
+            ...mcpData,
+            skills: skillsData.installed,
+            hostSkills: skillsData.hostSkills,
+        };
+    },
+
+    /** Установить MCP-сервер (из JSON mcpServers, пресета или полей формы) в /SERVICES/<id>. */
+    async mcp_install(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        const payload = parsePostPayload(params);
+        return ext.installMcpServers(payload, { session: params.session });
+    },
+
+    /** Включить/выключить MCP-сервер /SERVICES/<id>. */
+    async mcp_toggle(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        const payload = parsePostPayload(params);
+        return ext.setMcpServerEnabled({ id: payload.id || params.id, enabled: payload.enabled ?? params.enabled }, { session: params.session });
+    },
+
+    /** Удалить MCP-сервер /SERVICES/<id>. */
+    async mcp_remove(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        const payload = parsePostPayload(params);
+        return ext.removeMcpServer({ id: payload.id || params.id }, { session: params.session });
+    },
+
+    /** Проверить соединение с MCP-сервером и получить список его инструментов (tools/list). */
+    async mcp_inspect(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        const payload = parsePostPayload(params);
+        return ext.inspectMcpServer({ id: payload.id || params.id || this.id, place: payload.place || params.place }, { session: params.session });
+    },
+
+    /** Установить внешний навык (SKILL.md) из локального каталога OpenCode/Claude, по GitHub URL или из текста. */
+    async skill_install(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        const payload = parsePostPayload(params);
+        return ext.installExternalSkill(payload, { session: params.session });
+    },
+
+    /** Удалить навык из выбранного слоя. */
+    async skill_remove(params = {}) {
+        const ext = await WORK_EXTENSIONS();
+        const payload = parsePostPayload(params);
+        return ext.removeInstalledSkill(payload, { session: params.session });
+    },
 };
+
+function parsePostPayload(params = {}) {
+    let post = params.post ?? params.body ?? params.data;
+    if (typeof post === 'string' && post.trim()) {
+        try { post = JSON.parse(post); } catch { /* keep as string */ }
+    }
+    return (post && typeof post === 'object' && !Array.isArray(post)) ? { ...params, ...post } : params;
+}
 
 const MCP_START_TIMEOUT = 15000;
 const MCP_CALL_TIMEOUT = 60000;

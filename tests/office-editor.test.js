@@ -13,6 +13,7 @@ import {
     buildDocumentBuffer,
     parsePresentation,
     buildPresentationBuffer,
+    extractOfficeOrPdfText,
     officeLoadFile,
     officeSaveFile,
     handleOfficeWebDav,
@@ -273,5 +274,29 @@ describe('локальный офисный пакет WORK (xlsx / docx / pptx 
         for (const [, expr] of eventMatches) {
             assert.doesNotThrow(() => new Function('$event, $this, $for', `with(this){return (${expr})}`), `обработчик @...="${expr}" должен компилироваться без SyntaxError`);
         }
+    });
+
+    it('extractOfficeOrPdfText извлекает текст из .xlsx, .docx, .pptx и .pdf без внешних нативных библиотек', () => {
+        const xlsxBuf = buildSpreadsheetBuffer({
+            sheets: [{ name: 'Смета', cells: { '0:0': { v: 'Статья' }, '0:1': { v: 'Сумма' }, '1:0': { v: 'Аренда' }, '1:1': { v: 50000 } } }],
+        }, 'xlsx');
+        const xlsxText = extractOfficeOrPdfText(xlsxBuf, 'xlsx');
+        assert.match(xlsxText, /Статья,Сумма/);
+        assert.match(xlsxText, /Аренда,50000/);
+
+        const docxBuf = buildDocumentBuffer({ html: '<h1>Приказ № 7</h1><p>Назначить ответственным Иванова И.И.</p>' });
+        const docxText = extractOfficeOrPdfText(docxBuf, 'docx');
+        assert.match(docxText, /Приказ № 7/);
+        assert.match(docxText, /Назначить ответственным/);
+
+        const pptxBuf = buildPresentationBuffer({
+            slides: [{ id: 's1', title: 'Стратегия', elements: [{ id: 'e1', type: 'text', text: 'Выход на новые рынки 2026' }] }],
+        });
+        const pptxText = extractOfficeOrPdfText(pptxBuf, 'pptx');
+        assert.match(pptxText, /Выход на новые рынки 2026/);
+
+        const pdfSample = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Length 44 >>\nstream\nBT /F1 12 Tf 72 720 Td (Dogovor #42) Tj ET\nendstream\nendobj\n%%EOF', 'latin1');
+        const pdfText = extractOfficeOrPdfText(pdfSample, 'pdf');
+        assert.match(pdfText, /Dogovor #42/);
     });
 });

@@ -27,6 +27,7 @@ import { tlsAgentFor } from "../host/tls-ca.js";
 globalThis.WORK_AGENT ??= () => import('../modules/agent/session.js');
 globalThis.WORK_AGENT_CORE ??= () => import('../modules/agent/index.js');
 globalThis.WORK_MCP ??= () => import('../modules/agent/mcp-pool.js');
+globalThis.WORK_EXTENSIONS ??= () => import('../modules/agent/extensions.js');
 /** Коннекторы LAN для методов class.js (data:-модули не поддерживают относительные импорты). */
 globalThis.WORK_LAN ??= () => import('../modules/lan/connectors.js');
 /** Триггеры агента на сохранение файлов (ai/triggers/*.md); WORK_TRIGGERS=0 — выключить. */

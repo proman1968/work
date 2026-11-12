@@ -615,6 +615,7 @@ ODA({is: 'work-form',
             builder: 'Поясни схему полей (METADATA.FIELDS / STATIC / ANALYTICS / OVERLAY) и трёхосевое наследование класса.',
             database: 'Поясни состав таблиц изолированной SQLite-базы данных и назначение текущей таблицы.',
             trainer: 'Поясни профиль оборудования, доступные локальные модели и шаги сборки датасета и дообучения LoRA / SFT / GRPO.',
+            mcp: 'Поясни подключённые MCP-серверы в /SERVICES, способы добавления новых MCP (через стандартный JSON mcpServers или пресеты) и работу с внешними навыками SKILL.md (включая @grill-me).',
         };
         const tailHint = viewHints[viewId] || 'Расскажи, что здесь отображается, какие данные сейчас представлены и какие действия доступны.';
         const title = `Консультация: ${label}${focusSubject ? ' — ' + focusSubject : ''}${viewLabel ? ' (' + viewLabel + ')' : ''}`;
