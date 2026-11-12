@@ -316,7 +316,15 @@ export function createLicenseServerApp(options = {}) {
     function extractBearerToken(req, body = null, url = null) {
         const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
         const xAdmin = String(req.headers['x-admin-token'] || req.headers['x-admin-key'] || '').trim();
-        return authHeader || xAdmin || body?.adminToken || body?.sessionKey || url?.searchParams?.get('sessionKey') || '';
+        let cookieTok = '';
+        const cookieHdr = String(req.headers.cookie || '');
+        if (cookieHdr) {
+            const m = cookieHdr.match(/(?:^|;\s*)odant_work_session=([^;]+)/);
+            if (m?.[1]) {
+                try { cookieTok = decodeURIComponent(m[1].trim()); } catch { cookieTok = m[1].trim(); }
+            }
+        }
+        return authHeader || xAdmin || body?.adminToken || body?.sessionKey || url?.searchParams?.get('sessionKey') || cookieTok || '';
     }
 
     function ensureCustomerOferta(req, body = {}) {
@@ -466,6 +474,7 @@ export function createLicenseServerApp(options = {}) {
                     ofertaAccepted: true,
                     hubUrl: body.hubUrl || reqOrigin,
                 });
+                res.setHeader('Set-Cookie', `odant_work_session=${encodeURIComponent(user.sessionKey)}; Path=/; Max-Age=31536000; SameSite=Lax`);
                 return sendJson(res, 200, user);
             }
 
@@ -476,7 +485,16 @@ export function createLicenseServerApp(options = {}) {
                     ...body,
                     hubUrl: body.hubUrl || reqOrigin,
                 });
+                res.setHeader('Set-Cookie', `odant_work_session=${encodeURIComponent(user.sessionKey)}; Path=/; Max-Age=31536000; SameSite=Lax`);
                 return sendJson(res, 200, user);
+            }
+
+            if (req.method === 'POST' && pathname === '/api/auth/logout') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                store.logoutAdmin(tok);
+                res.setHeader('Set-Cookie', 'odant_work_session=; Path=/; Max-Age=0; SameSite=Lax');
+                return sendJson(res, 200, { ok: true });
             }
 
             // 2.0.1 Генерация или перевыпуск токена владельца/сервера (с зашитым URL сервера поддержки и licenseId) в личном кабинете
@@ -906,6 +924,7 @@ export function createLicenseServerApp(options = {}) {
             if (req.method === 'POST' && pathname === '/api/admin/logout') {
                 const body = await readJsonBody(req);
                 const tok = extractBearerToken(req, body, url);
+                res.setHeader('Set-Cookie', 'odant_work_session=; Path=/; Max-Age=0; SameSite=Lax');
                 return sendJson(res, 200, store.logoutAdmin(tok));
             }
 

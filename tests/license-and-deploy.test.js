@@ -1221,5 +1221,25 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(tatFinal.paidMonthsCount, 12, 'Все 12 месяцев графика закрыты');
         assert.equal(tatFinal.remainingFranchiseFeeRub, 0, 'Остаток паушального взноса = 0 ₽');
         assert.equal(tatFinal.status, 'paid_in_full');
+
+        // 12.5 Бессрочная сессия в браузере (wks_1...): переживает очистку памяти/перезапуск контейнера до явного нажатия «Выйти»
+        assert.ok(userReg.sessionKey.startsWith('wks_1.'), 'Выпущен криптографически подписанный токен сессии');
+        delete hubApp.store.state.users['multi-owner@odant.org'];
+        const meAfterRestart = await fetch(`${hubUrl}/api/auth/me`, {
+            headers: { 'Cookie': `odant_work_session=${encodeURIComponent(userReg.sessionKey)}` },
+        }).then(r => r.json());
+        assert.equal(meAfterRestart.authenticated, true, 'Сессия автоматически восстановлена из подписанного токена после перезапуска');
+        assert.equal(meAfterRestart.user.email, 'multi-owner@odant.org');
+
+        // После явного нажатия «Выйти» (/api/auth/logout) токен отзывается
+        await fetch(`${hubUrl}/api/auth/logout`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({}),
+        });
+        const meAfterLogout = await fetch(`${hubUrl}/api/auth/me`, {
+            headers: { 'Authorization': `Bearer ${userReg.sessionKey}` },
+        });
+        assert.equal(meAfterLogout.status, 401, 'После нажатия «Выйти» сессия завершается');
     });
 });

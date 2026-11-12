@@ -129,12 +129,47 @@
         card.style.setProperty('--my', (e.clientY - r.top) + 'px');
     }, { passive: true });
 
-    /* ================= Вход / Регистрация (Email, Мессенджеры, OAuth) ================= */
+    /* ================= Вход / Регистрация и постоянная сессия в браузере ================= */
+    function readCookieSession() {
+        try {
+            const m = String(document.cookie || '').match(/(?:^|;\s*)odant_work_session=([^;]+)/);
+            return m?.[1] ? decodeURIComponent(m[1].trim()) : '';
+        }
+        catch { return ''; }
+    }
+    function persistSessionInBrowser(sessionKey = '', email = '', isAdmin = false) {
+        try {
+            if (sessionKey) {
+                localStorage.setItem('odant_work_session', sessionKey);
+                sessionStorage.setItem('odant_work_session', sessionKey);
+                if (isAdmin) {
+                    localStorage.setItem('odant_work_admin_token', sessionKey);
+                    sessionStorage.setItem('odant_work_admin_token', sessionKey);
+                }
+                document.cookie = `odant_work_session=${encodeURIComponent(sessionKey)}; path=/; max-age=31536000; SameSite=Lax`;
+            }
+            if (email) {
+                localStorage.setItem('odant_work_email', email);
+            }
+        }
+        catch { /* приватный режим */ }
+    }
+    function clearSessionFromBrowser() {
+        try {
+            localStorage.removeItem('odant_work_session');
+            localStorage.removeItem('odant_work_admin_token');
+            sessionStorage.removeItem('odant_work_session');
+            sessionStorage.removeItem('odant_work_admin_token');
+            document.cookie = 'odant_work_session=; path=/; max-age=0; SameSite=Lax';
+        }
+        catch { /* ignore */ }
+    }
+
     function openAuth(hintMsg = '', intentTitle = '') {
         if ($('#authErrorMsg')) $('#authErrorMsg').textContent = hintMsg || '';
         const intentBox = $('#authIntentNotice');
         if (intentBox) {
-            if (intentTitle) {
+            if (intentTitle && !currentUser) {
                 intentBox.style.display = '';
                 intentBox.innerHTML = `Выбранная позиция: <b>${esc(intentTitle)}</b>.<br>После входа она автоматически появится как заказ в вашем Личном кабинете.`;
             }
@@ -143,9 +178,36 @@
                 intentBox.textContent = '';
             }
         }
-        if ($('#btnLogoutModal')) $('#btnLogoutModal').style.display = currentUser ? '' : 'none';
+        if (currentUser) {
+            if ($('#authTitle')) $('#authTitle').textContent = 'Ваш аккаунт';
+            if ($('#authSub')) $('#authSub').textContent = 'Сессия сохранена в браузере';
+            if ($('#authStepLoggedIn')) $('#authStepLoggedIn').style.display = '';
+            if ($('#authStepEmail')) $('#authStepEmail').style.display = 'none';
+            if ($('#authStepCode')) $('#authStepCode').style.display = 'none';
+            if ($('#authLoggedEmail')) $('#authLoggedEmail').textContent = currentUser.email || '';
+            if ($('#authLoggedRoleBadge')) {
+                $('#authLoggedRoleBadge').innerHTML = currentUser.isAdmin
+                    ? '<span class="tag ok">BOSS · Главный администратор</span>'
+                    : '<span class="tag">Клиент ODANT-WORK</span>';
+            }
+            if ($('#btnGoAdminModal')) $('#btnGoAdminModal').style.display = currentUser.isAdmin ? '' : 'none';
+        }
+        else {
+            if ($('#authTitle')) $('#authTitle').textContent = 'Вход / Регистрация';
+            if ($('#authSub')) $('#authSub').textContent = 'На ваш Email придёт одноразовый 6-значный код подтверждения';
+            if ($('#authStepLoggedIn')) $('#authStepLoggedIn').style.display = 'none';
+            if ($('#authStepEmail')) $('#authStepEmail').style.display = '';
+            if ($('#authStepCode')) $('#authStepCode').style.display = 'none';
+            try {
+                const savedEmail = localStorage.getItem('odant_work_email') || '';
+                if (savedEmail && $('#authEmail') && !$('#authEmail').value) {
+                    $('#authEmail').value = savedEmail;
+                }
+            }
+            catch { /* ignore */ }
+            setTimeout(() => $('#authEmail')?.focus(), 50);
+        }
         $('#authModal')?.classList.add('open');
-        setTimeout(() => $('#authEmail')?.focus(), 50);
     }
     function closeAuth() {
         $('#authModal')?.classList.remove('open');
@@ -224,7 +286,7 @@
         try {
             const data = await api('/api/auth/verify-code', { email, code });
             currentUser = data;
-            try { localStorage.setItem('odant_work_session', data.sessionKey); } catch { /* приватный режим */ }
+            persistSessionInBrowser(data.sessionKey, data.email, data.isAdmin);
             resetAuthStep();
             onAuthenticated();
             closeAuth();
@@ -245,18 +307,14 @@
         }
     }
 
-    function performLogout() {
+    async function performLogout() {
+        try { await api('/api/auth/logout', {}); } catch { /* ignore */ }
         currentUser = null;
         pendingAuthAction = null;
-        try {
-            localStorage.removeItem('odant_work_session');
-            localStorage.removeItem('odant_work_admin_token');
-            sessionStorage.removeItem('odant_work_admin_token');
-        } catch { /* ignore */ }
+        clearSessionFromBrowser();
         if ($('#tileAddons')) $('#tileAddons').style.display = 'none';
         if ($('#tileAdmin')) $('#tileAdmin').style.display = 'none';
         if ($('#btnAuthText')) $('#btnAuthText').textContent = 'Войти / Регистрация';
-        if ($('#btnLogoutModal')) $('#btnLogoutModal').style.display = 'none';
         closeAuth();
         if (currentStage === 'addons') switchStage('product');
         moveIndicator();
@@ -264,17 +322,25 @@
 
     async function restoreSession() {
         let key = '';
-        try { key = localStorage.getItem('odant_work_session') || ''; } catch { /* приватный режим */ }
+        try {
+            key = localStorage.getItem('odant_work_session')
+                || sessionStorage.getItem('odant_work_session')
+                || localStorage.getItem('odant_work_admin_token')
+                || readCookieSession()
+                || '';
+        }
+        catch { key = readCookieSession(); }
         if (!key) return;
         try {
             const data = await api('/api/auth/me?sessionKey=' + encodeURIComponent(key));
             if (data.authenticated && data.user) {
-                currentUser = { ...data.user, sessionKey: key };
+                currentUser = { ...data.user, sessionKey: data.user.sessionKey || key };
+                persistSessionInBrowser(currentUser.sessionKey, currentUser.email, currentUser.isAdmin);
                 onAuthenticated();
                 if (location.hash === '#addons' && isUserReadyForOrders()) switchStage('addons', { scroll: false });
             }
         }
-        catch { /* сессия устарела */ }
+        catch { /* сессия отозвана */ }
     }
 
     let franchiseCountdownTimer = null;
@@ -1688,14 +1754,12 @@
             if (el.dataset.stage && el !== document.body) { e.preventDefault(); switchStage(el.dataset.stage); return; }
             switch (el.dataset.action) {
                 case 'auth':
-                    if (isUserReadyForOrders() && currentStage !== 'addons') {
-                        switchStage('addons');
-                    }
-                    else {
-                        pendingAuthAction = null;
-                        resetAuthStep();
-                        openAuth();
-                    }
+                    pendingAuthAction = null;
+                    openAuth();
+                    break;
+                case 'go-cabinet':
+                    closeAuth();
+                    switchStage('addons');
                     break;
                 case 'auth-close': closeAuth(); break;
                 case 'send-code': sendAuthCode(); break;

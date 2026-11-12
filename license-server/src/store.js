@@ -29,6 +29,8 @@ import {
     createOwnerAccessToken,
     parseOwnerAccessToken,
     verifyOwnerAccessToken,
+    createSessionToken,
+    verifySessionToken,
 } from './crypto.js';
 
 const ONE_YEAR_MS = 365 * 24 * 3600_000;
@@ -82,6 +84,7 @@ export class LicenseStore {
         this.adminLogin = String(adminLogin || process.env.WORK_ADMIN_LOGIN || 'admin').trim();
         this.adminPassword = String(adminPassword || process.env.WORK_ADMIN_PASSWORD || process.env.WORK_ADMIN_KEY || 'odant-admin');
         this.adminSessions = new Map();
+        this.revokedSessions = new Set();
 
         this.state = {
             licenses: {},
@@ -124,7 +127,10 @@ export class LicenseStore {
 
     logoutAdmin(token = '') {
         const clean = String(token || '').trim();
-        if (clean) this.adminSessions.delete(clean);
+        if (clean) {
+            this.adminSessions.delete(clean);
+            this.revokedSessions.add(clean);
+        }
         return { ok: true };
     }
 
@@ -134,15 +140,15 @@ export class LicenseStore {
 
     getAdminIdentity(token = '') {
         const clean = String(token || '').trim();
-        if (!clean)
+        if (!clean || this.revokedSessions.has(clean))
             return null;
-        const adminUser = Object.values(this.state.users || {}).find(u => u.sessionKey === clean && u.isAdmin);
-        if (adminUser) {
+        const userFromTok = this._findUser(clean);
+        if (userFromTok && userFromTok.isAdmin) {
             return {
                 authenticated: true,
-                login: adminUser.email,
-                email: adminUser.email,
-                userId: adminUser.userId,
+                login: userFromTok.email,
+                email: userFromTok.email,
+                userId: userFromTok.userId,
                 role: 'BOSS',
             };
         }
@@ -1197,11 +1203,40 @@ export class LicenseStore {
 
     _findUser(sessionKeyOrEmail = '') {
         const key = String(sessionKeyOrEmail || '').trim();
-        if (!key)
+        if (!key || this.revokedSessions.has(key))
             return null;
-        return Object.values(this.state.users || {}).find(
+        let found = Object.values(this.state.users || {}).find(
             u => u.sessionKey === key || u.email === key.toLowerCase() || u.userId === key
         ) || null;
+        if (found)
+            return found;
+
+        // Если контейнер перезапускался, проверяем криптографическую подпись бессрочного токена сессии wks_1...
+        const verifiedPayload = verifySessionToken(key, this.authorityKeys.publicKey);
+        if (verifiedPayload?.email) {
+            const cleanEmail = String(verifiedPayload.email).toLowerCase();
+            let user = this.state.users[cleanEmail];
+            if (!user) {
+                this.registerOrLoginUser({
+                    email: cleanEmail,
+                    name: verifiedPayload.name || '',
+                    companyName: verifiedPayload.companyName || '',
+                    inn: verifiedPayload.inn || '',
+                    ofertaAccepted: true,
+                });
+                user = this.state.users[cleanEmail];
+            }
+            if (user) {
+                if (verifiedPayload.isAdmin) {
+                    user.isAdmin = true;
+                    user.role = 'BOSS';
+                }
+                user.sessionKey = key;
+                try { this._save(); } catch { /* ignore */ }
+                return user;
+            }
+        }
+        return null;
     }
 
     /**
@@ -1558,6 +1593,17 @@ export class LicenseStore {
             user.role = 'BOSS';
         }
 
+        // Выпускаем криптографически подписанный бессрочный токен сессии (wks_1...), устойчивый к перезапускам сервера
+        user.sessionKey = createSessionToken({
+            userId: user.userId,
+            email: user.email,
+            name: user.name,
+            companyName: user.companyName,
+            inn: user.inn,
+            isAdmin: Boolean(user.isAdmin),
+            issuedAt: now,
+        }, this.authorityKeys);
+
         if (ofertaAccepted !== false && !user.ofertaAccepted) {
             user.ofertaAccepted = true;
             user.ofertaAcceptedAt = now;
@@ -1784,7 +1830,7 @@ export class LicenseStore {
         const key = String(sessionKey || '').trim();
         if (!key)
             return null;
-        const user = Object.values(this.state.users).find(u => u.sessionKey === key);
+        const user = this._findUser(key);
         if (!user)
             return null;
         return this._formatUserResponse(user);

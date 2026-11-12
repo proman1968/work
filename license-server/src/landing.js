@@ -498,6 +498,20 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
 
             <div id="authIntentNotice" class="small" style="display:none;padding:10px 12px;border-radius:10px;background:rgba(0,163,224,.12);border:1px solid rgba(0,163,224,.35);margin-bottom:4px"></div>
 
+            <!-- Карточка активной сессии (показывается, когда пользователь уже вошёл) -->
+            <div id="authStepLoggedIn" style="display:none">
+                <div style="padding:14px 16px;border-radius:12px;border:1px solid var(--line-strong);background:var(--field);margin-bottom:14px">
+                    <div class="small muted">Активная сессия в браузере</div>
+                    <div style="font-size:16px;font-weight:700;margin-top:2px" id="authLoggedEmail">—</div>
+                    <div style="margin-top:6px" id="authLoggedRoleBadge"></div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                    <button type="button" class="btn btn-primary" style="width:100%" data-action="go-cabinet">Перейти в Личный кабинет</button>
+                    <a class="btn btn-ghost" id="btnGoAdminModal" href="/admin" style="width:100%;display:none;text-decoration:none">Открыть Админ-панель</a>
+                    <button type="button" class="btn btn-ghost" style="width:100%;color:var(--danger)" data-action="logout">Выйти из аккаунта</button>
+                </div>
+            </div>
+
             <div id="authStepEmail">
                 <div class="field">
                     <label for="authEmail">Ваш Email *</label>
@@ -531,7 +545,6 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
 
             <div class="status" id="authErrorMsg" style="color:var(--danger);min-height:18px;margin-top:6px"></div>
             <div style="display:flex;gap:10px;margin-top:6px;justify-content:flex-end;flex-wrap:wrap">
-                <button class="btn btn-ghost btn-sm" id="btnLogoutModal" data-action="logout" style="display:none">Выйти из аккаунта</button>
                 <button class="btn btn-ghost btn-sm" data-action="auth-close">Закрыть</button>
             </div>
         </div>

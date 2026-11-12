@@ -115,7 +115,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
 
             <div class="top-actions">
                 <button class="icon-btn" id="btnTheme" title="Светлая / тёмная тема" aria-label="Переключить тему">${icon('sun')}</button>
-                <button class="btn btn-primary btn-sm" data-action="admin-logout" title="Нажмите, чтобы выйти из сессии">${icon('user')}<span id="admUserLabel">BOSS</span></button>
+                <button class="btn btn-primary btn-sm" data-action="open-adm-profile" title="Аккаунт администратора">${icon('user')}<span id="admUserLabel">BOSS</span></button>
             </div>
         </header>
 
@@ -398,6 +398,30 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                 <button class="btn btn-primary" data-action="cert-copy">Скопировать JSON</button>
                 <button class="btn btn-ok" data-action="cert-download">Скачать .json</button>
                 <button class="btn btn-ghost" data-action="cert-close">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно: Аккаунт администратора (защита от случайного выхода) -->
+    <div class="modal" id="admProfileModal" role="dialog" aria-modal="true">
+        <div class="card" style="max-width:440px">
+            <div class="modal-head">
+                <img src="/assets/odant-logo.png" alt="">
+                <div>
+                    <h3 class="h3" style="margin:0">Аккаунт администратора</h3>
+                    <div class="small muted">Сессия активна и сохранена в браузере</div>
+                </div>
+                <button class="icon-btn" data-action="close-adm-profile" aria-label="Закрыть">${icon('close')}</button>
+            </div>
+            <div style="padding:14px 16px;border-radius:12px;border:1px solid var(--line-strong);background:var(--field);margin-bottom:14px">
+                <div class="small muted">Вы вошли как</div>
+                <div style="font-size:16px;font-weight:700;margin-top:2px" id="admProfileEmail">—</div>
+                <div style="margin-top:6px"><span class="tag ok">BOSS · Главный администратор</span></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+                <a class="btn btn-primary" href="/#addons" style="width:100%;text-decoration:none">Перейти в Личный кабинет</a>
+                <button type="button" class="btn btn-ghost" style="width:100%;color:var(--danger)" data-action="admin-logout">Выйти из аккаунта</button>
+                <button type="button" class="btn btn-ghost btn-sm" style="width:100%" data-action="close-adm-profile">Закрыть</button>
             </div>
         </div>
     </div>

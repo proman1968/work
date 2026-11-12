@@ -381,3 +381,75 @@ export function verifyOwnerAccessToken(tokenStr = '', trustedPublicKeyB64 = '') 
         return false;
     }
 }
+
+export const SESSION_TOKEN_PREFIX = 'wks_1';
+
+/**
+ * Сгенерировать бессрочный подписанный токен сессии браузера (wks_1.<payload_b64url>.<sig_b64url>),
+ * который не сбрасывается при перезапуске/обновлении контейнера сервера, пока пользователь сам не нажал «Выйти».
+ */
+export function createSessionToken({
+    userId = '',
+    email = '',
+    name = '',
+    companyName = '',
+    inn = '',
+    isAdmin = false,
+    issuedAt = Date.now(),
+} = {}, authorityKeys) {
+    const payloadObj = {
+        v: 1,
+        userId: String(userId || ''),
+        email: String(email || '').toLowerCase(),
+        ...(name ? { name: String(name) } : {}),
+        ...(companyName ? { companyName: String(companyName) } : {}),
+        ...(inn ? { inn: String(inn) } : {}),
+        isAdmin: Boolean(isAdmin),
+        issuedAt: Number(issuedAt || Date.now()),
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
+    let sigB64 = '';
+    if (authorityKeys?.privateKey) {
+        const priv = crypto.createPrivateKey({
+            key: Buffer.from(String(authorityKeys.privateKey), 'base64'),
+            format: 'der',
+            type: 'pkcs8',
+        });
+        sigB64 = crypto.sign(null, Buffer.from(`${SESSION_TOKEN_PREFIX}.${payloadB64}`, 'utf8'), priv).toString('base64url');
+    }
+    return `${SESSION_TOKEN_PREFIX}.${payloadB64}.${sigB64}`;
+}
+
+/**
+ * Проверить подпись Ed25519 сессионного токена (wks_1.<payload>.<sig>) и вернуть payload.
+ */
+export function verifySessionToken(tokenStr = '', trustedPublicKeyB64 = '') {
+    try {
+        const raw = String(tokenStr || '').trim();
+        const parts = raw.split('.');
+        if (parts.length !== 3 || parts[0] !== SESSION_TOKEN_PREFIX || !parts[2])
+            return null;
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+        if (!payload?.email)
+            return null;
+        const trustedKeys = resolveTrustedAuthorityKeys(trustedPublicKeyB64);
+        const signedData = Buffer.from(`${SESSION_TOKEN_PREFIX}.${parts[1]}`, 'utf8');
+        const sigBuf = Buffer.from(parts[2], 'base64url');
+        for (const keyB64 of trustedKeys) {
+            try {
+                const pub = crypto.createPublicKey({
+                    key: Buffer.from(String(keyB64), 'base64'),
+                    format: 'der',
+                    type: 'spki',
+                });
+                if (crypto.verify(null, signedData, pub, sigBuf))
+                    return payload;
+            }
+            catch { /* try next */ }
+        }
+        return null;
+    }
+    catch {
+        return null;
+    }
+}

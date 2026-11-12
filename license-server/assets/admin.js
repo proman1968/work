@@ -16,28 +16,44 @@
     let activeTab = 'servers';
     let admCountdownTimer = null;
 
-    function getStoredToken() {
+    function readCookieSession() {
         try {
-            return sessionStorage.getItem(TOKEN_KEY)
-                || localStorage.getItem(TOKEN_KEY)
-                || localStorage.getItem('odant_work_session')
-                || '';
+            const m = String(document.cookie || '').match(/(?:^|;\s*)odant_work_session=([^;]+)/);
+            return m?.[1] ? decodeURIComponent(m[1].trim()) : '';
         }
         catch { return ''; }
     }
-    function setStoredToken(tok) {
+
+    function getStoredToken() {
+        try {
+            return localStorage.getItem('odant_work_session')
+                || localStorage.getItem(TOKEN_KEY)
+                || sessionStorage.getItem(TOKEN_KEY)
+                || sessionStorage.getItem('odant_work_session')
+                || readCookieSession()
+                || '';
+        }
+        catch { return readCookieSession(); }
+    }
+    function setStoredToken(tok, email = '') {
         adminToken = tok || '';
         try {
             if (tok) {
                 sessionStorage.setItem(TOKEN_KEY, tok);
                 localStorage.setItem(TOKEN_KEY, tok);
-                if (tok.startsWith('wks_')) {
-                    localStorage.setItem('odant_work_session', tok);
-                }
+                localStorage.setItem('odant_work_session', tok);
+                sessionStorage.setItem('odant_work_session', tok);
+                document.cookie = `odant_work_session=${encodeURIComponent(tok)}; path=/; max-age=31536000; SameSite=Lax`;
             }
             else {
                 sessionStorage.removeItem(TOKEN_KEY);
                 localStorage.removeItem(TOKEN_KEY);
+                localStorage.removeItem('odant_work_session');
+                sessionStorage.removeItem('odant_work_session');
+                document.cookie = 'odant_work_session=; path=/; max-age=0; SameSite=Lax';
+            }
+            if (email) {
+                localStorage.setItem('odant_work_email', email);
             }
         }
         catch { /* приватный режим */ }
@@ -78,6 +94,13 @@
         $('#adminLoginScreen').style.display = '';
         $('#adminAppShell').style.display = 'none';
         if ($('#admLoginError')) $('#admLoginError').textContent = errMsg;
+        try {
+            const savedEmail = localStorage.getItem('odant_work_email') || '';
+            if (savedEmail && $('#admLoginEmail') && !$('#admLoginEmail').value) {
+                $('#admLoginEmail').value = savedEmail;
+            }
+        }
+        catch { /* ignore */ }
         setTimeout(() => $('#admLoginEmail')?.focus(), 50);
     }
 
@@ -102,6 +125,7 @@
         $('#adminLoginScreen').style.display = 'none';
         $('#adminAppShell').style.display = '';
         if ($('#admUserLabel')) $('#admUserLabel').textContent = login;
+        if ($('#admProfileEmail')) $('#admProfileEmail').textContent = login;
         requestAnimationFrame(moveIndicator);
     }
 
@@ -165,7 +189,7 @@
             if (!user.isAdmin) {
                 throw new Error(`Аккаунт ${user.email} не обладает правами администратора (BOSS) сервера лицензирования.`);
             }
-            setStoredToken(user.sessionKey);
+            setStoredToken(user.sessionKey, user.email);
             resetAdmStep();
             showAdminApp(user.email);
             await refreshRegistry();
@@ -179,9 +203,9 @@
     }
 
     async function logoutAdmin() {
+        $('#admProfileModal')?.classList.remove('open');
         try { await api('/api/admin/logout', {}); } catch { /* ignore */ }
         setStoredToken('');
-        try { localStorage.removeItem('odant_work_session'); } catch { /* ignore */ }
         resetAdmStep();
         showLoginGate('');
     }
@@ -196,6 +220,7 @@
         try {
             const me = await api('/api/admin/me');
             if (me.authenticated) {
+                setStoredToken(saved, me.email || me.login || '');
                 showAdminApp(me.login || 'admin');
                 await refreshRegistry();
             }
@@ -900,6 +925,8 @@
                 case 'adm-send-code': sendAdminOtpCode(); break;
                 case 'adm-verify-code': verifyAdminOtpCode(); break;
                 case 'adm-reset-step': resetAdmStep(); break;
+                case 'open-adm-profile': $('#admProfileModal')?.classList.add('open'); break;
+                case 'close-adm-profile': $('#admProfileModal')?.classList.remove('open'); break;
                 case 'admin-logout': logoutAdmin(); break;
                 case 'registry': refreshRegistry(); break;
                 case 'open-create-server-modal': $('#admCreateServerModal')?.classList.add('open'); break;
