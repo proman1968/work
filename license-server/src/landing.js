@@ -317,8 +317,12 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     <div class="sum-total" id="lblPakTotal">${rub(P.basePriceRub)}</div>
                     <div class="small" id="lblPakDiscount" style="color:var(--ok);font-weight:650">Включает 10 вечных мест и 1 год поддержки Enterprise</div>
                     <div class="sum-lines" id="lblPakBreakdown"></div>
+                    <div class="field" id="clientServerPickerWrap" style="display:none;margin:10px 0 4px">
+                        <label for="selClientTargetServer">Целевой сервер (устройство) в вашем Личном кабинете</label>
+                        <select id="selClientTargetServer"></select>
+                    </div>
                     <button class="btn btn-primary btn-lg" style="width:100%" data-action="buy-client-config">Купить</button>
-                    <p class="small muted" style="margin:8px 0 0;text-align:center">При нажатии «Купить» заказ добавится в ваш Личный кабинет, где вы сможете оплатить его через ЮKassa или выставить счёт-договор для юр. лица.</p>
+                    <p class="small muted" style="margin:8px 0 0;text-align:center">При нажатии «Купить» заказ привяжется к выбранному серверу в вашем Реестре серверов Личного кабинета (оплата через ЮKassa или по счёту-договору).</p>
                     <div class="status" id="pakOrderStatus"></div>
                 </div>
             </div>
@@ -333,46 +337,50 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="tiers">${renderTiers()}</div>
         </section>
 
-        <!-- ============ ЛИЧНЫЙ КАБИНЕТ (открывается после входа / регистрации) ============ -->
+        <!-- ============ ЛИЧНЫЙ КАБИНЕТ: 2 ОСНОВНЫХ РЕЕСТРА (СЕРВЕРЫ И ФРАНШИЗЫ) ============ -->
         <section class="stage" id="stage-addons">
             <div class="sec-head">
-                <div><span class="kicker">Личный кабинет владельца</span><h2 class="h2">Заказы, токен привязки и лицензии</h2></div>
-                <p id="userBadgeBox"></p>
-            </div>
-
-            <div class="card" style="margin-bottom:20px">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-                    <div>
-                        <span class="kicker">Заказы и оплата</span>
-                        <h3 class="h3" style="margin:4px 0 0">Ваши заказы в Личном кабинете</h3>
-                    </div>
+                <div>
+                    <span class="kicker">Личный кабинет владельца</span>
+                    <h2 class="h2">Реестр серверов (устройств) и реестр франшиз</h2>
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+                    <p id="userBadgeBox" style="margin:0"></p>
                     <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <button class="btn btn-ghost btn-sm" data-stage="clients">+ Добавить лицензию / ПАК</button>
-                        <button class="btn btn-ghost btn-sm" data-stage="franchise">+ Зарезервировать франшизу</button>
-                        <button class="btn btn-ghost btn-sm" data-action="refresh-cabinet">Обновить</button>
+                        <button class="btn btn-ghost btn-sm" data-action="refresh-cabinet">Обновить данные</button>
                     </div>
                 </div>
-                <div id="cabinetOrdersBox" style="margin-top:14px"></div>
             </div>
 
-            <div class="split">
-                <div class="card">
-                    <span class="kicker">Привязка локального сервера WORK</span>
-                    <h3 class="h3" style="margin:4px 0 8px">Токен владельца (содержит URL сервера поддержки)</h3>
-                    <p class="small" style="margin:0 0 12px">Скопируйте этот токен и вставьте его в разделе <b>WORK → Лицензия</b> вашей локальной системы. По этому токену система сама скачивает и обновляет оплаченные файлы лицензий в папку <code>#system</code>.</p>
-                    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-                        <input type="text" id="inpCabinetHubToken" readonly placeholder="owk1..." style="flex:1;min-width:220px;font-family:monospace">
-                        <button class="btn btn-primary btn-sm" data-action="copy-hub-token">Скопировать токен</button>
-                        <button class="btn btn-ghost btn-sm" data-action="gen-hub-token">Перевыпустить</button>
+            <!-- 1.1 РЕЕСТР СЕРВЕРОВ (УСТРОЙСТВ) WORK -->
+            <div class="card" style="margin-bottom:24px">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--border)">
+                    <div>
+                        <span class="kicker">1. Реестр серверов (устройств) WORK</span>
+                        <h3 class="h3" style="margin:4px 0 4px">Ваши лицензируемые серверы и устройства <span class="tag" id="badgeServersCount" style="margin-left:6px">0</span></h3>
+                        <p class="small muted" style="margin:0">Вы можете добавить любое количество серверов WORK. Для каждого сервера выпускается свой собственный токен привязки (<code>owk1...</code>) и свой набор лицензий (базовая вечная на 10 мест + дополнительные годовые пакеты).</p>
                     </div>
-                    <div class="small" id="tokenCopyStatus" style="color:var(--ok);min-height:18px;margin-top:6px"></div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                        <input type="text" id="inpNewServerName" placeholder="Название сервера (напр., Центральный офис)…" style="width:280px;padding:8px 12px;font-size:13.5px">
+                        <button class="btn btn-primary btn-sm" data-action="create-server">${icon('plus')} Добавить сервер (устройство)</button>
+                    </div>
                 </div>
+                <div id="cabinetServersRegistry" style="margin-top:16px;display:flex;flex-direction:column;gap:16px"></div>
+            </div>
 
-                <div class="card">
-                    <span class="kicker">Действующие лицензии (.lic.json) и франшизы</span>
-                    <h3 class="h3" style="margin:4px 0 6px">Выпущенные файлы лицензий</h3>
-                    <div id="cabinetLicensesBox" class="small" style="margin-top:8px;line-height:1.55"></div>
+            <!-- 1.2 РЕЕСТР ФРАНШИЗ -->
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--border)">
+                    <div>
+                        <span class="kicker">2. Реестр региональных франшиз</span>
+                        <h3 class="h3" style="margin:4px 0 4px">Зарезервированные и действующие франшизы <span class="tag" id="badgeFranchisesCount" style="margin-left:6px">0</span></h3>
+                        <p class="small muted" style="margin:0">Можно резервировать франшизы в нескольких разных субъектах РФ (не более 1 франшизы в одном регионе). После резервирования необходимо оплатить начальный взнос <b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b> через ЮKassa в течение <b>15 минут</b>, иначе резерв автоматически отменяется. Остаток паушального взноса погашается по графику равными платежами раз в месяц в течение года.</p>
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" data-stage="franchise">${icon('map')} Зарезервировать франшизу на карте РФ</button>
+                    </div>
                 </div>
+                <div id="cabinetFranchisesRegistry" style="margin-top:16px;display:flex;flex-direction:column;gap:16px"></div>
             </div>
         </section>
 
@@ -425,7 +433,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <div><span>Остаток (в течение года)</span><b id="mapRegRest">—</b></div>
                     </div>
                     <button class="btn btn-primary" style="width:100%;margin-top:8px" id="btnReserveSelected" data-action="reserve-selected" disabled>Зарезервировать · залог ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</button>
-                    <p class="small muted" style="margin:8px 0 0;text-align:center">При нажатии «Зарезервировать» заявка на регион добавится как заказ в ваш Личный кабинет.</p>
+                    <p class="small muted" style="margin:8px 0 0;text-align:center">Не более 1 франшизы в одном регионе. После резервирования даётся <b>15 минут</b> на оплату начального взноса через ЮKassa; далее — годовой график погашения (раз в месяц).</p>
                     <div class="status" id="partnerActionMsg"></div>
                 </aside>
             </div>

@@ -1,4 +1,4 @@
-/* ODANT-WORK · /admin — клиентский скрипт отдельной защищённой админ-панели центра лицензирования */
+/* ODANT-WORK · /admin — клиентский скрипт рабочей админ-панели центра лицензирования и франшиз */
 (function () {
     'use strict';
 
@@ -12,6 +12,9 @@
     let adminToken = '';
     let lastAdminData = null;
     let currentCertLic = null;
+    let currentScheduleResId = '';
+    let activeTab = 'servers';
+    let admCountdownTimer = null;
 
     function getStoredToken() {
         try {
@@ -70,7 +73,7 @@
         applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
     }
 
-    /* ================= Авторизация администратора (по Email и 6-значному коду из письма) ================= */
+    /* ================= Авторизация администратора (по Email и 6-значному коду) ================= */
     function showLoginGate(errMsg = '') {
         $('#adminLoginScreen').style.display = '';
         $('#adminAppShell').style.display = 'none';
@@ -195,7 +198,15 @@
         }
     }
 
-    /* ================= Реестр и таблицы ================= */
+    /* ================= Вкладки и форматирование ================= */
+    function setTab(tab) {
+        activeTab = tab || 'servers';
+        $$('#admTopTabs [data-adm-tab]').forEach(b => b.classList.toggle('active', b.dataset.admTab === activeTab));
+        $$('[data-adm-sec]').forEach(sec => {
+            sec.style.display = sec.dataset.admSec === activeTab ? '' : 'none';
+        });
+    }
+
     function fmtDate(ms) {
         if (!ms) return '—';
         try { return new Date(ms).toLocaleDateString('ru-RU'); } catch { return '—'; }
@@ -203,6 +214,35 @@
     function fmtDateTime(ms) {
         if (!ms) return '—';
         try { return new Date(ms).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }); } catch { return '—'; }
+    }
+    function fmtCountdown(sec) {
+        const s = Math.max(0, Math.floor(Number(sec) || 0));
+        const m = Math.floor(s / 60);
+        const r = s % 60;
+        return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+    }
+
+    function startAdminCountdowns() {
+        if (admCountdownTimer) {
+            clearInterval(admCountdownTimer);
+            admCountdownTimer = null;
+        }
+        if (!$$('[data-adm-deadline]').length) return;
+        admCountdownTimer = setInterval(() => {
+            const now = Date.now();
+            let expiredAny = false;
+            for (const el of $$('[data-adm-deadline]')) {
+                const dl = Number(el.dataset.admDeadline || 0);
+                const rem = Math.max(0, Math.floor((dl - now) / 1000));
+                el.textContent = fmtCountdown(rem);
+                if (rem <= 0) expiredAny = true;
+            }
+            if (expiredAny) {
+                clearInterval(admCountdownTimer);
+                admCountdownTimer = null;
+                refreshRegistry();
+            }
+        }, 1000);
     }
 
     async function refreshRegistry() {
@@ -212,172 +252,523 @@
         catch { return; }
         lastAdminData = data;
         renderAdminPanel(data);
+        if (currentScheduleResId && $('#admFranchiseScheduleModal')?.classList.contains('open')) {
+            openFranchiseScheduleModal(currentScheduleResId);
+        }
     }
 
     function renderAdminPanel(data = {}) {
         const licenses = data.licenses || [];
+        const franchises = data.franchises || data.reservations || [];
         const orders = data.orders || [];
-        const partners = data.partners || [];
-        const reservations = (data.reservations || []).filter(r => r.status !== 'canceled');
         const tickets = data.tickets || [];
         const users = data.users || [];
 
+        const activeFranchises = franchises.filter(f => f && f.status !== 'canceled' && f.status !== 'expired');
         const totalSeats = licenses.reduce((s, l) => s + (l.totalSeats || 0), 0);
         const paidOrders = orders.filter(o => o.status === 'paid');
-        const pendingOrders = orders.filter(o => o.status === 'pending');
+        const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'awaiting_invoice');
         const paidRub = paidOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
         const pendingRub = pendingOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
         const openTickets = tickets.filter(t => t.status !== 'answered' && t.status !== 'closed');
-        const activeReservations = reservations.filter(r => !r.convertedToPartnerId);
-        const signedUsers = users.filter(u => u.ofertaAccepted);
+
+        if ($('#tabCntServers')) $('#tabCntServers').textContent = String(licenses.length);
+        if ($('#tabCntFranchises')) $('#tabCntFranchises').textContent = String(activeFranchises.length);
+        if ($('#tabCntOrders')) $('#tabCntOrders').textContent = String(orders.length);
+        if ($('#tabCntUsers')) $('#tabCntUsers').textContent = String(users.length);
+        if ($('#tabCntTickets')) $('#tabCntTickets').textContent = String(openTickets.length);
 
         if ($('#admStatLic')) {
             $('#admStatLic').textContent = String(licenses.length);
-            $('#admStatLicSub').textContent = `лицензий ПАК · ${totalSeats} активных мест`;
+            $('#admStatLicSub').textContent = `серверов · ${totalSeats} мест`;
+            $('#admStatFranchises').textContent = String(activeFranchises.length);
+            const overdueCnt = activeFranchises.filter(f => (f.overdueMonthsCount || 0) > 0).length;
+            $('#admStatFranchisesSub').textContent = overdueCnt > 0 ? `просрочек: ${overdueCnt}` : 'активных франшиз';
             $('#admStatPaid').textContent = rub(paidRub);
             $('#admStatPaidSub').textContent = `оплачено заказов: ${paidOrders.length}`;
             $('#admStatPending').textContent = rub(pendingRub);
             $('#admStatPendingSub').textContent = `ожидают оплаты: ${pendingOrders.length}`;
-            $('#admStatPartners').textContent = `${partners.length} / ${activeReservations.length}`;
-            if ($('#admStatUsers')) {
-                $('#admStatUsers').textContent = String(users.length);
-                $('#admStatUsersSub').textContent = `клиентов (оферт ПЭП: ${signedUsers.length})`;
-            }
+            $('#admStatUsers').textContent = String(users.length);
+            $('#admStatUsersSub').textContent = `админов BOSS: ${users.filter(u => u.isAdmin).length}`;
             $('#admStatTickets').textContent = String(openTickets.length);
-            $('#admStatTicketsSub').textContent = `открытых из ${tickets.length} обращений`;
+            $('#admStatTicketsSub').textContent = `открытых из ${tickets.length}`;
         }
 
-        // 1. Лицензии
-        if ($('#admLicensesBody')) {
-            $('#admLicensesBody').innerHTML = licenses.map(l => {
-                const hwid = l.hardware?.hwid || l.boundHwid || 'не привязан';
-                const fp = l.hardware?.nodeFingerprint || l.boundNodeFingerprint || '';
-                const bindCode = l.support?.bindCode || l.bindingCode || l.licenseId;
-                const expAt = l.baseSupportUntil || l.support?.expiresAt;
-                const partnerInfo = l.partner?.companyName
-                    ? `<div class="small" style="color:var(--brand-2)">Партнёр: ${esc(l.partner.companyName)} (${esc(l.partner.regionName || '')})</div>`
-                    : '';
-                return `<tr>
-                    <td><b>${esc(l.licenseId)}</b><div class="small muted">Код бота: <code>${esc(bindCode)}</code></div></td>
-                    <td><b>${esc(l.customer?.name || '—')}</b><div class="small muted">ИНН ${esc(l.customer?.inn || '—')} · ${esc(l.customer?.email || '—')}</div></td>
-                    <td><code>${esc(hwid)}</code><div class="small muted">${esc(fp ? fp.slice(0, 22) : 'ожидает синхронизации узла')}</div>${partnerInfo}</td>
-                    <td class="num"><b>${l.totalSeats}</b> <span class="muted">(${l.baseSeats ?? 10} вечн. + ${l.addonSeats || 0} доп.)</span></td>
-                    <td><span class="tag ok">${esc(l.support?.tierName || 'Enterprise')}</span><div class="small muted">до ${fmtDate(expAt)} · ${l.support?.ticketsRemaining ?? 0}/${l.support?.ticketsQuota ?? 0} обращ.</div></td>
-                    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <button class="btn btn-ghost btn-sm" data-cert="${esc(l.licenseId)}">Сертификат JSON</button>
-                    </div></td>
-                </tr>`;
-            }).join('') || '<tr><td colspan="6" class="muted">Лицензий пока нет — нажмите «+ Демо-лицензия ПАК» или выпустите выше</td></tr>';
-        }
+        renderServersTable(licenses);
+        renderFranchisesTable(franchises);
+        renderOrdersTable(orders);
+        renderUsersTable(users);
+        renderTicketsTable(tickets);
+        startAdminCountdowns();
+    }
 
-        // 2. Заказы ЮKassa
-        if ($('#admOrdersBody')) {
-            $('#admOrdersBody').innerHTML = orders.map(o => {
-                const stTag = o.status === 'paid' ? 'ok' : (o.status === 'canceled' ? 'bad' : '');
-                const stLabel = o.status === 'paid' ? 'оплачен' : (o.status === 'canceled' ? 'отменён' : 'ожидает оплаты');
-                const purposeSub = o.includeBasePak
-                    ? `Комплекс ПАК${o.addonSeats ? ` + ${o.addonSeats} доп. мест` : ''}`
-                    : (o.kind === 'franchise_reservation' ? `Залог франшизы (${esc(o.regionName || o.regionCode || '')})` : `Доп. места: ${o.addonSeats || 0} × ${o.years || 1} г.`);
-                return `<tr>
-                    <td><b>${esc(o.orderId)}</b><div class="small muted">${esc(o.paymentId || '—')}</div></td>
-                    <td><b>${esc(o.tierName || o.kind || 'Заказ')}</b><div class="small muted">${purposeSub}</div></td>
-                    <td><b>${esc(o.customer?.name || '—')}</b><div class="small muted">ИНН ${esc(o.customer?.inn || '—')} · ${esc(o.customer?.email || '—')}</div></td>
-                    <td class="num"><b>${rub(o.amountRub)}</b></td>
-                    <td><span class="tag ${stTag}">${stLabel}</span></td>
-                    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-                        ${o.status === 'pending' ? `<button class="btn btn-ok btn-sm" data-pay-order="${esc(o.orderId)}">Провести оплату</button>` : ''}
-                        ${o.status === 'pending' ? `<button class="btn btn-ghost btn-sm" data-cancel-order="${esc(o.orderId)}">Отменить</button>` : ''}
-                        <a class="btn btn-ghost btn-sm" href="/pay/sandbox/${encodeURIComponent(o.orderId)}" target="_blank" rel="noopener">Песочница</a>
-                    </div></td>
-                </tr>`;
-            }).join('') || '<tr><td colspan="6" class="muted">Заказов пока нет</td></tr>';
-        }
+    /* 1. Таблица серверов и лицензий */
+    function renderServersTable(licenses = []) {
+        const tbody = $('#admLicensesBody');
+        if (!tbody) return;
+        const q = ($('#inpFilterServers')?.value || '').trim().toLowerCase();
+        const mode = $('#selFilterServers')?.value || 'all';
 
-        // 3. Резервы франшиз и действующие партнёры
-        if ($('#admPartnersBody')) {
-            const resRows = reservations.map(r => `<tr>
-                <td><b>${esc(r.reservationId)}</b><div class="small muted">Резерв франшизы</div></td>
-                <td><b>${esc(r.regionName)}</b> <span class="muted">(${esc(r.regionCode)})</span></td>
-                <td><b>${esc(r.companyName)}</b><div class="small muted">ИНН ${esc(r.inn || '—')} · ${esc(r.email || '—')}</div></td>
-                <td>Паушальный взнос <b>${rub(r.franchiseFeeRub)}</b><div class="small muted">Залог ${rub(r.nonRefundableDepositRub || 100000)} · остаток за 1 год</div></td>
-                <td><span class="tag ${r.depositPaid ? 'ok' : ''}">${r.convertedToPartnerId ? 'конвертирован в партнёра' : (r.depositPaid ? 'залог оплачен' : 'ждёт оплаты залога')}</span></td>
-                <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-                    ${!r.depositPaid && r.orderId ? `<button class="btn btn-ok btn-sm" data-pay-order="${esc(r.orderId)}">Оплатить залог</button>` : ''}
-                    ${!r.convertedToPartnerId ? `<button class="btn btn-primary btn-sm" data-activate-res="${esc(r.reservationId)}">Активировать партнёра</button>` : `<span class="small muted">Партнёр ${esc(r.convertedToPartnerId)}</span>`}
-                </div></td>
-            </tr>`);
+        const filtered = licenses.filter(l => {
+            const hwidBound = Boolean(l.hwidBound || l.hardware?.hwidBound || l.hardware?.nodeFingerprint);
+            if (mode === 'base_active' && !l.baseActivated) return false;
+            if (mode === 'base_inactive' && l.baseActivated) return false;
+            if (mode === 'hwid_bound' && !hwidBound) return false;
+            if (!q) return true;
+            const hay = [
+                l.licenseId, l.serverName, l.ownerEmail, l.customer?.name,
+                l.customer?.inn, l.customer?.email, l.hardware?.hwid, l.hardware?.nodeFingerprint,
+            ].join(' ').toLowerCase();
+            return hay.includes(q);
+        });
 
-            const partRows = partners.map(p => {
-                const certs = p.certifiedSpecialists || [];
-                const certCodes = certs.map(c => c.trackCode).join(', ');
-                return `<tr>
-                    <td><b>${esc(p.partnerId)}</b><div class="small muted">Действующий партнёр</div></td>
-                    <td><b>${esc(p.regionName)}</b> <span class="muted">(${esc(p.regionCode)})</span></td>
-                    <td><b>${esc(p.companyName)}</b><div class="small muted">ИНН ${esc(p.inn || '—')} · ${esc(p.email || '—')}</div></td>
-                    <td>Скидка <b>${p.discountPercent}%</b> · ${esc(p.statusLevel)}<div class="small muted">Продажи: ${rub(p.annualSalesRub || 0)}</div></td>
-                    <td>
-                        <span class="tag ${p.certifiedStatus ? 'ok' : ''}">${p.certifiedStatus ? '✓ Сертифицированный франчайзи' : `сертификатов: ${certs.length} из 3`}</span>
-                        ${certCodes ? `<div class="small muted">${esc(certCodes)}</div>` : ''}
-                    </td>
-                    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <button class="btn btn-ghost btn-sm" data-certify-partner="${esc(p.partnerId)}">+ Аттестовать инженера</button>
-                        <button class="btn btn-primary btn-sm" data-partner-issue="${esc(p.partnerId)}">+ Выдать ПАК (продажа)</button>
-                    </div></td>
-                </tr>`;
-            });
-            $('#admPartnersBody').innerHTML = [...resRows, ...partRows].join('') || '<tr><td colspan="6" class="muted">Резервов и партнёров пока нет</td></tr>';
-        }
+        tbody.innerHTML = filtered.map(l => {
+            const lid = l.licenseId;
+            const srvName = l.serverName || 'Сервер WORK';
+            const hwidBound = Boolean(l.hwidBound || l.hardware?.hwidBound || l.hardware?.nodeFingerprint);
+            const hwid = l.hardware?.hwid || '—';
+            const fp = l.hardware?.nodeFingerprint || '';
+            const ownerEmail = l.ownerEmail || l.customer?.email || '—';
 
-        // 4. Тикеты SLA
-        if ($('#admTicketsBody')) {
-            $('#admTicketsBody').innerHTML = tickets.map(t => {
-                const msgs = (t.messages || []).map(m => {
-                    const isSupport = m.from === 'support' || m.role === 'engineer';
-                    const author = isSupport ? (m.author || 'Инженер ODANT') : (m.author || t.userName || 'Клиент');
-                    return `<div class="small"><b style="color:${isSupport ? 'var(--brand-2)' : 'var(--text)'}">${esc(author)}:</b> ${esc(m.text)}</div>`;
-                }).join('');
-                const slaStatus = t.status === 'closed'
-                    ? '<span class="tag">закрыт</span>'
-                    : t.slaMet === true
-                        ? '<span class="tag ok">✓ SLA выполнен</span>'
-                        : t.slaMet === false
-                            ? '<span class="tag bad">SLA просрочен</span>'
-                            : '<span class="tag">ожидает ответа</span>';
-                return `<tr>
-                    <td><b>${esc(t.ticketId)}</b><div><span class="tag">${esc(String(t.channel || '').toUpperCase())}</span> ${slaStatus}</div></td>
-                    <td><b>${esc(t.customerName || t.userName || t.chatId)}</b><div class="small muted">Лицензия: ${esc(t.licenseId || 'не привязана')}</div></td>
-                    <td><span class="tag ok">${esc(t.tierName || 'Start')}</span><div class="small muted">${esc(t.reactionLabel || (`реакция ≤ ${t.reactionMinutes || 480} мин`))}</div></td>
-                    <td style="white-space:normal;max-width:360px">${msgs}</td>
-                    <td>
-                        ${t.status !== 'closed' ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
-                            <input type="text" id="reply-${esc(t.ticketId)}" placeholder="Ответ инженера…" style="min-width:180px;padding:7px 10px;font-size:12.5px">
-                            <button class="btn btn-primary btn-sm" data-reply-ticket="${esc(t.ticketId)}">Ответить</button>
-                            <button class="btn btn-ghost btn-sm" data-close-ticket="${esc(t.ticketId)}">Закрыть</button>
-                        </div>` : '<span class="small muted">Обращение закрыто</span>'}
-                    </td>
-                </tr>`;
-            }).join('') || '<tr><td colspan="5" class="muted">Обращений пока нет</td></tr>';
-        }
+            const baseHtml = l.baseActivated
+                ? `<span class="tag ok">✓ Активна (${l.baseSeats || 10} вечн. + ИИ)</span>
+                   <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px;color:var(--danger)" data-adm-base="${esc(lid)}" data-activate="0">Отозвать базовую</button></div>`
+                : `<span class="tag">Не активирована (1 сессия BOSS)</span>
+                   <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-base="${esc(lid)}" data-activate="1">Активировать базовую</button></div>`;
 
-        // 5. Клиенты, роли BOSS и оферты (ПЭП)
-        if ($('#admUsersBody')) {
-            $('#admUsersBody').innerHTML = users.map(u => `<tr>
-                <td><b>${esc(u.userId)}</b><div class="small muted">${esc(u.email)}</div></td>
+            const hwidHtml = hwidBound
+                ? `<span class="tag ok">Привязан</span> <code>${esc(hwid)}</code>
+                   ${fp ? `<div class="small muted">Узел: <code>${esc(fp.slice(0, 18))}…</code></div>` : ''}
+                   <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-reset-hwid="${esc(lid)}">Сбросить привязку</button></div>`
+                : `<span class="small muted">Ожидает привязки токена</span><div class="small muted"><code>${esc(hwid)}</code></div>`;
+
+            return `<tr>
+                <td>
+                    <b>${esc(srvName)}</b>
+                    <div class="small muted"><code>${esc(lid)}</code> · создан ${fmtDate(l.issuedAt)}</div>
+                    <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
+                        <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-copy-tok="${esc(lid)}">Скопировать токен owk1</button>
+                    </div>
+                </td>
+                <td>
+                    <b>${esc(l.customer?.name || '—')}</b>
+                    <div class="small muted">ИНН ${esc(l.customer?.inn || '—')}</div>
+                    <div class="small"><code>${esc(ownerEmail)}</code></div>
+                </td>
+                <td>${hwidHtml}</td>
+                <td>${baseHtml}</td>
+                <td>
+                    <div>Всего сессий: <b>${l.totalSeats}</b> (+<b>${l.addonSeats || 0}</b> доп.)</div>
+                    <div class="small muted">SLA: ${esc(l.support?.tierName || 'Enterprise')} (пакетов: ${(l.activeAddons || []).length})</div>
+                    <div style="margin-top:4px">
+                        <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-open-grant="${esc(lid)}" data-srv-name="${esc(srvName)}">+ Начислить доп. места</button>
+                    </div>
+                </td>
+                <td>
+                    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
+                        <button class="btn btn-primary btn-sm" data-cert="${esc(lid)}">Файлы .lic.json (${(l.licenseFiles || []).length})</button>
+                    </div>
+                </td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="6" class="muted">Серверов по заданному фильтру не найдено</td></tr>';
+    }
+
+    /* 2. Таблица франшиз и 12-месячных графиков погашения */
+    function renderFranchisesTable(franchises = []) {
+        const tbody = $('#admFranchisesBody');
+        if (!tbody) return;
+        const q = ($('#inpFilterFranchises')?.value || '').trim().toLowerCase();
+        const mode = $('#selFilterFranchises')?.value || 'all';
+        const now = Date.now();
+
+        const filtered = franchises.filter(f => {
+            if (!f) return false;
+            const isClosed = f.status === 'canceled' || f.status === 'expired';
+            const remaining = Number(f.remainingFranchiseFeeRub ?? 0);
+            if (mode === 'all' && isClosed) return false;
+            if (mode === 'pending_deposit' && (isClosed || f.depositPaid)) return false;
+            if (mode === 'deposit_paid' && (isClosed || !f.depositPaid || remaining <= 0)) return false;
+            if (mode === 'overdue' && (isClosed || !(f.overdueMonthsCount > 0))) return false;
+            if (mode === 'paid_in_full' && (isClosed || !f.depositPaid || remaining > 0)) return false;
+            if (mode === 'closed' && !isClosed) return false;
+            if (!q) return true;
+            const hay = [
+                f.reservationId, f.regionName, f.regionCode, f.district,
+                f.companyName, f.inn, f.email,
+            ].join(' ').toLowerCase();
+            return hay.includes(q);
+        });
+
+        tbody.innerHTML = filtered.map(f => {
+            const rid = f.reservationId;
+            const isClosed = f.status === 'canceled' || f.status === 'expired';
+            const depositRub = Number(f.nonRefundableDepositRub || 100_000);
+            const totalFeeRub = Number(f.franchiseFeeRub || 500_000);
+            const paidRub = Number(f.totalPaidRub ?? (f.depositPaid ? depositRub : 0));
+            const remRub = Number(f.remainingFranchiseFeeRub ?? Math.max(0, totalFeeRub - paidRub));
+            const paidMonths = Number(f.paidMonthsCount || 0);
+            const overdueMonths = Number(f.overdueMonthsCount || 0);
+            const pct = totalFeeRub > 0 ? Math.min(100, Math.round((paidRub / totalFeeRub) * 100)) : 0;
+
+            const dl = Number(f.depositDeadlineAt || ((f.createdAt || now) + 15 * 60_000));
+            const remSec = Math.max(0, Math.floor((dl - now) / 1000));
+
+            let depositHtml = '';
+            if (isClosed) {
+                depositHtml = `<span class="tag bad">${f.status === 'expired' ? 'Истёк (15 мин)' : 'Отменён'}</span>`;
+            }
+            else if (f.depositPaid) {
+                depositHtml = `<span class="tag ok">✓ Оплачен (${rub(depositRub)})</span><div class="small muted">${fmtDateTime(f.paidAt)}</div>`;
+            }
+            else {
+                depositHtml = `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Таймер 15 мин: <b data-adm-deadline="${dl}">${fmtCountdown(remSec)}</b></span>
+                    <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-pay-deposit="${esc(rid)}">Зачесть залог (${rub(depositRub)})</button></div>`;
+            }
+
+            let schedHtml = '';
+            if (isClosed) {
+                schedHtml = '<span class="small muted">Резерв закрыт</span>';
+            }
+            else {
+                const overdueBadge = overdueMonths > 0
+                    ? ` <span class="tag bad">Просрочено: ${overdueMonths}</span>`
+                    : (f.depositPaid && remRub <= 0 ? ' <span class="tag ok">Погашен полностью</span>' : '');
+                schedHtml = `<div><b>${paidMonths} из 12</b> ежемесячных платежей${overdueBadge}</div>
+                    <div class="bar" style="width:160px;height:6px;margin-top:5px"><i style="--p:${pct}%"></i></div>
+                    ${f.nextInstallment && f.depositPaid ? `<div class="small muted" style="margin-top:4px">След. взнос №${f.nextInstallment.monthNumber}: ${rub(f.nextInstallment.amountRub)} до ${fmtDate(f.nextInstallment.dueDate)}</div>` : ''}`;
+            }
+
+            return `<tr>
+                <td>
+                    <b>${esc(f.regionName)}</b> <span class="tag">${esc(f.district || f.regionCode)}</span>
+                    <div class="small muted"><code>${esc(rid)}</code> · от ${fmtDateTime(f.createdAt)}</div>
+                </td>
+                <td>
+                    <b>${esc(f.companyName || '—')}</b>
+                    <div class="small muted">ИНН ${esc(f.inn || '—')} · <code>${esc(f.email || '—')}</code></div>
+                </td>
+                <td>${depositHtml}</td>
+                <td>${schedHtml}</td>
+                <td>
+                    <div>Паушальный: <b>${rub(totalFeeRub)}</b></div>
+                    <div class="small" style="color:var(--ok)">Оплачено: <b>${rub(paidRub)}</b></div>
+                    <div class="small muted">Остаток: <b>${rub(remRub)}</b></div>
+                </td>
+                <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" data-adm-sched="${esc(rid)}">График 12 мес.</button>
+                        ${!isClosed ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" data-adm-cancel-franchise="${esc(rid)}">Отозвать</button>` : ''}
+                    </div>
+                </td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="6" class="muted">Франшиз по заданному фильтру не найдено</td></tr>';
+    }
+
+    /* 3. Таблица заказов и счетов */
+    function renderOrdersTable(orders = []) {
+        const tbody = $('#admOrdersBody');
+        if (!tbody) return;
+        const q = ($('#inpFilterOrders')?.value || '').trim().toLowerCase();
+        const mode = $('#selFilterOrders')?.value || 'all';
+
+        const filtered = orders.filter(o => {
+            if (!o) return false;
+            const isPending = o.status === 'pending' || o.status === 'awaiting_invoice';
+            if (mode === 'pending' && !isPending) return false;
+            if (mode === 'paid' && o.status !== 'paid') return false;
+            if (mode === 'canceled' && o.status !== 'canceled') return false;
+            if (!q) return true;
+            const hay = [
+                o.orderId, o.invoiceNumber, o.contractNumber, o.licenseId,
+                o.reservationId, o.tierName, o.customer?.name, o.customer?.inn, o.customer?.email,
+            ].join(' ').toLowerCase();
+            return hay.includes(q);
+        });
+
+        tbody.innerHTML = filtered.map(o => {
+            const isPaid = o.status === 'paid';
+            const isCanceled = o.status === 'canceled';
+            const isPending = !isPaid && !isCanceled;
+            const stTag = isPaid ? 'ok' : (isCanceled ? 'bad' : '');
+            const stLabel = isPaid ? '✓ Оплачен' : (isCanceled ? 'Отменён' : (o.paymentMethod === 'invoice' ? 'Ждёт оплаты по счёту' : 'Ожидает ЮKassa'));
+
+            let targetInfo = `Сервер: <code>${esc(o.licenseId || '—')}</code>`;
+            if (o.kind === 'franchise_reservation') {
+                targetInfo = `Залог франшизы (15 мин): <b>${esc(o.regionName || o.regionCode)}</b> (<code>${esc(o.reservationId)}</code>)`;
+            }
+            else if (o.kind === 'franchise_installment') {
+                targetInfo = `Погашение франшизы: <b>${esc(o.regionName || o.regionCode)}</b> (<code>${esc(o.reservationId)}</code>)`;
+            }
+
+            return `<tr>
+                <td>
+                    <b>${esc(o.orderId)}</b>
+                    ${o.invoiceNumber ? `<div class="small">Счёт: <code>${esc(o.invoiceNumber)}</code></div>` : ''}
+                    <div class="small muted">${fmtDateTime(o.createdAt)}</div>
+                </td>
+                <td>
+                    <b>${esc(o.tierName || o.kind || 'Заказ')}</b>
+                    <div class="small muted">${targetInfo}</div>
+                </td>
+                <td>
+                    <b>${esc(o.customer?.name || '—')}</b>
+                    <div class="small muted">ИНН ${esc(o.customer?.inn || '—')} · ${esc(o.customer?.email || '—')}</div>
+                </td>
+                <td class="num"><b>${rub(o.amountRub)}</b><div class="small muted">${o.paymentMethod === 'invoice' ? 'Безнал / Счёт' : 'ЮKassa'}</div></td>
+                <td><span class="tag ${stTag}">${stLabel}</span>${o.paidAt ? `<div class="small muted">${fmtDateTime(o.paidAt)}</div>` : ''}</td>
+                <td>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        ${isPending ? `<button class="btn btn-ok btn-sm" data-pay-order="${esc(o.orderId)}">Подтвердить оплату</button>` : ''}
+                        ${isPending ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" data-cancel-order="${esc(o.orderId)}">Отменить</button>` : ''}
+                        ${o.invoiceUrl ? `<a class="btn btn-ghost btn-sm" href="${esc(o.invoiceUrl)}" target="_blank" rel="noopener">Счёт ↗</a>` : ''}
+                    </div>
+                </td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="6" class="muted">Заказов по заданному фильтру не найдено</td></tr>';
+    }
+
+    /* 4. Таблица клиентов и ролей BOSS */
+    function renderUsersTable(users = []) {
+        const tbody = $('#admUsersBody');
+        if (!tbody) return;
+        const q = ($('#inpFilterUsers')?.value || '').trim().toLowerCase();
+
+        const filtered = users.filter(u => {
+            if (!q) return true;
+            const hay = [u.userId, u.email, u.companyName, u.inn, u.name].join(' ').toLowerCase();
+            return hay.includes(q);
+        });
+
+        tbody.innerHTML = filtered.map(u => {
+            const srvCount = Array.isArray(u.servers) ? u.servers.length : (u.licenseId ? 1 : 0);
+            const frCount = Array.isArray(u.franchises) ? u.franchises.length : 0;
+            return `<tr>
+                <td><b>${esc(u.email)}</b><div class="small muted"><code>${esc(u.userId)}</code></div></td>
                 <td>
                     ${u.isAdmin
                         ? `<span class="tag ok">BOSS · Администратор</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="0">Снять права</button>`
-                        : `<span class="tag">Клиент</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="1">Сделать админом</button>`}
+                        : `<span class="tag">Клиент</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="1">Назначить BOSS</button>`}
                 </td>
                 <td><b>${esc(u.companyName || '—')}</b><div class="small muted">ИНН ${esc(u.inn || '—')}</div></td>
-                <td><code>${esc(u.licenseId || '—')}</code></td>
+                <td>Серверов: <b>${srvCount}</b> · Франшиз: <b>${frCount}</b></td>
                 <td>
                     ${u.ofertaAccepted
-                        ? `<span class="tag ok">✓ Подписана ПЭП</span><div class="small muted"><code>${esc(u.ofertaSignatureId)}</code> · ${esc(u.ofertaVersion)}</div>`
+                        ? `<span class="tag ok">✓ Подписана ПЭП</span><div class="small muted"><code>${esc(u.ofertaSignatureId)}</code></div>`
                         : '<span class="tag bad">Не подписана</span>'}
                 </td>
-                <td class="small muted">${fmtDateTime(u.ofertaAcceptedAt || u.createdAt)}</td>
-            </tr>`).join('') || '<tr><td colspan="6" class="muted">Зарегистрированных клиентов пока нет</td></tr>';
+                <td class="small muted">${fmtDateTime(u.lastLoginAt || u.createdAt)}</td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="6" class="muted">Клиентов не найдено</td></tr>';
+    }
+
+    /* 5. Таблица тикетов SLA */
+    function renderTicketsTable(tickets = []) {
+        const tbody = $('#admTicketsBody');
+        if (!tbody) return;
+        const mode = $('#selFilterTickets')?.value || 'all';
+
+        const filtered = tickets.filter(t => {
+            if (mode === 'open' && t.status !== 'open') return false;
+            if (mode === 'answered' && t.status !== 'answered') return false;
+            if (mode === 'closed' && t.status !== 'closed') return false;
+            return true;
+        });
+
+        tbody.innerHTML = filtered.map(t => {
+            const msgs = (t.messages || []).map(m => {
+                const isSupport = m.from === 'support' || m.role === 'engineer';
+                const author = isSupport ? (m.author || 'Инженер ODANT') : (m.author || t.userName || 'Клиент');
+                return `<div class="small"><b style="color:${isSupport ? 'var(--brand-2)' : 'var(--text)'}">${esc(author)}:</b> ${esc(m.text)}</div>`;
+            }).join('');
+            const slaStatus = t.status === 'closed'
+                ? '<span class="tag">закрыт</span>'
+                : t.slaMet === true
+                    ? '<span class="tag ok">✓ SLA выполнен</span>'
+                    : t.slaMet === false
+                        ? '<span class="tag bad">SLA просрочен</span>'
+                        : '<span class="tag">ожидает ответа</span>';
+            return `<tr>
+                <td><b>${esc(t.ticketId)}</b><div><span class="tag">${esc(String(t.channel || '').toUpperCase())}</span> ${slaStatus}</div></td>
+                <td><b>${esc(t.customerName || t.userName || t.chatId)}</b><div class="small muted">Сервер: <code>${esc(t.licenseId || '—')}</code></div></td>
+                <td><span class="tag ok">${esc(t.tierName || 'Start')}</span><div class="small muted">${esc(t.reactionLabel || '')}</div></td>
+                <td style="white-space:normal;max-width:360px">${msgs}</td>
+                <td>
+                    ${t.status !== 'closed' ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
+                        <input type="text" id="reply-${esc(t.ticketId)}" placeholder="Ответ инженера…" style="min-width:180px;padding:7px 10px;font-size:12.5px">
+                        <button class="btn btn-primary btn-sm" data-reply-ticket="${esc(t.ticketId)}">Ответить</button>
+                        <button class="btn btn-ghost btn-sm" data-close-ticket="${esc(t.ticketId)}">Закрыть</button>
+                    </div>` : '<span class="small muted">Обращение закрыто</span>'}
+                </td>
+            </tr>`;
+        }).join('') || '<tr><td colspan="5" class="muted">Обращений нет</td></tr>';
+    }
+
+    /* ================= Модалка 12-месячного графика погашения франшизы ================= */
+    function openFranchiseScheduleModal(reservationId) {
+        const franchises = lastAdminData?.franchises || lastAdminData?.reservations || [];
+        const f = franchises.find(x => x.reservationId === reservationId);
+        if (!f) return;
+        currentScheduleResId = reservationId;
+        $('#admSchedTitle').textContent = `График погашения франшизы · ${f.regionName}`;
+        $('#admSchedSub').textContent = `${f.companyName || f.email || ''} · ${f.reservationId}`;
+
+        const depositRub = Number(f.nonRefundableDepositRub || 100_000);
+        const totalFeeRub = Number(f.franchiseFeeRub || 500_000);
+        const paidRub = Number(f.totalPaidRub ?? (f.depositPaid ? depositRub : 0));
+        const remRub = Number(f.remainingFranchiseFeeRub ?? Math.max(0, totalFeeRub - paidRub));
+
+        $('#admSchedSummary').innerHTML = `<div style="padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.02);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div>Паушальный взнос: <b>${rub(totalFeeRub)}</b></div>
+            <div>Начальный взнос (залог): <b>${rub(depositRub)}</b> (${f.depositPaid ? '<span style="color:var(--ok)">оплачен</span>' : '<span style="color:var(--warn)">не оплачен</span>'})</div>
+            <div>Оплачено всего: <b style="color:var(--ok)">${rub(paidRub)}</b></div>
+            <div>Остаток к погашению: <b>${rub(remRub)}</b></div>
+        </div>`;
+
+        const schedule = Array.isArray(f.paymentSchedule) ? f.paymentSchedule : [];
+        $('#admSchedBody').innerHTML = schedule.map(inst => {
+            const isPaid = inst.status === 'paid';
+            const stHtml = isPaid
+                ? `<span class="tag ok">✓ Оплачен ${fmtDate(inst.paidAt)}</span>`
+                : (inst.displayStatus === 'overdue'
+                    ? '<span class="tag bad">Просрочен</span>'
+                    : (inst.displayStatus === 'next' ? '<span class="tag">Очередной к оплате</span>' : '<span class="tag">По графику</span>'));
+            const actHtml = !isPaid
+                ? `<button class="btn btn-ok btn-sm" style="padding:4px 10px;font-size:12px" data-adm-confirm-inst="${esc(f.reservationId)}" data-month="${inst.monthNumber}">Зачесть оплату (${rub(inst.amountRub)})</button>`
+                : `<span class="small muted">Заказ ${esc(inst.orderId || '—')}</span>`;
+            return `<tr>
+                <td><b>Месяц ${inst.monthNumber} / 12</b></td>
+                <td>${fmtDate(inst.dueDate)}</td>
+                <td class="num"><b>${rub(inst.amountRub)}</b></td>
+                <td>${stHtml}</td>
+                <td style="text-align:right">${actHtml}</td>
+            </tr>`;
+        }).join('');
+
+        $('#admSchedEarlyBox').innerHTML = remRub > 0
+            ? `<button class="btn btn-primary btn-sm" data-adm-confirm-inst="${esc(f.reservationId)}" data-early="1">Досрочно зачесть весь остаток (${rub(remRub)})</button>`
+            : `<span class="tag ok">✓ Все 12 платежей полностью погашены</span>`;
+
+        $('#admFranchiseScheduleModal').classList.add('open');
+    }
+
+    /* ================= Действия администратора ================= */
+    async function adminSubmitCreateServer() {
+        const st = $('#admCreateServerStatus');
+        if (st) st.textContent = '';
+        const serverName = $('#admNewSrvName')?.value.trim() || 'Сервер WORK #1';
+        const org = $('#admNewSrvOrg')?.value.trim() || '';
+        const inn = $('#admNewSrvInn')?.value.trim() || '';
+        const email = $('#admNewSrvEmail')?.value.trim() || '';
+        const hwid = $('#admNewSrvHwid')?.value.trim() || '';
+        const baseActivated = Boolean($('#admNewSrvActivateBase')?.checked);
+        if (!email || !email.includes('@')) {
+            if (st) st.textContent = 'Укажите корректный Email владельца сервера.';
+            return;
         }
+        try {
+            await api('/api/license/issue', {
+                serverName,
+                hwid,
+                baseActivated,
+                ownerEmail: email,
+                customer: {
+                    name: org || email,
+                    inn,
+                    email,
+                },
+            });
+            $('#admCreateServerModal')?.classList.remove('open');
+            await refreshRegistry();
+        }
+        catch (err) {
+            if (st) st.textContent = err.message;
+        }
+    }
+
+    async function adminManageServerAction(payload) {
+        try {
+            await api('/api/admin/servers/manage', payload);
+            await refreshRegistry();
+        }
+        catch (err) {
+            alert(err.message);
+        }
+    }
+
+    function openGrantSeatsModal(licenseId, serverName = '') {
+        $('#admGrantLicId').value = licenseId;
+        $('#admGrantTitle').textContent = 'Начислить доп. рабочие места';
+        $('#admGrantSub').textContent = `${serverName || 'Сервер WORK'} (${licenseId})`;
+        $('#admGrantSeatsModal')?.classList.add('open');
+    }
+
+    async function submitGrantSeats() {
+        const licenseId = $('#admGrantLicId')?.value || '';
+        const addonSeats = Math.max(1, Number($('#admGrantSeatsCount')?.value) || 5);
+        const addonYears = Math.max(1, Math.min(5, Number($('#admGrantYears')?.value) || 1));
+        const addonTier = $('#admGrantTier')?.value || 'business';
+        if (!licenseId) return;
+        await adminManageServerAction({
+            licenseId,
+            addonSeats,
+            addonYears,
+            addonTier,
+        });
+        $('#admGrantSeatsModal')?.classList.remove('open');
+    }
+
+    function copyAdminServerToken(licenseId) {
+        const lic = (lastAdminData?.licenses || []).find(l => l.licenseId === licenseId);
+        const tok = lic?.hubToken || '';
+        if (!tok) {
+            alert('Токен для этого сервера не найден');
+            return;
+        }
+        navigator.clipboard?.writeText(tok);
+    }
+
+    async function adminConfirmFranchiseInst(reservationId, { monthNumber = null, earlyPayoff = false } = {}) {
+        try {
+            await api('/api/admin/franchises/confirm-installment', {
+                reservationId,
+                monthNumber,
+                earlyPayoff,
+            });
+            await refreshRegistry();
+        }
+        catch (err) {
+            alert(err.message);
+        }
+    }
+
+    async function adminCancelFranchise(reservationId) {
+        if (!confirm('Отозвать / отменить эту региональную франшизу? Слот в регионе освободится.')) return;
+        try {
+            await api('/api/admin/franchises/cancel', { reservationId });
+            await refreshRegistry();
+        }
+        catch (err) {
+            alert(err.message);
+        }
+    }
+
+    async function adminConfirmOrder(orderId) {
+        try {
+            await api('/api/admin/orders/' + encodeURIComponent(orderId) + '/confirm-invoice', {
+                paymentOrderNumber: 'ADM-' + Date.now(),
+            });
+            await refreshRegistry();
+        }
+        catch (err) { alert(err.message); }
+    }
+
+    async function adminCancelOrder(orderId) {
+        if (!confirm(`Отменить заказ ${orderId}?`)) return;
+        try {
+            await api('/api/admin/orders/' + encodeURIComponent(orderId) + '/cancel', {});
+            await refreshRegistry();
+        }
+        catch (err) { alert(err.message); }
     }
 
     async function adminToggleUserRole(userId, makeAdmin) {
@@ -386,125 +777,7 @@
                 userId,
                 isAdmin: Boolean(makeAdmin),
             });
-            refreshRegistry();
-        }
-        catch (err) { alert(err.message); }
-    }
-
-    /* ================= Действия администратора ================= */
-    async function adminIssueLicense() {
-        const st = $('#admIssueStatus');
-        st.textContent = 'Выпускаем сертификат…';
-        try {
-            const lic = await api('/api/license/issue', {
-                hwid: $('#admLicHwid').value.trim(),
-                customer: {
-                    name: $('#admLicOrg').value.trim(),
-                    inn: $('#admLicInn').value.trim(),
-                    email: $('#admLicEmail').value.trim(),
-                },
-            });
-            st.textContent = `Выпущена лицензия ${lic.licenseId} (${lic.totalSeats} мест, подпись Ed25519)`;
-            refreshRegistry();
-        }
-        catch (err) { st.textContent = err.message; }
-    }
-
-    async function createDemoPak() {
-        try {
-            await api('/api/license/issue', {
-                customer: { name: 'ООО «Маслоторг»', inn: '7701234567', email: 'admin@maslotorg.ru' },
-            });
-        }
-        catch (err) { alert(err.message); }
-        refreshRegistry();
-    }
-
-    async function adminConfirmOrder(orderId) {
-        const order = (lastAdminData?.orders || []).find(o => o.orderId === orderId);
-        if (!order) return;
-        try {
-            await api('/api/payments/yookassa/webhook', {
-                type: 'notification',
-                event: 'payment.succeeded',
-                object: {
-                    id: order.paymentId,
-                    status: 'succeeded',
-                    amount: { value: Number(order.amountRub || 0).toFixed(2), currency: 'RUB' },
-                    metadata: { orderId: order.orderId, licenseId: order.licenseId || '', reservationId: order.reservationId || '' },
-                },
-            });
-            refreshRegistry();
-        }
-        catch (err) { alert(err.message); }
-    }
-
-    async function adminCancelOrder(orderId) {
-        try {
-            await api('/api/admin/orders/' + encodeURIComponent(orderId) + '/cancel', {});
-            refreshRegistry();
-        }
-        catch (err) { alert(err.message); }
-    }
-
-    async function adminRegisterPartner() {
-        const st = $('#admPartnerStatus');
-        if (st) st.textContent = 'Регистрируем партнёра…';
-        try {
-            const partner = await api('/api/partners/register', {
-                regionCode: $('#admPartRegion').value,
-                companyName: $('#admPartCompany').value.trim(),
-                inn: $('#admPartInn').value.trim(),
-                email: $('#admPartEmail').value.trim(),
-            });
-            if (st) st.textContent = `Зарегистрирован партнёр ${partner.partnerId} (${partner.regionName}, скидка ${partner.discountPercent}%)`;
-            refreshRegistry();
-        }
-        catch (err) { if (st) st.textContent = err.message; }
-    }
-
-    async function adminActivateReservation(reservationId) {
-        const r = (lastAdminData?.reservations || []).find(x => x.reservationId === reservationId);
-        if (!r) return;
-        try {
-            await api('/api/partners/register', {
-                reservationId: r.reservationId,
-                regionCode: r.regionCode,
-                companyName: r.companyName,
-                inn: r.inn,
-                email: r.email,
-            });
-            refreshRegistry();
-        }
-        catch (err) { alert(err.message); }
-    }
-
-    async function adminCertifyPartner(partnerId) {
-        try {
-            await api('/api/partners/certify', {
-                partnerId,
-                specialistName: 'Ведущий инженер ПАК',
-                email: 'engineer@partner.ru',
-                trackId: 'next',
-                score: 96,
-            });
-            refreshRegistry();
-        }
-        catch (err) { alert(err.message); }
-    }
-
-    async function adminPartnerIssueLicense(partnerId) {
-        try {
-            await api('/api/partners/issue-license', {
-                partnerId,
-                customer: { name: 'Заказчик регионального партнёра', inn: '7710998877' },
-                hardwareWarrantyYears: 1,
-                partnerAddons: {
-                    nasBackup: true,
-                    techSupportContract: true,
-                },
-            });
-            refreshRegistry();
+            await refreshRegistry();
         }
         catch (err) { alert(err.message); }
     }
@@ -519,7 +792,7 @@
                 text,
             });
             inp.value = '';
-            refreshRegistry();
+            await refreshRegistry();
         }
         catch (err) { alert(err.message); }
     }
@@ -527,7 +800,7 @@
     async function adminCloseTicket(ticketId) {
         try {
             await api('/api/admin/tickets/' + encodeURIComponent(ticketId) + '/close', {});
-            refreshRegistry();
+            await refreshRegistry();
         }
         catch (err) { alert(err.message); }
     }
@@ -536,10 +809,35 @@
         const lic = (lastAdminData?.licenses || []).find(l => l.licenseId === licenseId);
         if (!lic) return;
         currentCertLic = lic;
-        $('#certTitle').textContent = `Сертификат ${lic.licenseId}`;
-        $('#certSub').textContent = `${lic.customer?.name || ''} · Ed25519 (WORK-LIC-v1)`;
+        $('#certTitle').textContent = `Сертификат и файлы .lic.json · ${lic.serverName || lic.licenseId}`;
+        $('#certSub').textContent = `${lic.customer?.name || ''} (${lic.licenseId}) · Ed25519 (WORK-LIC-v1)`;
+        const files = lic.licenseFiles || [];
+        if ($('#certFilesList')) {
+            $('#certFilesList').innerHTML = files.length
+                ? files.map((f, idx) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-radius:8px;border:1px solid var(--border);margin-bottom:6px;font-size:12.5px">
+                    <code>${esc(f.fileName)}</code>
+                    <button class="btn btn-ok btn-sm" style="padding:3px 10px;font-size:12px" data-adm-dl-licfile="${idx}">Скачать .lic.json</button>
+                  </div>`).join('')
+                : '<div class="small muted">Нет активных .lic.json файлов (базовая лицензия не активирована).</div>';
+        }
         $('#certJsonBox').textContent = JSON.stringify(lic.certificate || lic, null, 2);
         $('#certModal').classList.add('open');
+    }
+
+    function downloadCertLicFile(idx) {
+        if (!currentCertLic) return;
+        const f = currentCertLic.licenseFiles?.[Number(idx)];
+        if (!f) return;
+        const json = JSON.stringify(f.licenseFile || f, null, 2);
+        const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = f.fileName || `${currentCertLic.licenseId}.lic.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
     }
 
     function downloadCurrentCert() {
@@ -549,89 +847,89 @@
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${currentCertLic.licenseId || 'work-license'}.json`;
+        a.download = `${currentCertLic.licenseId}.cert.json`;
         document.body.appendChild(a);
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
     }
 
-    function switchAdminTab(tab = 'all') {
-        $$('[data-adm-tab]').forEach(b => b.classList.toggle('on', b.dataset.admTab === tab));
-        const ws = $('#adminWorkspace');
-        if (ws) ws.classList.toggle('only-agent', tab === 'agent');
-        $$('[data-adm-sec]').forEach(sec => {
-            sec.style.display = (tab === 'all' || tab === sec.dataset.admSec) ? '' : 'none';
-        });
-        if (tab === 'agent') setTimeout(() => $('#admAiInput')?.focus(), 50);
-    }
-
-    function md(text) {
-        return esc(text)
-            .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/(^|\s)\*(.+?)\*(?=\s|$)/g, '$1<i>$2</i>');
-    }
-
-    async function sendAdminAi(text) {
-        const inp = $('#admAiInput');
-        text = (text ?? inp?.value ?? '').trim();
-        if (!text) return;
-        if (inp) inp.value = '';
-        const box = $('#admAiMessages');
-        if (!box) return;
-        box.insertAdjacentHTML('beforeend', `<div class="msg me">${esc(text)}</div><div class="msg bot" id="admAiTyping"><span class="typing"><i></i><i></i><i></i></span></div>`);
-        box.scrollTop = box.scrollHeight;
-        let data;
-        try { data = await api('/api/agent/chat', { message: text }); }
-        catch (err) { data = { reply: err.message, actions: [] }; }
-        $('#admAiTyping')?.remove();
-        box.insertAdjacentHTML('beforeend', `<div class="msg bot">${md(data.reply || '')}</div>`);
-        box.scrollTop = box.scrollHeight;
-        for (const act of data.actions || []) {
-            if (act.type === 'refresh_admin') {
-                refreshRegistry();
-            }
-            else if (act.type === 'admin_tab' && act.tab) {
-                switchAdminTab(act.tab);
-            }
-        }
-    }
-
+    /* ================= Привязка событий ================= */
     function bind() {
-        $('#btnTheme')?.addEventListener('click', toggleTheme);
-
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-action],[data-adm-tab],[data-adm-ask],[data-cert],[data-pay-order],[data-cancel-order],[data-activate-res],[data-certify-partner],[data-partner-issue],[data-reply-ticket],[data-close-ticket],[data-toggle-admin]');
+            const el = e.target.closest('[data-action],[data-adm-tab],[data-cert],[data-adm-dl-licfile],[data-adm-base],[data-adm-reset-hwid],[data-adm-open-grant],[data-adm-copy-tok],[data-adm-sched],[data-adm-pay-deposit],[data-adm-confirm-inst],[data-adm-cancel-franchise],[data-pay-order],[data-cancel-order],[data-reply-ticket],[data-close-ticket],[data-toggle-admin]');
             if (!el) return;
-            if (el.matches('[data-adm-tab]')) { switchAdminTab(el.dataset.admTab); return; }
-            if (el.matches('[data-adm-ask]')) { sendAdminAi(el.dataset.admAsk); return; }
-            if (el.matches('[data-cert]')) { openCertModal(el.dataset.cert); return; }
-            if (el.matches('[data-pay-order]')) { adminConfirmOrder(el.dataset.payOrder); return; }
-            if (el.matches('[data-cancel-order]')) { adminCancelOrder(el.dataset.cancelOrder); return; }
-            if (el.matches('[data-activate-res]')) { adminActivateReservation(el.dataset.activateRes); return; }
-            if (el.matches('[data-certify-partner]')) { adminCertifyPartner(el.dataset.certifyPartner); return; }
-            if (el.matches('[data-partner-issue]')) { adminPartnerIssueLicense(el.dataset.partnerIssue); return; }
-            if (el.matches('[data-reply-ticket]')) { adminReplyTicket(el.dataset.replyTicket); return; }
-            if (el.matches('[data-close-ticket]')) { adminCloseTicket(el.dataset.closeTicket); return; }
-            if (el.matches('[data-toggle-admin]')) { adminToggleUserRole(el.dataset.toggleAdmin, el.dataset.makeAdmin === '1'); return; }
+
+            if (el.dataset.admTab) { setTab(el.dataset.admTab); return; }
+            if (el.dataset.cert) { openCertModal(el.dataset.cert); return; }
+            if (el.dataset.admDlLicfile !== undefined) { downloadCertLicFile(el.dataset.admDlLicfile); return; }
+            if (el.dataset.admBase) {
+                adminManageServerAction({
+                    licenseId: el.dataset.admBase,
+                    baseActivated: el.dataset.activate === '1',
+                });
+                return;
+            }
+            if (el.dataset.admResetHwid) {
+                if (confirm('Сбросить привязку оборудования (HWID) для этого сервера?')) {
+                    adminManageServerAction({ licenseId: el.dataset.admResetHwid, resetHwid: true });
+                }
+                return;
+            }
+            if (el.dataset.admOpenGrant) {
+                openGrantSeatsModal(el.dataset.admOpenGrant, el.dataset.srvName || '');
+                return;
+            }
+            if (el.dataset.admCopyTok) {
+                copyAdminServerToken(el.dataset.admCopyTok);
+                return;
+            }
+            if (el.dataset.admSched) {
+                openFranchiseScheduleModal(el.dataset.admSched);
+                return;
+            }
+            if (el.dataset.admPayDeposit) {
+                adminConfirmFranchiseInst(el.dataset.admPayDeposit, { monthNumber: null, earlyPayoff: false });
+                return;
+            }
+            if (el.dataset.admConfirmInst) {
+                adminConfirmFranchiseInst(el.dataset.admConfirmInst, {
+                    monthNumber: el.dataset.month ? Number(el.dataset.month) : null,
+                    earlyPayoff: el.dataset.early === '1',
+                });
+                return;
+            }
+            if (el.dataset.admCancelFranchise) {
+                adminCancelFranchise(el.dataset.admCancelFranchise);
+                return;
+            }
+            if (el.dataset.payOrder) { adminConfirmOrder(el.dataset.payOrder); return; }
+            if (el.dataset.cancelOrder) { adminCancelOrder(el.dataset.cancelOrder); return; }
+            if (el.dataset.replyTicket) { adminReplyTicket(el.dataset.replyTicket); return; }
+            if (el.dataset.closeTicket) { adminCloseTicket(el.dataset.closeTicket); return; }
+            if (el.dataset.toggleAdmin) { adminToggleUserRole(el.dataset.toggleAdmin, el.dataset.makeAdmin === '1'); return; }
 
             switch (el.dataset.action) {
                 case 'adm-send-code': sendAdminOtpCode(); break;
                 case 'adm-verify-code': verifyAdminOtpCode(); break;
                 case 'adm-reset-step': resetAdmStep(); break;
-                case 'registry': refreshRegistry(); break;
-                case 'demo-pak': createDemoPak(); break;
                 case 'admin-logout': logoutAdmin(); break;
-                case 'adm-issue-lic': adminIssueLicense(); break;
-                case 'adm-register-partner': adminRegisterPartner(); break;
-                case 'adm-ai-send': sendAdminAi(); break;
+                case 'registry': refreshRegistry(); break;
+                case 'open-create-server-modal': $('#admCreateServerModal')?.classList.add('open'); break;
+                case 'close-create-server-modal': $('#admCreateServerModal')?.classList.remove('open'); break;
+                case 'submit-create-server': adminSubmitCreateServer(); break;
+                case 'close-grant-modal': $('#admGrantSeatsModal')?.classList.remove('open'); break;
+                case 'submit-grant-seats': submitGrantSeats(); break;
+                case 'close-sched-modal': $('#admFranchiseScheduleModal')?.classList.remove('open'); break;
                 case 'cert-close': $('#certModal')?.classList.remove('open'); break;
-                case 'cert-copy': navigator.clipboard?.writeText($('#certJsonBox')?.textContent || ''); break;
+                case 'cert-copy':
+                    navigator.clipboard?.writeText($('#certJsonBox')?.textContent || '');
+                    break;
                 case 'cert-download': downloadCurrentCert(); break;
             }
         });
 
+        $('#btnTheme')?.addEventListener('click', toggleTheme);
         $('#adminLoginScreen')?.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') {
                 if ($('#admStepCode')?.style.display !== 'none') verifyAdminOtpCode();
@@ -639,19 +937,24 @@
             }
         });
 
-        $('#certModal')?.addEventListener('click', (e) => { if (e.target.id === 'certModal') $('#certModal').classList.remove('open'); });
+        ['inpFilterServers', 'selFilterServers', 'inpFilterFranchises', 'selFilterFranchises', 'inpFilterOrders', 'selFilterOrders', 'inpFilterUsers', 'selFilterTickets'].forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.addEventListener('input', () => lastAdminData && renderAdminPanel(lastAdminData));
+            el.addEventListener('change', () => lastAdminData && renderAdminPanel(lastAdminData));
+        });
+
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') $('#certModal')?.classList.remove('open');
-            if (e.key === 'Enter' && e.target?.id?.startsWith('reply-')) {
-                adminReplyTicket(e.target.id.slice('reply-'.length));
+            if (e.key === 'Escape') {
+                $$('.modal.open').forEach(m => m.classList.remove('open'));
             }
         });
-        $('#admAiInput')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendAdminAi(); });
     }
 
     function start() {
         applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
         bind();
+        setTab('servers');
         checkAdminSession();
     }
 

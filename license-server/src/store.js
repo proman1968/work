@@ -32,6 +32,41 @@ import {
 } from './crypto.js';
 
 const ONE_YEAR_MS = 365 * 24 * 3600_000;
+export const FRANCHISE_RESERVATION_TTL_MS = 15 * 60 * 1000; // 15 минут на оплату начального взноса за резерв франшизы
+
+/**
+ * Построить 12-месячный график погашения остатка паушального взноса за региональную франшизу (платёж раз в месяц в течение года).
+ */
+export function buildFranchisePaymentSchedule({
+    remainingRub = 0,
+    startMs = Date.now(),
+    existingSchedule = [],
+} = {}) {
+    const totalRub = Math.max(0, Math.round(Number(remainingRub || 0)));
+    const months = 12;
+    const baseMonthly = Math.floor(totalRub / months);
+    const schedule = [];
+    for (let m = 1; m <= months; m++) {
+        const prev = Array.isArray(existingSchedule)
+            ? existingSchedule.find(x => Number(x.monthNumber) === m)
+            : null;
+        const amountRub = (m < months) ? baseMonthly : Math.max(0, totalRub - baseMonthly * (months - 1));
+        const d = new Date(Number(startMs || Date.now()));
+        d.setMonth(d.getMonth() + m);
+        schedule.push({
+            monthNumber: m,
+            installmentId: prev?.installmentId || `INST-${String(m).padStart(2, '0')}`,
+            title: `Платёж №${m} (месяц ${m} из ${months})`,
+            dueDate: prev?.status === 'paid' && prev?.dueDate ? prev.dueDate : d.getTime(),
+            amountRub: prev?.status === 'paid' && prev?.amountRub ? prev.amountRub : amountRub,
+            status: prev?.status === 'paid' ? 'paid' : 'pending',
+            paidAt: prev?.paidAt || null,
+            orderId: prev?.orderId || '',
+            paymentId: prev?.paymentId || '',
+        });
+    }
+    return schedule;
+}
 
 export class LicenseStore {
     constructor({ dataDir = './data', adminLogin = '', adminPassword = '', publicOrigin = 'https://work.odant.org' } = {}) {
@@ -202,7 +237,29 @@ export class LicenseStore {
     _resignAllWithAuthority() {
         let changed = false;
         for (const [id, lic] of Object.entries(this.state.licenses || {})) {
-            if (lic && lic.issuerPublicKey !== this.authorityKeys.publicKey) {
+            if (!lic) continue;
+            if (!lic.serverName) {
+                lic.serverName = 'Сервер WORK';
+                changed = true;
+            }
+            if (!lic.hubToken || !verifyOwnerAccessToken(lic.hubToken, this.authorityKeys.publicKey)) {
+                const tokData = createOwnerAccessToken({
+                    hubUrl: lic.hubUrl || 'https://work.odant.org',
+                    accountId: lic.ownerAccountId || ('USR-' + id),
+                    email: lic.ownerEmail || lic.customer?.email || '',
+                    licenseId: lic.licenseId || id,
+                    serverName: lic.serverName,
+                    tokenId: lic.hubTokenId || '',
+                    secret: lic.hubTokenSecret || '',
+                    issuedAt: lic.issuedAt || Date.now(),
+                }, this.authorityKeys);
+                lic.hubToken = tokData.token;
+                lic.hubTokenId = tokData.payload.tokenId;
+                lic.hubTokenSecret = tokData.payload.secret;
+                lic.hubUrl = tokData.payload.hubUrl;
+                changed = true;
+            }
+            if (lic.issuerPublicKey !== this.authorityKeys.publicKey) {
                 this.state.licenses[id] = signCertificate(lic, this.authorityKeys);
                 changed = true;
             }
@@ -214,6 +271,7 @@ export class LicenseStore {
                     hubUrl: user.hubUrl || 'https://work.odant.org',
                     accountId: user.userId,
                     email: user.email,
+                    licenseId: user.licenseId || '',
                     tokenId: user.hubTokenId || '',
                     secret: user.hubTokenSecret || '',
                     issuedAt: user.createdAt || Date.now(),
@@ -242,11 +300,13 @@ export class LicenseStore {
      */
     issueOrUpdateLicense({
         licenseId,
+        serverName = '',
         hwid = '',
         nodeFingerprint = '',
         customer = {},
         ownerAccountId = '',
         ownerEmail = '',
+        hubUrl = '',
         partnerId = '',
         hardwareWarrantyYears = 1,
         partnerAddons = {},
@@ -272,13 +332,42 @@ export class LicenseStore {
             ? Boolean(baseActivated)
             : (existing?.baseActivated !== undefined ? Boolean(existing.baseActivated) : true);
 
+        const resolvedOwnerAccountId = String(ownerAccountId || existing?.ownerAccountId || '');
+        const resolvedOwnerEmail = String(ownerEmail || customer.email || existing?.ownerEmail || existing?.customer?.email || '').toLowerCase();
+        const resolvedServerName = String(serverName || existing?.serverName || 'Сервер WORK #1').trim();
+        const resolvedHubUrl = String(hubUrl || existing?.hubUrl || 'https://work.odant.org').replace(/\/+$/, '');
+
+        let hubToken = existing?.hubToken || '';
+        let hubTokenId = existing?.hubTokenId || '';
+        let hubTokenSecret = existing?.hubTokenSecret || '';
+        if (!hubToken || !verifyOwnerAccessToken(hubToken, this.authorityKeys.publicKey)) {
+            const tokData = createOwnerAccessToken({
+                hubUrl: resolvedHubUrl,
+                accountId: resolvedOwnerAccountId || ('USR-' + id),
+                email: resolvedOwnerEmail,
+                licenseId: id,
+                serverName: resolvedServerName,
+                issuedAt: now,
+            }, this.authorityKeys);
+            hubToken = tokData.token;
+            hubTokenId = tokData.payload.tokenId;
+            hubTokenSecret = tokData.payload.secret;
+        }
+
+        const hwidBound = Boolean(hwid || nodeFingerprint || existing?.hardware?.hwidBound);
+
         const record = {
             licenseId: id,
+            serverName: resolvedServerName,
             issuedAt,
             updatedAt: now,
             issuer: 'work.odant.org',
-            ownerAccountId: String(ownerAccountId || existing?.ownerAccountId || ''),
-            ownerEmail: String(ownerEmail || customer.email || existing?.ownerEmail || existing?.customer?.email || '').toLowerCase(),
+            ownerAccountId: resolvedOwnerAccountId,
+            ownerEmail: resolvedOwnerEmail,
+            hubToken,
+            hubTokenId,
+            hubTokenSecret,
+            hubUrl: resolvedHubUrl,
             baseActivated: isBaseActivated,
             baseSku: String(baseSku || existing?.baseSku || PAK_PRODUCT.sku),
             customer: {
@@ -290,6 +379,7 @@ export class LicenseStore {
             hardware: {
                 hwid: hwid || existing?.hardware?.hwid || ('PAK-' + crypto.randomBytes(6).toString('hex').toUpperCase()),
                 nodeFingerprint: nodeFingerprint || existing?.hardware?.nodeFingerprint || '',
+                hwidBound,
                 sku: String(baseSku || existing?.hardware?.sku || PAK_PRODUCT.sku),
                 cpu: PAK_PRODUCT.hardware.cpu,
                 ramGb: PAK_PRODUCT.hardware.ramGb,
@@ -542,10 +632,15 @@ export class LicenseStore {
 
         return {
             licenseId: lic.licenseId,
+            serverName: lic.serverName || 'Сервер WORK #1',
             issuedAt: lic.issuedAt,
             updatedAt: lic.updatedAt,
             ownerAccountId: lic.ownerAccountId || '',
             ownerEmail: lic.ownerEmail || lic.customer?.email || '',
+            hubToken: lic.hubToken || '',
+            hubTokenId: lic.hubTokenId || '',
+            hubUrl: lic.hubUrl || 'https://work.odant.org',
+            hwidBound: Boolean(lic.hardware?.hwidBound),
             baseActivated: lic.baseActivated !== false,
             baseSku: lic.baseSku || PAK_PRODUCT.sku,
             customer: lic.customer,
@@ -608,6 +703,8 @@ export class LicenseStore {
      */
     createOrder({
         licenseId = '',
+        serverName = '',
+        createNewServer = false,
         hwid = '',
         nodeFingerprint = '',
         includeBasePak = false,
@@ -633,10 +730,17 @@ export class LicenseStore {
         if (quote.totalAmountRub <= 0)
             throw new Error('Сумма заказа должна быть больше 0 ₽');
 
-        let targetLic = this.findLicense(licenseId || hwid);
+        const forceNew = Boolean(createNewServer || String(licenseId).toUpperCase() === 'NEW');
+        let targetLic = forceNew ? null : this.findLicense(licenseId || hwid);
         if (!targetLic) {
+            const existingCount = Object.values(this.state.licenses).filter(
+                l => (ownerAccountId && l.ownerAccountId === ownerAccountId)
+                    || (customer.email && l.ownerEmail === String(customer.email).toLowerCase())
+            ).length;
             targetLic = this.issueOrUpdateLicense({
-                licenseId: licenseId || undefined,
+                licenseId: (!forceNew && licenseId) ? licenseId : undefined,
+                serverName: serverName || `Сервер WORK #${existingCount + 1}`,
+                baseActivated: forceNew ? false : undefined,
                 hwid,
                 nodeFingerprint,
                 customer,
@@ -727,11 +831,11 @@ export class LicenseStore {
         if (!ord)
             throw new Error(`Заказ ${orderId} не найден`);
         if (ord.status === 'paid') {
-            if (ord.kind === 'franchise_reservation' && ord.reservationId && this.state.reservations[ord.reservationId]) {
+            if ((ord.kind === 'franchise_reservation' || ord.kind === 'franchise_installment') && ord.reservationId && this.state.reservations[ord.reservationId]) {
                 const resv = this.state.reservations[ord.reservationId];
                 return {
                     order: ord,
-                    reservation: resv,
+                    reservation: this.getFranchiseSummary(resv.reservationId),
                     regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
                     alreadyProcessed: true,
                 };
@@ -754,10 +858,60 @@ export class LicenseStore {
             resv.paymentId = ord.paymentId;
             if (!resv.convertedToPartnerId)
                 resv.status = 'deposit_paid';
+            // Фиксируем 12-месячный график погашения остатка ровно от даты оплаты начального взноса
+            const remainingAfterDeposit = Math.max(0, Number(resv.franchiseFeeRub || 0) - Number(resv.nonRefundableDepositRub || 100_000));
+            resv.paymentSchedule = buildFranchisePaymentSchedule({
+                remainingRub: remainingAfterDeposit,
+                startMs: ord.paidAt,
+                existingSchedule: resv.paymentSchedule || [],
+            });
+            resv.paidInstallmentsRub = (resv.paymentSchedule || [])
+                .filter(it => it.status === 'paid')
+                .reduce((s, it) => s + Number(it.amountRub || 0), 0);
+            resv.totalPaidRub = Number(resv.nonRefundableDepositRub || 100_000) + resv.paidInstallmentsRub;
+            resv.remainingFranchiseFeeRub = Math.max(0, Number(resv.franchiseFeeRub || 0) - resv.totalPaidRub);
             this._save();
             return {
                 order: ord,
-                reservation: resv,
+                reservation: this.getFranchiseSummary(resv.reservationId),
+                regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
+                alreadyProcessed: false,
+            };
+        }
+
+        if (ord.kind === 'franchise_installment' && ord.reservationId && this.state.reservations[ord.reservationId]) {
+            const resv = this.state.reservations[ord.reservationId];
+            if (!Array.isArray(resv.paymentSchedule) || !resv.paymentSchedule.length) {
+                const rem = Math.max(0, Number(resv.franchiseFeeRub || 0) - Number(resv.nonRefundableDepositRub || 100_000));
+                resv.paymentSchedule = buildFranchisePaymentSchedule({
+                    remainingRub: rem,
+                    startMs: resv.paidAt || resv.createdAt || ord.paidAt,
+                });
+            }
+            const targetMonths = Array.isArray(ord.installmentMonths) && ord.installmentMonths.length
+                ? new Set(ord.installmentMonths.map(Number))
+                : null;
+            for (const inst of resv.paymentSchedule) {
+                if (inst.status === 'paid') continue;
+                if (ord.earlyPayoff || (targetMonths && targetMonths.has(Number(inst.monthNumber)))) {
+                    inst.status = 'paid';
+                    inst.paidAt = ord.paidAt;
+                    inst.orderId = ord.orderId;
+                    inst.paymentId = ord.paymentId || '';
+                }
+            }
+            resv.paidInstallmentsRub = resv.paymentSchedule
+                .filter(it => it.status === 'paid')
+                .reduce((s, it) => s + Number(it.amountRub || 0), 0);
+            resv.totalPaidRub = (resv.depositPaid ? Number(resv.nonRefundableDepositRub || 100_000) : 0) + resv.paidInstallmentsRub;
+            resv.remainingFranchiseFeeRub = Math.max(0, Number(resv.franchiseFeeRub || 0) - resv.totalPaidRub);
+            if (resv.remainingFranchiseFeeRub <= 0 && !resv.convertedToPartnerId) {
+                resv.status = 'paid_in_full';
+            }
+            this._save();
+            return {
+                order: ord,
+                reservation: this.getFranchiseSummary(resv.reservationId),
                 regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
                 alreadyProcessed: false,
             };
@@ -902,7 +1056,7 @@ export class LicenseStore {
             regionQuota = this.getRegionPartnerQuotaStatus(resv.regionCode);
         }
         this._save();
-        return { order: ord, regionQuota };
+        return { ok: true, orderId: ord.orderId, order: ord, regionQuota };
     }
 
     /**
@@ -1041,9 +1195,218 @@ export class LicenseStore {
         return all;
     }
 
+    _findUser(sessionKeyOrEmail = '') {
+        const key = String(sessionKeyOrEmail || '').trim();
+        if (!key)
+            return null;
+        return Object.values(this.state.users || {}).find(
+            u => u.sessionKey === key || u.email === key.toLowerCase() || u.userId === key
+        ) || null;
+    }
+
+    /**
+     * 1.1 Реестр серверов (устройств) пользователя: каждый сервер со своим токеном (owk1...) и своими лицензиями.
+     */
+    listUserServers(userOrKey, now = Date.now()) {
+        const user = typeof userOrKey === 'object' ? userOrKey : this._findUser(userOrKey);
+        if (!user)
+            return [];
+        const userEmail = String(user.email || '').toLowerCase();
+        const serverLics = Object.values(this.state.licenses || {})
+            .filter(lic => lic && (
+                (user.userId && lic.ownerAccountId === user.userId)
+                || (user.licenseId && lic.licenseId === user.licenseId)
+                || (userEmail && String(lic.ownerEmail || lic.customer?.email || '').toLowerCase() === userEmail)
+            ))
+            .sort((a, b) => (a.issuedAt || 0) - (b.issuedAt || 0));
+
+        return serverLics.map((lic, idx) => {
+            const summary = this.getLicenseSummary(lic.licenseId, now);
+            const serverOrders = Object.values(this.state.orders || {})
+                .filter(o => o.status !== 'canceled'
+                    && o.licenseId === lic.licenseId
+                    && o.kind !== 'franchise_reservation'
+                    && o.kind !== 'franchise_installment'
+                )
+                .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            return {
+                ...summary,
+                serverName: lic.serverName || `Сервер WORK #${idx + 1}`,
+                hubToken: lic.hubToken || user.hubToken || '',
+                hubTokenId: lic.hubTokenId || user.hubTokenId || '',
+                orders: serverOrders,
+            };
+        });
+    }
+
+    /**
+     * Добавить новый лицензируемый сервер (устройство) WORK в Личном кабинете со своим токеном привязки.
+     */
+    createUserServer(sessionKeyOrEmail = '', {
+        serverName = '',
+        hwid = '',
+        hubUrl = 'https://work.odant.org',
+    } = {}) {
+        const user = this._findUser(sessionKeyOrEmail);
+        if (!user)
+            throw new Error('Войдите в Личный кабинет, чтобы добавить сервер');
+        const existingServers = this.listUserServers(user);
+        const cleanName = String(serverName || '').trim() || `Сервер WORK #${existingServers.length + 1}`;
+        const summary = this.issueOrUpdateLicense({
+            serverName: cleanName,
+            hwid: hwid || '',
+            baseActivated: false,
+            ownerAccountId: user.userId,
+            ownerEmail: user.email,
+            hubUrl: hubUrl || user.hubUrl || 'https://work.odant.org',
+            customer: {
+                name: user.companyName || user.name || user.email,
+                inn: user.inn || '',
+                email: user.email,
+                phone: user.phone || '',
+            },
+        });
+        if (!user.licenseId) {
+            user.licenseId = summary.licenseId;
+        }
+        this._save();
+        return {
+            ok: true,
+            server: this.getLicenseSummary(summary.licenseId),
+            user: this._formatUserResponse(user),
+        };
+    }
+
+    /**
+     * Переименовать сервер (устройство) в реестре серверов пользователя.
+     */
+    renameUserServer(sessionKeyOrEmail = '', { licenseId = '', serverName = '' } = {}) {
+        const user = this._findUser(sessionKeyOrEmail);
+        const lic = this.state.licenses[licenseId];
+        if (!lic)
+            throw new Error(`Сервер ${licenseId} не найден`);
+        if (user && !user.isAdmin && lic.ownerAccountId && lic.ownerAccountId !== user.userId)
+            throw new Error('Нет прав на изменение этого сервера');
+        const cleanName = String(serverName || '').trim();
+        if (!cleanName)
+            throw new Error('Укажите название сервера');
+        lic.serverName = cleanName;
+        lic.updatedAt = Date.now();
+        this.state.licenses[licenseId] = signCertificate(lic, this.authorityKeys);
+        this._save();
+        return {
+            ok: true,
+            server: this.getLicenseSummary(licenseId),
+            user: user ? this._formatUserResponse(user) : null,
+        };
+    }
+
+    /**
+     * Удалить неактивированный сервер из реестра серверов пользователя (если на нём нет оплаченных лицензий).
+     */
+    deleteUserServer(sessionKeyOrEmail = '', { licenseId = '' } = {}) {
+        const user = this._findUser(sessionKeyOrEmail);
+        const lic = this.state.licenses[licenseId];
+        if (!lic)
+            throw new Error(`Сервер ${licenseId} не найден`);
+        if (user && !user.isAdmin && lic.ownerAccountId && lic.ownerAccountId !== user.userId)
+            throw new Error('Нет прав на удаление этого сервера');
+        const hasPaidAddons = Array.isArray(lic.addonSubscriptions) && lic.addonSubscriptions.some(s => s.status === 'active');
+        if (lic.baseActivated || hasPaidAddons)
+            throw new Error('Нельзя удалить сервер с активированной платной лицензией');
+        // Отменяем неоплаченные заказы этого сервера
+        for (const ord of Object.values(this.state.orders || {})) {
+            if (ord.licenseId === licenseId && ord.status !== 'paid') {
+                ord.status = 'canceled';
+                ord.canceledAt = Date.now();
+            }
+        }
+        delete this.state.licenses[licenseId];
+        if (user && user.licenseId === licenseId) {
+            const remaining = this.listUserServers(user);
+            user.licenseId = remaining[0]?.licenseId || '';
+        }
+        this._save();
+        return {
+            ok: true,
+            deletedLicenseId: licenseId,
+            user: user ? this._formatUserResponse(user) : null,
+        };
+    }
+
+    /**
+     * Сбросить привязку оборудования (HWID / nodeFingerprint) у сервера (действие администратора при замене железа).
+     */
+    resetServerHwid(licenseId = '') {
+        const lic = this.state.licenses[licenseId];
+        if (!lic)
+            throw new Error(`Сервер ${licenseId} не найден`);
+        lic.hardware = {
+            ...lic.hardware,
+            hwid: 'PAK-' + crypto.randomBytes(6).toString('hex').toUpperCase(),
+            nodeFingerprint: '',
+            hwidBound: false,
+        };
+        lic.updatedAt = Date.now();
+        this.state.licenses[licenseId] = signCertificate(lic, this.authorityKeys);
+        this._save();
+        return this.getLicenseSummary(licenseId);
+    }
+
+    /**
+     * Административное управление сервером и лицензией из /admin (активация/отзыв базовой лицензии, переименование, сброс HWID).
+     */
+    adminManageServer({
+        licenseId = '',
+        serverName = undefined,
+        baseActivated = undefined,
+        baseSku = '',
+        resetHwid = false,
+        addonSeats = 0,
+        addonTier = 'business',
+        addonYears = 1,
+    } = {}) {
+        const lic = this.state.licenses[licenseId];
+        if (!lic)
+            throw new Error(`Сервер ${licenseId} не найден`);
+        if (serverName !== undefined && String(serverName).trim()) {
+            lic.serverName = String(serverName).trim();
+        }
+        if (baseActivated !== undefined) {
+            lic.baseActivated = Boolean(baseActivated);
+            if (lic.baseActivated) {
+                lic.baseSeats = PAK_PRODUCT.baseSeats;
+                lic.perpetualBase = true;
+                if (baseSku) lic.baseSku = baseSku;
+            }
+        }
+        if (resetHwid) {
+            lic.hardware = {
+                ...lic.hardware,
+                hwid: 'PAK-' + crypto.randomBytes(6).toString('hex').toUpperCase(),
+                nodeFingerprint: '',
+                hwidBound: false,
+            };
+        }
+        lic.updatedAt = Date.now();
+        this.state.licenses[licenseId] = signCertificate(lic, this.authorityKeys);
+        if (Number(addonSeats) > 0) {
+            return this.grantAddonSubscription(licenseId, {
+                tier: addonTier,
+                seats: Number(addonSeats),
+                years: Number(addonYears) || 1,
+                orderId: 'ADM-' + Date.now().toString(36).toUpperCase(),
+            });
+        }
+        this._save();
+        return this.getLicenseSummary(licenseId);
+    }
+
     _formatUserResponse(user) {
         if (!user)
             return null;
+        this._expireStaleReservations();
+        const now = Date.now();
         const userEmail = String(user.email || '').toLowerCase();
         const userOrders = Object.values(this.state.orders || {})
             .filter(o => o.status !== 'canceled' && (
@@ -1052,12 +1415,8 @@ export class LicenseStore {
                 || (userEmail && String(o.customer?.email || '').toLowerCase() === userEmail)
             ))
             .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-        const userReservations = Object.values(this.state.reservations || {})
-            .filter(r => r.status !== 'canceled' && (
-                (user.userId && r.ownerAccountId === user.userId)
-                || (userEmail && String(r.email || '').toLowerCase() === userEmail)
-            ))
-            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        const userFranchises = this.listUserFranchises(user, now);
+        const userServers = this.listUserServers(user, now);
         return {
             userId: user.userId,
             email: user.email,
@@ -1081,9 +1440,11 @@ export class LicenseStore {
             ofertaSignatureId: user.ofertaSignatureId || '',
             createdAt: user.createdAt,
             lastLoginAt: user.lastLoginAt,
-            license: this.getLicenseSummary(user.licenseId),
+            license: this.getLicenseSummary(user.licenseId, now),
+            servers: userServers,
+            franchises: userFranchises,
             orders: userOrders,
-            reservations: userReservations,
+            reservations: userFranchises,
         };
     }
 
@@ -1222,27 +1583,39 @@ export class LicenseStore {
     }
 
     /**
-     * Сгенерировать (или перевыпустить) токен владельца в личном кабинете (содержит URL сервера поддержки).
+     * Сгенерировать (или перевыпустить) токен привязки сервера (или владельца) в личном кабинете (содержит URL сервера поддержки и ID сервера).
      */
-    generateUserHubToken(sessionKeyOrEmail = '', { hubUrl = 'https://work.odant.org' } = {}) {
-        const key = String(sessionKeyOrEmail || '').trim();
-        const user = Object.values(this.state.users).find(
-            u => u.sessionKey === key || u.email === key.toLowerCase() || u.userId === key
-        );
+    generateUserHubToken(sessionKeyOrEmail = '', { licenseId = '', hubUrl = 'https://work.odant.org' } = {}) {
+        const user = this._findUser(sessionKeyOrEmail);
         if (!user)
             throw new Error('Аккаунт владельца не найден в личном кабинете');
 
+        const targetLicId = String(licenseId || user.licenseId || '').trim();
+        const targetLic = targetLicId ? this.state.licenses[targetLicId] : null;
+        const resolvedHubUrl = String(hubUrl || targetLic?.hubUrl || user.hubUrl || 'https://work.odant.org').replace(/\/+$/, '');
+
         const tokData = createOwnerAccessToken({
-            hubUrl: hubUrl || user.hubUrl || 'https://work.odant.org',
+            hubUrl: resolvedHubUrl,
             accountId: user.userId,
             email: user.email,
+            licenseId: targetLic ? targetLic.licenseId : (user.licenseId || ''),
+            serverName: targetLic ? (targetLic.serverName || 'Сервер WORK') : '',
             issuedAt: Date.now(),
         }, this.authorityKeys);
 
-        user.hubToken = tokData.token;
-        user.hubTokenId = tokData.payload.tokenId;
-        user.hubTokenSecret = tokData.payload.secret;
-        user.hubUrl = tokData.payload.hubUrl;
+        if (targetLic) {
+            targetLic.hubToken = tokData.token;
+            targetLic.hubTokenId = tokData.payload.tokenId;
+            targetLic.hubTokenSecret = tokData.payload.secret;
+            targetLic.hubUrl = tokData.payload.hubUrl;
+            this.state.licenses[targetLic.licenseId] = signCertificate(targetLic, this.authorityKeys);
+        }
+        if (!licenseId || licenseId === user.licenseId) {
+            user.hubToken = tokData.token;
+            user.hubTokenId = tokData.payload.tokenId;
+            user.hubTokenSecret = tokData.payload.secret;
+            user.hubUrl = tokData.payload.hubUrl;
+        }
         this._save();
 
         return {
@@ -1253,13 +1626,15 @@ export class LicenseStore {
             email: user.email,
             hubUrl: tokData.payload.hubUrl,
             issuedAt: tokData.payload.issuedAt,
-            licenseId: user.licenseId,
+            licenseId: targetLic ? targetLic.licenseId : user.licenseId,
+            serverName: targetLic ? targetLic.serverName : '',
+            user: this._formatUserResponse(user),
         };
     }
 
     /**
-     * Проверить токен владельца (owk1...), привязать локальную систему (HWID / nodeFingerprint) к аккаунту
-     * владельца и выдать подписанные файлы лицензий (базовую на 10 вечных мест и дополнительные временные)
+     * Проверить токен владельца/сервера (owk1...), привязать локальную систему (HWID / nodeFingerprint) к конкретному
+     * серверу из реестра владельца и выдать подписанные файлы лицензий (базовую на 10 вечных мест и дополнительные временные)
      * для сохранения в папке #system.
      */
     syncByOwnerToken({
@@ -1277,7 +1652,7 @@ export class LicenseStore {
             throw err;
         }
 
-        const { accountId, email, tokenId, secret, hubUrl } = parsed.payload;
+        const { accountId, email, tokenId, secret, hubUrl, licenseId: tokLicenseId } = parsed.payload;
         const user = Object.values(this.state.users).find(
             u => u.userId === accountId || (email && u.email === email.toLowerCase())
         );
@@ -1286,15 +1661,35 @@ export class LicenseStore {
             err.statusCode = 404;
             throw err;
         }
-        if (user.hubTokenId && (user.hubTokenId !== tokenId || user.hubTokenSecret !== secret)) {
+
+        // Определяем целевой сервер из реестра серверов владельца
+        let targetLic = null;
+        if (tokLicenseId && this.state.licenses[tokLicenseId]) {
+            targetLic = this.state.licenses[tokLicenseId];
+        }
+        if (!targetLic) {
+            targetLic = Object.values(this.state.licenses).find(
+                l => l && l.hubTokenId === tokenId && (l.ownerAccountId === user.userId || l.ownerEmail === user.email)
+            ) || null;
+        }
+        if (!targetLic && user.licenseId && this.state.licenses[user.licenseId]) {
+            targetLic = this.state.licenses[user.licenseId];
+        }
+
+        const matchesServerToken = Boolean(targetLic?.hubTokenId && targetLic.hubTokenId === tokenId && targetLic.hubTokenSecret === secret);
+        const matchesUserToken = Boolean(user.hubTokenId && user.hubTokenId === tokenId && user.hubTokenSecret === secret);
+        if (!matchesServerToken && !matchesUserToken) {
             const err = new Error('Токен владельца был отозван или перевыпущен в личном кабинете');
             err.statusCode = 401;
             throw err;
         }
 
-        // Обновляем привязку оборудования к лицензии владельца
+        const targetLicenseId = targetLic ? targetLic.licenseId : user.licenseId;
+
+        // Обновляем привязку оборудования именно к этому серверу из реестра
         const summary = this.issueOrUpdateLicense({
-            licenseId: user.licenseId,
+            licenseId: targetLicenseId,
+            serverName: targetLic?.serverName || 'Сервер WORK #1',
             hwid: hwid || undefined,
             nodeFingerprint: nodeFingerprint || undefined,
             ownerAccountId: user.userId,
@@ -1406,9 +1801,270 @@ export class LicenseStore {
     }
 
     /**
+     * Автоматически отменить резервы франшиз, по которым не оплачен начальный взнос (100 000 ₽) в течение 15 минут.
+     */
+    _expireStaleReservations(now = Date.now()) {
+        let changed = false;
+        for (const resv of Object.values(this.state.reservations || {})) {
+            if (!resv) continue;
+            if (
+                resv.status === 'reserved_pending_deposit'
+                && !resv.depositPaid
+                && resv.depositDeadlineAt
+                && now > Number(resv.depositDeadlineAt)
+            ) {
+                resv.status = 'expired';
+                resv.expiredAt = now;
+                if (resv.orderId && this.state.orders[resv.orderId] && this.state.orders[resv.orderId].status !== 'paid') {
+                    this.state.orders[resv.orderId].status = 'canceled';
+                    this.state.orders[resv.orderId].canceledAt = now;
+                }
+                changed = true;
+            }
+        }
+        if (changed) {
+            try { this._save(); } catch { /* ignore */ }
+        }
+        return changed;
+    }
+
+    /**
+     * Получить развёрнутую карточку региональной франшизы с таймером 15 минут и 12-месячным графиком погашения.
+     */
+    getFranchiseSummary(reservationId, now = Date.now()) {
+        this._expireStaleReservations(now);
+        const resv = this.state.reservations[reservationId];
+        if (!resv)
+            return null;
+
+        const depositRub = Number(resv.nonRefundableDepositRub || FRANCHISE_PROGRAM.reservationDepositRub || 100_000);
+        const totalFeeRub = Number(resv.franchiseFeeRub || 500_000);
+        const remainingAfterDeposit = Math.max(0, totalFeeRub - depositRub);
+
+        if (!Array.isArray(resv.paymentSchedule) || resv.paymentSchedule.length !== 12) {
+            resv.paymentSchedule = buildFranchisePaymentSchedule({
+                remainingRub: remainingAfterDeposit,
+                startMs: resv.paidAt || resv.createdAt || now,
+                existingSchedule: resv.paymentSchedule || [],
+            });
+        }
+
+        let nextFound = false;
+        let paidMonthsCount = 0;
+        let overdueMonthsCount = 0;
+        let paidInstallmentsRub = 0;
+        let nextInstallment = null;
+
+        const schedule = resv.paymentSchedule.map(inst => {
+            const isPaid = inst.status === 'paid';
+            if (isPaid) {
+                paidMonthsCount += 1;
+                paidInstallmentsRub += Number(inst.amountRub || 0);
+                return { ...inst, displayStatus: 'paid' };
+            }
+            const isOverdue = Boolean(resv.depositPaid && inst.dueDate && now > Number(inst.dueDate));
+            if (isOverdue) overdueMonthsCount += 1;
+            let displayStatus = isOverdue ? 'overdue' : 'scheduled';
+            if (!nextFound) {
+                nextFound = true;
+                if (!isOverdue) displayStatus = 'next';
+                nextInstallment = { ...inst, displayStatus };
+            }
+            return { ...inst, displayStatus };
+        });
+
+        const totalPaidRub = (resv.depositPaid ? depositRub : 0) + paidInstallmentsRub;
+        const remainingFranchiseFeeRub = Math.max(0, totalFeeRub - totalPaidRub);
+        const depositDeadlineAt = Number(resv.depositDeadlineAt || ((resv.createdAt || now) + FRANCHISE_RESERVATION_TTL_MS));
+        const depositRemainingSeconds = (!resv.depositPaid && resv.status === 'reserved_pending_deposit')
+            ? Math.max(0, Math.floor((depositDeadlineAt - now) / 1000))
+            : 0;
+
+        const relatedOrders = Object.values(this.state.orders || {})
+            .filter(o => o.reservationId === resv.reservationId && o.status !== 'canceled')
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+        return {
+            ...resv,
+            depositDeadlineAt,
+            depositRemainingSeconds,
+            paymentSchedule: schedule,
+            paidMonthsCount,
+            totalMonthsCount: 12,
+            overdueMonthsCount,
+            paidInstallmentsRub,
+            totalPaidRub,
+            remainingFranchiseFeeRub,
+            nextInstallment,
+            orders: relatedOrders,
+        };
+    }
+
+    /**
+     * 1.2 Реестр франшиз пользователя (несколько франшиз в разных регионах, но не более 1 в одном регионе).
+     */
+    listUserFranchises(userOrKey, now = Date.now()) {
+        this._expireStaleReservations(now);
+        const user = typeof userOrKey === 'object' ? userOrKey : this._findUser(userOrKey);
+        if (!user)
+            return [];
+        const userEmail = String(user.email || '').toLowerCase();
+        return Object.values(this.state.reservations || {})
+            .filter(r => r && r.status !== 'canceled' && r.status !== 'expired' && (
+                (user.userId && r.ownerAccountId === user.userId)
+                || (userEmail && String(r.email || '').toLowerCase() === userEmail)
+            ))
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+            .map(r => this.getFranchiseSummary(r.reservationId, now));
+    }
+
+    /**
+     * Список всех франшиз и резервов для Админ-панели (/admin).
+     */
+    listAllFranchises(now = Date.now()) {
+        this._expireStaleReservations(now);
+        return Object.values(this.state.reservations || {})
+            .filter(Boolean)
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+            .map(r => this.getFranchiseSummary(r.reservationId, now));
+    }
+
+    /**
+     * Создать заказ на оплату очередного ежемесячного платежа (раз в месяц) или досрочное погашение остатка франшизы.
+     */
+    createFranchiseInstallmentOrder(sessionKeyOrEmail = '', {
+        reservationId = '',
+        monthNumber = null,
+        earlyPayoff = false,
+        paymentMethod = 'yookassa',
+        companyName = '',
+        inn = '',
+        returnUrl = '',
+    } = {}) {
+        this._expireStaleReservations();
+        const user = this._findUser(sessionKeyOrEmail);
+        const summary = this.getFranchiseSummary(reservationId);
+        if (!summary)
+            throw new Error(`Франшиза ${reservationId} не найдена`);
+        if (summary.status === 'canceled' || summary.status === 'expired')
+            throw new Error('Резерв франшизы истёк или был отменён');
+        if (!summary.depositPaid)
+            throw new Error('Сначала оплатите начальный взнос за резервирование франшизы (100 000 ₽)');
+
+        const unpaid = (summary.paymentSchedule || []).filter(it => it.status !== 'paid');
+        if (!unpaid.length || summary.remainingFranchiseFeeRub <= 0)
+            throw new Error('Все 12 платежей по данной франшизе уже полностью погашены');
+
+        let targetInstallments = [];
+        if (earlyPayoff) {
+            targetInstallments = unpaid;
+        }
+        else if (monthNumber != null) {
+            const found = unpaid.find(it => Number(it.monthNumber) === Number(monthNumber));
+            if (!found)
+                throw new Error(`Платёж №${monthNumber} уже оплачен или не найден`);
+            targetInstallments = [found];
+        }
+        else {
+            targetInstallments = [unpaid[0]];
+        }
+
+        const amountRub = targetInstallments.reduce((s, it) => s + Number(it.amountRub || 0), 0);
+        const monthsList = targetInstallments.map(it => Number(it.monthNumber));
+        const now = Date.now();
+        const method = String(paymentMethod || 'yookassa').toLowerCase() === 'invoice' ? 'invoice' : 'yookassa';
+        const orderId = 'ORD-FI-' + now.toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+        const invoiceNumber = 'СЧ-FI-' + new Date(now).toISOString().slice(0, 10).replace(/-/g, '') + '-' + orderId.slice(-4);
+        const contractNumber = summary.contractNumber || ('ДЛ-FR-' + new Date(now).getFullYear() + '-' + summary.reservationId.slice(-6));
+
+        const title = earlyPayoff
+            ? `Досрочное погашение остатка паушального взноса по франшизе ODANT-WORK (${summary.regionName}, платежи №${monthsList.join(', ')})`
+            : `Ежемесячный платёж №${monthsList[0]}/12 по графику погашения франшизы ODANT-WORK (${summary.regionName})`;
+
+        const order = {
+            orderId,
+            ownerAccountId: summary.ownerAccountId || user?.userId || '',
+            kind: 'franchise_installment',
+            reservationId: summary.reservationId,
+            licenseId: summary.reservationId,
+            regionCode: summary.regionCode,
+            regionName: summary.regionName,
+            earlyPayoff: Boolean(earlyPayoff),
+            installmentMonths: monthsList,
+            tierName: earlyPayoff
+                ? `Досрочное погашение франшизы (${summary.regionName})`
+                : `Платёж №${monthsList[0]}/12 · Франшиза (${summary.regionName})`,
+            addonSeats: 1,
+            years: 1,
+            amountRub,
+            paymentMethod: method,
+            invoiceNumber,
+            contractNumber,
+            invoiceUrl: `/api/orders/${encodeURIComponent(orderId)}/invoice`,
+            items: [
+                {
+                    title,
+                    quantity: 1,
+                    unitPriceRub: amountRub,
+                    totalRub: amountRub,
+                },
+            ],
+            customer: {
+                name: companyName || summary.companyName || user?.companyName || user?.email || 'Партнёр ODANT-WORK',
+                inn: inn || summary.inn || user?.inn || '',
+                email: summary.email || user?.email || 'franchise@odant.org',
+                phone: summary.phone || user?.phone || '',
+            },
+            status: method === 'invoice' ? 'awaiting_invoice' : 'pending',
+            paymentId: '',
+            confirmationUrl: method === 'invoice' ? `/api/orders/${encodeURIComponent(orderId)}/invoice` : '',
+            returnUrl: returnUrl || 'https://work.odant.org/#addons',
+            createdAt: now,
+            paidAt: null,
+        };
+
+        this.state.orders[orderId] = order;
+        this._save();
+        return {
+            ok: true,
+            order,
+            franchise: this.getFranchiseSummary(summary.reservationId),
+            user: user ? this._formatUserResponse(user) : null,
+        };
+    }
+
+    /**
+     * Зачесть оплату ежемесячного платежа (или полного остатка) по графику франшизы из Админ-панели (/admin).
+     */
+    adminConfirmFranchiseInstallment(reservationId, {
+        monthNumber = null,
+        earlyPayoff = false,
+        paymentOrderNumber = '',
+    } = {}) {
+        const resv = this.state.reservations[reservationId];
+        if (!resv)
+            throw new Error(`Франшиза ${reservationId} не найдена`);
+        if (!resv.depositPaid && !earlyPayoff && monthNumber == null) {
+            if (resv.orderId && this.state.orders[resv.orderId]) {
+                return this.confirmInvoicePayment(resv.orderId, { paymentOrderNumber });
+            }
+        }
+        const created = this.createFranchiseInstallmentOrder(resv.ownerAccountId || resv.email, {
+            reservationId,
+            monthNumber,
+            earlyPayoff,
+            paymentMethod: 'invoice',
+        });
+        return this.confirmInvoicePayment(created.order.orderId, {
+            paymentOrderNumber: paymentOrderNumber || `ADM-FI-${Date.now()}`,
+        });
+    }
+
+    /**
      * Получить статус квоты и вакантных франшиз по региону (макс. число партнёров пропорционально населению).
      */
     getRegionPartnerQuotaStatus(regionCode = 'RU-SVE', customPopulationMillions = null, options = {}) {
+        this._expireStaleReservations();
         const info = calculateFranchiseFee(regionCode, customPopulationMillions);
         const ignoreResId = options?.ignoreReservationId || '';
         const existingInRegion = Object.values(this.state.partners).filter(
@@ -1417,6 +2073,7 @@ export class LicenseStore {
         const reservedInRegion = Object.values(this.state.reservations || {}).filter(
             r => r.regionCode === info.regionCode
                 && r.status !== 'canceled'
+                && r.status !== 'expired'
                 && !r.convertedToPartnerId
                 && r.reservationId !== ignoreResId
         );
@@ -1433,8 +2090,9 @@ export class LicenseStore {
     }
 
     /**
-     * Зарезервировать региональную франшизу с выставлением счёта ЮKassa на невозвратный залог 100 000 ₽.
-     * Полный паушальный взнос (500 000 ₽ × индекс региона) фиксируется в договоре резерва, полная оплата — в течение 1 года.
+     * Зарезервировать региональную франшизу с выставлением счёта ЮKassa на невозвратный залог 100 000 ₽ (таймер 15 минут).
+     * Пользователь может резервировать несколько франшиз в разных регионах, но не более 1 в одном регионе.
+     * Полный паушальный взнос (500 000 ₽ × индекс региона) погашается по помесячному графику в течение 1 года (12 мес.).
      */
     reserveFranchiseSlot({
         regionCode = 'RU-SVE',
@@ -1444,11 +2102,46 @@ export class LicenseStore {
         email = '',
         phone = '',
         contactPerson = '',
+        depositTtlMs = FRANCHISE_RESERVATION_TTL_MS,
         returnUrl = '',
     } = {}) {
+        const now = Date.now();
+        this._expireStaleReservations(now);
         const effCompanyName = String(companyName || email || 'Партнёр ODANT-WORK').trim();
+        const cleanEmail = String(email || '').trim().toLowerCase();
+        const cleanOwnerId = String(ownerAccountId || '').trim();
 
         const quotaStatus = this.getRegionPartnerQuotaStatus(regionCode);
+
+        // Проверка ограничения 1.2.1: более 1 франшизы в одном регионе одному пользователю резервировать нельзя
+        if (cleanOwnerId || cleanEmail) {
+            const duplicateResv = Object.values(this.state.reservations || {}).find(r =>
+                r
+                && r.regionCode === quotaStatus.regionCode
+                && r.status !== 'canceled'
+                && r.status !== 'expired'
+                && (
+                    (cleanOwnerId && r.ownerAccountId === cleanOwnerId)
+                    || (cleanEmail && String(r.email || '').toLowerCase() === cleanEmail)
+                )
+            );
+            const duplicatePartner = Object.values(this.state.partners || {}).find(p =>
+                p
+                && p.regionCode === quotaStatus.regionCode
+                && p.status !== 'revoked'
+                && (
+                    (cleanOwnerId && p.ownerAccountId === cleanOwnerId)
+                    || (cleanEmail && String(p.email || '').toLowerCase() === cleanEmail)
+                )
+            );
+            if (duplicateResv || duplicatePartner) {
+                throw new Error(
+                    `В регионе «${quotaStatus.regionName}» у вас уже есть зарезервированная или действующая франшиза `
+                    + `(нельзя резервировать более 1 франшизы в одном регионе). Вы можете выбрать любой другой регион.`
+                );
+            }
+        }
+
         if (quotaStatus.vacantFranchises <= 0) {
             throw new Error(
                 `В регионе «${quotaStatus.regionName}» нет вакантных франшиз `
@@ -1456,9 +2149,11 @@ export class LicenseStore {
             );
         }
 
-        const now = Date.now();
         const reservationId = 'RES-' + quotaStatus.regionCode.replace(/^RU-/, '') + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
         const depositRub = FRANCHISE_PROGRAM.reservationDepositRub;
+        const remainingRub = Math.max(0, quotaStatus.franchiseFeeRub - depositRub);
+        const ttlMs = Number(depositTtlMs) > 0 ? Number(depositTtlMs) : FRANCHISE_RESERVATION_TTL_MS;
+        const depositDeadlineAt = now + ttlMs;
         const orderId = 'ORD-FR-' + Date.now().toString(36).toUpperCase() + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
         const invoiceNumber = 'СЧ-FR-' + new Date(now).toISOString().slice(0, 10).replace(/-/g, '') + '-' + orderId.slice(-4);
         const contractNumber = 'ДЛ-FR-' + new Date(now).getFullYear() + '-' + orderId.slice(-6);
@@ -1466,7 +2161,7 @@ export class LicenseStore {
         const reservation = {
             reservationId,
             orderId,
-            ownerAccountId: String(ownerAccountId || '').trim(),
+            ownerAccountId: cleanOwnerId,
             regionCode: quotaStatus.regionCode,
             regionName: quotaStatus.regionName,
             district: quotaStatus.district,
@@ -1477,9 +2172,16 @@ export class LicenseStore {
             contactPerson: String(contactPerson || '').trim(),
             franchiseFeeRub: quotaStatus.franchiseFeeRub,
             nonRefundableDepositRub: depositRub,
-            remainingFranchiseFeeRub: Math.max(0, quotaStatus.franchiseFeeRub - depositRub),
+            paidInstallmentsRub: 0,
+            totalPaidRub: 0,
+            remainingFranchiseFeeRub: remainingRub,
             fullPaymentPeriodMonths: FRANCHISE_PROGRAM.fullPaymentPeriodMonths,
             fullPaymentDeadlineAt: now + 365 * 24 * 3600_000,
+            depositDeadlineAt,
+            paymentSchedule: buildFranchisePaymentSchedule({
+                remainingRub,
+                startMs: now,
+            }),
             status: 'reserved_pending_deposit',
             depositPaid: false,
             createdAt: now,
@@ -1488,23 +2190,24 @@ export class LicenseStore {
 
         const order = {
             orderId,
-            ownerAccountId: String(ownerAccountId || '').trim(),
+            ownerAccountId: cleanOwnerId,
             kind: 'franchise_reservation',
             reservationId,
             licenseId: reservationId,
             regionCode: quotaStatus.regionCode,
             regionName: quotaStatus.regionName,
-            tierName: `Резерв франшизы (${quotaStatus.regionName})`,
+            tierName: `Начальный взнос за резерв франшизы (${quotaStatus.regionName})`,
             addonSeats: 1,
             years: 1,
             amountRub: depositRub,
             franchiseFeeRub: quotaStatus.franchiseFeeRub,
+            depositDeadlineAt,
             invoiceNumber,
             contractNumber,
             invoiceUrl: `/api/orders/${encodeURIComponent(orderId)}/invoice`,
             items: [
                 {
-                    title: `Невозвратный залог за резервирование региональной франшизы ODANT-WORK (${quotaStatus.regionName}, паушальный взнос ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽, полная оплата в течение 1 года)`,
+                    title: `Начальный взнос (залог) за резервирование региональной франшизы ODANT-WORK (${quotaStatus.regionName}, паушальный взнос ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽, график погашения остатка — 12 ежемесячных платежей)`,
                     quantity: 1,
                     unitPriceRub: depositRub,
                     totalRub: depositRub,
@@ -1519,7 +2222,7 @@ export class LicenseStore {
             status: 'pending',
             paymentId: '',
             confirmationUrl: '',
-            returnUrl: returnUrl || 'https://work.odant.org',
+            returnUrl: returnUrl || 'https://work.odant.org/#addons',
             createdAt: now,
             paidAt: null,
         };
@@ -1529,7 +2232,7 @@ export class LicenseStore {
         this._save();
 
         return {
-            reservation,
+            reservation: this.getFranchiseSummary(reservationId, now),
             order,
             regionQuota: this.getRegionPartnerQuotaStatus(quotaStatus.regionCode),
         };
@@ -1579,21 +2282,32 @@ export class LicenseStore {
     }
 
     /**
-     * Отменить неоплаченный заказ в Личном кабинете (и снять резерв региона, если это был резерв франшизы).
+     * Отменить резерв франшизы (до оплаты залога — пользователем, либо в любой момент — администратором).
      */
-    cancelOrder(orderId) {
-        const order = this.state.orders[orderId];
-        if (!order)
-            throw new Error(`Заказ ${orderId} не найден`);
-        if (order.status === 'paid')
-            throw new Error('Оплаченный заказ отменить нельзя');
-        order.status = 'canceled';
-        order.canceledAt = Date.now();
-        if (order.reservationId && this.state.reservations[order.reservationId]) {
-            this.state.reservations[order.reservationId].status = 'canceled';
+    cancelFranchiseReservation(reservationId, { byAdmin = false } = {}) {
+        const resv = this.state.reservations[reservationId];
+        if (!resv)
+            throw new Error(`Франшиза ${reservationId} не найдена`);
+        if (resv.depositPaid && !byAdmin)
+            throw new Error('Залог по франшизе уже оплачен. Для расторжения обратитесь к администратору.');
+        const now = Date.now();
+        resv.status = 'canceled';
+        resv.canceledAt = now;
+        for (const ord of Object.values(this.state.orders || {})) {
+            if (ord.reservationId === reservationId && ord.status !== 'paid') {
+                ord.status = 'canceled';
+                ord.canceledAt = now;
+            }
+        }
+        if (resv.convertedToPartnerId && this.state.partners[resv.convertedToPartnerId] && byAdmin) {
+            this.state.partners[resv.convertedToPartnerId].status = 'revoked';
         }
         this._save();
-        return { ok: true, orderId };
+        return {
+            ok: true,
+            reservationId,
+            regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
+        };
     }
 
     /**

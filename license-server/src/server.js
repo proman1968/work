@@ -479,12 +479,44 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, user);
             }
 
-            // 2.0.1 Генерация или перевыпуск токена владельца (с зашитым URL сервера поддержки) в личном кабинете
+            // 2.0.1 Генерация или перевыпуск токена владельца/сервера (с зашитым URL сервера поддержки и licenseId) в личном кабинете
             if (req.method === 'POST' && pathname === '/api/cabinet/token') {
                 const body = await readJsonBody(req);
                 const key = extractBearerToken(req, body, url) || body.email || body.accountId || '';
                 const result = store.generateUserHubToken(key, {
+                    licenseId: body.licenseId || '',
                     hubUrl: body.hubUrl || reqOrigin,
+                });
+                return sendJson(res, 200, result);
+            }
+
+            // 2.0.2 Реестр серверов (устройств) пользователя: добавление, переименование, удаление
+            if (req.method === 'POST' && pathname === '/api/cabinet/servers/create') {
+                const body = await readJsonBody(req);
+                const key = extractBearerToken(req, body, url) || body.email || body.accountId || '';
+                const result = store.createUserServer(key, {
+                    serverName: body.serverName || '',
+                    hwid: body.hwid || '',
+                    hubUrl: body.hubUrl || reqOrigin,
+                });
+                return sendJson(res, 200, result);
+            }
+
+            if (req.method === 'POST' && pathname === '/api/cabinet/servers/rename') {
+                const body = await readJsonBody(req);
+                const key = extractBearerToken(req, body, url) || body.email || body.accountId || '';
+                const result = store.renameUserServer(key, {
+                    licenseId: body.licenseId || '',
+                    serverName: body.serverName || '',
+                });
+                return sendJson(res, 200, result);
+            }
+
+            if (req.method === 'POST' && pathname === '/api/cabinet/servers/delete') {
+                const body = await readJsonBody(req);
+                const key = extractBearerToken(req, body, url) || body.email || body.accountId || '';
+                const result = store.deleteUserServer(key, {
+                    licenseId: body.licenseId || '',
                 });
                 return sendJson(res, 200, result);
             }
@@ -569,6 +601,7 @@ export function createLicenseServerApp(options = {}) {
                 const user = ensureCustomerOferta(req, body);
                 let order;
                 let reservation = null;
+                let payment = null;
                 if (body.kind === 'franchise_reservation' || body.regionCode) {
                     const reserved = store.reserveFranchiseSlot({
                         regionCode: body.regionCode,
@@ -576,14 +609,18 @@ export function createLicenseServerApp(options = {}) {
                         companyName: body.companyName || user?.companyName || user?.email || 'Партнёр ODANT-WORK',
                         inn: body.inn || user?.inn || '',
                         email: body.email || user?.email || '',
+                        depositTtlMs: body.depositTtlMs,
                     });
                     order = reserved.order;
-                    reservation = reserved.reservation;
+                    payment = await yookassa.createPaymentForOrder(order, { originOverride: reqOrigin });
+                    reservation = store.getFranchiseSummary(reserved.reservation.reservationId);
                 }
                 else {
                     order = store.createOrder({
                         ...body,
                         licenseId: body.licenseId || user?.licenseId || '',
+                        serverName: body.serverName || '',
+                        createNewServer: Boolean(body.createNewServer || body.licenseId === 'NEW'),
                         ownerAccountId: user?.userId || '',
                         customer: {
                             name: body.customer?.name || user?.companyName || user?.email || '',
@@ -596,8 +633,58 @@ export function createLicenseServerApp(options = {}) {
                 const updatedUser = store.findUserBySessionKey(user?.sessionKey);
                 return sendJson(res, 200, {
                     ok: true,
+                    ...(payment || {}),
                     order,
                     reservation,
+                    user: updatedUser,
+                });
+            }
+
+            // 2.6.1b Оплата очередного ежемесячного платежа (раз в месяц) или досрочное погашение по графику франшизы
+            if (req.method === 'POST' && pathname === '/api/cabinet/franchises/pay-installment') {
+                const body = await readJsonBody(req);
+                const user = ensureCustomerOferta(req, body);
+                const created = store.createFranchiseInstallmentOrder(user?.sessionKey || user?.userId, {
+                    reservationId: body.reservationId,
+                    monthNumber: body.monthNumber ?? null,
+                    earlyPayoff: Boolean(body.earlyPayoff),
+                    paymentMethod: body.paymentMethod || 'yookassa',
+                    companyName: body.companyName || user?.companyName || '',
+                    inn: body.inn || user?.inn || '',
+                });
+                const order = created.order;
+                if (order.paymentMethod === 'invoice') {
+                    const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                    return sendJson(res, 200, {
+                        ok: true,
+                        orderId: order.orderId,
+                        paymentMethod: 'invoice',
+                        invoiceUrl: `${reqOrigin}${order.invoiceUrl}`,
+                        confirmationUrl: `${reqOrigin}${order.invoiceUrl}`,
+                        order,
+                        franchise: store.getFranchiseSummary(body.reservationId),
+                        user: updatedUser,
+                    });
+                }
+                const payment = await yookassa.createPaymentForOrder(order, { originOverride: reqOrigin });
+                const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                return sendJson(res, 200, {
+                    ok: true,
+                    ...payment,
+                    order,
+                    franchise: store.getFranchiseSummary(body.reservationId),
+                    user: updatedUser,
+                });
+            }
+
+            // 2.6.1c Отмена неоплаченного резерва франшизы
+            if (req.method === 'POST' && pathname === '/api/cabinet/franchises/cancel') {
+                const body = await readJsonBody(req);
+                const user = ensureCustomerOferta(req, body);
+                const resCancel = store.cancelFranchiseReservation(body.reservationId, { byAdmin: Boolean(user?.isAdmin) });
+                const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                return sendJson(res, 200, {
+                    ...resCancel,
                     user: updatedUser,
                 });
             }
@@ -843,15 +930,44 @@ export function createLicenseServerApp(options = {}) {
                 const tok = extractBearerToken(req, null, url);
                 if (!store.verifyAdminToken(tok))
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const allFranchises = store.listAllFranchises();
                 return sendJson(res, 200, {
                     licenses: store.listLicenses(),
                     tickets: store.listTickets(),
-                    orders: Object.values(store.state.orders),
+                    orders: Object.values(store.state.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
                     partners: store.listPartners(),
-                    reservations: Object.values(store.state.reservations || {}),
+                    franchises: allFranchises,
+                    reservations: allFranchises,
                     regions: store.listRegionsWithQuotas(),
                     users: store.listUsers(),
                 });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/servers/manage') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const server = store.adminManageServer(body);
+                return sendJson(res, 200, { ok: true, server });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/franchises/confirm-installment') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const result = store.adminConfirmFranchiseInstallment(body.reservationId, body);
+                return sendJson(res, 200, { ok: true, ...result });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/franchises/cancel') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const result = store.cancelFranchiseReservation(body.reservationId, { byAdmin: true });
+                return sendJson(res, 200, result);
             }
 
             if (req.method === 'POST' && pathname.startsWith('/api/admin/orders/') && pathname.endsWith('/cancel')) {

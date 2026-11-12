@@ -377,6 +377,8 @@ export function saveOwnerTokenBinding(tokenStr, { systemDir = SYSTEM_DIR, canoni
         hubUrl,
         accountId: parsed.payload.accountId,
         email: parsed.payload.email || '',
+        licenseId: parsed.payload.licenseId || '',
+        serverName: parsed.payload.serverName || '',
         tokenId: parsed.payload.tokenId,
         issuedAt: parsed.payload.issuedAt || Date.now(),
         boundAt: Date.now(),

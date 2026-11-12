@@ -405,7 +405,7 @@ describe('ПАК WORK: спецификация, лицензирование, �
         // 7.1 Отдельная страница админки /admin и обязательная защита входа администратора
         const adminHtml = await fetch(`${hubUrl}/admin`).then(r => r.text());
         assert.ok(adminHtml.includes('id="adminLoginScreen"'), 'На странице /admin есть экран входа администратора');
-        assert.ok(adminHtml.includes('id="admAgentCard"') && adminHtml.includes('data-adm-tab="agent"'), 'ИИ-агент интегрирован на левую вкладку отдельной страницы /admin');
+        assert.ok(adminHtml.includes('data-adm-tab="servers"') && adminHtml.includes('data-adm-tab="franchises"'), 'В админ-панели /admin представлены операционные реестры серверов и франшиз');
         assert.ok(adminHtml.includes('/assets/admin.js'), 'Подключён отдельный скрипт /assets/admin.js');
 
         // Без токена администратора доступ к /api/admin/overview закрыт (401)
@@ -1009,5 +1009,217 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(stateAfterAttack.baseLicensed, false, 'Поддельные файлы лицензий в #system не активируют базовую лицензию');
         assert.equal(stateAfterAttack.aiAgentsEnabled, false, 'Агентская ИИ-система остаётся отключённой');
         assert.equal(stateAfterAttack.totalSeats, 1, 'Доступна только 1 настроечная сессия');
+    });
+
+    it('12. Личный кабинет: Реестр серверов (N устройств со своими токенами и лицензиями) и Реестр франшиз (лимит 1 на регион, таймер 15 мин ЮKassa, 12-месячный график погашения)', async () => {
+        // 12.1 Регистрируем владельца в Личном кабинете
+        const userReg = await fetch(`${hubUrl}/api/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: 'multi-owner@odant.org',
+                companyName: 'ГК «МультиСервер и Франшиза»',
+                inn: '7701992233',
+                ofertaAccepted: true,
+                hubUrl,
+            }),
+        }).then(r => r.json());
+
+        assert.equal(userReg.servers.length, 1, 'По умолчанию создан 1-й сервер в реестре');
+        const srv1 = userReg.servers[0];
+
+        // 12.2 Пользователь самостоятельно добавляет 2-й и 3-й серверы (устройства) WORK в реестр
+        const addSrv2 = await fetch(`${hubUrl}/api/cabinet/servers/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({ serverName: 'Сервер Филиал Казань', hubUrl }),
+        }).then(r => r.json());
+        assert.equal(addSrv2.ok, true);
+        assert.equal(addSrv2.user.servers.length, 2);
+        const srv2 = addSrv2.server;
+
+        const addSrv3 = await fetch(`${hubUrl}/api/cabinet/servers/create`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({ serverName: 'Сервер Филиал Краснодар', hubUrl }),
+        }).then(r => r.json());
+        assert.equal(addSrv3.ok, true);
+        assert.equal(addSrv3.user.servers.length, 3);
+        const srv3 = addSrv3.server;
+
+        // У каждого сервера свой уникальный licenseId и свой собственный токен owk1...
+        assert.notEqual(srv1.licenseId, srv2.licenseId);
+        assert.notEqual(srv2.licenseId, srv3.licenseId);
+        assert.notEqual(srv1.hubToken, srv2.hubToken);
+        assert.notEqual(srv2.hubToken, srv3.hubToken);
+        assert.equal(parseOwnerAccessToken(srv2.hubToken).payload.licenseId, srv2.licenseId, 'В токене 2-го сервера зашит именно его licenseId');
+
+        // Оформляем и оплачиваем базовую лицензию + 10 доп. мест ТОЛЬКО для 2-го сервера (Казань)
+        const orderSrv2 = await fetch(`${hubUrl}/api/cabinet/orders/draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({
+                licenseId: srv2.licenseId,
+                includeBaseLicenseOnly: true,
+                tier: 'business',
+                addonSeats: 10,
+                years: 1,
+            }),
+        }).then(r => r.json());
+        assert.equal(orderSrv2.order.licenseId, srv2.licenseId);
+
+        const paySrv2 = await fetch(`${hubUrl}/api/cabinet/orders/pay`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({ orderId: orderSrv2.order.orderId, paymentMethod: 'yookassa' }),
+        }).then(r => r.json());
+
+        await fetch(`${hubUrl}/api/payments/yookassa/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'notification',
+                event: 'payment.succeeded',
+                object: {
+                    id: paySrv2.paymentId,
+                    status: 'succeeded',
+                    amount: { value: Number(orderSrv2.order.amountRub).toFixed(2), currency: 'RUB' },
+                    metadata: { orderId: orderSrv2.order.orderId, licenseId: srv2.licenseId },
+                },
+            }),
+        });
+
+        // Привязываем токен 2-го сервера к локальной папке #system второго устройства:
+        // он получает свои 20 мест (10 вечных + 10 доп.), в то время как 1-й сервер остаётся неактивированным!
+        const sysDirSrv2 = path.join(tmpDir, 'kazan-server-system');
+        fs.mkdirSync(sysDirSrv2, { recursive: true });
+        const syncedSrv2 = await bindOwnerTokenAndSync({
+            token: srv2.hubToken,
+            systemDir: sysDirSrv2,
+            licensePath: path.join(sysDirSrv2, 'license.json'),
+        });
+        assert.equal(syncedSrv2.licenseId, srv2.licenseId);
+        assert.equal(syncedSrv2.baseLicensed, true);
+        assert.equal(syncedSrv2.totalSeats, 20);
+        assert.equal(hubApp.store.getLicenseSummary(srv1.licenseId).baseActivated, false, '1-й сервер остался со своей отдельной (неактивированной) лицензией');
+
+        // 12.3 Реестр франшиз: резервирование в разных регионах и запрет >1 франшизы в одном регионе
+        const resTat1 = await fetch(`${hubUrl}/api/cabinet/orders/draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({ kind: 'franchise_reservation', regionCode: 'RU-TAT' }),
+        }).then(r => r.json());
+        assert.equal(resTat1.ok, true);
+        assert.ok(resTat1.confirmationUrl, 'Сразу создаётся платёж ЮKassa на начальный взнос 100 000 ₽');
+        assert.equal(resTat1.reservation.paymentSchedule.length, 12, 'Сформирован годовой график из 12 ежемесячных платежей');
+
+        // Попытка зарезервировать 2-ю франшизу в том же регионе (RU-TAT) тем же пользователем отклоняется
+        const resTatDup = await fetch(`${hubUrl}/api/cabinet/orders/draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({ kind: 'franchise_reservation', regionCode: 'RU-TAT' }),
+        });
+        assert.equal(resTatDup.status, 400);
+        const dupErr = await resTatDup.json();
+        assert.match(dupErr.error, /нельзя резервировать более 1 франшизы в одном регионе/);
+
+        // В другом регионе (RU-KDA) этот же пользователь успешно резервирует вторую франшизу (с коротким таймером 50 мс для проверки автоотмены)
+        const kdaBefore = hubApp.store.getRegionPartnerQuotaStatus('RU-KDA').vacantFranchises;
+        const resKda = await fetch(`${hubUrl}/api/cabinet/orders/draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({ kind: 'franchise_reservation', regionCode: 'RU-KDA', depositTtlMs: 40 }),
+        }).then(r => r.json());
+        assert.equal(resKda.ok, true);
+        assert.equal(hubApp.store.getRegionPartnerQuotaStatus('RU-KDA').vacantFranchises, kdaBefore - 1);
+
+        // Ждём истечения таймера оплаты залога (симуляция 15 минут) -> резерв RU-KDA автоматически отменяется и освобождает слот
+        await new Promise(r => setTimeout(r, 80));
+        assert.equal(hubApp.store.getRegionPartnerQuotaStatus('RU-KDA').vacantFranchises, kdaBefore, 'После истечения таймера неоплаченный резерв автоматически отменён и квота освобождена');
+        assert.equal(hubApp.store.state.reservations[resKda.reservation.reservationId].status, 'expired');
+
+        // 12.4 Оплата начального взноса по франшизе RU-TAT через ЮKassa и погашение ежемесячного графика
+        await fetch(`${hubUrl}/api/payments/yookassa/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'notification',
+                event: 'payment.succeeded',
+                object: {
+                    id: resTat1.paymentId,
+                    status: 'succeeded',
+                    amount: { value: '100000.00', currency: 'RUB' },
+                    metadata: { orderId: resTat1.order.orderId, reservationId: resTat1.reservation.reservationId },
+                },
+            }),
+        });
+
+        const tatAfterDeposit = hubApp.store.getFranchiseSummary(resTat1.reservation.reservationId);
+        assert.equal(tatAfterDeposit.depositPaid, true);
+        assert.equal(tatAfterDeposit.paidMonthsCount, 0);
+        assert.equal(tatAfterDeposit.totalMonthsCount, 12);
+
+        // Оплачиваем 1-й ежемесячный платёж по графику через ЮKassa
+        const payMonth1 = await fetch(`${hubUrl}/api/cabinet/franchises/pay-installment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({
+                reservationId: resTat1.reservation.reservationId,
+                monthNumber: 1,
+                paymentMethod: 'yookassa',
+            }),
+        }).then(r => r.json());
+        assert.equal(payMonth1.ok, true);
+
+        await fetch(`${hubUrl}/api/payments/yookassa/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'notification',
+                event: 'payment.succeeded',
+                object: {
+                    id: payMonth1.paymentId,
+                    status: 'succeeded',
+                    amount: { value: Number(payMonth1.order.amountRub).toFixed(2), currency: 'RUB' },
+                    metadata: { orderId: payMonth1.order.orderId, reservationId: resTat1.reservation.reservationId },
+                },
+            }),
+        });
+
+        const tatAfterMonth1 = hubApp.store.getFranchiseSummary(resTat1.reservation.reservationId);
+        assert.equal(tatAfterMonth1.paidMonthsCount, 1, '1-й месяц из 12 отмечен оплаченным');
+
+        // Досрочно погашаем весь оставшийся график (месяцы 2..12)
+        const payEarly = await fetch(`${hubUrl}/api/cabinet/franchises/pay-installment`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${userReg.sessionKey}` },
+            body: JSON.stringify({
+                reservationId: resTat1.reservation.reservationId,
+                earlyPayoff: true,
+                paymentMethod: 'yookassa',
+            }),
+        }).then(r => r.json());
+        assert.equal(payEarly.ok, true);
+        assert.equal(payEarly.order.amountRub, tatAfterMonth1.remainingFranchiseFeeRub);
+
+        await fetch(`${hubUrl}/api/payments/yookassa/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'notification',
+                event: 'payment.succeeded',
+                object: {
+                    id: payEarly.paymentId,
+                    status: 'succeeded',
+                    amount: { value: Number(payEarly.order.amountRub).toFixed(2), currency: 'RUB' },
+                    metadata: { orderId: payEarly.order.orderId, reservationId: resTat1.reservation.reservationId },
+                },
+            }),
+        });
+
+        const tatFinal = hubApp.store.getFranchiseSummary(resTat1.reservation.reservationId);
+        assert.equal(tatFinal.paidMonthsCount, 12, 'Все 12 месяцев графика закрыты');
+        assert.equal(tatFinal.remainingFranchiseFeeRub, 0, 'Остаток паушального взноса = 0 ₽');
+        assert.equal(tatFinal.status, 'paid_in_full');
     });
 });
