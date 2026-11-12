@@ -14,6 +14,7 @@
     let REGIONS = (D.regions || []).slice();
     let currentUser = null;
     let currentStage = 'product';
+    let requestedInitialStage = '';
     let selectedCode = null;
     let pendingAuthAction = null;
 
@@ -137,7 +138,7 @@
         }
         catch { return ''; }
     }
-    function persistSessionInBrowser(sessionKey = '', email = '', isAdmin = false) {
+    function persistSessionInBrowser(sessionKey = '', email = '', isAdmin = false, userObj = null) {
         try {
             if (sessionKey) {
                 localStorage.setItem('odant_work_session', sessionKey);
@@ -151,6 +152,9 @@
             if (email) {
                 localStorage.setItem('odant_work_email', email);
             }
+            if (userObj && typeof userObj === 'object') {
+                localStorage.setItem('odant_work_user_cache', JSON.stringify(userObj));
+            }
         }
         catch { /* приватный режим */ }
     }
@@ -158,9 +162,54 @@
         try {
             localStorage.removeItem('odant_work_session');
             localStorage.removeItem('odant_work_admin_token');
+            localStorage.removeItem('odant_work_user_cache');
             sessionStorage.removeItem('odant_work_session');
             sessionStorage.removeItem('odant_work_admin_token');
             document.cookie = 'odant_work_session=; path=/; max-age=0; SameSite=Lax';
+        }
+        catch { /* ignore */ }
+    }
+    function hydrateCachedUser() {
+        try {
+            const key = localStorage.getItem('odant_work_session')
+                || sessionStorage.getItem('odant_work_session')
+                || localStorage.getItem('odant_work_admin_token')
+                || readCookieSession()
+                || '';
+            if (!key) return;
+            const raw = localStorage.getItem('odant_work_user_cache');
+            if (raw) {
+                const cached = JSON.parse(raw);
+                if (cached?.email) {
+                    currentUser = { ...cached, sessionKey: key, ofertaAccepted: cached.ofertaAccepted !== false };
+                    onAuthenticated();
+                    return;
+                }
+            }
+            // Если есть подписанный токен wks_1.<payload>.<sig>, декодируем payload синхронно до ответа /api/auth/me
+            if (key.startsWith('wks_1.')) {
+                const parts = key.split('.');
+                if (parts[1]) {
+                    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+                    const json = decodeURIComponent(escape(atob(b64)));
+                    const payload = JSON.parse(json);
+                    if (payload?.email) {
+                        currentUser = {
+                            userId: payload.userId || '',
+                            email: payload.email,
+                            name: payload.name || payload.email,
+                            companyName: payload.companyName || '',
+                            inn: payload.inn || '',
+                            isAdmin: Boolean(payload.isAdmin),
+                            ofertaAccepted: true,
+                            sessionKey: key,
+                            servers: [],
+                            franchises: [],
+                        };
+                        onAuthenticated();
+                    }
+                }
+            }
         }
         catch { /* ignore */ }
     }
@@ -286,7 +335,7 @@
         try {
             const data = await api('/api/auth/verify-code', { email, code });
             currentUser = data;
-            persistSessionInBrowser(data.sessionKey, data.email, data.isAdmin);
+            persistSessionInBrowser(data.sessionKey, data.email, data.isAdmin, data);
             resetAuthStep();
             onAuthenticated();
             closeAuth();
@@ -335,9 +384,12 @@
             const data = await api('/api/auth/me?sessionKey=' + encodeURIComponent(key));
             if (data.authenticated && data.user) {
                 currentUser = { ...data.user, sessionKey: data.user.sessionKey || key };
-                persistSessionInBrowser(currentUser.sessionKey, currentUser.email, currentUser.isAdmin);
+                persistSessionInBrowser(currentUser.sessionKey, currentUser.email, currentUser.isAdmin, currentUser);
                 onAuthenticated();
-                if (location.hash === '#addons' && isUserReadyForOrders()) switchStage('addons', { scroll: false });
+                if ((requestedInitialStage === 'addons' || location.hash === '#addons') && isUserReadyForOrders()) {
+                    requestedInitialStage = '';
+                    switchStage('addons', { scroll: false });
+                }
             }
         }
         catch { /* сессия отозвана */ }
@@ -1834,14 +1886,18 @@
 
     function start() {
         applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
+        requestedInitialStage = D.initialStage || location.hash.slice(1);
+        hydrateCachedUser();
         bind();
         renderOrbit();
         recalcBaseOrder();
         recalcPartner();
         renderRegionsTable();
         initBackdrop();
-        const initial = D.initialStage || location.hash.slice(1);
-        switchStage(initial && initial !== 'addons' && initial !== 'admin' ? initial : 'product', { scroll: false });
+        const targetStage = (requestedInitialStage === 'addons' && isUserReadyForOrders())
+            ? 'addons'
+            : (requestedInitialStage && requestedInitialStage !== 'addons' && requestedInitialStage !== 'admin' ? requestedInitialStage : 'product');
+        switchStage(targetStage, { scroll: false });
         if (document.fonts?.ready) document.fonts.ready.then(moveIndicator);
         initMap().then(() => selectRegion(selectedCode || 'RU-SVE'));
         restoreSession();

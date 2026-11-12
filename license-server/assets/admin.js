@@ -35,7 +35,7 @@
         }
         catch { return readCookieSession(); }
     }
-    function setStoredToken(tok, email = '') {
+    function setStoredToken(tok, email = '', userObj = null) {
         adminToken = tok || '';
         try {
             if (tok) {
@@ -49,11 +49,15 @@
                 sessionStorage.removeItem(TOKEN_KEY);
                 localStorage.removeItem(TOKEN_KEY);
                 localStorage.removeItem('odant_work_session');
+                localStorage.removeItem('odant_work_user_cache');
                 sessionStorage.removeItem('odant_work_session');
                 document.cookie = 'odant_work_session=; path=/; max-age=0; SameSite=Lax';
             }
             if (email) {
                 localStorage.setItem('odant_work_email', email);
+            }
+            if (userObj && typeof userObj === 'object') {
+                localStorage.setItem('odant_work_user_cache', JSON.stringify(userObj));
             }
         }
         catch { /* приватный режим */ }
@@ -189,7 +193,7 @@
             if (!user.isAdmin) {
                 throw new Error(`Аккаунт ${user.email} не обладает правами администратора (BOSS) сервера лицензирования.`);
             }
-            setStoredToken(user.sessionKey, user.email);
+            setStoredToken(user.sessionKey, user.email, user);
             resetAdmStep();
             showAdminApp(user.email);
             await refreshRegistry();
