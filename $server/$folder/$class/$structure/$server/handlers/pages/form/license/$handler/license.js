@@ -170,11 +170,31 @@ export default {
                 background: transparent;
                 border: 1px solid var(--subtle-border, #cbd5e1);
                 border-radius: 8px;
-                padding: 9px 16px;
+                padding: 7px 14px;
+                font-weight: 600;
+                font-size: 13px;
+                cursor: pointer;
+                color: inherit;
+            }
+            .btn-secondary:hover {
+                border-color: var(--accent-color, #2563eb);
+            }
+            .btn-danger {
+                background: rgba(244, 63, 94, 0.1);
+                border: 1px solid rgba(244, 63, 94, 0.35);
+                color: #e11d48;
+                border-radius: 8px;
+                padding: 10px 18px;
                 font-weight: 600;
                 font-size: 13.5px;
                 cursor: pointer;
-                color: inherit;
+            }
+            .btn-danger:hover {
+                background: rgba(244, 63, 94, 0.18);
+            }
+            input[readonly] {
+                background: var(--subtle-background, #f8fafc);
+                color: var(--muted-color, #475569);
             }
             .lic-table {
                 width: 100%;
@@ -215,14 +235,14 @@ export default {
                     <div class="card-title">
                         <oda-icon icon="carbon:certificate" :icon-size="22"></oda-icon>
                         <span>Лицензирование ODANT-WORK</span>
+                        <span class="badge" :class="status?.baseLicensed ? '' : 'warn'">
+                            {{status?.baseLicensed ? 'Лицензия активна · ИИ-агенты включены' : 'Базовая лицензия не установлена'}}
+                        </span>
                     </div>
                     <div class="head-actions">
                         <button type="button" class="btn-portal" @tap="openPortal">
                             <span>Личный кабинет ({{portalHost}}) ↗</span>
                         </button>
-                        <span class="badge" :class="status?.baseLicensed ? '' : 'warn'">
-                            {{status?.baseLicensed ? 'Лицензия активна · ИИ-агенты включены' : 'Базовая лицензия не установлена'}}
-                        </span>
                     </div>
                 </div>
 
@@ -255,14 +275,17 @@ export default {
                     <div class="stat-box">
                         <span class="stat-label">Аккаунт владельца и портал (ЛК)</span>
                         <span class="stat-val">{{status?.tokenBinding?.email || status?.ownerEmail || 'Не привязан'}}</span>
-                        <span class="stat-label portal-link" @tap="openPortal">{{portalUrl}} ↗</span>
+                        <span class="stat-label portal-link" @tap="openPortal">{{portalCabinetUrl}} ↗</span>
                     </div>
                 </div>
 
-                <div class="token-row">
+                <div class="token-row" ~if="isTokenBound">
+                    <input type="text" :value="boundTokenValue" readonly title="Привязанный токен сервера">
+                    <button type="button" class="btn-danger" @tap="unbindOwnerToken">Отвязать токен</button>
+                </div>
+                <div class="token-row" ~if="!isTokenBound">
                     <input type="text" ::value="ownerTokenInput" placeholder="Вставьте токен владельца (owk1...) из личного кабинета work.odant.org">
-                    <button class="btn-primary" @tap="bindOwnerToken">Привязать токен</button>
-                    <button class="btn-secondary" ~if="status?.tokenBinding?.bound" @tap="syncHub">Проверить обновления лицензий</button>
+                    <button type="button" class="btn-primary" @tap="bindOwnerToken">Привязать токен</button>
                 </div>
 
                 <div class="notice" ~if="message">{{message}}</div>
@@ -274,7 +297,10 @@ export default {
                         <oda-icon icon="carbon:folder-details" :icon-size="20"></oda-icon>
                         <span>Установленные файлы лицензий в папке #system</span>
                     </div>
-                    <span class="badge" :class="installedLicenses.length ? '' : 'warn'">{{installedLicenses.length}} файл(ов)</span>
+                    <div class="head-actions">
+                        <button type="button" class="btn-secondary" ~if="isTokenBound" @tap="syncHub">Проверить обновления лицензий</button>
+                        <span class="badge" :class="installedLicenses.length ? '' : 'warn'">{{installedLicenses.length}} файл(ов)</span>
+                    </div>
                 </div>
 
                 <div class="empty-box" ~if="!installedLicenses.length">
@@ -306,9 +332,26 @@ export default {
     `,
     status: null,
     ownerTokenInput: '',
+    localUnbound: false,
     message: '',
+    get isTokenBound() {
+        return Boolean(this.status?.tokenBinding?.bound && !this.localUnbound);
+    },
+    get boundTokenValue() {
+        if (this.status?.tokenBinding?.token)
+            return this.status.tokenBinding.token;
+        try {
+            const cached = localStorage.getItem('work_bound_owner_token');
+            if (cached) return cached;
+        }
+        catch { /* ignore */ }
+        if (this.status?.tokenBinding?.bound) {
+            return `owk1.${this.status.tokenBinding.tokenId || ''} (${this.status.tokenBinding.email || ''})`;
+        }
+        return '';
+    },
     get portalUrl() {
-        const rawTok = String(this.ownerTokenInput || '').trim();
+        const rawTok = String(this.ownerTokenInput || this.boundTokenValue || '').trim();
         if (rawTok.startsWith('owk1.')) {
             try {
                 const b64 = rawTok.split('.')[1]?.replace(/-/g, '+').replace(/_/g, '/');
@@ -322,11 +365,14 @@ export default {
         }
         return this.status?.tokenBinding?.hubUrl || this.status?.hubUrl || 'https://work.odant.org';
     },
+    get portalCabinetUrl() {
+        return `${String(this.portalUrl || 'https://work.odant.org').replace(/\/+$/, '')}/#addons`;
+    },
     get portalHost() {
         return String(this.portalUrl || 'https://work.odant.org').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
     },
     openPortal() {
-        window.open(this.portalUrl || 'https://work.odant.org', '_blank', 'noopener');
+        window.open(this.portalCabinetUrl, '_blank', 'noopener');
     },
     get installedLicenses() {
         const files = this.status?.licenseFiles || [];
@@ -372,6 +418,8 @@ export default {
         try {
             this.message = 'Проверка токена и загрузка лицензий из личного кабинета…';
             this.status = await this.$item?.fetch('license_bind_token', { token: tok });
+            this.localUnbound = false;
+            try { localStorage.setItem('work_bound_owner_token', tok); } catch { /* ignore */ }
             window.top?.dispatchEvent?.(new CustomEvent('work:license-changed', { detail: this.status }));
             this.ownerTokenInput = '';
             const count = (this.status?.licenseFiles || []).length;
@@ -381,6 +429,24 @@ export default {
         }
         catch (err) {
             this.message = 'Ошибка привязки токена: ' + (err?.message || err);
+        }
+    },
+    async unbindOwnerToken() {
+        try {
+            this.message = 'Отвязка токена и очистка лицензий…';
+            try {
+                this.status = await this.$item?.fetch('license_unbind_token');
+            }
+            catch {
+                this.localUnbound = true;
+            }
+            try { localStorage.removeItem('work_bound_owner_token'); } catch { /* ignore */ }
+            this.ownerTokenInput = '';
+            window.top?.dispatchEvent?.(new CustomEvent('work:license-changed', { detail: this.status }));
+            this.message = 'Токен отвязан. Вы можете вставить новый токен привязки.';
+        }
+        catch (err) {
+            this.message = 'Ошибка отвязки токена: ' + (err?.message || err);
         }
     },
     async syncHub() {

@@ -410,11 +410,12 @@ export function loadOwnerTokenBinding(systemDir = SYSTEM_DIR) {
 /**
  * Сохранить отдельные файлы лицензий (.lic.json) в папку #system (только после проверки подписи ODANT).
  */
-export function saveLicenseFilesToSystem(licenseFiles = [], systemDir = SYSTEM_DIR, { trustedPublicKey = '' } = {}) {
+export function saveLicenseFilesToSystem(licenseFiles = [], systemDir = SYSTEM_DIR, { trustedPublicKey = '', replaceExisting = false } = {}) {
     if (!Array.isArray(licenseFiles))
         return [];
     fs.mkdirSync(systemDir, { recursive: true });
     const saved = [];
+    const expectedNames = new Set();
     for (const item of licenseFiles) {
         const fileObj = item?.licenseFile || item;
         if (!fileObj || typeof fileObj !== 'object' || !fileObj.fileId)
@@ -428,11 +429,22 @@ export function saveLicenseFilesToSystem(licenseFiles = [], systemDir = SYSTEM_D
         }
         const safeName = String(item?.fileName || `license-${fileObj.kind || 'base'}-${fileObj.fileId}.lic.json`)
             .replace(/[^a-zA-Z0-9._-]/g, '_');
+        expectedNames.add(safeName);
         const fullPath = path.join(systemDir, safeName);
         const tmp = `${fullPath}.${process.pid}.tmp`;
         fs.writeFileSync(tmp, JSON.stringify(fileObj, null, 2), 'utf8');
         fs.renameSync(tmp, fullPath);
         saved.push({ fileName: safeName, path: fullPath, kind: fileObj.kind, fileId: fileObj.fileId, seats: fileObj.seats });
+    }
+    if (replaceExisting) {
+        try {
+            for (const name of fs.readdirSync(systemDir)) {
+                if (name.endsWith('.lic.json') && !expectedNames.has(name)) {
+                    try { fs.unlinkSync(path.join(systemDir, name)); } catch { /* ignore */ }
+                }
+            }
+        }
+        catch { /* ignore */ }
     }
     return saved;
 }
@@ -902,12 +914,15 @@ export function getFullLicenseStatus(options = {}) {
         licenseFiles,
         tokenBinding: tokenBinding ? {
             bound: true,
+            token: tokenBinding.token,
             hubUrl: tokenBinding.hubUrl,
             accountId: tokenBinding.accountId,
             email: tokenBinding.email,
+            licenseId: tokenBinding.licenseId || '',
+            serverName: tokenBinding.serverName || '',
             tokenId: tokenBinding.tokenId,
             boundAt: tokenBinding.boundAt,
-        } : { bound: false },
+        } : { bound: false, token: '' },
         autoUpdate,
     };
 }
@@ -999,8 +1014,8 @@ export async function bindOwnerTokenAndSync({
         saveOwnerTokenBinding(token, { systemDir, canonicalHubUrl: effectiveHubUrl, trustedPublicKey });
     }
 
-    if (Array.isArray(data.licenseFiles) && data.licenseFiles.length > 0) {
-        saveLicenseFilesToSystem(data.licenseFiles, systemDir, { trustedPublicKey });
+    if (Array.isArray(data.licenseFiles)) {
+        saveLicenseFilesToSystem(data.licenseFiles, systemDir, { trustedPublicKey, replaceExisting: true });
     }
 
     const targetLicPath = licensePath || path.join(systemDir, 'license.json');
@@ -1022,6 +1037,27 @@ export async function bindOwnerTokenAndSync({
     }
 
     return getFullLicenseStatus({ licensePath: targetLicPath, systemDir, trustedPublicKey });
+}
+
+/**
+ * Отвязать токен владельца (owk1...) от локального WORK и удалить связанные файлы лицензий из #system.
+ */
+export function unbindOwnerToken({ systemDir = SYSTEM_DIR, licensePath } = {}) {
+    const tokenFile = path.join(systemDir, 'owner-token.json');
+    const targetLicPath = licensePath || path.join(systemDir, 'license.json');
+    try { if (fs.existsSync(tokenFile)) fs.unlinkSync(tokenFile); } catch { /* ignore */ }
+    try { if (fs.existsSync(targetLicPath)) fs.unlinkSync(targetLicPath); } catch { /* ignore */ }
+    try {
+        if (fs.existsSync(systemDir)) {
+            for (const name of fs.readdirSync(systemDir)) {
+                if (name.endsWith('.lic.json')) {
+                    try { fs.unlinkSync(path.join(systemDir, name)); } catch { /* ignore */ }
+                }
+            }
+        }
+    }
+    catch { /* ignore */ }
+    return getFullLicenseStatus({ systemDir, licensePath: targetLicPath });
 }
 
 /**
@@ -1151,6 +1187,12 @@ export const LICENSE_METHODS = Object.freeze({
             if (!token)
                 throw new Error('Укажите токен владельца (owk1...), сгенерированный в личном кабинете work.odant.org');
             return bindOwnerTokenAndSync({ token });
+        },
+    },
+    license_unbind_token: {
+        level: 'admin',
+        fn: async function () {
+            return unbindOwnerToken();
         },
     },
     license_install: {
