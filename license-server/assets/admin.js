@@ -89,10 +89,20 @@
         setTimeout(() => $('#admLoginEmail')?.focus(), 50);
     }
 
+    function moveIndicator() {
+        const active = $('#tabs .tab.active');
+        const ind = $('#tabInd');
+        if (!ind) return;
+        if (!active) { ind.style.width = '0px'; return; }
+        ind.style.left = active.offsetLeft + 'px';
+        ind.style.width = active.offsetWidth + 'px';
+    }
+
     function showAdminApp(login = 'BOSS') {
         $('#adminLoginScreen').style.display = 'none';
         $('#adminAppShell').style.display = '';
-        if ($('#admUserLabel')) $('#admUserLabel').textContent = `Выйти (${login})`;
+        if ($('#admUserLabel')) $('#admUserLabel').textContent = login;
+        requestAnimationFrame(moveIndicator);
     }
 
     async function sendAdminOtpCode() {
@@ -201,7 +211,7 @@
     /* ================= Вкладки и форматирование ================= */
     function setTab(tab) {
         activeTab = tab || 'servers';
-        $$('#admTopTabs [data-adm-tab]').forEach(b => b.classList.toggle('active', b.dataset.admTab === activeTab));
+        $$('[data-adm-tab]').forEach(b => b.classList.toggle('active', b.dataset.admTab === activeTab));
         $$('[data-adm-sec]').forEach(sec => {
             sec.style.display = sec.dataset.admSec === activeTab ? '' : 'none';
         });
@@ -265,34 +275,13 @@
         const users = data.users || [];
 
         const activeFranchises = franchises.filter(f => f && f.status !== 'canceled' && f.status !== 'expired');
-        const totalSeats = licenses.reduce((s, l) => s + (l.totalSeats || 0), 0);
-        const paidOrders = orders.filter(o => o.status === 'paid');
-        const pendingOrders = orders.filter(o => o.status === 'pending' || o.status === 'awaiting_invoice');
-        const paidRub = paidOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
-        const pendingRub = pendingOrders.reduce((s, o) => s + (Number(o.amountRub) || 0), 0);
         const openTickets = tickets.filter(t => t.status !== 'answered' && t.status !== 'closed');
 
-        if ($('#tabCntServers')) $('#tabCntServers').textContent = String(licenses.length);
-        if ($('#tabCntFranchises')) $('#tabCntFranchises').textContent = String(activeFranchises.length);
-        if ($('#tabCntOrders')) $('#tabCntOrders').textContent = String(orders.length);
-        if ($('#tabCntUsers')) $('#tabCntUsers').textContent = String(users.length);
-        if ($('#tabCntTickets')) $('#tabCntTickets').textContent = String(openTickets.length);
-
-        if ($('#admStatLic')) {
-            $('#admStatLic').textContent = String(licenses.length);
-            $('#admStatLicSub').textContent = `серверов · ${totalSeats} мест`;
-            $('#admStatFranchises').textContent = String(activeFranchises.length);
-            const overdueCnt = activeFranchises.filter(f => (f.overdueMonthsCount || 0) > 0).length;
-            $('#admStatFranchisesSub').textContent = overdueCnt > 0 ? `просрочек: ${overdueCnt}` : 'активных франшиз';
-            $('#admStatPaid').textContent = rub(paidRub);
-            $('#admStatPaidSub').textContent = `оплачено заказов: ${paidOrders.length}`;
-            $('#admStatPending').textContent = rub(pendingRub);
-            $('#admStatPendingSub').textContent = `ожидают оплаты: ${pendingOrders.length}`;
-            $('#admStatUsers').textContent = String(users.length);
-            $('#admStatUsersSub').textContent = `админов BOSS: ${users.filter(u => u.isAdmin).length}`;
-            $('#admStatTickets').textContent = String(openTickets.length);
-            $('#admStatTicketsSub').textContent = `открытых из ${tickets.length}`;
-        }
+        if ($('#navAdmServers')) $('#navAdmServers').textContent = `Серверы и лицензии (${licenses.length})`;
+        if ($('#navAdmFranchises')) $('#navAdmFranchises').textContent = `Франшизы (${activeFranchises.length})`;
+        if ($('#navAdmOrders')) $('#navAdmOrders').textContent = `Заказы и счета (${orders.length})`;
+        if ($('#navAdmUsers')) $('#navAdmUsers').textContent = `Клиенты и роли (${users.length})`;
+        if ($('#navAdmTickets')) $('#navAdmTickets').textContent = `Тикеты поддержки (${openTickets.length})`;
 
         renderServersTable(licenses);
         renderFranchisesTable(franchises);
@@ -364,10 +353,8 @@
                         <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-open-grant="${esc(lid)}" data-srv-name="${esc(srvName)}">+ Начислить доп. места</button>
                     </div>
                 </td>
-                <td>
-                    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
-                        <button class="btn btn-primary btn-sm" data-cert="${esc(lid)}">Файлы .lic.json (${(l.licenseFiles || []).length})</button>
-                    </div>
+                <td style="text-align:right">
+                    <button class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:12px" data-cert="${esc(lid)}">.lic.json (${(l.licenseFiles || []).length})</button>
                 </td>
             </tr>`;
         }).join('') || '<tr><td colspan="6" class="muted">Серверов по заданному фильтру не найдено</td></tr>';
@@ -949,12 +936,14 @@
                 $$('.modal.open').forEach(m => m.classList.remove('open'));
             }
         });
+        window.addEventListener('resize', moveIndicator);
     }
 
     function start() {
         applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
         bind();
         setTab('servers');
+        if (document.fonts?.ready) document.fonts.ready.then(moveIndicator);
         checkAdminSession();
     }
 

@@ -1,15 +1,8 @@
 /**
- * Рабочая консоль администратора центра лицензирования и биллинга ODANT-WORK (/admin).
+ * Админ-панель центра лицензирования и франшиз ODANT-WORK (/admin).
  *
- * Доступна пользователям с ролью BOSS (первый зарегистрированный по Email пользователь
- * или назначенный администратор) по их штатной сессии без отдельных паролей.
- *
- * Разделы:
- *  1. Реестр серверов (устройств) и лицензий клиентов
- *  2. Реестр региональных франшиз и 12-месячных графиков погашения
- *  3. Заказы ЮKassa и безналичные счета-договоры
- *  4. Зарегистрированные клиенты, оферты (ПЭП) и роли BOSS
- *  5. Тикеты техподдержки SLA (MAX · Telegram · VK)
+ * Единая шапка с основным сайтом (О платформе · Клиентам · Франшиза · Личный кабинет · Админ-панель)
+ * и двухколоночная навигация со счётчиками в скобках (по эталону Скрина 1).
  */
 import {
     PAK_PRODUCT,
@@ -44,7 +37,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <title>ODANT-WORK · Админ-панель центра лицензирования и франшиз</title>
+    <title>ODANT-WORK · Админ-панель</title>
     <meta name="robots" content="noindex, nofollow">
     <meta name="theme-color" content="#04060b">
     <link rel="icon" type="image/png" href="/favicon.ico">
@@ -97,210 +90,196 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
             <div style="margin-top:8px;text-align:center">
                 <a href="/" class="small muted">← Вернуться на главную страницу work.odant.org</a>
             </div>
-            <div class="small muted" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line)">
-                Ключ ЦС Ed25519: <code>${esc(publicKey.slice(0, 26))}…</code>
-            </div>
         </div>
     </div>
 
-    <!-- Основная операционная консоль администратора -->
+    <!-- Основная оболочка с единой шапкой сайта и двухколоночным меню разделов -->
     <div class="shell" id="adminAppShell" style="display:none">
         <header class="topbar">
-            <a href="/" class="brand" style="text-decoration:none">
+            <a href="/" class="brand" style="text-decoration:none" aria-label="ODANT-WORK — на главную">
                 <img src="/assets/odant-logo.png" alt="ODANT">
                 <span>
-                    <span class="brand-name">ODANT<b>·</b>WORK <span class="tag ok" style="margin-left:6px;vertical-align:middle">BOSS · АДМИН</span></span><br>
-                    <span class="brand-sub">реестр серверов · реестр франшиз · платежи и счета</span>
+                    <span class="brand-name">ODANT<b>·</b>WORK</span><br>
+                    <span class="brand-sub">учёт · документооборот · процессы · приватный ИИ</span>
                 </span>
             </a>
 
-            <nav class="tabs" id="admTopTabs" aria-label="Реестры администратора">
-                <button class="tab active" data-adm-tab="servers">Серверы и лицензии <span class="tag" id="tabCntServers" style="margin-left:4px">0</span></button>
-                <button class="tab" data-adm-tab="franchises">Франшизы и графики <span class="tag" id="tabCntFranchises" style="margin-left:4px">0</span></button>
-                <button class="tab" data-adm-tab="orders">Заказы и счета <span class="tag" id="tabCntOrders" style="margin-left:4px">0</span></button>
-                <button class="tab" data-adm-tab="users">Клиенты и роли BOSS <span class="tag" id="tabCntUsers" style="margin-left:4px">0</span></button>
-                <button class="tab" data-adm-tab="tickets">Тикеты SLA <span class="tag" id="tabCntTickets" style="margin-left:4px">0</span></button>
+            <nav class="tabs" id="tabs" aria-label="Разделы">
+                <span class="tab-ind" id="tabInd"></span>
+                <a class="tab" href="/#product" style="text-decoration:none">О платформе</a>
+                <a class="tab" href="/#clients" style="text-decoration:none">Клиентам</a>
+                <a class="tab" href="/#franchise" style="text-decoration:none">Франшиза</a>
+                <a class="tab" href="/#addons" style="text-decoration:none">Личный кабинет</a>
+                <a class="tab active" href="/admin" id="tileAdmin" style="text-decoration:none">Админ-панель</a>
             </nav>
 
             <div class="top-actions">
-                <a href="/#addons" class="btn btn-ghost btn-sm" style="text-decoration:none">← Личный кабинет</a>
                 <button class="icon-btn" id="btnTheme" title="Светлая / тёмная тема" aria-label="Переключить тему">${icon('sun')}</button>
-                <button class="btn btn-ghost btn-sm" data-action="registry">${icon('server')}<span>Обновить</span></button>
-                <button class="btn btn-ghost btn-sm" data-action="admin-logout" title="Завершить сессию">${icon('lock')}<span id="admUserLabel">Выйти</span></button>
+                <button class="btn btn-primary btn-sm" data-action="admin-logout" title="Нажмите, чтобы выйти из сессии">${icon('user')}<span id="admUserLabel">BOSS</span></button>
             </div>
         </header>
 
-        <section class="stage active" style="padding-top:20px">
-            <!-- Сводные показатели -->
-            <div class="stats" style="grid-template-columns:repeat(6,1fr);margin-bottom:20px">
-                <div class="stat"><b id="admStatLic">0</b><span id="admStatLicSub">серверов · 0 мест</span></div>
-                <div class="stat"><b id="admStatFranchises">0</b><span id="admStatFranchisesSub">активных франшиз</span></div>
-                <div class="stat"><b id="admStatPaid">0 ₽</b><span id="admStatPaidSub">оплачено заказов: 0</span></div>
-                <div class="stat"><b id="admStatPending">0 ₽</b><span id="admStatPendingSub">ожидают оплаты: 0</span></div>
-                <div class="stat"><b id="admStatUsers">0</b><span id="admStatUsersSub">клиентов в базе</span></div>
-                <div class="stat"><b id="admStatTickets">0</b><span id="admStatTicketsSub">открытых тикетов SLA</span></div>
-            </div>
+        <section class="stage active" style="padding-top:24px">
+            <div class="sec-layout">
+                <!-- Левое вертикальное меню разделов со счётчиками в скобках (как на Скрине 1) -->
+                <aside class="sec-nav" aria-label="Разделы администрирования">
+                    <button type="button" class="sec-nav-item active" data-adm-tab="servers" id="navAdmServers">Серверы и лицензии (0)</button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="franchises" id="navAdmFranchises">Франшизы (0)</button>
+                    <div class="sec-nav-sep"></div>
+                    <button type="button" class="sec-nav-item" data-adm-tab="orders" id="navAdmOrders">Заказы и счета (0)</button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="users" id="navAdmUsers">Клиенты и роли (0)</button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="tickets" id="navAdmTickets">Тикеты поддержки (0)</button>
+                </aside>
 
-            <!-- 1. РЕЕСТР СЕРВЕРОВ (УСТРОЙСТВ) И ЛИЦЕНЗИЙ -->
-            <div class="card adm-section" data-adm-sec="servers">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-                    <div>
-                        <span class="kicker">Реестр 1 · Устройства и лицензии</span>
-                        <h3 class="h3" style="margin:2px 0 0">Серверы (устройства) WORK и лицензии клиентов</h3>
+                <!-- Правая область выбранного раздела -->
+                <div class="sec-main">
+                    <!-- 1. СЕРВЕРЫ И ЛИЦЕНЗИИ -->
+                    <div data-adm-sec="servers">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Серверы (устройства) WORK и лицензии клиентов</h2>
+                            <div class="sec-controls">
+                                <input type="search" id="inpFilterServers" placeholder="Поиск по клиенту, Email, HWID…">
+                                <select id="selFilterServers">
+                                    <option value="all">Все серверы</option>
+                                    <option value="base_active">Базовая активна</option>
+                                    <option value="base_inactive">Без базовой лицензии</option>
+                                    <option value="hwid_bound">HWID привязан</option>
+                                </select>
+                                <button type="button" class="btn btn-primary btn-sm" data-action="open-create-server-modal">+ Добавить сервер</button>
+                            </div>
+                        </div>
+                        <div class="sec-box">
+                            <table class="sec-table">
+                                <thead><tr>
+                                    <th>Сервер / ID</th>
+                                    <th>Владелец / Организация</th>
+                                    <th>Железо (HWID)</th>
+                                    <th>Базовая лицензия</th>
+                                    <th>Доп. места и SLA</th>
+                                    <th style="text-align:right">Файлы</th>
+                                </tr></thead>
+                                <tbody id="admLicensesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
                     </div>
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                        <input type="search" id="inpFilterServers" placeholder="Поиск по клиенту, Email, ИНН, серверу, HWID…" style="width:280px;padding:8px 12px;font-size:13px">
-                        <select id="selFilterServers" style="padding:8px 12px;font-size:13px">
-                            <option value="all">Все серверы</option>
-                            <option value="base_active">Базовая активирована</option>
-                            <option value="base_inactive">Без базовой лицензии</option>
-                            <option value="hwid_bound">Железо (HWID) привязано</option>
-                        </select>
-                        <button class="btn btn-primary btn-sm" data-action="open-create-server-modal">${icon('plus')} Добавить сервер / лицензию</button>
-                    </div>
-                </div>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Сервер / ID</th>
-                            <th>Владелец / Организация</th>
-                            <th>Привязка железа (HWID)</th>
-                            <th>Базовая лицензия (10 вечн.)</th>
-                            <th>Доп. места и SLA</th>
-                            <th>Управление</th>
-                        </tr></thead>
-                        <tbody id="admLicensesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
 
-            <!-- 2. РЕЕСТР ФРАНШИЗ И ГРАФИКОВ ПОГАШЕНИЯ (12 МЕС.) -->
-            <div class="card adm-section" data-adm-sec="franchises" style="display:none">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-                    <div>
-                        <span class="kicker">Реестр 2 · Региональная партнёрская сеть</span>
-                        <h3 class="h3" style="margin:2px 0 0">Региональные франшизы, резервы (15 мин) и годовые графики погашения</h3>
+                    <!-- 2. ФРАНШИЗЫ И ГРАФИКИ ПОГАШЕНИЯ (12 МЕС.) -->
+                    <div data-adm-sec="franchises" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Региональные франшизы и графики погашения (12 мес.)</h2>
+                            <div class="sec-controls">
+                                <input type="search" id="inpFilterFranchises" placeholder="Поиск по региону, компании, ИНН…">
+                                <select id="selFilterFranchises">
+                                    <option value="all">Все активные</option>
+                                    <option value="pending_deposit">Ожидают залога (15 мин)</option>
+                                    <option value="deposit_paid">Погашение по графику</option>
+                                    <option value="overdue">С просрочкой</option>
+                                    <option value="paid_in_full">Полностью погашены</option>
+                                    <option value="closed">Отменённые / Истёкшие</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="sec-box">
+                            <table class="sec-table">
+                                <thead><tr>
+                                    <th>Субъект РФ / ID</th>
+                                    <th>Франчайзи</th>
+                                    <th>Залог (100 тыс. ₽)</th>
+                                    <th>График (12 мес.)</th>
+                                    <th>Оплачено / Остаток</th>
+                                    <th style="text-align:right">Управление</th>
+                                </tr></thead>
+                                <tbody id="admFranchisesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
                     </div>
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                        <input type="search" id="inpFilterFranchises" placeholder="Поиск по региону, компании, ИНН, Email…" style="width:280px;padding:8px 12px;font-size:13px">
-                        <select id="selFilterFranchises" style="padding:8px 12px;font-size:13px">
-                            <option value="all">Все активные франшизы и резервы</option>
-                            <option value="pending_deposit">Ожидают залога (таймер 15 мин)</option>
-                            <option value="deposit_paid">Погашение по графику (12 мес.)</option>
-                            <option value="overdue">С просрочкой ежемесячного платежа</option>
-                            <option value="paid_in_full">Полностью погашены</option>
-                            <option value="closed">Отменённые / Истёкшие</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Субъект РФ / ID</th>
-                            <th>Франчайзи / Контакты</th>
-                            <th>Начальный взнос (залог 100 тыс. ₽)</th>
-                            <th>График погашения (12 мес.)</th>
-                            <th>Финансовая сводка</th>
-                            <th>Управление</th>
-                        </tr></thead>
-                        <tbody id="admFranchisesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
 
-            <!-- 3. ЗАКАЗЫ ЮKASSA И БЕЗНАЛИЧНЫЕ СЧЕТА-ДОГОВОРЫ -->
-            <div class="card adm-section" data-adm-sec="orders" style="display:none">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-                    <div>
-                        <span class="kicker">Реестр 3 · Биллинг и расчёты</span>
-                        <h3 class="h3" style="margin:2px 0 0">Заказы ЮKassa, счета-договоры юрлиц и взносы по франшизам</h3>
+                    <!-- 3. ЗАКАЗЫ И СЧЕТА -->
+                    <div data-adm-sec="orders" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Заказы ЮKassa и безналичные счета-договоры</h2>
+                            <div class="sec-controls">
+                                <input type="search" id="inpFilterOrders" placeholder="Поиск по заказу, счёту, ИНН…">
+                                <select id="selFilterOrders">
+                                    <option value="all">Все заказы</option>
+                                    <option value="pending">Ожидают оплаты</option>
+                                    <option value="paid">Оплачены</option>
+                                    <option value="canceled">Отменены</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="sec-box">
+                            <table class="sec-table">
+                                <thead><tr>
+                                    <th>Заказ / Счёт</th>
+                                    <th>Назначение</th>
+                                    <th>Плательщик</th>
+                                    <th>Сумма</th>
+                                    <th>Статус</th>
+                                    <th style="text-align:right">Действия</th>
+                                </tr></thead>
+                                <tbody id="admOrdersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
                     </div>
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                        <input type="search" id="inpFilterOrders" placeholder="Поиск по номеру заказа, счёту, плательщику, ИНН…" style="width:280px;padding:8px 12px;font-size:13px">
-                        <select id="selFilterOrders" style="padding:8px 12px;font-size:13px">
-                            <option value="all">Все заказы</option>
-                            <option value="pending">Ожидают оплаты</option>
-                            <option value="paid">Оплачены</option>
-                            <option value="canceled">Отменены</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Заказ / Счёт / Дата</th>
-                            <th>Назначение и объект</th>
-                            <th>Плательщик / ИНН</th>
-                            <th class="num">Сумма</th>
-                            <th>Статус</th>
-                            <th>Действия</th>
-                        </tr></thead>
-                        <tbody id="admOrdersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
 
-            <!-- 4. КЛИЕНТЫ, ОФЕРТЫ ПЭП И РОЛИ BOSS -->
-            <div class="card adm-section" data-adm-sec="users" style="display:none">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-                    <div>
-                        <span class="kicker">Реестр 4 · Аккаунты владельцев и права доступа</span>
-                        <h3 class="h3" style="margin:2px 0 0">Зарегистрированные клиенты, подписанные оферты (ПЭП) и администраторы (BOSS)</h3>
+                    <!-- 4. КЛИЕНТЫ И РОЛИ BOSS -->
+                    <div data-adm-sec="users" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Зарегистрированные клиенты и права администраторов (BOSS)</h2>
+                            <div class="sec-controls">
+                                <input type="search" id="inpFilterUsers" placeholder="Поиск по Email, организации, ИНН…">
+                            </div>
+                        </div>
+                        <div class="sec-box">
+                            <table class="sec-table">
+                                <thead><tr>
+                                    <th>Email / ID</th>
+                                    <th>Роль</th>
+                                    <th>Организация / ИНН</th>
+                                    <th>Реестры клиента</th>
+                                    <th>Оферта (ПЭП)</th>
+                                    <th style="text-align:right">Вход</th>
+                                </tr></thead>
+                                <tbody id="admUsersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
                     </div>
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                        <input type="search" id="inpFilterUsers" placeholder="Поиск по Email, организации, ИНН…" style="width:280px;padding:8px 12px;font-size:13px">
-                    </div>
-                </div>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Email / ID</th>
-                            <th>Роль на сервере</th>
-                            <th>Организация / ИНН</th>
-                            <th>Серверов / Франшиз</th>
-                            <th>Договор-оферта (ПЭП)</th>
-                            <th>Регистрация / Вход</th>
-                        </tr></thead>
-                        <tbody id="admUsersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
 
-            <!-- 5. ТИКЕТЫ SLA -->
-            <div class="card adm-section" data-adm-sec="tickets" style="display:none">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:14px">
-                    <div>
-                        <span class="kicker">Реестр 5 · Служба поддержки</span>
-                        <h3 class="h3" style="margin:2px 0 0">Обращения техподдержки SLA (MAX · Telegram · VK)</h3>
+                    <!-- 5. ТИКЕТЫ ПОДДЕРЖКИ SLA -->
+                    <div data-adm-sec="tickets" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Тикеты техподдержки SLA (MAX · Telegram · VK)</h2>
+                            <div class="sec-controls">
+                                <select id="selFilterTickets">
+                                    <option value="all">Все обращения</option>
+                                    <option value="open">Открытые</option>
+                                    <option value="answered">Отвеченные</option>
+                                    <option value="closed">Закрытые</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="sec-box">
+                            <table class="sec-table">
+                                <thead><tr>
+                                    <th>Тикет / Канал</th>
+                                    <th>Клиент / Сервер</th>
+                                    <th>SLA</th>
+                                    <th>Переписка</th>
+                                    <th style="text-align:right">Ответ инженера</th>
+                                </tr></thead>
+                                <tbody id="admTicketsBody"><tr><td colspan="5" class="muted">Загрузка…</td></tr></tbody>
+                            </table>
+                        </div>
                     </div>
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                        <select id="selFilterTickets" style="padding:8px 12px;font-size:13px">
-                            <option value="all">Все обращения</option>
-                            <option value="open">Открытые (ожидают ответа)</option>
-                            <option value="answered">Отвеченные</option>
-                            <option value="closed">Закрытые</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="table-wrap">
-                    <table class="t">
-                        <thead><tr>
-                            <th>Тикет / Канал</th>
-                            <th>Клиент / Сервер</th>
-                            <th>Тариф SLA</th>
-                            <th>Переписка</th>
-                            <th>Ответ инженера</th>
-                        </tr></thead>
-                        <tbody id="admTicketsBody"><tr><td colspan="5" class="muted">Загрузка…</td></tr></tbody>
-                    </table>
                 </div>
             </div>
         </section>
 
         <footer>
             <div class="footer-bottom">
-                <span>© ODANT · Консоль администратора центра лицензирования ${esc(P.domain)}</span>
-                <span>Ключ центра сертификации Ed25519: <code>${esc(publicKey)}</code></span>
+                <span>© ODANT · ${esc(P.domain)}</span>
+                <span>Ключ центра сертификации Ed25519: <code>${esc(publicKey.slice(0, 28))}…</code></span>
             </div>
         </footer>
     </div>
@@ -386,14 +365,14 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                 <button class="icon-btn" data-action="close-sched-modal" aria-label="Закрыть">${icon('close')}</button>
             </div>
             <div id="admSchedSummary" style="margin-bottom:12px"></div>
-            <div class="table-wrap" style="max-height:420px">
-                <table class="t">
+            <div style="max-height:420px;overflow-y:auto">
+                <table class="sec-table">
                     <thead><tr>
                         <th>Месяц</th>
                         <th>Дата платежа</th>
-                        <th class="num">Сумма</th>
+                        <th>Сумма</th>
                         <th>Статус</th>
-                        <th style="text-align:right">Действие администратора</th>
+                        <th style="text-align:right">Действие</th>
                     </tr></thead>
                     <tbody id="admSchedBody"></tbody>
                 </table>

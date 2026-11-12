@@ -337,50 +337,38 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="tiers">${renderTiers()}</div>
         </section>
 
-        <!-- ============ ЛИЧНЫЙ КАБИНЕТ: 2 ОСНОВНЫХ РЕЕСТРА (СЕРВЕРЫ И ФРАНШИЗЫ) ============ -->
+        <!-- ============ ЛИЧНЫЙ КАБИНЕТ: ЛЕВОЕ МЕНЮ РАЗДЕЛОВ + ЧИСТЫЕ РЕЕСТРЫ ============ -->
         <section class="stage" id="stage-addons">
-            <div class="sec-head">
-                <div>
-                    <span class="kicker">Личный кабинет владельца</span>
-                    <h2 class="h2">Реестр серверов (устройств) и реестр франшиз</h2>
-                </div>
-                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
-                    <p id="userBadgeBox" style="margin:0"></p>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <button class="btn btn-ghost btn-sm" data-action="refresh-cabinet">Обновить данные</button>
-                    </div>
-                </div>
-            </div>
+            <div class="sec-layout">
+                <aside class="sec-nav" aria-label="Разделы Личного кабинета">
+                    <button type="button" class="sec-nav-item active" data-cab-tab="servers" id="navCabServers">Серверы и устройства (0)</button>
+                    <button type="button" class="sec-nav-item" data-cab-tab="franchises" id="navCabFranchises">Региональные франшизы (0)</button>
+                </aside>
 
-            <!-- 1.1 РЕЕСТР СЕРВЕРОВ (УСТРОЙСТВ) WORK -->
-            <div class="card" style="margin-bottom:24px">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--border)">
-                    <div>
-                        <span class="kicker">1. Реестр серверов (устройств) WORK</span>
-                        <h3 class="h3" style="margin:4px 0 4px">Ваши лицензируемые серверы и устройства <span class="tag" id="badgeServersCount" style="margin-left:6px">0</span></h3>
-                        <p class="small muted" style="margin:0">Вы можете добавить любое количество серверов WORK. Для каждого сервера выпускается свой собственный токен привязки (<code>owk1...</code>) и свой набор лицензий (базовая вечная на 10 мест + дополнительные годовые пакеты).</p>
+                <div class="sec-main">
+                    <!-- 1.1 РЕЕСТР СЕРВЕРОВ (УСТРОЙСТВ) WORK -->
+                    <div id="cabSecServers">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Серверы и устройства WORK</h2>
+                            <div class="sec-controls">
+                                <input type="text" id="inpNewServerName" placeholder="Название нового сервера…">
+                                <button type="button" class="btn btn-primary btn-sm" data-action="create-server">+ Добавить сервер</button>
+                            </div>
+                        </div>
+                        <div class="sec-box" id="cabinetServersRegistry"></div>
                     </div>
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                        <input type="text" id="inpNewServerName" placeholder="Название сервера (напр., Центральный офис)…" style="width:280px;padding:8px 12px;font-size:13.5px">
-                        <button class="btn btn-primary btn-sm" data-action="create-server">${icon('plus')} Добавить сервер (устройство)</button>
-                    </div>
-                </div>
-                <div id="cabinetServersRegistry" style="margin-top:16px;display:flex;flex-direction:column;gap:16px"></div>
-            </div>
 
-            <!-- 1.2 РЕЕСТР ФРАНШИЗ -->
-            <div class="card">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--border)">
-                    <div>
-                        <span class="kicker">2. Реестр региональных франшиз</span>
-                        <h3 class="h3" style="margin:4px 0 4px">Зарезервированные и действующие франшизы <span class="tag" id="badgeFranchisesCount" style="margin-left:6px">0</span></h3>
-                        <p class="small muted" style="margin:0">Можно резервировать франшизы в нескольких разных субъектах РФ (не более 1 франшизы в одном регионе). После резервирования необходимо оплатить начальный взнос <b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b> через ЮKassa в течение <b>15 минут</b>, иначе резерв автоматически отменяется. Остаток паушального взноса погашается по графику равными платежами раз в месяц в течение года.</p>
-                    </div>
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                        <button class="btn btn-primary btn-sm" data-stage="franchise">${icon('map')} Зарезервировать франшизу на карте РФ</button>
+                    <!-- 1.2 РЕЕСТР РЕГИОНАЛЬНЫХ ФРАНШИЗ -->
+                    <div id="cabSecFranchises" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Региональные франшизы</h2>
+                            <div class="sec-controls">
+                                <button type="button" class="btn btn-primary btn-sm" data-stage="franchise">+ Выбрать регион на карте РФ</button>
+                            </div>
+                        </div>
+                        <div class="sec-box" id="cabinetFranchisesRegistry"></div>
                     </div>
                 </div>
-                <div id="cabinetFranchisesRegistry" style="margin-top:16px;display:flex;flex-direction:column;gap:16px"></div>
             </div>
         </section>
 

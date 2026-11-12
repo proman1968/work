@@ -278,6 +278,14 @@
     }
 
     let franchiseCountdownTimer = null;
+    let activeCabinetTab = 'servers';
+
+    function switchCabinetTab(tab = 'servers') {
+        activeCabinetTab = tab === 'franchises' ? 'franchises' : 'servers';
+        $$('[data-cab-tab]').forEach(b => b.classList.toggle('active', b.dataset.cabTab === activeCabinetTab));
+        if ($('#cabSecServers')) $('#cabSecServers').style.display = activeCabinetTab === 'servers' ? '' : 'none';
+        if ($('#cabSecFranchises')) $('#cabSecFranchises').style.display = activeCabinetTab === 'franchises' ? '' : 'none';
+    }
 
     function onAuthenticated() {
         if (!currentUser) return;
@@ -360,11 +368,11 @@
         const box = $('#cabinetServersRegistry');
         if (!box) return;
         const servers = getUserServersList();
-        if ($('#badgeServersCount')) $('#badgeServersCount').textContent = String(servers.length);
+        if ($('#navCabServers')) $('#navCabServers').textContent = `Серверы и устройства (${servers.length})`;
 
         if (!servers.length) {
-            box.innerHTML = `<div style="padding:22px;border-radius:12px;border:1px dashed var(--border);color:var(--muted);text-align:center;">
-                В вашем реестре пока нет добавленных серверов WORK. Введите название сервера выше и нажмите <b>«+ Добавить сервер (устройство)»</b>.
+            box.innerHTML = `<div style="padding:18px;color:var(--muted);text-align:center;">
+                В реестре пока нет серверов WORK. Введите название нового сервера справа вверху и нажмите <b>«+ Добавить сервер»</b>.
             </div>`;
             return;
         }
@@ -375,12 +383,12 @@
             const tok = s.hubToken || currentUser?.hubToken || '';
             const hwidBound = Boolean(s.hwidBound || s.hardware?.hwidBound || s.hardware?.nodeFingerprint);
             const hwidText = hwidBound
-                ? `Железо привязано: <code>${esc(s.hardware?.hwid || '')}</code>${s.hardware?.nodeFingerprint ? ` · узел <code>${esc(s.hardware.nodeFingerprint.slice(0, 16))}…</code>` : ''}`
-                : 'Ожидает привязки токена в локальном WORK (раздел WORK → Лицензия)';
+                ? `HWID: <code>${esc(s.hardware?.hwid || '')}</code>`
+                : 'ожидает привязки токена в WORK → Лицензия';
 
             const baseBadge = s.baseActivated
-                ? `<span class="tag ok">✓ Базовая активна · ${s.baseSeats || 10} вечных мест + ИИ-агенты</span>`
-                : `<span class="tag">Базовая не активирована (1 сессия BOSS · ИИ отключён)</span>`;
+                ? `<span class="tag ok">✓ Базовая: ${s.baseSeats || 10} вечн. мест + ИИ</span>`
+                : `<span class="tag">Базовая не активна (1 сессия BOSS)</span>`;
 
             const files = s.licenseFiles || [];
             const activeAddons = s.activeAddons || [];
@@ -390,118 +398,83 @@
             const canDelete = !s.baseActivated && !activeAddons.length && !paidOrders.length;
 
             const baseActionsHtml = !s.baseActivated
-                ? `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
-                    <button class="btn btn-primary btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="license_only">Купить базовую лицензию (${rub(D.product?.baseLicensePriceRub || 4_000_000)})</button>
-                    <button class="btn btn-ghost btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="pak">Заказать ПАК с сервером (${rub(D.product?.basePriceRub || 5_000_000)})</button>
-                   </div>`
+                ? `<button class="btn btn-primary btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="license_only">Купить базовую (${rub(D.product?.baseLicensePriceRub || 4_000_000)})</button>
+                   <button class="btn btn-ghost btn-sm" data-buy-for-server="${esc(lid)}" data-buy-variant="pak">Купить ПАК с сервером (${rub(D.product?.basePriceRub || 5_000_000)})</button>`
                 : '';
 
-            const addonsListHtml = activeAddons.length
-                ? `<div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
-                    ${activeAddons.map(sub => {
-                        const exp = sub.expiresAt ? new Date(sub.expiresAt).toLocaleDateString('ru-RU') : '—';
-                        return `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,.03);border:1px solid var(--border)">
-                            <span><b>+${sub.seats} конк. мест</b> · уровень <b>${esc(sub.tierName || sub.tier)}</b> (${sub.years || 1} г.)</span>
-                            <span class="small muted">действует до ${esc(exp)}</span>
-                        </div>`;
-                    }).join('')}
-                   </div>`
-                : `<div class="small muted" style="margin-top:6px">Дополнительные временные места не подключены.</div>`;
+            const addonsSummaryHtml = activeAddons.length
+                ? activeAddons.map(sub => {
+                    const exp = sub.expiresAt ? new Date(sub.expiresAt).toLocaleDateString('ru-RU') : '—';
+                    return `<span class="tag ok" style="margin-right:6px">+${sub.seats} мест · ${esc(sub.tierName || sub.tier)} до ${esc(exp)}</span>`;
+                }).join('')
+                : `<span class="small muted">Доп. места не подключены</span>`;
 
             const filesHtml = files.length
-                ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border)">
-                    <div class="small muted" style="margin-bottom:6px">Выпущенные подписанные файлы лицензий этого сервера (автоматически загружаются в <code>#system</code> по токену):</div>
-                    <div style="display:flex;flex-direction:column;gap:6px">
-                        ${files.map((f, fIdx) => {
-                            const lf = f.licenseFile || f;
-                            const isBase = lf.kind === 'base' || lf.perpetual;
-                            const label = isBase ? 'Базовая вечная лицензия (10 мест + ИИ)' : `Доп. лицензия (+${lf.seats} мест · ${String(lf.tier || '').toUpperCase()})`;
-                            return `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px">
-                                <span><b>${esc(label)}</b> · <code>${esc(f.fileName || lf.fileId)}</code></span>
-                                <button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-download-lic="${esc(lid)}" data-file-idx="${fIdx}">Скачать .lic.json</button>
-                            </div>`;
-                        }).join('')}
-                    </div>
+                ? `<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                    <span class="small muted">Файлы лицензий (<code>#system</code>):</span>
+                    ${files.map((f, fIdx) => `<button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-download-lic="${esc(lid)}" data-file-idx="${fIdx}">↓ ${esc(f.fileName || 'license.lic.json')}</button>`).join('')}
                    </div>`
                 : '';
 
             const pendingOrdersHtml = pendingOrders.length
-                ? `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
-                    <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--warn);margin-bottom:8px">Ожидают оплаты по этому серверу (${pendingOrders.length})</div>
+                ? `<div style="margin-top:10px;padding:10px 12px;border-radius:8px;border:1px solid var(--line-strong);background:color-mix(in srgb, var(--warn) 6%, transparent)">
                     ${pendingOrders.map(o => {
                         const title = (o.items && o.items.length) ? o.items.map(it => esc(it.title)).join(' + ') : esc(o.tierName || o.orderId);
-                        return `<div style="padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:rgba(245,158,11,.05);margin-bottom:8px">
-                            <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
-                                <div>
-                                    <div class="small muted">Заказ <code>${esc(o.orderId)}</code></div>
-                                    <div style="font-weight:700;font-size:14px;margin-top:2px">${title}</div>
-                                </div>
-                                <div style="font-size:17px;font-weight:800">${rub(o.amountRub)}</div>
+                        return `<div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;align-items:center">
+                            <div class="small"><b>Ожидает оплаты:</b> ${title} · <b>${rub(o.amountRub)}</b></div>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                <button class="btn btn-primary btn-sm" style="padding:5px 10px;font-size:12px" data-pay-order="${esc(o.orderId)}" data-pay-method="yookassa">Оплатить ЮKassa</button>
+                                <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-invoice-toggle="${esc(o.orderId)}">Счёт юрлицу</button>
+                                <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px;color:var(--danger)" data-cancel-order="${esc(o.orderId)}">Отменить</button>
                             </div>
-                            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
-                                <button class="btn btn-primary btn-sm" data-pay-order="${esc(o.orderId)}" data-pay-method="yookassa">Оплатить через ЮKassa (${rub(o.amountRub)})</button>
-                                <button class="btn btn-ghost btn-sm" data-invoice-toggle="${esc(o.orderId)}">Счёт-договор (для юр. лиц)</button>
-                                <button class="btn btn-ghost btn-sm" data-cancel-order="${esc(o.orderId)}" style="color:var(--danger)">Отменить заказ</button>
-                            </div>
-                            <div id="invBox-${esc(o.orderId)}" style="display:none;margin-top:10px;padding:12px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.02)">
-                                <div class="small" style="margin-bottom:8px;font-weight:600">Реквизиты юр. лица для счёта-договора:</div>
-                                <div class="row2">
-                                    <div class="field"><label>Наименование организации *</label><input type="text" id="invCompany-${esc(o.orderId)}" value="${esc(o.customer?.name || currentUser?.companyName || '')}" placeholder="ООО «Маслоторг»"></div>
-                                    <div class="field"><label>ИНН *</label><input type="text" id="invInn-${esc(o.orderId)}" value="${esc(o.customer?.inn || currentUser?.inn || '')}" placeholder="7701234567" inputmode="numeric"></div>
-                                </div>
-                                <button class="btn btn-primary btn-sm" style="margin-top:8px" data-pay-order="${esc(o.orderId)}" data-pay-method="invoice">Сформировать и открыть счёт-договор →</button>
+                        </div>
+                        <div id="invBox-${esc(o.orderId)}" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                                <input type="text" id="invCompany-${esc(o.orderId)}" value="${esc(o.customer?.name || currentUser?.companyName || '')}" placeholder="Организация (ООО «Маслоторг»)" style="width:240px;padding:6px 10px;font-size:13px">
+                                <input type="text" id="invInn-${esc(o.orderId)}" value="${esc(o.customer?.inn || currentUser?.inn || '')}" placeholder="ИНН" style="width:150px;padding:6px 10px;font-size:13px">
+                                <button class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12.5px" data-pay-order="${esc(o.orderId)}" data-pay-method="invoice">Открыть счёт-договор →</button>
                             </div>
                         </div>`;
                     }).join('')}
                    </div>`
                 : '';
 
-            return `<div style="padding:18px 20px;border-radius:14px;border:1px solid var(--border);background:rgba(255,255,255,.015)">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--border)">
-                    <div>
-                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                            <h4 class="h3" style="margin:0;font-size:18px">${esc(name)}</h4>
-                            <code style="font-size:12px;padding:2px 8px;border-radius:6px;background:rgba(255,255,255,.06)">${esc(lid)}</code>
-                            ${baseBadge}
-                        </div>
-                        <div class="small muted" style="margin-top:6px">${hwidText}</div>
+            return `<div class="sec-item">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <b style="font-size:15px">${esc(name)}</b>
+                        <span class="small muted">· <code>${esc(lid)}</code> · ${hwidText}</span>
+                        ${baseBadge}
                     </div>
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                        <span class="pill" style="padding:4px 12px;font-size:12.5px">Сессий всего: <b>${s.totalSeats}</b> (${s.baseSeats || 0} вечн. + ${s.addonSeats || 0} доп.)</span>
-                        <button class="btn btn-ghost btn-sm" data-rename-server="${esc(lid)}" data-current-name="${esc(name)}">Переименовать</button>
-                        ${canDelete ? `<button class="btn btn-ghost btn-sm" data-delete-server="${esc(lid)}" style="color:var(--danger)">Удалить</button>` : ''}
+                    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                        <span class="small muted" style="margin-right:4px">Сессий: <b>${s.totalSeats}</b></span>
+                        <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-rename-server="${esc(lid)}" data-current-name="${esc(name)}">Переименовать</button>
+                        ${canDelete ? `<button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px;color:var(--danger)" data-delete-server="${esc(lid)}">Удалить</button>` : ''}
                     </div>
                 </div>
 
-                <div class="split" style="margin-top:14px;gap:16px">
-                    <!-- Токен этого сервера -->
-                    <div style="padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.02)">
-                        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--brand-2);margin-bottom:4px">Токен привязки этого сервера (owk1...)</div>
-                        <p class="small muted" style="margin:0 0 8px">Вставьте этот токен в <b>WORK → Лицензия</b> на данном сервере. Токен привяжет устройство и автоматически скачает все его лицензии в <code>#system</code>.</p>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                            <input type="text" id="srvTok-${esc(lid)}" readonly value="${esc(tok)}" style="flex:1;min-width:180px;font-family:monospace;font-size:12.5px;padding:7px 10px">
-                            <button class="btn btn-primary btn-sm" data-copy-server-token="${esc(lid)}">Скопировать токен</button>
-                            <button class="btn btn-ghost btn-sm" data-regen-server-token="${esc(lid)}">Перевыпустить</button>
-                        </div>
-                        <div class="small" id="srvTokStatus-${esc(lid)}" style="color:var(--ok);min-height:16px;margin-top:4px"></div>
-                    </div>
+                <!-- Строка токена привязки этого сервера -->
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+                    <span class="small muted" style="min-width:115px">Токен привязки:</span>
+                    <input type="text" id="srvTok-${esc(lid)}" readonly value="${esc(tok)}" style="flex:1;min-width:200px;max-width:440px;padding:6px 10px;font-family:monospace;font-size:12px;border-radius:8px">
+                    <button class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12px" data-copy-server-token="${esc(lid)}">Скопировать токен</button>
+                    <button class="btn btn-ghost btn-sm" style="padding:6px 10px;font-size:12px" data-regen-server-token="${esc(lid)}">Перевыпустить</button>
+                    <span class="small" id="srvTokStatus-${esc(lid)}" style="color:var(--ok)"></span>
+                </div>
 
-                    <!-- Лицензии этого сервера -->
-                    <div style="padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.02)">
-                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-                            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--brand-2)">Лицензии сервера (базовая и доп.)</div>
-                            <button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-buy-for-server="${esc(lid)}" data-buy-variant="addons_only">+ Докупить рабочие места / SLA</button>
-                        </div>
-                        <div class="small" style="margin-top:6px">
-                            <b>Базовая лицензия:</b> ${s.baseActivated ? '<span style="color:var(--ok)">Активирована (10 вечных мест + ИИ-агенты)</span>' : '<span style="color:var(--muted)">Не активирована</span>'}
-                        </div>
+                <!-- Строка лицензий и докупки мест -->
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span class="small muted" style="min-width:115px">Доп. лицензии:</span>
+                        ${addonsSummaryHtml}
+                    </div>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
                         ${baseActionsHtml}
-                        <div class="small" style="margin-top:8px"><b>Дополнительные годовые лицензии:</b></div>
-                        ${addonsListHtml}
-                        ${filesHtml}
+                        <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-buy-for-server="${esc(lid)}" data-buy-variant="addons_only">+ Докупить рабочие места</button>
                     </div>
                 </div>
 
+                ${filesHtml}
                 ${pendingOrdersHtml}
             </div>`;
         }).join('');
@@ -544,11 +517,11 @@
         if (!box) return;
         const franchises = currentUser?.franchises || currentUser?.reservations || [];
         const activeList = franchises.filter(f => f && f.status !== 'canceled' && f.status !== 'expired');
-        if ($('#badgeFranchisesCount')) $('#badgeFranchisesCount').textContent = String(activeList.length);
+        if ($('#navCabFranchises')) $('#navCabFranchises').textContent = `Региональные франшизы (${activeList.length})`;
 
         if (!activeList.length) {
-            box.innerHTML = `<div style="padding:22px;border-radius:12px;border:1px dashed var(--border);color:var(--muted);text-align:center;">
-                У вас пока нет зарезервированных или действующих региональных франшиз. Нажмите <b>«Зарезервировать франшизу на карте РФ»</b> выше, чтобы выбрать субъект РФ.
+            box.innerHTML = `<div style="padding:18px;color:var(--muted);text-align:center;">
+                У вас пока нет зарезервированных или действующих региональных франшиз. Нажмите <b>«+ Выбрать регион на карте РФ»</b> справа вверху.
             </div>`;
             startFranchiseCountdowns();
             return;
@@ -569,29 +542,28 @@
             const remSec = Math.max(0, Math.floor((deadline - now) / 1000));
 
             const statusBadge = !f.depositPaid
-                ? `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Ожидает оплаты залога · <b data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</b></span>`
+                ? `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Оплата залога: <b data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</b></span>`
                 : (remainingRub <= 0
-                    ? `<span class="tag ok">✓ Франшиза полностью оплачена (12/12)</span>`
-                    : `<span class="tag ok">✓ Залог оплачен · Погашение по графику (${paidMonths}/12 мес.)</span>`);
+                    ? `<span class="tag ok">✓ Погашена полностью (12/12)</span>`
+                    : `<span class="tag ok">✓ Залог оплачен · График ${paidMonths}/12 мес.</span>`);
 
             const depositAlertHtml = !f.depositPaid
-                ? `<div style="margin-top:12px;padding:14px 16px;border-radius:12px;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap">
-                    <div>
-                        <div style="font-weight:700;color:var(--warn)">Требуется оплата начального взноса (${rub(depositRub)}) в течение 15 минут</div>
-                        <div class="small muted" style="margin-top:2px">Осталось времени: <b style="color:var(--text);font-family:monospace;font-size:14px" data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</b>. Если оплата через ЮKassa не поступит вовремя, резерв региона автоматически отменится.</div>
+                ? `<div style="margin-top:10px;padding:12px 14px;border-radius:10px;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                    <div class="small">
+                        <b>Оплатите начальный взнос (${rub(depositRub)}) через ЮKassa в течение <span style="font-family:monospace;font-size:13.5px" data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</span></b>, иначе резерв автоматически отменится.
                     </div>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap">
-                        <button class="btn btn-primary btn-sm" data-pay-order="${esc(f.orderId)}" data-pay-method="yookassa">Оплатить начальный взнос ${rub(depositRub)} (ЮKassa)</button>
-                        <button class="btn btn-ghost btn-sm" data-cancel-franchise="${esc(rid)}" style="color:var(--danger)">Отменить резерв</button>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12px" data-pay-order="${esc(f.orderId)}" data-pay-method="yookassa">Оплатить ${rub(depositRub)} (ЮKassa)</button>
+                        <button class="btn btn-ghost btn-sm" style="padding:6px 10px;font-size:12px;color:var(--danger)" data-cancel-franchise="${esc(rid)}">Отменить резерв</button>
                     </div>
                    </div>`
                 : '';
 
             const nextInst = f.nextInstallment || schedule.find(x => x.status !== 'paid');
             const scheduleControlsHtml = (f.depositPaid && remainingRub > 0)
-                ? `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                    ${nextInst ? `<button class="btn btn-primary btn-sm" data-pay-installment="${esc(rid)}" data-month="${nextInst.monthNumber}">Оплатить платёж №${nextInst.monthNumber} (${rub(nextInst.amountRub)} · ЮKassa)</button>` : ''}
-                    <button class="btn btn-ghost btn-sm" data-pay-installment="${esc(rid)}" data-early="1">Досрочно погасить весь остаток (${rub(remainingRub)})</button>
+                ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                    ${nextInst ? `<button class="btn btn-primary btn-sm" style="padding:5px 10px;font-size:12px" data-pay-installment="${esc(rid)}" data-month="${nextInst.monthNumber}">Оплатить месяц №${nextInst.monthNumber} (${rub(nextInst.amountRub)})</button>` : ''}
+                    <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:12px" data-pay-installment="${esc(rid)}" data-early="1">Погасить досрочно (${rub(remainingRub)})</button>
                    </div>`
                 : '';
 
@@ -607,62 +579,48 @@
                     stHtml = '<span class="tag bad">Просрочен</span>';
                 }
                 else if (inst.displayStatus === 'next') {
-                    stHtml = '<span class="tag" style="color:var(--brand-2)">Ближайший к оплате</span>';
+                    stHtml = '<span class="tag" style="color:var(--brand-2)">К оплате</span>';
                 }
 
                 const actHtml = (!isPaid && f.depositPaid)
                     ? `<div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
-                        <button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:12px" data-pay-installment="${esc(rid)}" data-month="${inst.monthNumber}" data-pay-method="yookassa">Оплатить ЮKassa</button>
+                        <button class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:12px" data-pay-installment="${esc(rid)}" data-month="${inst.monthNumber}" data-pay-method="yookassa">ЮKassa</button>
                         <button class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-pay-installment="${esc(rid)}" data-month="${inst.monthNumber}" data-pay-method="invoice">Счёт</button>
                        </div>`
-                    : (isPaid ? `<span class="small muted">Закрыт</span>` : `<span class="small muted">После оплаты залога</span>`);
+                    : (isPaid ? `<span class="small muted">Закрыт</span>` : `<span class="small muted">После залога</span>`);
 
                 return `<tr>
                     <td><b>Месяц ${inst.monthNumber} / 12</b></td>
                     <td>${esc(dueStr)}</td>
-                    <td class="num"><b>${rub(inst.amountRub)}</b></td>
+                    <td><b>${rub(inst.amountRub)}</b></td>
                     <td>${stHtml}</td>
                     <td style="text-align:right">${actHtml}</td>
                 </tr>`;
             }).join('');
 
-            return `<div style="padding:18px 20px;border-radius:14px;border:1px solid var(--border);background:rgba(255,255,255,.015)">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--border)">
-                    <div>
-                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                            <h4 class="h3" style="margin:0;font-size:18px">${esc(f.regionName)}</h4>
-                            <span class="tag">${esc(f.district || f.regionCode)}</span>
-                            <code style="font-size:12px;color:var(--muted)">${esc(rid)}</code>
-                            ${statusBadge}
-                        </div>
-                        <div class="small muted" style="margin-top:6px">
-                            Паушальный взнос региона: <b>${rub(totalFeeRub)}</b> · Начальный взнос (залог): <b>${rub(depositRub)}</b> (${f.depositPaid ? 'оплачен' : 'ожидает оплаты'}) · Погашено всего: <b>${rub(totalPaidRub)}</b> · Остаток: <b>${rub(remainingRub)}</b>
-                        </div>
+            return `<div class="sec-item">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <b style="font-size:15px">${esc(f.regionName)}</b>
+                        <span class="small muted">· ${esc(f.district || f.regionCode)} · <code>${esc(rid)}</code></span>
+                        ${statusBadge}
                     </div>
                     ${scheduleControlsHtml}
                 </div>
-
-                ${depositAlertHtml}
-
-                <div style="margin-top:14px">
-                    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap">
-                        <span class="small" style="font-weight:700">Годовой график погашения платежей (12 месяцев, платёж раз в месяц)</span>
-                        <span class="small muted">Погашено ${pct}% (${rub(totalPaidRub)} из ${rub(totalFeeRub)})</span>
-                    </div>
-                    <div class="bar" style="width:100%;height:8px;margin-bottom:12px"><i style="--p:${pct}%"></i></div>
-                    <div class="table-wrap" style="max-height:340px">
-                        <table class="t">
-                            <thead><tr>
-                                <th>Период</th>
-                                <th>Дата платежа</th>
-                                <th class="num">Сумма взноса</th>
-                                <th>Статус</th>
-                                <th style="text-align:right">Действие</th>
-                            </tr></thead>
-                            <tbody>${scheduleRowsHtml}</tbody>
-                        </table>
-                    </div>
+                <div class="small muted" style="margin-top:4px">
+                    Паушальный взнос: <b>${rub(totalFeeRub)}</b> · Залог: <b>${rub(depositRub)}</b> · Оплачено: <b>${rub(totalPaidRub)}</b> (${pct}%) · Остаток: <b>${rub(remainingRub)}</b>
                 </div>
+                ${depositAlertHtml}
+                <table class="sec-table" style="margin-top:10px">
+                    <thead><tr>
+                        <th>Период</th>
+                        <th>Дата платежа</th>
+                        <th>Сумма</th>
+                        <th>Статус</th>
+                        <th style="text-align:right">Оплата</th>
+                    </tr></thead>
+                    <tbody>${scheduleRowsHtml}</tbody>
+                </table>
             </div>`;
         }).join('');
 
@@ -958,6 +916,7 @@
                 onAuthenticated();
             }
             if (st) st.textContent = '';
+            switchCabinetTab('servers');
             switchStage('addons');
         }
         catch (err) {
@@ -1428,6 +1387,7 @@
             }
             if (msg) msg.textContent = '';
             refreshCatalogRegions();
+            switchCabinetTab('franchises');
             switchStage('addons');
         }
         catch (err) {
@@ -1688,8 +1648,9 @@
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-stage],[data-action],[data-reserve],[data-pay-order],[data-invoice-toggle],[data-cancel-order],[data-copy-server-token],[data-regen-server-token],[data-rename-server],[data-delete-server],[data-download-lic],[data-buy-for-server],[data-pay-installment],[data-cancel-franchise],[data-ask],[data-district],th[data-sort],#regionsTableBody tr');
+            const el = e.target.closest('[data-stage],[data-cab-tab],[data-action],[data-reserve],[data-pay-order],[data-invoice-toggle],[data-cancel-order],[data-copy-server-token],[data-regen-server-token],[data-rename-server],[data-delete-server],[data-download-lic],[data-buy-for-server],[data-pay-installment],[data-cancel-franchise],[data-ask],[data-district],th[data-sort],#regionsTableBody tr');
             if (!el) return;
+            if (el.matches('[data-cab-tab]')) { e.preventDefault(); switchCabinetTab(el.dataset.cabTab); return; }
             if (el.matches('[data-reserve]')) { e.stopPropagation(); reserveRegionFranchise(el.dataset.reserve); return; }
             if (el.matches('[data-pay-order]')) { e.stopPropagation(); payCabinetOrder(el.dataset.payOrder, el.dataset.payMethod || 'yookassa'); return; }
             if (el.matches('[data-invoice-toggle]')) {
