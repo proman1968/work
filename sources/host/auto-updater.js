@@ -564,6 +564,30 @@ export function applyUpdateFromDirectory({
 
     walkSource(absSource);
 
+    // Очистка устаревшей дублирующей ветки MODELS/Halogen (объединена с MODELS/Local) с сохранением скачанных весов
+    try {
+        const legacyHalogen = path.join(absRoot, 'MODELS', 'Halogen');
+        const localModelsDir = path.join(absRoot, 'MODELS', 'Local');
+        if (fs.existsSync(legacyHalogen) && !fs.existsSync(path.join(absSource, 'MODELS', 'Halogen'))) {
+            for (const entry of fs.readdirSync(legacyHalogen, { withFileTypes: true })) {
+                if (!entry.isDirectory() || entry.name.startsWith('$') || entry.name.startsWith('#'))
+                    continue;
+                const oldWeights = path.join(legacyHalogen, entry.name, '#weights');
+                if (fs.existsSync(oldWeights)) {
+                    const hasWeights = fs.readdirSync(oldWeights).some(
+                        f => !f.endsWith('.part') && /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i.test(f)
+                    );
+                    if (hasWeights && !fs.existsSync(path.join(localModelsDir, entry.name))) {
+                        fs.mkdirSync(localModelsDir, { recursive: true });
+                        fs.cpSync(path.join(legacyHalogen, entry.name), path.join(localModelsDir, entry.name), { recursive: true });
+                    }
+                }
+            }
+            fs.rmSync(legacyHalogen, { recursive: true, force: true });
+        }
+    }
+    catch { /* ignore */ }
+
     // Сохраняем обновлённый манифест поставки
     const nextManifest = {
         packageName: PACKAGE_NAME,

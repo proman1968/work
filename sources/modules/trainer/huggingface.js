@@ -1018,40 +1018,44 @@ export async function startHuggingFaceDownload({
     rootDir = process.cwd(),
     providerFolder = 'Local',
     targetNodeName = '',
+    nodeMeta = null,
     registerInWork = true,
     waitForCompletion = false,
     fetchImpl = globalThis.fetch,
 } = {}) {
     const cleanId = validateRepoId(repoId);
+    const safeProvider = String(providerFolder || 'Local').replace(/[<>:"/\\|?*]/g, '-');
+
+    // Если эта модель уже скачивается прямо сейчас — возвращаем активную задачу без дублирования
+    for (const entry of _downloads.values()) {
+        if (
+            entry.job.status === 'downloading'
+            && entry.job.providerFolder === safeProvider
+            && (entry.job.repoId === cleanId || (targetNodeName && entry.job.folderName === targetNodeName))
+        ) {
+            return { ...entry.job };
+        }
+    }
+
     const repoMeta = await inspectHuggingFaceRepo(cleanId, { revision, token, fetchImpl });
     const selected = selectFilesToDownload(repoMeta, { files, quant });
     if (!selected.length)
         throw new Error(`В репозитории ${cleanId} не найдено подходящих файлов весов (.gguf / .safetensors)`);
 
-    const safeProvider = String(providerFolder || 'Local').replace(/[<>:"/\\|?*]/g, '-');
     const folderName = targetNodeName
         ? String(targetNodeName).replace(/[<>:"/\\|?*]/g, '-')
         : safeModelFolderName(cleanId, quant && selected.some(f => f.kind === 'gguf') ? quant : '');
     const modelDir = path.join(rootDir, 'MODELS', safeProvider, folderName);
     const weightsDir = path.join(modelDir, '#weights');
+    const stagingDir = path.join(rootDir, 'MODELS', safeProvider, '#downloads', folderName);
     const primary = selected.find(f => f.name.endsWith('.gguf'))?.name
         || selected.find(f => f.name.endsWith('.safetensors') || f.name.endsWith('.hgn') || f.name.endsWith('.hnpw'))?.name
         || selected[0]?.name || '';
 
-    // Сначала создаём $ai/class.js (только для новых узлов в /MODELS/Local), чтобы папка с первой миллисекунды распознавалась сервером как $ai, а не $folder
-    if (registerInWork && safeProvider === 'Local') {
-        await registerLocalModelNode({
-            rootDir,
-            folderName,
-            label: `${cleanId.split('/')[1] || cleanId}${quant && primary.endsWith('.gguf') ? ' (' + quant + ')' : ''}`,
-            repoId: cleanId,
-            modality: repoMeta.modality || 'llm',
-            capabilities: repoMeta.capabilities || ['chat'],
-            weightsDir,
-            primaryFile: path.basename(primary),
-        });
-    }
-    await fsp.mkdir(weightsDir, { recursive: true });
+    const displayLabel = nodeMeta?.label
+        || `${cleanId.split('/')[1] || cleanId}${quant && primary.endsWith('.gguf') ? ' (' + quant + ')' : ''}`;
+
+    await fsp.mkdir(stagingDir, { recursive: true });
 
     const jobId = 'hf_' + crypto.randomUUID().slice(0, 8);
     const totalBytes = selected.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
@@ -1060,8 +1064,9 @@ export async function startHuggingFaceDownload({
     const job = {
         id: jobId,
         repoId: cleanId,
-        modality: repoMeta.modality || 'llm',
-        capabilities: repoMeta.capabilities || ['chat'],
+        label: displayLabel,
+        modality: nodeMeta?.modality || repoMeta.modality || 'llm',
+        capabilities: nodeMeta?.capabilities || repoMeta.capabilities || ['chat'],
         revision: String(revision || 'main'),
         providerFolder: safeProvider,
         folderName,
@@ -1087,8 +1092,8 @@ export async function startHuggingFaceDownload({
                 if (controller.signal.aborted)
                     throw new Error('Загрузка отменена пользователем');
                 job.currentFile = fileEntry.name;
-                const destFile = path.join(weightsDir, path.basename(fileEntry.name));
-                const partFile = destFile + '.part';
+                const stagedFile = path.join(stagingDir, path.basename(fileEntry.name));
+                const partFile = stagedFile + '.part';
 
                 let existingSize = 0;
                 try {
@@ -1144,9 +1149,24 @@ export async function startHuggingFaceDownload({
                     });
                 }
 
-                await fsp.rename(partFile, destFile);
+                await fsp.rename(partFile, stagedFile);
                 fileEntry.done = true;
             }
+
+            // Переносим готовые файлы из скрытой папки #downloads в целевую папку модели #weights
+            await fsp.mkdir(weightsDir, { recursive: true });
+            for (const fileEntry of job.files) {
+                const stagedFile = path.join(stagingDir, path.basename(fileEntry.name));
+                const destFile = path.join(weightsDir, path.basename(fileEntry.name));
+                try {
+                    await fsp.rename(stagedFile, destFile);
+                }
+                catch {
+                    await fsp.copyFile(stagedFile, destFile);
+                    await fsp.unlink(stagedFile).catch(() => {});
+                }
+            }
+            await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
 
             const manifestFile = path.join(weightsDir, 'hf-manifest.json');
             await fsp.writeFile(manifestFile, JSON.stringify({
@@ -1157,6 +1177,27 @@ export async function startHuggingFaceDownload({
                 downloadedAt: new Date().toISOString(),
                 files: job.files,
             }, null, 2), 'utf-8');
+
+            // Регистрируем узел $ai/class.js только после полного завершения скачивания весов
+            if (registerInWork && safeProvider === 'Local') {
+                await registerLocalModelNode({
+                    rootDir,
+                    folderName,
+                    label: displayLabel,
+                    repoId: cleanId,
+                    model: nodeMeta?.model || '',
+                    protocol: nodeMeta?.protocol || '',
+                    icon: nodeMeta?.icon || '',
+                    modality: job.modality,
+                    capabilities: job.capabilities,
+                    efforts: nodeMeta?.efforts || null,
+                    maxTokens: nodeMeta?.maxTokens,
+                    maxOutput: nodeMeta?.maxOutput,
+                    baseUrl: nodeMeta?.baseUrl,
+                    weightsDir,
+                    primaryFile: path.basename(primary),
+                });
+            }
 
             job.progress = 100;
             job.status = 'completed';
@@ -1173,20 +1214,8 @@ export async function startHuggingFaceDownload({
             job.status = controller.signal.aborted ? 'cancelled' : 'failed';
             job.error = String(err?.message || err);
             job.finishedAt = Date.now();
-            // Если ни один файл весов(.gguf / .safetensors / .hgn / .hnpw) не скачался целиком — убираем недокачанную папку
-            const hasWeights = job.files.some(f => f.done && /\.(gguf|safetensors|hgn|hnpw|bin|onnx)$/i.test(f.name));
-            if (!hasWeights) {
-                if (safeProvider === 'Local') {
-                    await fsp.rm(modelDir, { recursive: true, force: true }).catch(() => {});
-                }
-                else {
-                    await fsp.rm(weightsDir, { recursive: true, force: true }).catch(() => {});
-                }
-                try {
-                    const localNode = await globalThis.WORK?.get_item?.(`/MODELS/${safeProvider}`);
-                    localNode?.reset?.();
-                }
-                catch { /* ignore */ }
+            if (controller.signal.aborted) {
+                await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
             }
         }
     })();

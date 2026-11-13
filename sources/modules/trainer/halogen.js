@@ -1408,11 +1408,12 @@ export function inspectHalogenCatalogWithStatus(rootDir = process.cwd()) {
             d.status === 'downloading'
             && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
         ) || null;
+        const hasRealWeightFile = downloadedFiles.some(f => /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i.test(f));
         return {
             ...spec,
             nodeConfigured,
             weightsDir: path.relative(rootDir, weightsDir).replace(/\\/g, '/'),
-            weightsDownloaded: downloadedFiles.length > 0,
+            weightsDownloaded: !activeJob && hasRealWeightFile,
             downloadedFiles,
             activeDownload: activeJob,
         };
@@ -1422,7 +1423,7 @@ export function inspectHalogenCatalogWithStatus(rootDir = process.cwd()) {
 /**
  * Поставить в очередь скачивание всего пакета моделей Halo в `/MODELS/Local` (1 основная GPU-модель + 7 NPU-моделей)
  * или выбранного подмножества моделей с Hugging Face Hub прямо в `MODELS/Local/<nodeName>/#weights`,
- * регистрируя узлы `$ai` в `/MODELS/Local/<nodeName>`.
+ * регистрируя узлы `$ai` в `/MODELS/Local/<nodeName>` по мере завершения скачивания каждой модели.
  */
 export async function downloadHalogenBundle({
     rootDir = process.cwd(),
@@ -1451,7 +1452,6 @@ export async function downloadHalogenBundle({
     let alreadyActiveCount = 0;
 
     for (const spec of targets) {
-        await ensureHalogenModelNodes(rootDir, { models: [spec.nodeName], onlyWithWeights: false });
         const running = existingDownloads.find(d =>
             d.status === 'downloading'
             && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
@@ -1465,9 +1465,21 @@ export async function downloadHalogenBundle({
             repoId: spec.hfRepo,
             providerFolder: 'Local',
             targetNodeName: spec.nodeName,
+            nodeMeta: {
+                label: spec.label || spec.nodeName,
+                model: spec.model,
+                protocol: 'halogen',
+                icon: spec.icon || 'ai:qwen',
+                modality: spec.modality,
+                capabilities: spec.capabilities,
+                efforts: spec.efforts,
+                maxTokens: spec.maxTokens,
+                maxOutput: spec.maxOutput,
+                baseUrl: spec.baseUrl || HALOGEN_DEFAULT_BASE_URL,
+            },
             rootDir,
             token,
-            registerInWork: false,
+            registerInWork: true,
             waitForCompletion,
             fetchImpl,
         });

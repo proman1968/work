@@ -7,7 +7,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { registerLocalModelNode, estimateModelMemoryFromId } from './huggingface.js';
+import { registerLocalModelNode, estimateModelMemoryFromId, listHuggingFaceDownloads } from './huggingface.js';
 import { verifyCompletion } from './dataset.js';
 
 const _jobs = new Map();
@@ -201,11 +201,39 @@ export async function detectHardware({ force = false } = {}) {
  */
 export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
     const localRoot = path.join(rootDir, 'MODELS', 'Local');
+    const legacyHalogenRoot = path.join(rootDir, 'MODELS', 'Halogen');
+
+    // Автоматическая миграция и очистка устаревшей дублирующей папки MODELS/Halogen
+    if (fs.existsSync(legacyHalogenRoot)) {
+        try {
+            const halEntries = await fsp.readdir(legacyHalogenRoot, { withFileTypes: true }).catch(() => []);
+            for (const he of halEntries) {
+                if (!he.isDirectory() || he.name.startsWith('$') || he.name.startsWith('#'))
+                    continue;
+                const oldWeights = path.join(legacyHalogenRoot, he.name, '#weights');
+                if (fs.existsSync(oldWeights)) {
+                    const wf = await fsp.readdir(oldWeights).catch(() => []);
+                    const hasRealWeight = wf.some(f => !f.endsWith('.part') && /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i.test(f));
+                    if (hasRealWeight) {
+                        const targetModelDir = path.join(localRoot, he.name);
+                        if (!fs.existsSync(targetModelDir)) {
+                            await fsp.mkdir(localRoot, { recursive: true });
+                            await fsp.cp(path.join(legacyHalogenRoot, he.name), targetModelDir, { recursive: true });
+                        }
+                    }
+                }
+            }
+            await fsp.rm(legacyHalogenRoot, { recursive: true, force: true });
+        }
+        catch { /* ignore */ }
+    }
+
     const models = [];
     const adapters = [];
     if (!fs.existsSync(localRoot))
         return { models, adapters };
 
+    const activeDownloads = listHuggingFaceDownloads().filter(d => d.status === 'downloading');
     const entries = await fsp.readdir(localRoot, { withFileTypes: true });
     for (const e of entries) {
         if (!e.isDirectory() || e.name.startsWith('$'))
@@ -227,13 +255,19 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
         }
         if (e.name.startsWith('#'))
             continue;
+
+        const isDownloading = activeDownloads.some(
+            d => d.folderName === e.name || d.modelPath === `/MODELS/Local/${e.name}`
+        );
         const aiClassFile = path.join(localRoot, e.name, '$ai', 'class.js');
         const weightsDir = path.join(localRoot, e.name, '#weights');
         let weightFiles = [];
+        let hasRealWeightBinary = false;
         let sizeBytes = 0;
         if (fs.existsSync(weightsDir)) {
             const wf = await fsp.readdir(weightsDir).catch(() => []);
             weightFiles = wf.filter(f => !f.endsWith('.part') && f !== 'hf-manifest.json');
+            hasRealWeightBinary = weightFiles.some(f => /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i.test(f));
             for (const f of weightFiles) {
                 try {
                     const st = await fsp.stat(path.join(weightsDir, f));
@@ -251,9 +285,25 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
             }
             catch { /* non-json class.js */ }
         }
-        if (fs.existsSync(aiClassFile) || weightFiles.length) {
+
+        const isAdapterNode = Boolean(meta.adapterPath);
+
+        // Если папка модели была создана преждевременно прежней версией без скачанных весов и сейчас не качается — убираем пустой дубль
+        if (!isDownloading && !hasRealWeightBinary && !isAdapterNode) {
+            try {
+                await fsp.rm(path.join(localRoot, e.name), { recursive: true, force: true });
+            }
+            catch { /* ignore */ }
+            continue;
+        }
+
+        // Пока модель ещё скачивается, она отображается только в блоке «Идёт установка», а не в «Установленных моделях»
+        if (isDownloading && !hasRealWeightBinary && !isAdapterNode) {
+            continue;
+        }
+
+        if (hasRealWeightBinary || isAdapterNode) {
             const enabled = meta.enabled !== false;
-            const hasWeights = weightFiles.length > 0;
             models.push({
                 id: e.name,
                 label: meta.label || e.name,
@@ -263,7 +313,7 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
                 capabilities: Array.isArray(meta.capabilities) ? meta.capabilities : ['chat', 'stream'],
                 maxTokens: meta.maxTokens || 16384,
                 enabled,
-                active: enabled && hasWeights,
+                active: enabled && (hasRealWeightBinary || isAdapterNode),
                 path: `/MODELS/Local/${e.name}`,
                 hasClass: fs.existsSync(aiClassFile),
                 weightFiles,

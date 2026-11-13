@@ -623,6 +623,19 @@ describe('Единый локальный контур /MODELS/Local для ма
                 const weightPath = path.join(tmpRoot, 'MODELS', 'Local', item.nodeName, '#weights');
                 assert.ok(fs.existsSync(path.join(weightPath, 'hf-manifest.json')));
             }
+
+            // Проверим, что пустые/недокачанные папки (только с config.json без файла весов) не попадают в установленные модели и очищаются
+            const { listLocalModelsAndAdapters } = await import('../sources/modules/trainer/runner.js');
+            const ghostDir = path.join(tmpRoot, 'MODELS', 'Local', 'Ghost-Incomplete');
+            await fsp.mkdir(path.join(ghostDir, '$ai'), { recursive: true });
+            await fsp.mkdir(path.join(ghostDir, '#weights'), { recursive: true });
+            await fsp.writeFile(path.join(ghostDir, '$ai', 'class.js'), 'export default {"label":"Ghost"};');
+            await fsp.writeFile(path.join(ghostDir, '#weights', 'config.json'), '{"ok":true}');
+
+            const inv = await listLocalModelsAndAdapters(tmpRoot);
+            assert.equal(inv.models.length, 8, 'В установленных числятся только 8 реально скачанных моделей');
+            assert.ok(!inv.models.some(m => m.id === 'Ghost-Incomplete'), 'Недокачанная папка без бинарных весов не попадает в установленные');
+            assert.equal(fs.existsSync(ghostDir), false, 'Пустой дубль без весов автоматически очищен');
         }
         finally {
             await fsp.rm(tmpRoot, { recursive: true, force: true });
