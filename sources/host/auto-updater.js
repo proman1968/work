@@ -86,8 +86,10 @@ export function isProtectedUserPath(relPath) {
     if (rel === 'config.json' || rel === '.env' || rel.startsWith('.env.'))
         return true;
 
-    // 2. Базы данных SQLite, полнотекстовые и векторные индексы
+    // 2. Базы данных SQLite, хранилище лицензионного сервера, полнотекстовые и векторные индексы
     if (rel === '.data' || rel.startsWith('.data/'))
+        return true;
+    if (rel === 'data' || rel.startsWith('data/') || rel === 'license-server/data' || rel.startsWith('license-server/data/'))
         return true;
     if (rel === '.index' || rel.startsWith('.index/'))
         return true;

@@ -39,16 +39,14 @@ import {
     calculateRegionPartnerQuota,
     PUBLIC_OFERTA,
 } from './catalog.js';
-import { LicenseStore } from './store.js';
+import { LicenseStore, resolvePersistentDataDir } from './store.js';
 import { YooKassaService } from './yookassa.js';
 import { SupportBotsHub } from './bots.js';
 import { LicenseServerAiAgent } from './agent.js';
 import { renderLandingPage, renderSandboxPaymentPage } from './landing.js';
 import { renderAdminPage } from './admin.js';
 
-const DEFAULT_DATA_DIR = fileURLToPath(new URL('../data', import.meta.url));
-
-async function readJsonBody(req, maxBytes = 1024 * 1024) {
+async function readJsonBody(req, maxBytes = 16 * 1024 * 1024) {
     const chunks = [];
     let size = 0;
     for await (const ch of req) {
@@ -284,10 +282,12 @@ async function sendOtpEmail({ to, code }) {
 export function createLicenseServerApp(options = {}) {
     const pendingOtpCodes = new Map(); // email -> { code, expiresAt, attempts }
     const store = options.store || new LicenseStore({
-        dataDir: options.dataDir || DEFAULT_DATA_DIR,
+        dataDir: options.dataDir || resolvePersistentDataDir(),
         adminLogin: options.adminLogin,
         adminPassword: options.adminPassword,
         publicOrigin: options.publicOrigin || 'https://work.odant.org',
+        autoRecover: options.autoRecover,
+        extraSearchRoots: options.extraSearchRoots,
     });
     let bots = null;
     const yookassa = options.yookassa || new YooKassaService({
@@ -986,6 +986,8 @@ export function createLicenseServerApp(options = {}) {
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
                 const allFranchises = store.listAllFranchises();
                 return sendJson(res, 200, {
+                    dataDir: store.dataDir,
+                    counts: store.getStoreCounts(),
                     licenses: store.listLicenses(),
                     tickets: store.listTickets(),
                     orders: Object.values(store.state.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
@@ -995,6 +997,40 @@ export function createLicenseServerApp(options = {}) {
                     regions: store.listRegionsWithQuotas(),
                     users: store.listUsers(),
                 });
+            }
+
+            if (req.method === 'GET' && pathname === '/api/admin/backup/export') {
+                const tok = extractBearerToken(req, null, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const bundle = store.exportBackupBundle();
+                const dayStr = new Date().toISOString().slice(0, 10);
+                const body = JSON.stringify(bundle, null, 2);
+                res.writeHead(200, {
+                    'Content-Type': 'application/json; charset=utf-8',
+                    'Content-Disposition': `attachment; filename="odant-work-license-backup-${dayStr}.json"`,
+                    'Access-Control-Allow-Origin': '*',
+                });
+                res.end(body);
+                return;
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/backup/import') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const result = store.importBackupBundle(body.backup || body, { mode: body.mode || 'merge' });
+                return sendJson(res, 200, result);
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/backup/recover') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const result = store.recoverFromExternalLocations({ extraSearchRoots: body.extraSearchRoots || [] });
+                return sendJson(res, 200, result);
             }
 
             if (req.method === 'POST' && pathname === '/api/admin/servers/manage') {

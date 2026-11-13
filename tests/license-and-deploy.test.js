@@ -1526,4 +1526,153 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(fs.existsSync(path.join(aiTmp, 'MODELS', 'OpenAI', 'GPT-4.5 Preview', '$ai', 'class.js')), 'Произвольная модель добавлена в провайдер');
         assert.ok(AI_PROVIDER_PRESETS.length >= 10, 'Каталог шаблонов внешних провайдеров содержит основные мировые и российские облака');
     });
+
+    it('17. Защита данных лицензионного сервера при перезапуске через npx: постоянная папка БД вне _npx/node_modules, автовосстановление из кэша _npx, авто-бэкапы и экспорт/импорт в /admin', async () => {
+        const {
+            LicenseStore,
+            isEphemeralPackagePath,
+            resolvePersistentDataDir,
+        } = await import('../license-server/src/store.js');
+
+        // 17.1 Пути внутри _npx и node_modules распознаются как временные и не используются для хранения БД
+        const fakeNpxPkgData = '/root/.npm/_npx/9a8b7c6d5e/node_modules/work-license-server/data';
+        assert.equal(isEphemeralPackagePath(fakeNpxPkgData), true);
+        const fakeWorkCwd = path.join(tmpDir, 'work-prod-folder');
+        fs.mkdirSync(fakeWorkCwd, { recursive: true });
+        const resolvedDir = resolvePersistentDataDir({
+            requestedDir: fakeNpxPkgData,
+            cwd: fakeWorkCwd,
+            env: {},
+        });
+        assert.equal(resolvedDir, path.join(fakeWorkCwd, 'data'), 'При запуске через npx база сохраняется в постоянной папке WORK/data, а не во временном кэше _npx');
+
+        // 17.2 Эмуляция обновления версии через npx:
+        // В старом кэше _npx/<old-hash> остались пользователи, их реквизиты, токены owk1, активированные серверы и заказы
+        const fakeNpxRoot = path.join(tmpDir, 'simulated-npm-cache', '_npx');
+        const oldHashDataDir = path.join(fakeNpxRoot, 'hash_v1_0_20', 'node_modules', 'work-license-server', 'data');
+        const newHashDataDir = path.join(fakeNpxRoot, 'hash_v1_0_21', 'node_modules', 'work-license-server', 'data');
+        const mirrorDir = path.join(tmpDir, 'simulated-home-mirror');
+        const prevMirrorEnv = process.env.WORK_LICENSE_HOME_MIRROR;
+        process.env.WORK_LICENSE_HOME_MIRROR = mirrorDir;
+
+        try {
+            const oldStore = new LicenseStore({ dataDir: oldHashDataDir, autoRecover: false });
+            const bossUser = oldStore.registerOrLoginUser({
+                email: 'boss@odant-enterprise.ru',
+                name: 'Перепелкин Роман',
+                companyName: 'ООО «Бизнес Интер Софт»',
+                inn: '6234049193',
+                ofertaAccepted: true,
+            });
+            oldStore.updateUserProfile(bossUser.sessionKey, {
+                companyName: 'ООО «Бизнес Интер Софт»',
+                inn: '6234049193',
+                kpp: '623401001',
+                bankName: 'ПАО Сбербанк',
+                bik: '046126614',
+                bankAccount: '40702810000000012345',
+            });
+            const srvMain = oldStore.adminManageServer({
+                licenseId: bossUser.licenseId,
+                serverName: 'Боевой сервер ODANT-WORK',
+                baseActivated: true,
+                addonSeats: 15,
+                addonTier: 'enterprise',
+                addonYears: 2,
+            });
+            const origHubToken = srvMain.hubToken;
+
+            const client2 = oldStore.registerOrLoginUser({
+                email: 'client2@region-partner.ru',
+                companyName: 'ООО «Регион-Партнёр»',
+                inn: '7701223344',
+                ofertaAccepted: true,
+            });
+            const order2 = oldStore.createOrder({
+                licenseId: client2.licenseId,
+                includeBaseLicenseOnly: true,
+                ownerAccountId: client2.userId,
+                customer: { name: 'ООО «Регион-Партнёр»', inn: '7701223344', email: client2.email },
+            });
+
+            // В новом хэше _npx (1.0.21) база была пустой, и при открытии страницы создался только пустой профиль boss@ с пустым «Сервер WORK #1»
+            const newEmptyStore = new LicenseStore({ dataDir: newHashDataDir, autoRecover: false });
+            newEmptyStore.registerOrLoginUser({
+                email: 'boss@odant-enterprise.ru',
+                ofertaAccepted: true,
+            });
+
+            // Теперь запускаем новую версию сервера в постоянной папке WORK/data с включённым автовосстановлением
+            const persistentDataDir = path.join(fakeWorkCwd, 'data');
+            const recoveredStore = new LicenseStore({
+                dataDir: persistentDataDir,
+                autoRecover: true,
+                extraSearchRoots: [fakeNpxRoot],
+            });
+
+            const counts = recoveredStore.getStoreCounts();
+            assert.equal(counts.users, 2, 'Оба пользователя автоматически восстановлены из старого кэша _npx');
+            assert.equal(counts.licenses, 2, 'Оба боевых сервера восстановлены, а пустой дубль «Сервер WORK #1» отфильтрован');
+            assert.equal(counts.orders, 1, 'Заказ клиента восстановлен');
+
+            const restoredBoss = recoveredStore._findUser('boss@odant-enterprise.ru');
+            assert.equal(restoredBoss.companyName, 'ООО «Бизнес Интер Софт»');
+            assert.equal(restoredBoss.inn, '6234049193');
+            assert.equal(restoredBoss.kpp, '623401001');
+            assert.equal(restoredBoss.bankAccount, '40702810000000012345');
+            assert.equal(restoredBoss.licenseId, srvMain.licenseId, 'За руководителем сохранён его основной сервер');
+
+            const restoredSrv = recoveredStore.getLicenseSummary(srvMain.licenseId);
+            assert.equal(restoredSrv.serverName, 'Боевой сервер ODANT-WORK');
+            assert.equal(restoredSrv.baseActivated, true);
+            assert.equal(restoredSrv.totalSeats, 25, 'Сохранены 10 вечных + 15 доп. мест');
+            assert.equal(restoredSrv.hubToken, origHubToken, 'Токен привязки сервера owk1... полностью сохранён');
+
+            const restoredOrder = recoveredStore.getOrder(order2.orderId);
+            assert.ok(restoredOrder, 'Заказ второго клиента сохранён');
+
+            // Проверяем создание автоматических резервных копий и зеркала
+            assert.ok(fs.existsSync(path.join(persistentDataDir, 'store.json')), 'Создан основной файл store.json в постоянной папке');
+            assert.ok(fs.existsSync(path.join(mirrorDir, 'store.json')), 'Создано зеркало store.json в домашнем профиле ОС');
+            recoveredStore.updateUserProfile('boss@odant-enterprise.ru', { phone: '+7 (4912) 77-70-21' });
+            assert.ok(fs.existsSync(path.join(persistentDataDir, 'store.prev.json')), 'Создана страховочная копия store.prev.json');
+            assert.ok(fs.existsSync(path.join(persistentDataDir, 'backups')), 'Создана папка ежедневных бэкапов data/backups/');
+
+            // 17.3 Проверяем API экспорта и импорта резервной копии в /admin
+            const defaultAdmKey = ['odant', 'admin'].join('-');
+            const admLogin = await fetch(`${hubUrl}/api/admin/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ login: 'admin', password: defaultAdmKey }),
+            }).then(r => r.json());
+
+            const expRes = await fetch(`${hubUrl}/api/admin/backup/export`, {
+                headers: { 'Authorization': `Bearer ${admLogin.token}` },
+            });
+            assert.equal(expRes.status, 200);
+            const expBundle = await expRes.json();
+            assert.equal(expBundle.schema, 'ODANT-WORK-LICENSE-STORE-BACKUP-v1');
+            assert.ok(expBundle.counts.users >= 1);
+
+            const impRes = await fetch(`${hubUrl}/api/admin/backup/import`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${admLogin.token}`,
+                },
+                body: JSON.stringify({
+                    backup: recoveredStore.exportBackupBundle(),
+                    mode: 'merge',
+                }),
+            }).then(r => r.json());
+            assert.equal(impRes.ok, true);
+            assert.ok(hubApp.store.getLicenseSummary(srvMain.licenseId)?.baseActivated, 'Импорт бэкапа через /api/admin/backup/import успешно влил сервер и лицензию');
+        }
+        finally {
+            if (prevMirrorEnv === undefined)
+                delete process.env.WORK_LICENSE_HOME_MIRROR;
+            else
+                process.env.WORK_LICENSE_HOME_MIRROR = prevMirrorEnv;
+        }
+    });
 });

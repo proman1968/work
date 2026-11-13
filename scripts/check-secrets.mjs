@@ -83,6 +83,8 @@ export function scanText(content, ignores = []) {
             if (!m)
                 continue;
             const value = m[0];
+            if (rule === 'uuid-pair-key' && /data:image\/[a-z0-9+.-]+;base64,/i.test(line))
+                continue;
             if (rule === 'keyword-value' || rule === 'bearer-basic-b64') {
                 const v = (value.match(/['"]([^'"]+)['"]\s*$/) || value.match(/['"]([^'"]+)['"]/) || value.match(/[A-Za-z0-9+/]{20,}/) || [])[1] || value;
                 if (SAFE_VALUE.test(v) || SAFE_MARK.test(v) || SAFE_MARK.test(line))

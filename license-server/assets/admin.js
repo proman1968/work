@@ -311,6 +311,9 @@
         if ($('#navAdmOrders')) $('#navAdmOrders').textContent = `Заказы и счета (${orders.length})`;
         if ($('#navAdmUsers')) $('#navAdmUsers').textContent = `Клиенты и администраторы (${users.length})`;
         if ($('#navAdmTickets')) $('#navAdmTickets').textContent = `Тикеты поддержки (${openTickets.length})`;
+        if ($('#admDataDirLabel') && data.dataDir) {
+            $('#admDataDirLabel').textContent = `Папка БД: ${data.dataDir}`;
+        }
 
         renderServersTable(licenses);
         renderFranchisesTable(franchises);
@@ -870,6 +873,57 @@
         URL.revokeObjectURL(url);
     }
 
+    async function exportAdminBackup() {
+        try {
+            const bundle = await api('/api/admin/backup/export');
+            const json = JSON.stringify(bundle, null, 2);
+            const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const dayStr = new Date().toISOString().slice(0, 10);
+            a.href = url;
+            a.download = `odant-work-license-backup-${dayStr}.json`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        }
+        catch (err) {
+            alert(err.message);
+        }
+    }
+
+    async function importAdminBackupFile(file) {
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const parsed = JSON.parse(text);
+            const res = await api('/api/admin/backup/import', {
+                backup: parsed,
+                mode: 'merge',
+            });
+            await refreshRegistry();
+            const c = res.counts || {};
+            alert(`Резервная копия успешно объединена с базой!\nПользователей: ${c.users || 0}, серверов/лицензий: ${c.licenses || 0}, заказов: ${c.orders || 0}, франшиз: ${c.reservations || 0}.`);
+        }
+        catch (err) {
+            alert('Ошибка импорта резервной копии: ' + (err.message || err));
+        }
+    }
+
+    async function recoverAdminFromNpx() {
+        try {
+            const res = await api('/api/admin/backup/recover', {});
+            await refreshRegistry();
+            const c = res.counts || {};
+            const srcCount = Array.isArray(res.mergedSources) ? res.mergedSources.length : 0;
+            alert(`Поиск по кэшу npx и системным папкам завершён (найдено источников: ${srcCount}).\nВ базе сейчас — пользователей: ${c.users || 0}, серверов/лицензий: ${c.licenses || 0}, заказов: ${c.orders || 0}, франшиз: ${c.reservations || 0}.`);
+        }
+        catch (err) {
+            alert(err.message);
+        }
+    }
+
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
@@ -944,7 +998,16 @@
                     navigator.clipboard?.writeText($('#certJsonBox')?.textContent || '');
                     break;
                 case 'cert-download': downloadCurrentCert(); break;
+                case 'admin-export-backup': exportAdminBackup(); break;
+                case 'admin-import-backup': $('#inpAdmBackupFile')?.click(); break;
+                case 'admin-recover-npx': recoverAdminFromNpx(); break;
             }
+        });
+
+        $('#inpAdmBackupFile')?.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (file) importAdminBackupFile(file);
+            e.target.value = '';
         });
 
         $('#btnTheme')?.addEventListener('click', toggleTheme);

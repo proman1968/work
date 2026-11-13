@@ -37,7 +37,13 @@ export {
     parseOwnerAccessToken,
     verifyOwnerAccessToken,
 } from './crypto.js';
-export { LicenseStore } from './store.js';
+export {
+    LicenseStore,
+    isEphemeralPackagePath,
+    resolvePersistentDataDir,
+    findCandidateRecoveryDirs,
+    mergeStoreStates,
+} from './store.js';
 export { YooKassaService } from './yookassa.js';
 export { SupportBotsHub } from './bots.js';
 export { LicenseServerAiAgent } from './agent.js';

@@ -6,8 +6,10 @@
  *  - Тикеты техподдержки с расчётом SLA времени реакции и лимитов обращений по уровням Start / Business / Enterprise.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import {
     PAK_PRODUCT,
     BASE_LICENSE_PRODUCT,
@@ -70,14 +72,473 @@ export function buildFranchisePaymentSchedule({
     return schedule;
 }
 
+/**
+ * Проверить, указывает ли путь внутрь временного кэша npx / npm или папки node_modules.
+ * Хранить базу данных внутри таких папок недопустимо, так как при обновлении версии npx создаёт новый хэш-каталог.
+ */
+export function isEphemeralPackagePath(dirPath = '') {
+    const norm = String(dirPath || '').replace(/\\/g, '/').toLowerCase();
+    return norm.includes('/_npx/') || norm.includes('/node_modules/') || norm.includes('/npm-cache/');
+}
+
+/**
+ * Проверить, является ли директория изолированной временной папкой автотестов.
+ */
+export function isTestTempPath(dirPath = '') {
+    const full = path.resolve(String(dirPath || ''));
+    const norm = full.replace(/\\/g, '/').toLowerCase();
+    const tmpNorm = os.tmpdir().replace(/\\/g, '/').toLowerCase();
+    if (tmpNorm && norm.startsWith(tmpNorm))
+        return true;
+    return norm.includes('fake-hub-data')
+        || norm.includes('work-lic-')
+        || norm.includes('work-npx-test')
+        || norm.includes('/temp/opencode/');
+}
+
+/**
+ * Постоянное зеркало базы данных в профиле пользователя ОС (~/.odant-work-license/data).
+ */
+export function getHomeMirrorDataDir() {
+    if (process.env.WORK_LICENSE_HOME_MIRROR)
+        return path.resolve(process.env.WORK_LICENSE_HOME_MIRROR);
+    return path.join(os.homedir(), '.odant-work-license', 'data');
+}
+
+/**
+ * Определить постоянную папку хранения базы данных лицензионного сервера:
+ *  1) Явная переменная окружения WORK_LICENSE_DATA_DIR;
+ *  2) Явно переданный requestedDir (если он не указывает внутрь временного кэша _npx / node_modules);
+ *  3) Постоянная папка внутри рабочей директории запуска (например, <WORK>/data или <WORK>/license-server/data);
+ *  4) Защищённое системное хранилище в домашнем профиле ОС (~/.odant-work-license/data).
+ */
+export function resolvePersistentDataDir({
+    requestedDir = '',
+    cwd = process.cwd(),
+    env = process.env,
+} = {}) {
+    if (env?.WORK_LICENSE_DATA_DIR && String(env.WORK_LICENSE_DATA_DIR).trim()) {
+        return path.resolve(String(env.WORK_LICENSE_DATA_DIR).trim());
+    }
+    if (requestedDir && requestedDir !== './data' && !isEphemeralPackagePath(requestedDir)) {
+        return path.resolve(requestedDir);
+    }
+    const cleanCwd = path.resolve(cwd || process.cwd());
+    if (!isEphemeralPackagePath(cleanCwd)) {
+        const lsData = path.join(cleanCwd, 'license-server', 'data');
+        if (fs.existsSync(path.join(lsData, 'store.json')))
+            return lsData;
+        const sysData = path.join(cleanCwd, '#system', 'license-server');
+        if (fs.existsSync(path.join(sysData, 'store.json')))
+            return sysData;
+        return path.join(cleanCwd, 'data');
+    }
+    return getHomeMirrorDataDir();
+}
+
+/**
+ * Найти все возможные папки на диске (включая старые хэш-каталоги ~/.npm/_npx/* и %LOCALAPPDATA%/npm-cache/_npx/*),
+ * где могли остаться данные от предыдущих запусков через npx.
+ */
+export function findCandidateRecoveryDirs({
+    primaryDir = '',
+    cwd = process.cwd(),
+    extraSearchRoots = [],
+    includeSystemDefaults = true,
+} = {}) {
+    const seen = new Set();
+    const dirs = [];
+    const addDir = (d) => {
+        if (!d) return;
+        try {
+            const full = path.resolve(d);
+            const key = process.platform === 'win32' ? full.toLowerCase() : full;
+            if (seen.has(key)) return;
+            seen.add(key);
+            if (fs.existsSync(full))
+                dirs.push(full);
+        }
+        catch { /* ignore */ }
+    };
+
+    addDir(primaryDir);
+    addDir(getHomeMirrorDataDir());
+
+    const npxRoots = new Set();
+    const addNpxRoot = (r) => {
+        if (!r) return;
+        try {
+            const full = path.resolve(r);
+            if (fs.existsSync(full))
+                npxRoots.add(full);
+        }
+        catch { /* ignore */ }
+    };
+
+    for (const root of (extraSearchRoots || [])) {
+        addDir(root);
+        addNpxRoot(root);
+        addNpxRoot(path.join(root, '_npx'));
+    }
+
+    if (includeSystemDefaults) {
+        const cleanCwd = path.resolve(cwd || process.cwd());
+        if (!isEphemeralPackagePath(cleanCwd)) {
+            addDir(path.join(cleanCwd, 'data'));
+            addDir(path.join(cleanCwd, '#system', 'license-server'));
+            addDir(path.join(cleanCwd, 'license-server', 'data'));
+        }
+
+        try {
+            addDir(fileURLToPath(new URL('../data', import.meta.url)));
+        }
+        catch { /* ignore */ }
+
+        if (process.env.npm_config_cache)
+            addNpxRoot(path.join(process.env.npm_config_cache, '_npx'));
+        addNpxRoot(path.join(os.homedir(), '.npm', '_npx'));
+        addNpxRoot(path.join(os.homedir(), '.npm-cache', '_npx'));
+        addNpxRoot('/root/.npm/_npx');
+
+        if (process.platform !== 'win32' && fs.existsSync('/home')) {
+            try {
+                for (const entry of fs.readdirSync('/home', { withFileTypes: true })) {
+                    if (entry.isDirectory()) {
+                        addNpxRoot(path.join('/home', entry.name, '.npm', '_npx'));
+                        addDir(path.join('/home', entry.name, '.odant-work-license', 'data'));
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }
+
+        if (process.env.LOCALAPPDATA)
+            addNpxRoot(path.join(process.env.LOCALAPPDATA, 'npm-cache', '_npx'));
+        if (process.env.APPDATA) {
+            addNpxRoot(path.join(process.env.APPDATA, 'npm-cache', '_npx'));
+            addDir(path.join(process.env.APPDATA, 'npm', 'node_modules', 'work-license-server', 'data'));
+        }
+        addNpxRoot(path.join(os.homedir(), 'AppData', 'Local', 'npm-cache', '_npx'));
+        addNpxRoot(path.join(os.homedir(), 'AppData', 'Roaming', 'npm-cache', '_npx'));
+
+        addDir('/usr/local/lib/node_modules/work-license-server/data');
+        addDir('/usr/lib/node_modules/work-license-server/data');
+    }
+
+    for (const npxRoot of npxRoots) {
+        try {
+            const entries = fs.readdirSync(npxRoot, { withFileTypes: true });
+            for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                const hashDir = path.join(npxRoot, entry.name);
+                addDir(path.join(hashDir, 'node_modules', 'work-license-server', 'data'));
+                addDir(path.join(hashDir, 'node_modules', 'odant-work', 'license-server', 'data'));
+                addDir(path.join(hashDir, 'node_modules', 'odant-work', 'data'));
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    return dirs;
+}
+
+function isAutoPlaceholderLicense(lic, allOrders = {}) {
+    if (!lic || typeof lic !== 'object') return false;
+    if (lic.baseActivated) return false;
+    if (lic.hardware?.hwidBound || lic.hardware?.nodeFingerprint) return false;
+    if (Array.isArray(lic.addonSubscriptions) && lic.addonSubscriptions.length > 0) return false;
+    if (Array.isArray(lic.paidOrderIds) && lic.paidOrderIds.length > 0) return false;
+    const name = String(lic.serverName || '').trim();
+    if (name && name !== 'Сервер WORK #1' && name !== 'Сервер WORK') return false;
+    const hasOrders = Object.values(allOrders || {}).some(o => o && o.licenseId === lic.licenseId && o.status !== 'canceled');
+    return !hasOrders;
+}
+
+/**
+ * Безопасное объединение (merge без потери записей) двух состояний store.json.
+ * Сохраняет всех пользователей, их реквизиты, токены привязки (owk1...), серверы/лицензии,
+ * заказы, франшизы, партнёров, тикеты и привязки ботов.
+ */
+export function mergeStoreStates(baseState = {}, incomingState = {}) {
+    const out = {
+        licenses: { ...(baseState.licenses || {}) },
+        orders: { ...(baseState.orders || {}) },
+        tickets: { ...(baseState.tickets || {}) },
+        botBindings: { ...(baseState.botBindings || {}) },
+        partners: { ...(baseState.partners || {}) },
+        reservations: { ...(baseState.reservations || {}) },
+        certificates: { ...(baseState.certificates || {}) },
+        users: { ...(baseState.users || {}) },
+    };
+
+    // 1. Заказы (предпочитаем оплаченные или более свежие)
+    for (const [orderId, incOrd] of Object.entries(incomingState.orders || {})) {
+        if (!incOrd || !orderId) continue;
+        const curOrd = out.orders[orderId];
+        if (!curOrd) {
+            out.orders[orderId] = structuredClone(incOrd);
+            continue;
+        }
+        if (incOrd.status === 'paid' && curOrd.status !== 'paid') {
+            out.orders[orderId] = { ...curOrd, ...structuredClone(incOrd) };
+        }
+        else if (curOrd.status === 'paid' && incOrd.status !== 'paid') {
+            out.orders[orderId] = { ...structuredClone(incOrd), ...curOrd };
+        }
+        else {
+            const incTs = Number(incOrd.paidAt || incOrd.updatedAt || incOrd.createdAt || 0);
+            const curTs = Number(curOrd.paidAt || curOrd.updatedAt || curOrd.createdAt || 0);
+            out.orders[orderId] = incTs >= curTs
+                ? { ...curOrd, ...structuredClone(incOrd) }
+                : { ...structuredClone(incOrd), ...curOrd };
+        }
+    }
+
+    // 2. Серверы / Лицензии
+    for (const [licId, incLic] of Object.entries(incomingState.licenses || {})) {
+        if (!incLic || !licId) continue;
+        const curLic = out.licenses[licId];
+        if (!curLic) {
+            out.licenses[licId] = structuredClone(incLic);
+            continue;
+        }
+        const incTs = Number(incLic.updatedAt || incLic.issuedAt || 0);
+        const curTs = Number(curLic.updatedAt || curLic.issuedAt || 0);
+        const [older, newer] = incTs >= curTs ? [curLic, incLic] : [incLic, curLic];
+
+        const mergedAddonsMap = new Map();
+        for (const sub of [...(older.addonSubscriptions || []), ...(newer.addonSubscriptions || [])]) {
+            if (!sub) continue;
+            const key = sub.id || sub.orderId || JSON.stringify(sub);
+            mergedAddonsMap.set(key, sub);
+        }
+        const mergedPaidOrders = Array.from(new Set([
+            ...(older.paidOrderIds || []),
+            ...(newer.paidOrderIds || []),
+        ]));
+
+        const mergedCustomer = { ...(older.customer || {}), ...(newer.customer || {}) };
+        for (const k of ['name', 'inn', 'kpp', 'legalAddress', 'email', 'phone']) {
+            const vNew = String(newer.customer?.[k] || '').trim();
+            const vOld = String(older.customer?.[k] || '').trim();
+            mergedCustomer[k] = vNew || vOld;
+        }
+
+        const mergedHardware = (newer.hardware?.hwidBound || !older.hardware?.hwidBound)
+            ? { ...(older.hardware || {}), ...(newer.hardware || {}) }
+            : { ...(newer.hardware || {}), ...(older.hardware || {}) };
+
+        const pickServerName = (newer.serverName && newer.serverName !== 'Сервер WORK #1' && newer.serverName !== 'Сервер WORK')
+            ? newer.serverName
+            : (older.serverName || newer.serverName || 'Сервер WORK #1');
+
+        out.licenses[licId] = {
+            ...older,
+            ...newer,
+            serverName: pickServerName,
+            baseActivated: Boolean(older.baseActivated || newer.baseActivated),
+            perpetualBase: Boolean(older.perpetualBase || newer.perpetualBase || older.baseActivated || newer.baseActivated),
+            baseSeats: Math.max(Number(older.baseSeats || 0), Number(newer.baseSeats || 0), PAK_PRODUCT.baseSeats),
+            issuedAt: Math.min(Number(older.issuedAt || Date.now()), Number(newer.issuedAt || Date.now())),
+            updatedAt: Math.max(incTs, curTs),
+            hubToken: older.hubToken || newer.hubToken || '',
+            hubTokenId: older.hubTokenId || newer.hubTokenId || '',
+            hubTokenSecret: older.hubTokenSecret || newer.hubTokenSecret || '',
+            customer: mergedCustomer,
+            hardware: mergedHardware,
+            addonSubscriptions: Array.from(mergedAddonsMap.values()),
+            paidOrderIds: mergedPaidOrders,
+        };
+    }
+
+    // 3. Пользователи Личного кабинета и администраторы
+    for (const [rawKey, incUser] of Object.entries(incomingState.users || {})) {
+        if (!incUser || typeof incUser !== 'object') continue;
+        const email = String(incUser.email || rawKey || '').trim().toLowerCase();
+        if (!email) continue;
+        const curUser = out.users[email];
+        if (!curUser) {
+            out.users[email] = { ...structuredClone(incUser), email };
+            continue;
+        }
+
+        const emailPrefix = email.split('@')[0];
+        const isRealName = (val) => {
+            const s = String(val || '').trim();
+            return Boolean(s && s.toLowerCase() !== emailPrefix && s !== 'Организация ODANT-WORK' && !s.includes('@'));
+        };
+
+        const curCreated = Number(curUser.createdAt || Date.now());
+        const incCreated = Number(incUser.createdAt || Date.now());
+        const [olderU, newerU] = incCreated >= curCreated ? [curUser, incUser] : [incUser, curUser];
+
+        const mergedUser = {
+            ...olderU,
+            ...newerU,
+            userId: olderU.userId || newerU.userId,
+            email,
+            isAdmin: Boolean(curUser.isAdmin || incUser.isAdmin),
+            role: (curUser.isAdmin || incUser.isAdmin) ? 'ADMIN' : 'CLIENT',
+            createdAt: Math.min(curCreated, incCreated),
+            lastLoginAt: Math.max(Number(curUser.lastLoginAt || 0), Number(incUser.lastLoginAt || 0)),
+            name: isRealName(newerU.name) ? newerU.name : (isRealName(olderU.name) ? olderU.name : (newerU.name || olderU.name || emailPrefix)),
+            companyName: isRealName(newerU.companyName) ? newerU.companyName : (isRealName(olderU.companyName) ? olderU.companyName : (newerU.companyName || olderU.companyName || '')),
+            hubToken: olderU.hubToken || newerU.hubToken || '',
+            hubTokenId: olderU.hubTokenId || newerU.hubTokenId || '',
+            hubTokenSecret: olderU.hubTokenSecret || newerU.hubTokenSecret || '',
+            hubUrl: newerU.hubUrl || olderU.hubUrl || 'https://work.odant.org',
+            sessionKey: newerU.sessionKey || olderU.sessionKey || '',
+            ofertaAccepted: Boolean(curUser.ofertaAccepted || incUser.ofertaAccepted),
+            ofertaAcceptedAt: olderU.ofertaAcceptedAt || newerU.ofertaAcceptedAt || null,
+            ofertaVersion: newerU.ofertaVersion || olderU.ofertaVersion || '',
+            ofertaSignerName: isRealName(newerU.ofertaSignerName) ? newerU.ofertaSignerName : (olderU.ofertaSignerName || newerU.ofertaSignerName || ''),
+            ofertaSignatureId: olderU.ofertaSignatureId || newerU.ofertaSignatureId || '',
+        };
+
+        for (const field of ['position', 'inn', 'kpp', 'legalAddress', 'signerName', 'signerPosition', 'bankName', 'bik', 'bankAccount', 'corrAccount', 'phone']) {
+            const vNew = String(newerU[field] || '').trim();
+            const vOld = String(olderU[field] || '').trim();
+            mergedUser[field] = vNew || vOld;
+        }
+
+        out.users[email] = mergedUser;
+    }
+
+    // 4. Очистка пустых дублей «Сервер WORK #1», автоматически созданных при входе в пустую БД после перезапуска npx
+    for (const user of Object.values(out.users)) {
+        if (!user) continue;
+        const uEmail = String(user.email || '').toLowerCase();
+        const userLics = Object.values(out.licenses).filter(l => l && (
+            (user.userId && l.ownerAccountId === user.userId)
+            || (uEmail && String(l.ownerEmail || l.customer?.email || '').toLowerCase() === uEmail)
+        )).sort((a, b) => (a.issuedAt || 0) - (b.issuedAt || 0));
+
+        if (userLics.length > 1) {
+            const nonPlaceholders = userLics.filter(l => !isAutoPlaceholderLicense(l, out.orders));
+            const keepList = nonPlaceholders.length > 0 ? nonPlaceholders : [userLics[0]];
+            const keepIds = new Set(keepList.map(l => l.licenseId));
+            for (const l of userLics) {
+                if (!keepIds.has(l.licenseId) && isAutoPlaceholderLicense(l, out.orders)) {
+                    delete out.licenses[l.licenseId];
+                }
+            }
+            const remaining = userLics.filter(l => out.licenses[l.licenseId]);
+            if (remaining.length > 0 && (!user.licenseId || !out.licenses[user.licenseId])) {
+                const best = remaining.find(l => l.baseActivated || l.hardware?.hwidBound) || remaining[0];
+                user.licenseId = best.licenseId;
+            }
+        }
+        else if (userLics.length === 1) {
+            user.licenseId = userLics[0].licenseId;
+        }
+    }
+
+    // 5. Резервы франшиз и 12-месячные графики платежей
+    for (const [resId, incRes] of Object.entries(incomingState.reservations || {})) {
+        if (!incRes || !resId) continue;
+        const curRes = out.reservations[resId];
+        if (!curRes) {
+            out.reservations[resId] = structuredClone(incRes);
+            continue;
+        }
+        const mergedSchedule = buildFranchisePaymentSchedule({
+            remainingRub: incRes.remainingFranchiseFeeRub ?? curRes.remainingFranchiseFeeRub ?? 0,
+            startMs: Math.min(Number(curRes.createdAt || Date.now()), Number(incRes.createdAt || Date.now())),
+            existingSchedule: (curRes.paymentSchedule || []).map((item, idx) => {
+                const incItem = (incRes.paymentSchedule || [])[idx];
+                if (incItem?.status === 'paid' && item.status !== 'paid') return incItem;
+                return item;
+            }),
+        });
+        out.reservations[resId] = {
+            ...curRes,
+            ...incRes,
+            depositPaid: Boolean(curRes.depositPaid || incRes.depositPaid),
+            paidInstallmentsRub: Math.max(Number(curRes.paidInstallmentsRub || 0), Number(incRes.paidInstallmentsRub || 0)),
+            totalPaidRub: Math.max(Number(curRes.totalPaidRub || 0), Number(incRes.totalPaidRub || 0)),
+            paymentSchedule: mergedSchedule,
+        };
+    }
+
+    // 6. Партнёры, тикеты, привязки ботов и сертификаты специалистов
+    for (const [pId, incP] of Object.entries(incomingState.partners || {})) {
+        if (!incP || !pId) continue;
+        const curP = out.partners[pId];
+        if (!curP) {
+            out.partners[pId] = structuredClone(incP);
+            continue;
+        }
+        const issuedLicenses = Array.from(new Set([...(curP.issuedLicenses || []), ...(incP.issuedLicenses || [])]));
+        const certMap = new Map();
+        for (const c of [...(curP.certifiedSpecialists || []), ...(incP.certifiedSpecialists || [])]) {
+            if (c) certMap.set(c.certificateId || `${c.email}:${c.trackId}`, c);
+        }
+        out.partners[pId] = {
+            ...curP,
+            ...incP,
+            annualSalesRub: Math.max(Number(curP.annualSalesRub || 0), Number(incP.annualSalesRub || 0)),
+            issuedLicenses,
+            certifiedSpecialists: Array.from(certMap.values()),
+        };
+    }
+
+    for (const [tId, incT] of Object.entries(incomingState.tickets || {})) {
+        if (!incT || !tId) continue;
+        const curT = out.tickets[tId];
+        if (!curT) {
+            out.tickets[tId] = structuredClone(incT);
+            continue;
+        }
+        const msgMap = new Map();
+        for (const m of [...(curT.messages || []), ...(incT.messages || [])]) {
+            if (m) msgMap.set(`${m.time}:${m.author}:${m.text}`, m);
+        }
+        out.tickets[tId] = {
+            ...curT,
+            ...incT,
+            messages: Array.from(msgMap.values()).sort((a, b) => (a.time || 0) - (b.time || 0)),
+        };
+    }
+
+    Object.assign(out.botBindings, incomingState.botBindings || {});
+    Object.assign(out.certificates, incomingState.certificates || {});
+
+    return out;
+}
+
 export class LicenseStore {
-    constructor({ dataDir = './data', adminLogin = '', adminPassword = '', publicOrigin = 'https://work.odant.org' } = {}) {
-        this.dataDir = dataDir;
+    constructor({
+        dataDir = '',
+        adminLogin = '',
+        adminPassword = '',
+        publicOrigin = 'https://work.odant.org',
+        autoRecover = undefined,
+        extraSearchRoots = [],
+    } = {}) {
+        const isExplicitDir = Boolean(
+            dataDir && dataDir !== './data' && (autoRecover === false || !isEphemeralPackagePath(dataDir))
+        );
+        this.dataDir = isExplicitDir
+            ? path.resolve(dataDir)
+            : resolvePersistentDataDir({ requestedDir: dataDir });
+        this.autoRecover = autoRecover !== undefined
+            ? Boolean(autoRecover)
+            : !isTestTempPath(this.dataDir);
+        this.extraSearchRoots = Array.isArray(extraSearchRoots) ? extraSearchRoots : [];
+
         fs.mkdirSync(this.dataDir, { recursive: true });
+        this.backupDir = path.join(this.dataDir, 'backups');
         this.stateFile = path.join(this.dataDir, 'store.json');
+        this.prevStateFile = path.join(this.dataDir, 'store.prev.json');
         this.keyFile = path.join(this.dataDir, 'authority-key.json');
+
+        // Если в новой постоянной папке ещё нет authority-key.json, восстанавливаем его из прежних папок / кэша npx
+        if (this.autoRecover && !fs.existsSync(this.keyFile)) {
+            this._recoverAuthorityKeyFromCandidates();
+        }
+
         const isOfficialOrigin = !publicOrigin || String(publicOrigin).includes('work.odant.org') || String(publicOrigin).includes('localhost');
-        const isFakeTestDir = String(dataDir).includes('fake-hub-data');
+        const isFakeTestDir = String(this.dataDir).includes('fake-hub-data');
         this.authorityKeys = loadOrCreateAuthorityKeys(this.keyFile, {
             useCanonicalFallback: isOfficialOrigin && !isFakeTestDir,
         });
@@ -85,6 +546,7 @@ export class LicenseStore {
         this.adminPassword = String(adminPassword || process.env.WORK_ADMIN_PASSWORD || process.env.WORK_ADMIN_KEY || 'odant-admin');
         this.adminSessions = new Map();
         this.revokedSessions = new Set();
+        this._readFailedGuard = false;
 
         this.state = {
             licenses: {},
@@ -216,25 +678,257 @@ export class LicenseStore {
         return this._formatUserResponse(user);
     }
 
-    _load() {
-        if (!fs.existsSync(this.stateFile))
-            return;
+    _recoverAuthorityKeyFromCandidates() {
+        const allRoots = [...this.extraSearchRoots];
+        const dirs = findCandidateRecoveryDirs({
+            primaryDir: this.dataDir,
+            extraSearchRoots: allRoots,
+            includeSystemDefaults: !(isTestTempPath(this.dataDir) && allRoots.length > 0),
+        });
+        let bestKeyFile = '';
+        let bestMtime = 0;
+        for (const d of dirs) {
+            const kf = path.join(d, 'authority-key.json');
+            if (path.resolve(kf) === path.resolve(this.keyFile)) continue;
+            try {
+                if (!fs.existsSync(kf)) continue;
+                const stat = fs.statSync(kf);
+                const parsed = JSON.parse(fs.readFileSync(kf, 'utf8'));
+                if (parsed?.publicKey && parsed?.privateKey && stat.mtimeMs >= bestMtime) {
+                    bestKeyFile = kf;
+                    bestMtime = stat.mtimeMs;
+                }
+            }
+            catch { /* ignore */ }
+        }
+        if (bestKeyFile) {
+            try {
+                fs.mkdirSync(path.dirname(this.keyFile), { recursive: true });
+                fs.copyFileSync(bestKeyFile, this.keyFile);
+                console.log(`[work.odant.org] Восстановлен ключ ЦС authority-key.json из: ${bestKeyFile}`);
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    _tryParseStateFile(filePath) {
         try {
-            const raw = JSON.parse(fs.readFileSync(this.stateFile, 'utf8'));
-            if (raw && typeof raw === 'object') {
-                this.state.licenses = raw.licenses || {};
-                this.state.orders = raw.orders || {};
-                this.state.tickets = raw.tickets || {};
-                this.state.botBindings = raw.botBindings || {};
-                this.state.partners = raw.partners || {};
-                this.state.reservations = raw.reservations || {};
-                this.state.certificates = raw.certificates || {};
-                this.state.users = raw.users || {};
-                this._ensureBootstrapAdmin();
-                this._resignAllWithAuthority();
+            if (!filePath || !fs.existsSync(filePath)) return null;
+            const text = fs.readFileSync(filePath, 'utf8').trim();
+            if (!text) return null;
+            const raw = JSON.parse(text);
+            const stateObj = (raw?.state && typeof raw.state === 'object' && (raw.state.users || raw.state.licenses))
+                ? raw.state
+                : raw;
+            if (!stateObj || typeof stateObj !== 'object') return null;
+            return {
+                licenses: stateObj.licenses || {},
+                orders: stateObj.orders || {},
+                tickets: stateObj.tickets || {},
+                botBindings: stateObj.botBindings || {},
+                partners: stateObj.partners || {},
+                reservations: stateObj.reservations || {},
+                certificates: stateObj.certificates || {},
+                users: stateObj.users || {},
+            };
+        }
+        catch {
+            return null;
+        }
+    }
+
+    getStoreCounts(state = this.state) {
+        return {
+            users: Object.keys(state?.users || {}).length,
+            licenses: Object.keys(state?.licenses || {}).length,
+            orders: Object.keys(state?.orders || {}).length,
+            reservations: Object.keys(state?.reservations || {}).length,
+            partners: Object.keys(state?.partners || {}).length,
+            tickets: Object.keys(state?.tickets || {}).length,
+        };
+    }
+
+    _load() {
+        let loaded = this._tryParseStateFile(this.stateFile);
+        const mainExistsNonEmpty = fs.existsSync(this.stateFile) && fs.statSync(this.stateFile).size > 50;
+
+        if (!loaded && mainExistsNonEmpty) {
+            console.warn(`[work.odant.org] Внимание: не удалось прочитать ${this.stateFile}, проверяем резервные копии...`);
+            loaded = this._tryParseStateFile(this.prevStateFile);
+            if (!loaded && fs.existsSync(this.backupDir)) {
+                try {
+                    const bFiles = fs.readdirSync(this.backupDir)
+                        .filter(f => f.endsWith('.json'))
+                        .sort()
+                        .reverse();
+                    for (const bf of bFiles) {
+                        loaded = this._tryParseStateFile(path.join(this.backupDir, bf));
+                        if (loaded) {
+                            console.log(`[work.odant.org] Состояние восстановлено из резервной копии: ${bf}`);
+                            break;
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+            }
+            if (!loaded) {
+                this._readFailedGuard = true;
             }
         }
-        catch { /* начинаем с чистого состояния */ }
+
+        if (loaded) {
+            this.state = mergeStoreStates(this.state, loaded);
+        }
+
+        if (this.autoRecover) {
+            this.recoverFromExternalLocations({ silentIfZero: true });
+        }
+        else if (loaded) {
+            this._ensureBootstrapAdmin();
+            this._resignAllWithAuthority();
+        }
+    }
+
+    /**
+     * Просканировать кэш npx (~/.npm/_npx/*, %LOCALAPPDATA%/npm-cache/_npx/*), домашнее зеркало и рабочие папки,
+     * и безопасно объединить все найденные записи store.json в текущую постоянную базу данных.
+     */
+    recoverFromExternalLocations({ extraSearchRoots = [], silentIfZero = false } = {}) {
+        const allRoots = [...this.extraSearchRoots, ...(extraSearchRoots || [])];
+        const dirs = findCandidateRecoveryDirs({
+            primaryDir: this.dataDir,
+            extraSearchRoots: allRoots,
+            includeSystemDefaults: !(isTestTempPath(this.dataDir) && allRoots.length > 0),
+        });
+
+        const candidates = [];
+        for (const d of dirs) {
+            const sf = path.join(d, 'store.json');
+            if (path.resolve(sf) === path.resolve(this.stateFile)) continue;
+            try {
+                if (!fs.existsSync(sf)) continue;
+                const stat = fs.statSync(sf);
+                const parsed = this._tryParseStateFile(sf);
+                if (!parsed) continue;
+                const counts = this.getStoreCounts(parsed);
+                const totalItems = counts.users + counts.licenses + counts.orders + counts.reservations + counts.partners + counts.tickets;
+                if (totalItems > 0) {
+                    candidates.push({ file: sf, dir: d, mtimeMs: stat.mtimeMs, parsed, counts });
+                }
+            }
+            catch { /* ignore */ }
+        }
+
+        // Сортируем от более старых к более новым, чтобы более свежие изменения дополняли старые
+        candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
+
+        const beforeCounts = this.getStoreCounts(this.state);
+        const mergedSources = [];
+
+        for (const item of candidates) {
+            this.state = mergeStoreStates(this.state, item.parsed);
+            mergedSources.push({
+                file: item.file,
+                counts: item.counts,
+            });
+        }
+
+        this._ensureBootstrapAdmin();
+        this._resignAllWithAuthority();
+
+        const afterCounts = this.getStoreCounts(this.state);
+        const addedOrMerged = (afterCounts.users > beforeCounts.users)
+            || (afterCounts.licenses > beforeCounts.licenses)
+            || (afterCounts.orders > beforeCounts.orders)
+            || (afterCounts.reservations > beforeCounts.reservations)
+            || !fs.existsSync(this.stateFile);
+
+        if (mergedSources.length > 0 && addedOrMerged) {
+            this._readFailedGuard = false;
+            try { this._save(); } catch { /* ignore */ }
+            if (!silentIfZero || afterCounts.users > beforeCounts.users || afterCounts.licenses > beforeCounts.licenses) {
+                console.log(
+                    `[work.odant.org] Автовосстановление данных (источников: ${mergedSources.length}): `
+                    + `пользователей=${afterCounts.users}, серверов/лицензий=${afterCounts.licenses}, `
+                    + `заказов=${afterCounts.orders}, франшиз=${afterCounts.reservations}`
+                );
+            }
+        }
+
+        return {
+            ok: true,
+            dataDir: this.dataDir,
+            scannedDirs: dirs,
+            mergedSources,
+            beforeCounts,
+            counts: afterCounts,
+        };
+    }
+
+    /**
+     * Сформировать полный пакет резервной копии базы данных для скачивания из /admin.
+     */
+    exportBackupBundle() {
+        let backups = [];
+        try {
+            if (fs.existsSync(this.backupDir)) {
+                backups = fs.readdirSync(this.backupDir)
+                    .filter(f => f.endsWith('.json'))
+                    .sort()
+                    .reverse()
+                    .slice(0, 14);
+            }
+        }
+        catch { /* ignore */ }
+
+        return {
+            schema: 'ODANT-WORK-LICENSE-STORE-BACKUP-v1',
+            exportedAt: new Date().toISOString(),
+            dataDir: this.dataDir,
+            authorityPublicKey: this.authorityKeys.publicKey,
+            counts: this.getStoreCounts(this.state),
+            backups,
+            state: this.state,
+        };
+    }
+
+    /**
+     * Восстановить или безопасно объединить (merge) базу данных из резервной копии JSON.
+     */
+    importBackupBundle(payload = {}, { mode = 'merge' } = {}) {
+        const parsed = (payload?.state && typeof payload.state === 'object')
+            ? payload.state
+            : payload;
+        if (!parsed || typeof parsed !== 'object' || (!parsed.users && !parsed.licenses && !parsed.orders)) {
+            throw new Error('Некорректный формат файла резервной копии (ожидается JSON с разделами users / licenses / orders)');
+        }
+
+        // Перед импортом обязательно сохраняем страховочный снапшот текущего состояния
+        try {
+            fs.mkdirSync(this.backupDir, { recursive: true });
+            const preFile = path.join(this.backupDir, `store-pre-import-${Date.now()}.json`);
+            fs.writeFileSync(preFile, JSON.stringify(this.state, null, 2), 'utf8');
+        }
+        catch { /* ignore */ }
+
+        if (mode === 'replace') {
+            this.state = mergeStoreStates({}, parsed);
+        }
+        else {
+            this.state = mergeStoreStates(this.state, parsed);
+        }
+
+        this._readFailedGuard = false;
+        this._ensureBootstrapAdmin();
+        this._resignAllWithAuthority();
+        this._save();
+
+        return {
+            ok: true,
+            mode: mode === 'replace' ? 'replace' : 'merge',
+            dataDir: this.dataDir,
+            counts: this.getStoreCounts(this.state),
+        };
     }
 
     /**
@@ -294,9 +988,60 @@ export class LicenseStore {
     }
 
     _save() {
-        const tmp = `${this.stateFile}.${process.pid}.tmp`;
-        fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), 'utf8');
-        fs.renameSync(tmp, this.stateFile);
+        const counts = this.getStoreCounts(this.state);
+        const totalEntities = counts.users + counts.licenses + counts.orders + counts.reservations + counts.partners + counts.tickets;
+
+        // Защита от перезаписи непустого файла пустым состоянием при сбое чтения
+        if (this._readFailedGuard && totalEntities === 0) {
+            return;
+        }
+
+        fs.mkdirSync(this.dataDir, { recursive: true });
+
+        // Сохраняем предыдущую версию (store.prev.json) и ежедневный снапшот (backups/store-YYYY-MM-DD.json)
+        try {
+            if (fs.existsSync(this.stateFile) && fs.statSync(this.stateFile).size > 50) {
+                fs.copyFileSync(this.stateFile, this.prevStateFile);
+                if (totalEntities > 0) {
+                    fs.mkdirSync(this.backupDir, { recursive: true });
+                    const dayKey = new Date().toISOString().slice(0, 10);
+                    const dailyBackup = path.join(this.backupDir, `store-${dayKey}.json`);
+                    fs.copyFileSync(this.stateFile, dailyBackup);
+                }
+            }
+        }
+        catch { /* ignore */ }
+
+        const serialized = JSON.stringify(this.state, null, 2);
+        const writeAtomically = (destPath) => {
+            const tmp = `${destPath}.${process.pid}.${crypto.randomBytes(3).toString('hex')}.tmp`;
+            fs.writeFileSync(tmp, serialized, 'utf8');
+            try {
+                fs.renameSync(tmp, destPath);
+            }
+            catch {
+                fs.writeFileSync(destPath, serialized, 'utf8');
+                try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+            }
+        };
+
+        writeAtomically(this.stateFile);
+
+        // Дублируем актуальную базу в системное зеркало профиля пользователя ОС (~/.odant-work-license/data),
+        // чтобы даже при запуске npx из другой папки данные всегда оставались едиными.
+        if (this.autoRecover && totalEntities > 0) {
+            try {
+                const mirrorDir = getHomeMirrorDataDir();
+                if (path.resolve(mirrorDir) !== path.resolve(this.dataDir)) {
+                    fs.mkdirSync(mirrorDir, { recursive: true });
+                    writeAtomically(path.join(mirrorDir, 'store.json'));
+                    if (fs.existsSync(this.keyFile)) {
+                        fs.copyFileSync(this.keyFile, path.join(mirrorDir, 'authority-key.json'));
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }
     }
 
     /**

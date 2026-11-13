@@ -129,6 +129,15 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                     <button type="button" class="sec-nav-item" data-adm-tab="orders" id="navAdmOrders">Заказы и счета (0)</button>
                     <button type="button" class="sec-nav-item" data-adm-tab="users" id="navAdmUsers">Клиенты и администраторы (0)</button>
                     <button type="button" class="sec-nav-item" data-adm-tab="tickets" id="navAdmTickets">Тикеты поддержки (0)</button>
+                    <div class="sec-nav-sep"></div>
+                    <div style="padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:6px">
+                        <div class="small muted" style="font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em">Резервная копия базы</div>
+                        <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;font-size:12px;padding:6px 10px" data-action="admin-export-backup">📥 Скачать бэкап (.json)</button>
+                        <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;font-size:12px;padding:6px 10px" data-action="admin-import-backup">📤 Восстановить из файла</button>
+                        <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;font-size:12px;padding:6px 10px" data-action="admin-recover-npx" title="Найти и объединить данные из предыдущих запусков npx">🔄 Найти данные из npx</button>
+                        <input type="file" id="inpAdmBackupFile" accept=".json,application/json" style="display:none">
+                        <div class="small muted" id="admDataDirLabel" style="font-size:11px;word-break:break-all;line-height:1.3;margin-top:2px"></div>
+                    </div>
                 </aside>
 
                 <!-- Правая область выбранного раздела -->
