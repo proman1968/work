@@ -939,14 +939,19 @@ export async function registerLocalModelNode({
     folderName,
     label,
     repoId,
+    model = '',
+    protocol = '',
+    icon: customIcon = '',
     modality = 'llm',
     capabilities = null,
+    efforts = null,
     weightsDir,
     primaryFile = '',
     baseModel = '',
     adapterPath = '',
     maxTokens = 16384,
-    baseUrl = 'http://127.0.0.1:8080/v1/chat/completions',
+    maxOutput = 8192,
+    baseUrl = 'http://127.0.0.1:8731/v1/chat/completions',
 } = {}) {
     const safeName = String(folderName || safeModelFolderName(repoId || label || 'Local-Model')).replace(/[<>:"/\\|?*]/g, '-');
     const aiDir = path.join(rootDir, 'MODELS', 'Local', safeName, '$ai');
@@ -963,19 +968,20 @@ export async function registerLocalModelNode({
         ...(rawCaps.includes('chat') && !rawCaps.includes('stream') ? ['stream'] : []),
         ...(rawCaps.includes('tools') && !rawCaps.includes('functions') ? ['functions'] : []),
     ])];
-    const icon = resolveModelIcon({ repoId: repoId || safeName, modality, capabilities: resolvedCaps });
+    const icon = customIcon || resolveModelIcon({ repoId: repoId || safeName, modality, capabilities: resolvedCaps });
 
     const meta = {
         label: String(label || safeName),
         icon,
-        protocol: String(primaryFile || '').endsWith('.gguf') ? 'openai' : 'local',
+        protocol: protocol || (String(primaryFile || '').endsWith('.gguf') ? 'openai' : 'local'),
         baseUrl,
-        model: repoId || safeName,
+        model: model || repoId || safeName,
         modality,
         maxTokens: Number(maxTokens) || 16384,
-        maxOutput: 8192,
+        maxOutput: Number(maxOutput) || 8192,
         functionCalling: resolvedCaps.includes('tools') || resolvedCaps.includes('functions'),
         capabilities: resolvedCaps,
+        ...(Array.isArray(efforts) && efforts.length ? { efforts } : {}),
         hfRepo: repoId || '',
         weightsDir: weightsDir ? path.relative(rootDir, weightsDir).replace(/\\/g, '/') : '',
         primaryFile: primaryFile || '',

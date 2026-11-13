@@ -50,14 +50,25 @@ function flush($server) {
         Promise.resolve(globalThis.WORK_AGENT_CORE?.()).then(c => c?.voice?.resetVoiceProbes?.()).catch(() => {});
     }
     for (const f of files) {
-        const p = '/' + f.replace(/\\/g, '/');
+        const norm = f.replace(/\\/g, '/');
+        const p = '/' + norm;
+        if (!fs.existsSync(f)) {
+            const parentDir = path.posix.dirname(norm);
+            if (parentDir && parentDir !== '.' && fs.existsSync(parentDir)) {
+                Promise.resolve(globalThis.WORK?.get_item('/' + parentDir)).then(item => {
+                    if (item && !Array.isArray(item))
+                        item.reset?.();
+                }).catch(() => {});
+            }
+            continue;
+        }
         Promise.resolve(globalThis.WORK?.get_item(p)).then(item => {
             if (item && !Array.isArray(item))
                 item.reset?.();
         }).catch(() => {});
         // Если изменился /X/$type/class.js — сбрасываем также сам узел класса /X
         const clsMatch = p.match(/^(\/.*?)\/\$[^/]+\/class\.js$/i);
-        if (clsMatch?.[1]) {
+        if (clsMatch?.[1] && fs.existsSync(clsMatch[1].slice(1))) {
             Promise.resolve(globalThis.WORK?.get_item(clsMatch[1])).then(clsItem => {
                 if (clsItem && !Array.isArray(clsItem))
                     clsItem.reset?.();

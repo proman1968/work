@@ -27,6 +27,25 @@ export default {
                 color: light-dark(#5b21b6, #c4b5fd);
                 font-style: italic;
             }
+            label.ai-inactive{
+                opacity: 0.48;
+            }
+            .ai-dot{
+                @apply --no-flex;
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                margin: 0 4px 0 2px;
+                align-self: center;
+            }
+            .ai-dot.active{
+                background: #22c55e;
+                box-shadow: 0 0 4px rgba(34, 197, 94, 0.55);
+            }
+            .ai-dot.inactive{
+                background: light-dark(#94a3b8, #52525b);
+                opacity: 0.65;
+            }
             .virt-badge{
                 @apply --no-flex;
                 font-size: 10px;
@@ -87,7 +106,8 @@ export default {
         <div horizontal flex style="align-items: center; min-width: 0; width: 100%;">
             <div vertical flex style="min-width: 0;">
                 <div horizontal flex style="min-width: 0;">
-                    <label flex style="min-width: 0;" :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink, virtual: isVirtual}" :title="isLink ? $item?.path : label" ~show="!hideLabel">{{label}}</label>
+                    <label flex style="min-width: 0;" :bold="$item instanceof CORE.$class && !isLink" ~class="{link: isLink, virtual: isVirtual, 'ai-inactive': isAiInactive}" :title="nodeTooltip" ~show="!hideLabel">{{label}}</label>
+                    <span class="ai-dot" ~if="isAiNode" ~class="isAiActive ? 'active' : 'inactive'" :title="aiStatusReason"></span>
                     <span class="virt-badge" ~if="isVirtual" title="Виртуальный справочник">вирт.</span>
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                 </div>
@@ -110,6 +130,36 @@ export default {
     },
     get isVirtual() {
         return this.$item?.type === '$virtual';
+    },
+    get isAiNode() {
+        const it = this.$item;
+        if (!it || it.id === 'MODELS')
+            return false;
+        return it.type === '$ai' || it.type === '$provider';
+    },
+    get isAiActive() {
+        if (!this.isAiNode)
+            return false;
+        const v = this.$item?.aiActive ?? this.$item?.DATA?.aiActive;
+        return v === true;
+    },
+    get isAiInactive() {
+        if (!this.isAiNode)
+            return false;
+        const v = this.$item?.aiActive ?? this.$item?.DATA?.aiActive;
+        return v === false;
+    },
+    get aiStatusReason() {
+        if (!this.isAiNode)
+            return '';
+        return String(this.$item?.aiStatusReason || this.$item?.DATA?.aiStatusReason || (this.isAiActive ? 'Активна' : 'Неактивна'));
+    },
+    get nodeTooltip() {
+        if (this.isLink)
+            return this.$item?.path;
+        if (this.isAiNode && this.aiStatusReason)
+            return `${this.label} — ${this.aiStatusReason}`;
+        return this.label;
     },
     get isStructureLike() {
         const it = this.$item;

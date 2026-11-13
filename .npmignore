@@ -27,9 +27,19 @@
 .env.*
 
 # 3. Тяжёлые веса локальных моделей, датасеты и адаптеры LoRA
+# В чистой поставке /MODELS/Local пустой (только системная метапапка $provider), а внутренний контур разработчика /MODELS/odant исключён
+/MODELS/odant/
+/MODELS/odant/**
+/MODELS/Halogen/
+/MODELS/Halogen/**
+/MODELS/Local/*/
+!/MODELS/Local/$provider/
+!/MODELS/Local/$provider/**
 **/#weights/
 **/#datasets/
 **/#adapters/
+**/#runtime/
+**/#cache/
 **/*.safetensors
 **/*.gguf
 **/*.bin

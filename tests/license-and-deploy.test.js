@@ -104,7 +104,7 @@ describe('ПАК WORK: спецификация, лицензирование, �
         const models = inspectPreinstalledModels('.');
         assert.equal(models.length, 4);
         for (const m of models) {
-            assert.equal(m.configured, true, `Дескриптор модели ${m.id} должен быть предустановлен в /MODELS/Local`);
+            assert.ok(m.path.startsWith('/MODELS/Local/'), `Целевой путь локальной модели ${m.id} ведёт в /MODELS/Local`);
         }
     });
 
@@ -1431,5 +1431,81 @@ describe('ПАК WORK: спецификация, лицензирование, �
             else
                 process.env.WORK_NO_MAIL = prevNoMail;
         }
+    });
+
+    it('16. Контур /MODELS: чистота дистрибутива (нет odant/Halogen, пустой Local), российские провайдеры (GigaChat, Yandex, T-Bank, MTS-AI), быстрое подключение внешних провайдеров и флаг aiActive', async () => {
+        const {
+            AI_PROVIDER_PRESETS,
+            evaluateAiNodeActivitySync,
+            getProviderStatusSync,
+            saveProviderConfigSync,
+            addProviderModelsSync,
+            toggleAiNodeEnabledSync,
+            scaffoldProviderOnDiskSync,
+        } = await import('../sources/modules/trainer/index.js');
+
+        // 16.1. В рабочей копии нет дублирующей ветки MODELS/Halogen, а MODELS/Local чист (только $provider)
+        assert.equal(fs.existsSync('MODELS/Halogen'), false, 'Дублирующая ветка MODELS/Halogen удалена (объединена с MODELS/Local)');
+        const localEntries = fs.readdirSync('MODELS/Local').filter(n => !n.startsWith('$') && !n.startsWith('#'));
+        assert.deepEqual(localEntries, [], 'В чистой поставке папка MODELS/Local пуста');
+
+        // 16.2. В .npmignore исключены /MODELS/odant/ и локальные модели /MODELS/Local/*/
+        const npmignore = fs.readFileSync('.npmignore', 'utf-8');
+        assert.match(npmignore, /^\/MODELS\/odant\/$/m, '.npmignore исключает внутренний провайдер /MODELS/odant/');
+        assert.match(npmignore, /^\/MODELS\/Local\/\*\/$/m, '.npmignore исключает скачанные локальные модели из /MODELS/Local/*/');
+        assert.match(npmignore, /^!\/MODELS\/Local\/\$provider\/$/m, '.npmignore сохраняет метапапку /MODELS/Local/$provider/');
+
+        // 16.3. Российские провайдеры (GigaChat, Yandex, T-Bank, MTS-AI) предустановлены со всеми моделями и без зашитых токенов
+        for (const provId of ['GigaChat', 'Yandex', 'T-Bank', 'MTS-AI']) {
+            assert.ok(fs.existsSync(path.join('MODELS', provId, '$provider', 'class.js')), `Провайдер /MODELS/${provId} предустановлен`);
+            const secretDir = path.join('MODELS', provId, '$provider', '#secret');
+            const secretFiles = fs.existsSync(secretDir) ? fs.readdirSync(secretDir) : [];
+            assert.equal(secretFiles.length, 0, `У провайдера /MODELS/${provId} нет зашитых секретных токенов в дистрибутиве`);
+        }
+
+        // Проверим полный состав моделей GigaChat и Yandex
+        const gigaDirs = fs.readdirSync('MODELS/GigaChat').filter(n => !n.startsWith('$'));
+        assert.ok(gigaDirs.includes('GigaChat 2 Lite') && gigaDirs.includes('GigaChat 2 Pro') && gigaDirs.includes('GigaChat 2 Max') && gigaDirs.includes('GigaChat Embeddings'));
+        const yandexDirs = fs.readdirSync('MODELS/Yandex').filter(n => !n.startsWith('$'));
+        assert.ok(yandexDirs.includes('Alice AI (YandexGPT 5 Pro)') && yandexDirs.includes('YandexGPT 5 Lite') && yandexDirs.includes('YandexGPT Reasoning') && yandexDirs.includes('YandexART'));
+
+        // 16.4. Проверка индикации активности (aiActive) и быстрого подключения провайдера на изолированном стенде
+        const aiTmp = path.join(tmpDir, 'ai-test-root');
+        fs.mkdirSync(path.join(aiTmp, 'MODELS', 'Local', '$provider'), { recursive: true });
+        scaffoldProviderOnDiskSync({ rootDir: aiTmp, providerId: 'GigaChat', presetId: 'GigaChat', includeDefaultModels: true });
+        scaffoldProviderOnDiskSync({ rootDir: aiTmp, providerId: 'Yandex', presetId: 'Yandex', includeDefaultModels: true });
+        scaffoldProviderOnDiskSync({ rootDir: aiTmp, providerId: 'OpenAI', presetId: 'OpenAI', includeDefaultModels: true });
+
+        // Без ключа провайдер неактивен (aiActive === false)
+        const gigaMock = { id: 'GigaChat', type: '$provider', path: '/MODELS/GigaChat', DATA: { protocol: 'gigachat', token: 'secret:gigachat.json' } };
+        const actBefore = evaluateAiNodeActivitySync(gigaMock, aiTmp);
+        assert.equal(actBefore.active, false, 'Без настроенного ключа GigaChat помечен как неактивный');
+
+        // Сохраняем ключ через saveProviderConfigSync — провайдер и его модели сразу становятся активными (aiActive === true)
+        saveProviderConfigSync({ rootDir: aiTmp, providerId: 'GigaChat', apiKey: 'test-giga-oauth-token-123456', protocol: 'gigachat' });
+        const actAfter = evaluateAiNodeActivitySync(gigaMock, aiTmp);
+        assert.equal(actAfter.active, true, 'После сохранения ключа GigaChat помечен как активный');
+
+        const stGiga = getProviderStatusSync(gigaMock, aiTmp);
+        assert.equal(stGiga.active, true);
+        assert.equal(stGiga.hasKey, true);
+        assert.equal(stGiga.installedModels.length, 4);
+        assert.ok(stGiga.installedModels.every(m => m.active === true), 'Все 4 модели GigaChat активны');
+
+        // Отключаем одну модель через toggleAiNodeEnabledSync — она становится неактивной
+        toggleAiNodeEnabledSync({ rootDir: aiTmp, nodePath: '/MODELS/GigaChat/GigaChat 2 Lite', enabled: false });
+        const stGigaAfterToggle = getProviderStatusSync(gigaMock, aiTmp);
+        const liteModel = stGigaAfterToggle.installedModels.find(m => m.id === 'GigaChat 2 Lite');
+        assert.equal(liteModel.enabled, false);
+        assert.equal(liteModel.active, false, 'Отключённая модель помечается как неактивная');
+
+        // Добавление новой модели в провайдер в 1 клик
+        addProviderModelsSync({
+            rootDir: aiTmp,
+            providerId: 'OpenAI',
+            models: [{ id: 'GPT-4.5 Preview', label: 'GPT-4.5 Preview', model: 'gpt-4.5-preview' }],
+        });
+        assert.ok(fs.existsSync(path.join(aiTmp, 'MODELS', 'OpenAI', 'GPT-4.5 Preview', '$ai', 'class.js')), 'Произвольная модель добавлена в провайдер');
+        assert.ok(AI_PROVIDER_PRESETS.length >= 10, 'Каталог шаблонов внешних провайдеров содержит основные мировые и российские облака');
     });
 });

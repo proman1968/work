@@ -69,7 +69,10 @@ if (ignored.length) {
 
 // Проверяем также .npmignore через npm pack --dry-run --json (кроме tests и license-server)
 const NPM_CODE_ROOTS = new Set(['$server', 'sources', 'oda', 'scripts', 'rules', 'MODELS', 'NODES', 'SERVICES']);
+const NPM_INTENTIONAL_EXCLUDE = /^MODELS\/(?:odant|Halogen)\/|^MODELS\/Local\/(?!\$provider\/)/;
 const npmCandidates = candidates.filter(f => {
+    if (NPM_INTENTIONAL_EXCLUDE.test(f))
+        return false;
     const top = f.split('/')[0];
     return NPM_CODE_ROOTS.has(top) || !f.includes('/');
 });

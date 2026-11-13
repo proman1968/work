@@ -9,6 +9,10 @@ export default {
             :host([is-inherit]), :host([is-inherit]) .icon {
                 opacity: .7;
             }
+            :host([ai-inactive]) .icon {
+                opacity: .42;
+                filter: grayscale(.65);
+            }
             .icon {
                 cursor: pointer;
                 border-radius: {{isUser ? '50%' : '4px'}};
@@ -103,6 +107,16 @@ export default {
             return this.$item?.isInherit;
         }
 
+    },
+    aiInactive: {
+        $attr: true,
+        $type: Boolean,
+        get() {
+            const it = this.$item;
+            if (!it || it.id === 'MODELS' || (it.type !== '$ai' && it.type !== '$provider'))
+                return false;
+            return (it.aiActive ?? it.DATA?.aiActive) === false;
+        }
     },
     isUser: {
         $attr: true,

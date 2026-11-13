@@ -14,12 +14,15 @@ export default {
     async execute(filter) {
         const $context = await this.$item.$context;
         const isOrgsRoot = $context?.path === '/ORGANIZATIONS';
+        const isModelsRoot = $context?.path === '/MODELS';
         const props = {
             $item: $context,
-            name: isOrgsRoot ? 'Моё предприятие' : 'new',
+            name: isOrgsRoot ? 'Моё предприятие' : (isModelsRoot ? 'OpenAI' : 'new'),
             message: isOrgsRoot
                 ? `Введите название организации и выберите уровень наполнения`
-                : `Введите имя создаваемого item'а и выберите тип`,
+                : isModelsRoot
+                    ? `Выберите шаблон провайдера ИИ или укажите свой сервер`
+                    : `Введите имя создаваемого item'а и выберите тип`,
             filter,
             'name-changed': (e) => {
                 e.target.parentElement.enable = !e.target.validity
@@ -70,6 +73,21 @@ export default {
                         createParams.preset = el.basePreset;
                     if (Array.isArray(el.selectedModules))
                         createParams.modules = el.selectedModules.join(',');
+                }
+                else if (type === '$provider') {
+                    if (el.selectedProviderPreset)
+                        createParams.providerPreset = el.selectedProviderPreset;
+                    if (el.providerBaseUrl)
+                        createParams.baseUrl = el.providerBaseUrl;
+                    if (el.providerProtocol)
+                        createParams.protocol = el.providerProtocol;
+                    if (el.providerIcon)
+                        createParams.icon = el.providerIcon;
+                    if (el.providerApiKey)
+                        createParams.apiKey = el.providerApiKey;
+                    if (el.providerFolderId)
+                        createParams.folderId = el.providerFolderId;
+                    createParams.includeDefaultModels = el.providerIncludeModels !== false;
                 }
                 return owner.create(createParams);
             }
@@ -364,6 +382,31 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 </div>
             </div>
         </fieldset>
+        <fieldset ~if="showProviderPicker" class="modules-box">
+            <legend>Шаблоны провайдеров ИИ:</legend>
+            <div class="horizontal" style="flex-wrap:wrap;gap:6px;">
+                <div ~for="providerPresets" class="mod-chip" :active="selectedProviderPreset === $for.item.id" @tap="_pickProviderPreset($for.item)">
+                    <oda-icon :icon="$for.item.icon || 'carbon:api'" icon-size="16"></oda-icon>
+                    <span>{{$for.item.label || $for.item.id}}</span>
+                </div>
+            </div>
+            <fieldset style="margin-top:4px;">
+                <legend>API Key / Token (опционально — сохранится в #secret):</legend>
+                <input type="password" :value="providerApiKey" placeholder="sk-... (можно ввести сейчас или позже)" @input="providerApiKey = $this.value">
+            </fieldset>
+            <fieldset ~if="selectedProviderPreset === 'Yandex'" style="margin-top:4px;">
+                <legend>Folder ID (каталог Yandex Cloud):</legend>
+                <input :value="providerFolderId" placeholder="b1g..." @input="providerFolderId = $this.value">
+            </fieldset>
+            <fieldset style="margin-top:4px;">
+                <legend>Base URL:</legend>
+                <input :value="providerBaseUrl" placeholder="https://.../v1/chat/completions" @input="providerBaseUrl = $this.value">
+            </fieldset>
+            <label class="horizontal" style="align-items:center;gap:6px;cursor:pointer;font-size:small;margin-top:2px;">
+                <input type="checkbox" :checked="providerIncludeModels" @change="providerIncludeModels = $event.target.checked" style="flex:0 0 auto;">
+                <span>Сразу создать типовой набор моделей этого провайдера</span>
+            </label>
+        </fieldset>
         <div ~if="_dirty && validity" ~text="validity" class="validity"></div>
     `,
     message: '',
@@ -377,9 +420,21 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         { id: 'demo', label: '3. С демоданными', desc: 'Типовая конфигурация + контрагенты, номенклатура, сотрудники и проведённые операции' },
     ],
     moduleLabel: '',
+    providerPresets: [],
+    selectedProviderPreset: 'OpenAI',
+    providerApiKey: '',
+    providerFolderId: '',
+    providerBaseUrl: 'https://api.openai.com/v1/chat/completions',
+    providerProtocol: 'openai',
+    providerIcon: 'ai:chatgpt',
+    providerIncludeModels: true,
     get isInOrganizations() {
         const p = String(this.$item?.path || '');
         return p === '/ORGANIZATIONS' || p.startsWith('/ORGANIZATIONS/');
+    },
+    get isInModels() {
+        const p = String(this.$item?.path || '');
+        return p === '/MODELS' || p.startsWith('/MODELS/');
     },
     get showBasePreset() {
         return this.isInOrganizations && this.type === '$base';
@@ -389,6 +444,20 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
     },
     get showModulePicker() {
         return this.isInOrganizations && this.type === '$module' && this.availableModules?.length > 0;
+    },
+    get showProviderPicker() {
+        return this.isInModels && this.type === '$provider' && this.providerPresets?.length > 0;
+    },
+    _pickProviderPreset(preset) {
+        if (!preset)
+            return;
+        this._dirty = true;
+        this.selectedProviderPreset = preset.id;
+        this.name = preset.id;
+        this.moduleLabel = preset.label || preset.id;
+        this.providerBaseUrl = preset.baseUrl || '';
+        this.providerProtocol = preset.protocol || 'openai';
+        this.providerIcon = preset.icon || 'carbon:api';
     },
     _selectPreset(id) {
         this.basePreset = id;
@@ -610,6 +679,18 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
                 }
             }
             catch { /* /MODULES недоступен */ }
+        }
+        if (this.isInModels) {
+            try {
+                const res = await this.$item?.fetch?.('provider_presets');
+                if (Array.isArray(res?.items) && res.items.length) {
+                    this.providerPresets = res.items;
+                    const def = res.items.find(p => p.id === 'OpenAI') || res.items[0];
+                    if (def && (this.name === 'new' || this.name === 'OpenAI'))
+                        this._pickProviderPreset(def);
+                }
+            }
+            catch { /* ignore */ }
         }
         this.async(() => {
             this.$('#nameInput')?.focus();

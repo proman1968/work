@@ -34,7 +34,7 @@ import http from 'node:http';
 import https from 'node:https';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { startHuggingFaceDownload, listHuggingFaceDownloads } from './huggingface.js';
+import { startHuggingFaceDownload, listHuggingFaceDownloads, registerLocalModelNode } from './huggingface.js';
 
 export const HALOGEN_DEFAULT_PORT = Number(process.env.HALOGEN_API_PORT) || 8731;
 export const HALOGEN_DEFAULT_BASE_URL = process.env.HALOGEN_BASE_URL || `http://127.0.0.1:${HALOGEN_DEFAULT_PORT}/v1/chat/completions`;
@@ -58,12 +58,15 @@ export const BUBO_WINDOWS_RELEASE = Object.freeze({
 });
 
 /**
- * Каталог штатных моделей провайдера `/MODELS/Halogen` (1 основная GPU-модель + 7 NPU-моделей на одном порту 8731).
+ * Каталог штатных моделей для машинок Halo в `/MODELS/Local` (1 основная GPU-модель + 7 NPU-моделей на одном порту 8731).
  */
 export const HALOGEN_MODELS_CATALOG = Object.freeze([
     {
         nodeName: 'Qwen3.8-Flash-Next',
-        path: '/MODELS/Halogen/Qwen3.8-Flash-Next',
+        label: 'Qwen3.8-Flash-Next (180B MoE)',
+        icon: 'ai:qwen',
+        path: '/MODELS/Local/Qwen3.8-Flash-Next',
+        baseUrl: 'http://127.0.0.1:8731/v1/chat/completions',
         model: 'halogen-qwen3.8-flash-next',
         hfRepo: 'peonist-ai/halogen-qwen3.8-flash-next',
         windowsBuboRepo: 'unsloth/Qwen3.8-Flash-Next-GGUF',
@@ -76,12 +79,16 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
         ramGb: 62.1,
         kvPoolGb: 27.0,
         lookupTableGb: 47.7,
+        efforts: ['off', 'low', 'medium', 'high'],
         capabilities: ['chat', 'stream', 'tools', 'functions', 'vision', 'effort', 'thinking', 'fork'],
         role: 'Основная агентская модель (`ai/config.js → model`): 180B MoE (Linux: Halogen 4.16 bpw / Windows: Halowin Bubo UD-Q4_K_XL + Dense Twin + MTP Draft Head, 57–94 tok/s decode, ~1415–1800 tok/s prefill)',
     },
     {
         nodeName: 'Qwen3.5-2B-NPU',
-        path: '/MODELS/Halogen/Qwen3.5-2B-NPU',
+        label: 'Qwen3.5-2B (NPU Compact)',
+        icon: 'ai:qwen',
+        path: '/MODELS/Local/Qwen3.5-2B-NPU',
+        baseUrl: 'http://127.0.0.1:8731/v1/chat/completions',
         model: 'qwen3.5-2b',
         hfRepo: 'peonist-ai/halogen-npu-qwen3.5-2b',
         device: 'NPU (Ryzen AI 55 TOPS)',
@@ -94,7 +101,10 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
     },
     {
         nodeName: 'Qwen3-ASR-NPU',
-        path: '/MODELS/Halogen/Qwen3-ASR-NPU',
+        label: 'Qwen3-ASR 1.7B (NPU STT)',
+        icon: 'carbon:microphone',
+        path: '/MODELS/Local/Qwen3-ASR-NPU',
+        baseUrl: 'http://127.0.0.1:8731/v1/audio/transcriptions',
         model: 'qwen3-asr-1.7b',
         hfRepo: 'peonist-ai/halogen-npu-qwen3-asr-1.7b',
         gufoService: 'asr',
@@ -108,7 +118,10 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
     },
     {
         nodeName: 'Qwen3-TTS-NPU',
-        path: '/MODELS/Halogen/Qwen3-TTS-NPU',
+        label: 'Qwen3-TTS 1.7B (NPU Voice)',
+        icon: 'carbon:volume-up',
+        path: '/MODELS/Local/Qwen3-TTS-NPU',
+        baseUrl: 'http://127.0.0.1:8731/v1/audio/speech',
         model: 'qwen3-tts-1.7b-customvoice',
         hfRepo: 'peonist-ai/halogen-npu-qwen3-tts-1.7b-customvoice',
         gufoService: 'tts',
@@ -122,7 +135,10 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
     },
     {
         nodeName: 'Flux2-Klein-NPU',
-        path: '/MODELS/Halogen/Flux2-Klein-NPU',
+        label: 'FLUX.2-klein 4B (NPU Image)',
+        icon: 'ai:stablediffusion',
+        path: '/MODELS/Local/Flux2-Klein-NPU',
+        baseUrl: 'http://127.0.0.1:8731/v1/images/generations',
         model: 'flux2-klein-4b',
         hfRepo: 'peonist-ai/halogen-npu-flux2-klein-4b',
         gufoService: 'image',
@@ -136,7 +152,10 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
     },
     {
         nodeName: 'Qwen3-Embedding-NPU',
-        path: '/MODELS/Halogen/Qwen3-Embedding-NPU',
+        label: 'Qwen3-Embedding 0.6B (NPU RAG)',
+        icon: 'carbon:search-locate',
+        path: '/MODELS/Local/Qwen3-Embedding-NPU',
+        baseUrl: 'http://127.0.0.1:8731/v1/embeddings',
         model: 'qwen3-embedding-0.6b',
         hfRepo: 'peonist-ai/halogen-npu-qwen3-embedding-0.6b',
         gufoService: 'embedding',
@@ -150,7 +169,10 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
     },
     {
         nodeName: 'Qwen3-Reranker-NPU',
-        path: '/MODELS/Halogen/Qwen3-Reranker-NPU',
+        label: 'Qwen3-Reranker 0.6B (NPU Rerank)',
+        icon: 'carbon:filter',
+        path: '/MODELS/Local/Qwen3-Reranker-NPU',
+        baseUrl: 'http://127.0.0.1:8731/v1/rerank',
         model: 'qwen3-reranker-0.6b',
         hfRepo: 'peonist-ai/halogen-npu-qwen3-reranker-0.6b',
         device: 'NPU (Ryzen AI 55 TOPS)',
@@ -163,7 +185,10 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
     },
     {
         nodeName: 'Decider-NPU',
-        path: '/MODELS/Halogen/Decider-NPU',
+        label: 'Decider 0.8B (NPU SystemOne)',
+        icon: 'carbon:decision-tree',
+        path: '/MODELS/Local/Decider-NPU',
+        baseUrl: 'http://127.0.0.1:8731/v1/systemone',
         model: 'decider-0.8b',
         hfRepo: 'peonist-ai/halogen-npu-decider-0.8b',
         gufoService: 'decision',
@@ -431,26 +456,26 @@ export function computeHalogenMemoryPlan({
     // Нативная подготовка и запуск Halowin Bubo (gufo v0.26.0 + AMD ROCm 10.0.0 gfx1151 + Ryzen AI XRT NPU) на Windows 11
     const windowsPrepareCommand = [
         `.\\bubo.exe prepare runtime --yes`,
-        `.\\bubo.exe prepare model --model-set original --output "MODELS\\Halogen" --yes`,
+        `.\\bubo.exe prepare model --model-set original --output "MODELS\\Local" --yes`,
     ].join('\n');
 
     const windowsCommand = [
         `bubo.exe serve llm ^`,
         `  --host 127.0.0.1 --port ${HALOGEN_DEFAULT_PORT} ^`,
-        `  --manifest "MODELS\\Halogen\\models\\qwen38-flash-next-base-ud-q4-k-xl-v1\\bubo-package.json" ^`,
+        `  --manifest "MODELS\\Local\\models\\qwen38-flash-next-base-ud-q4-k-xl-v1\\bubo-package.json" ^`,
         `  --served-model-name halogen-qwen3.8-flash-next ^`,
         `  --profile ${kvSlots > 1 ? 'subagents' : 'default'} --context ${contextTokens} ^`,
         `  --npu-prefill on ^`,
-        `  --cache-disk "MODELS\\Halogen\\#cache\\disk"`,
+        `  --cache-disk "MODELS\\Local\\#cache\\disk"`,
     ].join('\n');
 
     const windowsGufoServicesCommand = [
-        `gufo.exe serve --host 127.0.0.1 --port ${HALOGEN_DEFAULT_PORT} llm --model "MODELS\\Halogen\\Qwen3.8-Flash-Next\\#weights\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf" --served-model-name halogen-qwen3.8-flash-next --speculative mtp`,
-        `gufo.exe serve asr --model "MODELS\\Halogen\\Qwen3-ASR-NPU\\#weights"`,
-        `gufo.exe serve tts --model "MODELS\\Halogen\\Qwen3-TTS-NPU\\#weights"`,
-        `gufo.exe serve embedding --model "MODELS\\Halogen\\Qwen3-Embedding-NPU\\#weights"`,
-        `gufo.exe serve image --model "MODELS\\Halogen\\Flux2-Klein-NPU\\#weights"`,
-        `gufo.exe serve decision --model "MODELS\\Halogen\\Decider-NPU\\#weights"`,
+        `gufo.exe serve --host 127.0.0.1 --port ${HALOGEN_DEFAULT_PORT} llm --model "MODELS\\Local\\Qwen3.8-Flash-Next\\#weights\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf" --served-model-name halogen-qwen3.8-flash-next --speculative mtp`,
+        `gufo.exe serve asr --model "MODELS\\Local\\Qwen3-ASR-NPU\\#weights"`,
+        `gufo.exe serve tts --model "MODELS\\Local\\Qwen3-TTS-NPU\\#weights"`,
+        `gufo.exe serve embedding --model "MODELS\\Local\\Qwen3-Embedding-NPU\\#weights"`,
+        `gufo.exe serve image --model "MODELS\\Local\\Flux2-Klein-NPU\\#weights"`,
+        `gufo.exe serve decision --model "MODELS\\Local\\Decider-NPU\\#weights"`,
     ].join('\n');
 
     const windowsStrataCommand = `strata launch --family qwen --model iq3_s --port ${HALOGEN_DEFAULT_PORT}`;
@@ -506,6 +531,8 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
     const systemRoot = process.env.SystemRoot || 'C:\\Windows';
 
     const buboCandidates = [
+        path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'bin', 'bubo.exe'),
+        path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'bubo.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'bubo', 'bin', 'bubo.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'bubo', 'bubo.exe'),
         path.join(localAppData, 'Bubo', 'bin', 'bubo.exe'),
@@ -516,10 +543,11 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
         ? (path.basename(path.dirname(buboExePath)).toLowerCase() === 'bin'
             ? path.dirname(path.dirname(buboExePath))
             : path.dirname(buboExePath))
-        : path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'bubo');
+        : path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo');
 
     const rocmCandidates = [
         process.env.BUBO_RUNTIME_DIR || '',
+        path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151'),
         path.join(localAppData, 'Bubo', 'runtime', 'rocm-10.0.0-gfx1151'),
     ].filter(Boolean);
@@ -527,6 +555,9 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
 
     const manifestCandidates = [
         process.env.BUBO_MANIFEST || '',
+        path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'),
+        path.join(rootDir, 'MODELS', 'Local', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'),
+        path.join(rootDir, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '#weights', 'bubo-package.json'),
         path.join(rootDir, 'MODELS', 'Halogen', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'),
         path.join(rootDir, 'MODELS', 'Halogen', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'),
         path.join(rootDir, 'MODELS', 'Halogen', 'Qwen3.8-Flash-Next', '#weights', 'bubo-package.json'),
@@ -536,6 +567,8 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
     const buboManifestPath = manifestCandidates.find(p => fs.existsSync(p)) || null;
 
     const gufoCandidates = [
+        path.join(rootDir, 'MODELS', 'Local', '#runtime', 'gufo', 'gufo.exe'),
+        path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'bin', 'gufo.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'gufo', 'gufo.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'bubo', 'bin', 'gufo.exe'),
         path.join(localAppData, 'Gufo', 'gufo.exe'),
@@ -545,6 +578,7 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
     const strataCandidates = [
         path.join(localAppData, 'Programs', 'Strata', 'strata.exe'),
         path.join(localAppData, 'Strata', 'strata.exe'),
+        path.join(rootDir, 'MODELS', 'Local', '#runtime', 'strata', 'strata.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'strata', 'strata.exe'),
     ];
     const strataExePath = strataCandidates.find(p => fs.existsSync(p)) || null;
@@ -741,9 +775,10 @@ export async function probeHalogenServer(baseUrl = HALOGEN_DEFAULT_BASE_URL, { f
  */
 function findLocalGgufModel(rootDir = process.cwd()) {
     const searchRoots = [
+        path.join(rootDir, 'MODELS', 'Local', 'models'),
+        path.join(rootDir, 'MODELS', 'Local'),
         path.join(rootDir, 'MODELS', 'Halogen', 'models'),
         path.join(rootDir, 'MODELS', 'Halogen'),
-        path.join(rootDir, 'MODELS', 'Local'),
     ];
     for (const base of searchRoots) {
         if (!fs.existsSync(base))
@@ -783,10 +818,10 @@ export async function prepareWindowsBuboRuntime({
     fetchImpl = globalThis.fetch,
     spawnImpl = spawn,
 } = {}) {
-    const runtimeRoot = path.join(rootDir, 'MODELS', 'Halogen', '#runtime');
+    const runtimeRoot = path.join(rootDir, 'MODELS', 'Local', '#runtime');
     const buboDir = path.join(runtimeRoot, 'bubo');
     const rocmDir = path.join(buboDir, 'runtime', 'rocm-10.0.0-gfx1151');
-    const modelsOutDir = path.join(rootDir, 'MODELS', 'Halogen');
+    const modelsOutDir = path.join(rootDir, 'MODELS', 'Local');
 
     await fsp.mkdir(runtimeRoot, { recursive: true });
 
@@ -960,7 +995,7 @@ export async function startHalogenBackend({
     }
 
     const winEnv = inspectWindowsHalogenEnvironment({ rootDir });
-    const cacheDir = path.join(rootDir, 'MODELS', 'Halogen', '#cache');
+    const cacheDir = path.join(rootDir, 'MODELS', 'Local', '#cache');
     fs.mkdirSync(path.join(cacheDir, 'disk'), { recursive: true });
     fs.mkdirSync(path.join(cacheDir, 'slots'), { recursive: true });
 
@@ -1294,12 +1329,72 @@ export function computeFallbackDecision({ state = '', questions = {}, model = 'd
 }
 
 /**
- * Проверить наличие скачанных весов для каждой модели из `HALOGEN_MODELS_CATALOG` в `MODELS/Halogen/<nodeName>/#weights`.
+ * Зарегистрировать модели Halo (`HALOGEN_MODELS_CATALOG`) как дочерние узлы `$ai` внутри `/MODELS/Local/<nodeName>`.
+ */
+export async function ensureHalogenModelNodes(rootDir = process.cwd(), { models = null, onlyWithWeights = false } = {}) {
+    let filterList = null;
+    if (Array.isArray(models) && models.length) {
+        filterList = new Set(models.map(m => String(m).trim()));
+    }
+    else if (typeof models === 'string' && models.trim()) {
+        filterList = new Set(models.split(',').map(m => m.trim()).filter(Boolean));
+    }
+
+    const targets = filterList
+        ? HALOGEN_MODELS_CATALOG.filter(m =>
+            filterList.has(m.nodeName) || filterList.has(m.model) || filterList.has(m.hfRepo) || filterList.has(m.path)
+        )
+        : [...HALOGEN_MODELS_CATALOG];
+
+    const registered = [];
+    for (const spec of targets) {
+        const weightsDir = path.join(rootDir, 'MODELS', 'Local', spec.nodeName, '#weights');
+        if (onlyWithWeights) {
+            let hasFiles = false;
+            try {
+                if (fs.existsSync(weightsDir)) {
+                    hasFiles = fs.readdirSync(weightsDir).some(f => !f.endsWith('.part') && f !== 'hf-manifest.json');
+                }
+            }
+            catch { /* ignore */ }
+            if (!hasFiles)
+                continue;
+        }
+        const res = await registerLocalModelNode({
+            rootDir,
+            folderName: spec.nodeName,
+            label: spec.label || spec.nodeName,
+            repoId: spec.hfRepo,
+            model: spec.model,
+            protocol: 'halogen',
+            icon: spec.icon || 'ai:qwen',
+            modality: spec.modality,
+            capabilities: spec.capabilities,
+            efforts: spec.efforts,
+            maxTokens: spec.maxTokens,
+            maxOutput: spec.maxOutput,
+            baseUrl: spec.baseUrl || HALOGEN_DEFAULT_BASE_URL,
+            weightsDir,
+        });
+        registered.push(res.modelPath);
+    }
+    try {
+        const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+        localNode?.reset?.();
+    }
+    catch { /* ignore */ }
+    return registered;
+}
+
+/**
+ * Проверить наличие скачанных весов и узлов `$ai` для каждой модели из `HALOGEN_MODELS_CATALOG` в `MODELS/Local/<nodeName>/#weights`.
  */
 export function inspectHalogenCatalogWithStatus(rootDir = process.cwd()) {
     const activeDownloads = listHuggingFaceDownloads();
     return HALOGEN_MODELS_CATALOG.map(spec => {
-        const weightsDir = path.join(rootDir, 'MODELS', 'Halogen', spec.nodeName, '#weights');
+        const localWeightsDir = path.join(rootDir, 'MODELS', 'Local', spec.nodeName, '#weights');
+        const legacyWeightsDir = path.join(rootDir, 'MODELS', 'Halogen', spec.nodeName, '#weights');
+        const weightsDir = fs.existsSync(localWeightsDir) || !fs.existsSync(legacyWeightsDir) ? localWeightsDir : legacyWeightsDir;
         let downloadedFiles = [];
         if (fs.existsSync(weightsDir)) {
             try {
@@ -1308,12 +1403,14 @@ export function inspectHalogenCatalogWithStatus(rootDir = process.cwd()) {
             }
             catch { /* ignore */ }
         }
+        const nodeConfigured = fs.existsSync(path.join(rootDir, 'MODELS', 'Local', spec.nodeName, '$ai', 'class.js'));
         const activeJob = activeDownloads.find(d =>
             d.status === 'downloading'
             && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
         ) || null;
         return {
             ...spec,
+            nodeConfigured,
             weightsDir: path.relative(rootDir, weightsDir).replace(/\\/g, '/'),
             weightsDownloaded: downloadedFiles.length > 0,
             downloadedFiles,
@@ -1323,8 +1420,9 @@ export function inspectHalogenCatalogWithStatus(rootDir = process.cwd()) {
 }
 
 /**
- * Поставить в очередь скачивание всего пакета моделей `/MODELS/Halogen` (1 основная GPU-модель + 7 NPU-моделей)
- * или выбранного подмножества моделей с Hugging Face Hub прямо в `MODELS/Halogen/<nodeName>/#weights`.
+ * Поставить в очередь скачивание всего пакета моделей Halo в `/MODELS/Local` (1 основная GPU-модель + 7 NPU-моделей)
+ * или выбранного подмножества моделей с Hugging Face Hub прямо в `MODELS/Local/<nodeName>/#weights`,
+ * регистрируя узлы `$ai` в `/MODELS/Local/<nodeName>`.
  */
 export async function downloadHalogenBundle({
     rootDir = process.cwd(),
@@ -1353,6 +1451,7 @@ export async function downloadHalogenBundle({
     let alreadyActiveCount = 0;
 
     for (const spec of targets) {
+        await ensureHalogenModelNodes(rootDir, { models: [spec.nodeName], onlyWithWeights: false });
         const running = existingDownloads.find(d =>
             d.status === 'downloading'
             && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
@@ -1364,7 +1463,7 @@ export async function downloadHalogenBundle({
         }
         const job = await startHuggingFaceDownload({
             repoId: spec.hfRepo,
-            providerFolder: 'Halogen',
+            providerFolder: 'Local',
             targetNodeName: spec.nodeName,
             rootDir,
             token,

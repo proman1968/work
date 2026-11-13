@@ -19,21 +19,53 @@ import {
     recordHalogenSessionHandle,
     listHalogenSessionHandles,
     releaseHalogenSessionHandle,
+    ensureHalogenModelNodes,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
 } from '../sources/modules/trainer/index.js';
 
-describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Max+ PRO 495 · 192 ГБ RAM: Linux + Windows 11 + WORK Fallback)', () => {
+describe('Единый локальный контур /MODELS/Local для машинок Halo (AMD Ryzen AI Max+ PRO 495 · 192 ГБ RAM: Linux + Windows 11 + WORK Fallback)', () => {
     let WORK;
     let mockServer;
     let mockPort = 0;
     const capturedRequests = [];
+    const virtualHaloNodes = new Map();
+    let origGetItem = null;
 
     before(async () => {
         const { $server } = await import('../sources/server/server.js');
+        const { default: aiProto } = await import('../MODELS/$ai/$folder/$class/$ai/class.js');
         if (!globalThis.WORK)
             globalThis.WORK = new $server();
         WORK = globalThis.WORK;
+
+        for (const spec of HALOGEN_MODELS_CATALOG) {
+            const node = Object.assign(Object.create(aiProto), {
+                id: spec.nodeName,
+                label: spec.label || spec.nodeName,
+                type: '$ai',
+                path: spec.path,
+                short: spec.path,
+                protocol: 'halogen',
+                model: spec.model,
+                modality: spec.modality,
+                maxTokens: spec.maxTokens,
+                maxOutput: spec.maxOutput,
+                capabilities: spec.capabilities,
+                efforts: spec.efforts || [],
+                baseUrl: spec.baseUrl || 'http://127.0.0.1:8731/v1/chat/completions',
+                init: Promise.resolve(),
+            });
+            node.DATA = { ...node };
+            virtualHaloNodes.set(spec.path, node);
+        }
+
+        origGetItem = WORK.get_item.bind(WORK);
+        WORK.get_item = async function (p, ...rest) {
+            if (typeof p === 'string' && virtualHaloNodes.has(p))
+                return virtualHaloNodes.get(p);
+            return origGetItem(p, ...rest);
+        };
 
         // Поднимаем локальный HTTP-сервер, эмулирующий API halogen-flash-server (:8731)
         mockServer = http.createServer(async (req, res) => {
@@ -196,33 +228,42 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
     });
 
     after(async () => {
+        if (origGetItem && WORK)
+            WORK.get_item = origGetItem;
         if (mockServer) {
+            mockServer.closeAllConnections?.();
             await new Promise(resolve => mockServer.close(resolve));
         }
     });
 
-    it('1. Дерево /MODELS/Halogen содержит провайдер $provider и все 8 моделей (iGPU Flash + 7 NPU)', async () => {
-        const provider = await WORK.get_item('/MODELS/Halogen');
-        assert.ok(provider, 'узел /MODELS/Halogen существует');
+    it('1. Провайдер /MODELS/Local в чистой поставке пуст, поддерживает установку всех 8 моделей Halo (iGPU Flash + 7 NPU) и вкладку trainer', async () => {
+        const provider = await WORK.get_item('/MODELS/Local');
+        assert.ok(provider, 'узел /MODELS/Local существует');
         await provider.init;
         assert.equal(provider.type, '$provider');
-        assert.equal(provider.protocol, 'halogen');
+        assert.equal(provider.protocol, 'local');
 
-        const children = await provider.items;
-        const childNames = children.map(c => c.id);
-        for (const spec of HALOGEN_MODELS_CATALOG) {
-            assert.ok(childNames.includes(spec.nodeName), `модель ${spec.nodeName} присутствует в /MODELS/Halogen`);
-            const modelNode = await WORK.get_item(spec.path);
-            await modelNode.init;
-            assert.equal(modelNode.type, '$ai');
-            assert.equal(modelNode.model, spec.model);
-            assert.equal(modelNode.protocol, 'halogen');
+        const tmpCheck = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-halo-nodes-'));
+        try {
+            const registered = await ensureHalogenModelNodes(tmpCheck, { onlyWithWeights: false });
+            assert.equal(registered.length, 8, 'все 8 моделей Halo регистрируются в /MODELS/Local');
+            for (const spec of HALOGEN_MODELS_CATALOG) {
+                assert.ok(fs.existsSync(path.join(tmpCheck, 'MODELS', 'Local', spec.nodeName, '$ai', 'class.js')), `создан $ai/class.js для ${spec.nodeName}`);
+                const modelNode = await WORK.get_item(spec.path);
+                await modelNode.init;
+                assert.equal(modelNode.type, '$ai');
+                assert.equal(modelNode.model, spec.model);
+                assert.equal(modelNode.protocol, 'halogen');
+            }
+        }
+        finally {
+            await fsp.rm(tmpCheck, { recursive: true, force: true });
         }
 
-        // Представление form/trainer доступно на /MODELS/Halogen
+        // Представление form/trainer доступно на /MODELS/Local
         const handlers = await provider.handlers({ path: '//form', role: 'BOSS' });
         const viewIds = (handlers?.items || []).filter(i => i.usable !== false).map(i => i.id);
-        assert.ok(viewIds.includes('trainer'), 'на /MODELS/Halogen доступна вкладка trainer');
+        assert.ok(viewIds.includes('trainer'), 'на /MODELS/Local доступна вкладка trainer');
     });
 
     it('2. План памяти computeHalogenMemoryPlan для AMD Ryzen AI Max+ PRO 495 (192 ГБ) разделяет настройки Linux (halogen-flash-server) и Windows 11 Native (Halowin Bubo / Gufo ROCm 10.0 gfx1151)', () => {
@@ -265,7 +306,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         assert.ok(probe.remoteModels.includes('qwen3-tts-1.7b-customvoice'));
 
         // 3.2. Стриминговый чат с заголовками сессий X-Halogen-Keep / X-Halogen-From и continue_final_message
-        const flashModel = await WORK.get_item('/MODELS/Halogen/Qwen3.8-Flash-Next');
+        const flashModel = await WORK.get_item('/MODELS/Local/Qwen3.8-Flash-Next');
         await flashModel.init;
         const origBase = flashModel.baseUrl;
         flashModel.baseUrl = testBaseUrl;
@@ -311,7 +352,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         }
 
         // 3.3. NPU TTS (`qwen3-tts-1.7b-customvoice`)
-        const ttsModel = await WORK.get_item('/MODELS/Halogen/Qwen3-TTS-NPU');
+        const ttsModel = await WORK.get_item('/MODELS/Local/Qwen3-TTS-NPU');
         await ttsModel.init;
         ttsModel.baseUrl = `http://127.0.0.1:${mockPort}/v1/audio/speech`;
         try {
@@ -329,7 +370,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         }
 
         // 3.4. NPU STT (`qwen3-asr-1.7b`)
-        const sttModel = await WORK.get_item('/MODELS/Halogen/Qwen3-ASR-NPU');
+        const sttModel = await WORK.get_item('/MODELS/Local/Qwen3-ASR-NPU');
         await sttModel.init;
         sttModel.baseUrl = `http://127.0.0.1:${mockPort}/v1/audio/transcriptions`;
         try {
@@ -345,7 +386,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         }
 
         // 3.5. NPU Image (`flux2-klein-4b`), Embeddings, Rerank, SystemOne Decide
-        const imgModel = await WORK.get_item('/MODELS/Halogen/Flux2-Klein-NPU');
+        const imgModel = await WORK.get_item('/MODELS/Local/Flux2-Klein-NPU');
         await imgModel.init;
         imgModel.baseUrl = `http://127.0.0.1:${mockPort}/v1/images/generations`;
         try {
@@ -357,7 +398,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
             imgModel.baseUrl = 'http://127.0.0.1:8731/v1/images/generations';
         }
 
-        const embModel = await WORK.get_item('/MODELS/Halogen/Qwen3-Embedding-NPU');
+        const embModel = await WORK.get_item('/MODELS/Local/Qwen3-Embedding-NPU');
         await embModel.init;
         embModel.baseUrl = `http://127.0.0.1:${mockPort}/v1/embeddings`;
         try {
@@ -369,7 +410,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
             embModel.baseUrl = 'http://127.0.0.1:8731/v1/embeddings';
         }
 
-        const rerankModel = await WORK.get_item('/MODELS/Halogen/Qwen3-Reranker-NPU');
+        const rerankModel = await WORK.get_item('/MODELS/Local/Qwen3-Reranker-NPU');
         await rerankModel.init;
         rerankModel.baseUrl = `http://127.0.0.1:${mockPort}/v1/rerank`;
         try {
@@ -380,7 +421,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
             rerankModel.baseUrl = 'http://127.0.0.1:8731/v1/rerank';
         }
 
-        const deciderModel = await WORK.get_item('/MODELS/Halogen/Decider-NPU');
+        const deciderModel = await WORK.get_item('/MODELS/Local/Decider-NPU');
         await deciderModel.init;
         deciderModel.baseUrl = `http://127.0.0.1:${mockPort}/v1/systemone`;
         try {
@@ -417,7 +458,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         releaseHalogenSessionHandle('work-hybrid-test');
 
         // 4.2. Автономный фоллбэк TTS WAV 24 кГц
-        const ttsModel = await WORK.get_item('/MODELS/Halogen/Qwen3-TTS-NPU');
+        const ttsModel = await WORK.get_item('/MODELS/Local/Qwen3-TTS-NPU');
         await ttsModel.init;
         ttsModel.baseUrl = closedUrl;
         try {
@@ -431,7 +472,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         }
 
         // 4.3. Автономный фоллбэк Embeddings, Rerank и Decide
-        const embModel = await WORK.get_item('/MODELS/Halogen/Qwen3-Embedding-NPU');
+        const embModel = await WORK.get_item('/MODELS/Local/Qwen3-Embedding-NPU');
         embModel.baseUrl = closedUrl;
         try {
             const emb = await embModel.embed({ input: ['Счёт 51 Расчётные счета', 'Счёт 41 Товары'], dimensions: 128 });
@@ -444,7 +485,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
             embModel.baseUrl = 'http://127.0.0.1:8731/v1/embeddings';
         }
 
-        const rerankModel = await WORK.get_item('/MODELS/Halogen/Qwen3-Reranker-NPU');
+        const rerankModel = await WORK.get_item('/MODELS/Local/Qwen3-Reranker-NPU');
         rerankModel.baseUrl = closedUrl;
         try {
             const rr = await rerankModel.rerank({
@@ -457,7 +498,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
             rerankModel.baseUrl = 'http://127.0.0.1:8731/v1/rerank';
         }
 
-        const deciderModel = await WORK.get_item('/MODELS/Halogen/Decider-NPU');
+        const deciderModel = await WORK.get_item('/MODELS/Local/Decider-NPU');
         deciderModel.baseUrl = closedUrl;
         try {
             const dec = await deciderModel.decide({
@@ -477,13 +518,13 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
 
     it('5. Интеграция с агентским циклом WORK (llmFor + runLoop): передача X-Halogen-Keep родителем и X-Halogen-From субагентом', async () => {
         const { llmFor, runLoop } = await import('../sources/modules/agent/index.js');
-        const flashModel = await WORK.get_item('/MODELS/Halogen/Qwen3.8-Flash-Next');
+        const flashModel = await WORK.get_item('/MODELS/Local/Qwen3.8-Flash-Next');
         await flashModel.init;
         const origBase = flashModel.baseUrl;
         flashModel.baseUrl = `http://127.0.0.1:${mockPort}/v1/chat/completions`;
 
         try {
-            const llm = await llmFor('/MODELS/Halogen/Qwen3.8-Flash-Next');
+            const llm = await llmFor('/MODELS/Local/Qwen3.8-Flash-Next');
             assert.equal(llm.fork, true, 'у адаптера модели Halogen включён флаг fork');
             assert.equal(llm.vision, true, 'у адаптера модели Halogen включён флаг vision');
             assert.equal(llm.contextTokens, 262144);
@@ -531,7 +572,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
         }
     });
 
-    it('6. Пакетная загрузка всего комплекта («Скачать весь пакет (GPU + NPU)», downloadHalogenBundle) сохраняет веса всех 8 моделей в /MODELS/Halogen/*/#weights', async () => {
+    it('6. Пакетная загрузка всего комплекта («Скачать весь пакет (GPU + NPU)», downloadHalogenBundle) сохраняет веса всех 8 моделей в /MODELS/Local/*/#weights', async () => {
         const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-halogen-bundle-'));
         try {
             const mockFetch = async (url) => {
@@ -579,7 +620,7 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
             for (const item of statusCatalog) {
                 assert.equal(item.weightsDownloaded, true, `веса модели ${item.nodeName} скачаны в ${item.weightsDir}`);
                 assert.ok(item.downloadedFiles.length >= 2, `в папке ${item.nodeName}/#weights лежат файлы весов и конфига`);
-                const weightPath = path.join(tmpRoot, 'MODELS', 'Halogen', item.nodeName, '#weights');
+                const weightPath = path.join(tmpRoot, 'MODELS', 'Local', item.nodeName, '#weights');
                 assert.ok(fs.existsSync(path.join(weightPath, 'hf-manifest.json')));
             }
         }
@@ -591,9 +632,9 @@ describe('Гибридный провайдер /MODELS/Halogen (AMD Ryzen AI Ma
     it('7. Нативный стек Windows 11 (Halowin Bubo / Gufo ROCm 10.0.0 gfx1151): диагностика окружения, подготовка рантайма и запуск bubo.exe serve llm', async () => {
         const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-halogen-bubo-'));
         try {
-            const buboBinDir = path.join(tmpRoot, 'MODELS', 'Halogen', '#runtime', 'bubo', 'bin');
-            const rocmDir = path.join(tmpRoot, 'MODELS', 'Halogen', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151');
-            const manifestDir = path.join(tmpRoot, 'MODELS', 'Halogen', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1');
+            const buboBinDir = path.join(tmpRoot, 'MODELS', 'Local', '#runtime', 'bubo', 'bin');
+            const rocmDir = path.join(tmpRoot, 'MODELS', 'Local', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151');
+            const manifestDir = path.join(tmpRoot, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1');
             await fsp.mkdir(buboBinDir, { recursive: true });
             await fsp.mkdir(rocmDir, { recursive: true });
             await fsp.mkdir(manifestDir, { recursive: true });

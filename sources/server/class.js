@@ -19,7 +19,14 @@ import * as POLICY from './access/policy.js';
 import * as LINKS from './access/links.js';
 import * as WORKPLACES from './access/workplaces.js';
 import { DATA_METHODS, classHasObjects, classObjectCount, markClassesDirty } from '../data/api.js';
-import { TRAINER_METHODS, localStreamChat, halogenFallback } from '../modules/trainer/index.js';
+import {
+    TRAINER_METHODS,
+    localStreamChat,
+    halogenFallback,
+    evaluateAiNodeActivitySync,
+    scaffoldProviderOnDiskSync,
+    findProviderPreset,
+} from '../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../modules/license/index.js';
 import { NOTIFY_METHODS, resolveBotForPoint, sanitizeBotForUi } from '../modules/notify/index.js';
 import { DATA_TYPES } from '../data/classes.js';
@@ -156,6 +163,20 @@ export class $class extends $folder {
                     return undefined;
                 return this.DATA?.modality ?? this.DATA?.$public?.modality;
             },
+            get aiActive() {
+                if (this.type !== '$ai' && this.type !== '$provider')
+                    return undefined;
+                if (typeof this.DATA?.aiActive === 'boolean')
+                    return this.DATA.aiActive;
+                return evaluateAiNodeActivitySync(this).active;
+            },
+            get aiStatusReason() {
+                if (this.type !== '$ai' && this.type !== '$provider')
+                    return undefined;
+                if (typeof this.DATA?.aiStatusReason === 'string')
+                    return this.DATA.aiStatusReason;
+                return evaluateAiNodeActivitySync(this).reason;
+            },
         };
     }
 
@@ -195,6 +216,11 @@ export class $class extends $folder {
             this.DATA.localEnabled = localEnabled;
             this.DATA.systemBlocked = sysBlocked;
             this.DATA.enabled = localEnabled && !sysBlocked;
+        }
+        if ((this.type === '$provider' || this.type === '$ai') && this.DATA) {
+            const act = evaluateAiNodeActivitySync(this);
+            this.DATA.aiActive = act.active;
+            this.DATA.aiStatusReason = act.reason;
         }
         const arg = Object.assign({}, p);
         return super.info(arg);
@@ -477,11 +503,14 @@ export class $class extends $folder {
 
     get meta_folder() {
         try {
-            if (!fs.existsSync(this.real_dir))
+            if (!fs.existsSync(this.real_dir)) {
+                if (this.constructor.name === '$class')
+                    return undefined;
                 fs.mkdirSync(this.real_dir + '/' + this.constructor.name, { recursive: true });
+            }
             const metaId = fs.readdirSync(this.real_dir).find(f => f[0] === '$')
                 || (this instanceof FS.$handler ? this.constructor.name : undefined);
-            return FS.$folder.build(metaId, this);
+            return metaId ? FS.$folder.build(metaId, this) : undefined;
         }
         catch (e) {
             console.warn('[WORK] meta_folder:', e.message);
@@ -684,6 +713,29 @@ export class $class extends $folder {
                 }
                 const createdItem = await this._get_next_item(id, ctor);
                 createdItem?.reset?.();
+                this.reset();
+            }
+        }
+        const inModels = this.path === '/MODELS' || String(this.path || '').startsWith('/MODELS/');
+        if (allowScaffold && inModels && type === '$provider' && p.post == null) {
+            const preset = findProviderPreset(p.providerPreset || id);
+            if (preset || p.baseUrl || p.protocol || p.apiKey) {
+                scaffoldProviderOnDiskSync({
+                    providerId: id,
+                    presetId: p.providerPreset || id,
+                    label: p.label || preset?.label || id,
+                    baseUrl: p.baseUrl || preset?.baseUrl || '',
+                    protocol: p.protocol || preset?.protocol || 'openai',
+                    icon: explicitIcon || preset?.icon || 'carbon:api',
+                    apiKey: p.apiKey || '',
+                    folderId: p.folderId || '',
+                    includeDefaultModels: p.includeDefaultModels !== false && p.includeDefaultModels !== 'false',
+                });
+                const createdItem = await this._get_next_item(id, ctor);
+                if (createdItem) {
+                    createdItem.reset?.();
+                    createdItem.DATA = await createdItem.import?.();
+                }
                 this.reset();
             }
         }

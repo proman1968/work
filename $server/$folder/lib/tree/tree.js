@@ -36,10 +36,14 @@ function nodeStateKey(it) {
 function isChatModelNode(f) {
     if (!f)
         return false;
-    if (f.type === '$provider' || f.id === 'MODELS')
+    if (f.id === 'MODELS')
         return true;
+    if (f.type === '$provider')
+        return (f.aiActive ?? f.DATA?.aiActive) !== false;
     if (f.type && f.type !== '$ai')
         return true;
+    if ((f.aiActive ?? f.DATA?.aiActive) === false)
+        return false;
     const mod = String(f.DATA?.modality || '').toLowerCase();
     if (['image', 'audio', 'embedding', 'video', 'voice', 'asr', 'tts', 'stt'].includes(mod))
         return false;

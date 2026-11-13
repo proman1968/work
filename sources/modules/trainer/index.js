@@ -54,9 +54,22 @@ import {
     computeFallbackEmbeddings,
     computeFallbackRerank,
     computeFallbackDecision,
+    ensureHalogenModelNodes,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
 } from './halogen.js';
+import {
+    AI_PROVIDER_PRESETS,
+    findProviderPreset,
+    buildProviderClassScripts,
+    buildModelClassScript,
+    scaffoldProviderOnDiskSync,
+    evaluateAiNodeActivitySync,
+    getProviderStatusSync,
+    saveProviderConfigSync,
+    addProviderModelsSync,
+    toggleAiNodeEnabledSync,
+} from './providers.js';
 
 export const halogenFallback = Object.freeze({
     normalizeHalogenTtsPayload,
@@ -71,12 +84,23 @@ export const halogenFallback = Object.freeze({
     computeHalogenMemoryPlan,
     inspectWindowsHalogenEnvironment,
     prepareWindowsBuboRuntime,
+    ensureHalogenModelNodes,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
 });
 
 export {
     localStreamChat,
+    AI_PROVIDER_PRESETS,
+    findProviderPreset,
+    buildProviderClassScripts,
+    buildModelClassScript,
+    scaffoldProviderOnDiskSync,
+    evaluateAiNodeActivitySync,
+    getProviderStatusSync,
+    saveProviderConfigSync,
+    addProviderModelsSync,
+    toggleAiNodeEnabledSync,
     HALOGEN_DEFAULT_PORT,
     HALOGEN_DEFAULT_BASE_URL,
     HALOGEN_IMAGE_TAG,
@@ -97,6 +121,7 @@ export {
     computeFallbackEmbeddings,
     computeFallbackRerank,
     computeFallbackDecision,
+    ensureHalogenModelNodes,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
     CURATED_HF_MODELS,
@@ -201,8 +226,116 @@ export const TRAINER_METHODS = Object.freeze({
                 waitForCompletion: p.wait === true || p.wait === 'true',
             });
             try {
-                const halogenNode = await globalThis.WORK?.get_item?.('/MODELS/Halogen');
-                halogenNode?.reset?.();
+                const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                localNode?.reset?.();
+                const modelsRoot = await globalThis.WORK?.get_item?.('/MODELS');
+                modelsRoot?.reset?.();
+            }
+            catch { /* ignore */ }
+            return res;
+        },
+    },
+    provider_presets: {
+        level: 'read',
+        fn: async function () {
+            return { items: AI_PROVIDER_PRESETS };
+        },
+    },
+    provider_status: {
+        level: 'read',
+        fn: async function () {
+            await this?.init;
+            return getProviderStatusSync(this);
+        },
+    },
+    provider_save_config: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            await this?.init;
+            const itemPath = String(this?.path || this?.short || '');
+            const parts = itemPath.split('/').filter(Boolean);
+            const providerId = p.providerId || parts[1] || this?.id || '';
+            const res = saveProviderConfigSync({
+                providerId,
+                apiKey: p.apiKey,
+                folderId: p.folderId,
+                baseUrl: p.baseUrl,
+                authUrl: p.authUrl,
+                scope: p.scope,
+                protocol: p.protocol,
+                enabled: p.enabled !== undefined ? (p.enabled !== false && p.enabled !== 'false') : undefined,
+            });
+            try {
+                const provNode = await globalThis.WORK?.get_item?.(`/MODELS/${providerId}`);
+                if (provNode) {
+                    provNode.reset?.();
+                    provNode.DATA = await provNode.import?.();
+                    const children = await provNode.children;
+                    if (Array.isArray(children)) {
+                        for (const ch of children) {
+                            ch.reset?.();
+                            ch.DATA = await ch.import?.();
+                        }
+                    }
+                }
+                const modelsRoot = await globalThis.WORK?.get_item?.('/MODELS');
+                modelsRoot?.reset?.();
+            }
+            catch { /* ignore */ }
+            return {
+                ...res,
+                status: getProviderStatusSync(this),
+            };
+        },
+    },
+    provider_add_models: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            await this?.init;
+            const itemPath = String(this?.path || this?.short || '');
+            const parts = itemPath.split('/').filter(Boolean);
+            const providerId = p.providerId || parts[1] || this?.id || '';
+            let models = p.models || p.model || [];
+            if (typeof models === 'string' && models.trim().startsWith('[')) {
+                try { models = JSON.parse(models); } catch { /* ignore */ }
+            }
+            else if (typeof models === 'string') {
+                models = models.split(',').map(s => s.trim()).filter(Boolean);
+            }
+            const res = addProviderModelsSync({
+                providerId,
+                models,
+            });
+            try {
+                const provNode = await globalThis.WORK?.get_item?.(`/MODELS/${providerId}`);
+                provNode?.reset?.();
+                const modelsRoot = await globalThis.WORK?.get_item?.('/MODELS');
+                modelsRoot?.reset?.();
+            }
+            catch { /* ignore */ }
+            return {
+                ...res,
+                status: getProviderStatusSync(this),
+            };
+        },
+    },
+    provider_toggle_model: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const nodePath = p.nodePath || p.path || this?.path || '';
+            const enabled = p.enabled !== false && p.enabled !== 'false';
+            const res = toggleAiNodeEnabledSync({ nodePath, enabled });
+            try {
+                const node = await globalThis.WORK?.get_item?.(res.path);
+                if (node) {
+                    node.reset?.();
+                    node.DATA = await node.import?.();
+                }
+                const parts = res.path.split('/').filter(Boolean);
+                if (parts[1]) {
+                    const provNode = await globalThis.WORK?.get_item?.(`/MODELS/${parts[1]}`);
+                    provNode?.reset?.();
+                }
             }
             catch { /* ignore */ }
             return res;

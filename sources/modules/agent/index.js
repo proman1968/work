@@ -259,7 +259,24 @@ export async function llmWithFallback(primaryPath, fallbackPaths = []) {
     };
     return adapter;
 }
-/** Первая модель с capability image (или ai/config.js imageModel). */
+/** Первая доступная чат-модель в /MODELS (активная приоритетно), когда дефолтная модель отсутствует. */
+async function findFirstAvailableChatModel() {
+    const root = await WORK.get_item('/MODELS').catch(() => null);
+    let firstAny = '';
+    for (const provider of (await root?.items) || []) {
+        for (const m of (await provider.items) || []) {
+            await m.init;
+            const caps = Array.isArray(m.capabilities) ? m.capabilities : String(m.capabilities || '').split(/[\s,]+/);
+            if (!caps.includes('chat') || typeof m.streamChat !== 'function')
+                continue;
+            if (!firstAny)
+                firstAny = m.path;
+            if ((m.aiActive ?? m.DATA?.aiActive) !== false)
+                return m.path;
+        }
+    }
+    return firstAny;
+}
 async function findImageModel(config) {
     if (config.imageModel) {
         const m = await WORK.get_item(config.imageModel).catch(() => null);
@@ -530,7 +547,11 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
             return [stable, volatile].filter(Boolean).join('\n\n');
         },
         async defaultModel() {
-            return config.model || DEFAULT_MODEL;
+            const candidate = config.model || DEFAULT_MODEL;
+            const item = await WORK.get_item(candidate).catch(() => null);
+            if (item)
+                return candidate;
+            return (await findFirstAvailableChatModel()) || candidate;
         },
         /** Память изменена инструментом memory — пересобрать блок на следующем ходе. */
         resetMemory() {
