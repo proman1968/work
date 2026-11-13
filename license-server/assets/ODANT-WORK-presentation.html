@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ODANT-WORK — презентация для клиентов и региональных партнёров (франчайзи)</title>
+  <style>
+    @page {
+      size: 297mm 167mm;
+      margin: 0;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-dark: #06101e;
+      --bg-card-dark: #0d1d35;
+      --bg-light: #f7fafd;
+      --bg-white: #ffffff;
+      --primary: #1d63dc;
+      --primary-dark: #0a326e;
+      --accent: #00b4d8;
+      --accent-green: #10b981;
+      --accent-amber: #f59e0b;
+      --text-main: #0f1f33;
+      --text-muted: #4b627d;
+      --border: #d5e2f2;
+      --border-strong: #b4cce8;
+    }
+
+    body {
+      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Arial, sans-serif;
+      color: var(--text-main);
+      background: #0b1526;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    @media screen {
+      body {
+        padding: 18px 0 36px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 22px;
+      }
+      .slide {
+        box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+        border-radius: 6px;
+      }
+      body.embed-single {
+        padding: 0;
+        margin: 0;
+        height: 100vh;
+        width: 100vw;
+        overflow: hidden;
+        justify-content: center;
+        background: #060d18;
+      }
+      body.embed-single .slide {
+        display: none;
+        border-radius: 0;
+      }
+      body.embed-single .slide.active-slide {
+        display: flex;
+      }
+    }
+
+    @media print {
+      body {
+        background: #fff;
+        padding: 0;
+        display: block;
+      }
+    }
+
+    .slide {
+      width: 297mm;
+      height: 167mm;
+      position: relative;
+      overflow: hidden;
+      page-break-after: always;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 10.5mm 14.5mm 8.5mm;
+      background: var(--bg-white);
+      flex-shrink: 0;
+    }
+
+    .slide:last-of-type {
+      page-break-after: auto;
+    }
+
+    /* Dark Cover & Finale Slides */
+    .slide.dark {
+      background: radial-gradient(circle at 85% 18%, #13356b 0%, #08182f 54%, #040b17 100%);
+      color: #ffffff;
+    }
+
+    /* Top accent bar on standard light slides */
+    .slide:not(.dark)::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3.2mm;
+      background: linear-gradient(90deg, var(--primary-dark) 0%, var(--primary) 55%, var(--accent) 100%);
+    }
+
+    /* Slide Header */
+    .slide-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 3.8mm;
+      border-bottom: 1.5px solid var(--border);
+      padding-bottom: 2.8mm;
+    }
+
+    .slide.dark .slide-header {
+      border-bottom-color: rgba(255, 255, 255, 0.16);
+    }
+
+    .header-left {
+      max-width: 80%;
+    }
+
+    .kicker {
+      display: inline-block;
+      font-size: 8.3pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.11em;
+      color: var(--primary);
+      margin-bottom: 0.8mm;
+    }
+
+    .slide.dark .kicker {
+      color: #38bdf8;
+    }
+
+    .slide-title {
+      font-size: 18.5pt;
+      font-weight: 800;
+      color: var(--primary-dark);
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+
+    .slide.dark .slide-title {
+      color: #ffffff;
+    }
+
+    .slide-subtitle {
+      font-size: 9.5pt;
+      color: var(--text-muted);
+      margin-top: 1mm;
+      line-height: 1.32;
+    }
+
+    .slide.dark .slide-subtitle {
+      color: #cbd5e1;
+    }
+
+    .badge-pill {
+      background: #eaf2ff;
+      border: 1px solid #bdd6ff;
+      color: var(--primary-dark);
+      font-size: 8.3pt;
+      font-weight: 700;
+      padding: 1.6mm 3.6mm;
+      border-radius: 99px;
+      white-space: nowrap;
+    }
+
+    .badge-pill.green {
+      background: #d1fae5;
+      border-color: #6ee7b7;
+      color: #065f46;
+    }
+
+    .badge-pill.amber {
+      background: #fef3c7;
+      border-color: #fcd34d;
+      color: #92400e;
+    }
+
+    .badge-pill.dark-pill {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: rgba(56, 189, 248, 0.45);
+      color: #bae6fd;
+    }
+
+    /* Slide Body */
+    .slide-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 3.6mm;
+      min-height: 0;
+    }
+
+    /* Slide Footer */
+    .slide-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 7.9pt;
+      color: #6c849e;
+      border-top: 1px solid #e3ecf7;
+      padding-top: 2mm;
+      margin-top: 2.5mm;
+    }
+
+    .slide.dark .slide-footer {
+      border-top-color: rgba(255, 255, 255, 0.14);
+      color: #93aecf;
+    }
+
+    /* Grids */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4.2mm;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 3.8mm;
+    }
+
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 3.4mm;
+    }
+
+    .col-60-40 {
+      display: grid;
+      grid-template-columns: 1.42fr 1fr;
+      gap: 4.5mm;
+    }
+
+    .col-55-45 {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 4.5mm;
+    }
+
+    /* Cards */
+    .card {
+      background: var(--bg-light);
+      border: 1px solid var(--border);
+      border-radius: 2.8mm;
+      padding: 3.4mm 4mm;
+      display: flex;
+      flex-direction: column;
+      gap: 1.4mm;
+    }
+
+    .card.white {
+      background: #ffffff;
+      box-shadow: 0 2px 8px rgba(10, 54, 120, 0.04);
+    }
+
+    .card.accent-left {
+      border-left: 4px solid var(--primary);
+    }
+
+    .card.green-left {
+      border-left: 4px solid var(--accent-green);
+    }
+
+    .card.amber-left {
+      border-left: 4px solid var(--accent-amber);
+    }
+
+    .card.dark-box {
+      background: linear-gradient(135deg, #0a2344 0%, #123b72 100%);
+      color: #fff;
+      border: 1px solid #245596;
+    }
+
+    .card.dark-box .card-title {
+      color: #7dd3fc;
+    }
+
+    .card.dark-box p,
+    .card.dark-box li {
+      color: #e2efff;
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 2mm;
+    }
+
+    .card-title {
+      font-size: 10.2pt;
+      font-weight: 700;
+      color: var(--primary-dark);
+      line-height: 1.22;
+    }
+
+    .card p, .card li {
+      font-size: 8.7pt;
+      line-height: 1.36;
+      color: var(--text-main);
+    }
+
+    .card ul {
+      margin-left: 4mm;
+      display: flex;
+      flex-direction: column;
+      gap: 0.9mm;
+    }
+
+    .tag {
+      display: inline-block;
+      font-size: 7.3pt;
+      font-weight: 700;
+      padding: 0.5mm 2mm;
+      border-radius: 1.2mm;
+      background: #e1edff;
+      color: var(--primary-dark);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      white-space: nowrap;
+    }
+
+    .tag.green {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .tag.amber {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .tag.dark {
+      background: rgba(255, 255, 255, 0.16);
+      color: #bae6fd;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 8.5pt;
+    }
+
+    th, td {
+      border: 1px solid var(--border);
+      padding: 1.8mm 2.6mm;
+      text-align: left;
+      vertical-align: middle;
+      line-height: 1.28;
+    }
+
+    th {
+      background: #ecf3fc;
+      color: var(--primary-dark);
+      font-weight: 700;
+    }
+
+    tr:nth-child(even) td {
+      background: #fafcff;
+    }
+
+    .compact-table th, .compact-table td {
+      padding: 1.35mm 2.2mm;
+      font-size: 8.1pt;
+      line-height: 1.24;
+    }
+
+    /* Callout Banner */
+    .banner {
+      background: linear-gradient(90deg, #eef5ff 0%, #f5f9ff 100%);
+      border: 1px solid #bfd6f6;
+      border-left: 4.5px solid var(--primary);
+      border-radius: 2.4mm;
+      padding: 2.5mm 3.8mm;
+      font-size: 9pt;
+      line-height: 1.35;
+      color: var(--text-main);
+    }
+
+    .banner.green-banner {
+      background: linear-gradient(90deg, #ecfdf5 0%, #f4fef9 100%);
+      border-color: #a7f3d0;
+      border-left-color: var(--accent-green);
+    }
+
+    .banner strong {
+      color: var(--primary-dark);
+    }
+
+    /* KPI Row */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 3.4mm;
+    }
+
+    .kpi-box {
+      background: #f2f7ff;
+      border: 1px solid #c9def8;
+      border-radius: 2.6mm;
+      padding: 2.8mm 3.4mm;
+    }
+
+    .kpi-num {
+      font-size: 17pt;
+      font-weight: 800;
+      color: var(--primary);
+      line-height: 1.05;
+      margin-bottom: 0.8mm;
+    }
+
+    .kpi-label {
+      font-size: 8.3pt;
+      font-weight: 700;
+      color: var(--primary-dark);
+      line-height: 1.22;
+    }
+
+    .kpi-sub {
+      font-size: 7.6pt;
+      color: var(--text-muted);
+      margin-top: 0.5mm;
+      line-height: 1.22;
+    }
+
+    /* Flow Row */
+    .flow-row {
+      display: flex;
+      align-items: stretch;
+      justify-content: space-between;
+      gap: 1.8mm;
+    }
+
+    .flow-step {
+      flex: 1;
+      background: #f4f8ff;
+      border: 1px solid #c5dbf7;
+      border-radius: 2.4mm;
+      padding: 2.4mm 2.8mm;
+    }
+
+    .flow-step .step-num {
+      font-size: 7.3pt;
+      font-weight: 800;
+      color: var(--primary);
+      text-transform: uppercase;
+      margin-bottom: 0.6mm;
+    }
+
+    .flow-step .step-title {
+      font-size: 9pt;
+      font-weight: 700;
+      color: var(--primary-dark);
+      margin-bottom: 0.6mm;
+    }
+
+    .flow-step p {
+      font-size: 7.9pt;
+      color: var(--text-muted);
+      line-height: 1.28;
+    }
+
+    .flow-arrow {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12pt;
+      font-weight: 800;
+      color: var(--primary);
+      padding: 0 0.4mm;
+    }
+
+    code {
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 8.1pt;
+      background: rgba(29, 99, 220, 0.09);
+      color: #0b3c8a;
+      padding: 0.2mm 1.2mm;
+      border-radius: 1mm;
+    }
+
+    .dark code, .card.dark-box code {
+      background: rgba(255, 255, 255, 0.14);
+      color: #bae6fd;
+    }
+
+    /* Cover Layout */
+    .cover-main {
+      display: grid;
+      grid-template-columns: 1.32fr 1fr;
+      gap: 7.5mm;
+      align-items: center;
+      flex: 1;
+    }
+
+    .cover-brand {
+      display: flex;
+      align-items: center;
+      gap: 4mm;
+      margin-bottom: 4.5mm;
+    }
+
+    .cover-logo {
+      width: 16.5mm;
+      height: 16.5mm;
+      border-radius: 3.5mm;
+      background: rgba(255, 255, 255, 0.07);
+      padding: 1.4mm;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    .cover-brand-name {
+      font-size: 25pt;
+      font-weight: 900;
+      letter-spacing: 0.03em;
+      color: #ffffff;
+    }
+
+    .cover-brand-sub {
+      font-size: 9.2pt;
+      color: #38bdf8;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .cover-h1 {
+      font-size: 22.5pt;
+      font-weight: 800;
+      line-height: 1.18;
+      color: #ffffff;
+      margin-bottom: 3.8mm;
+    }
+
+    .cover-h1 span {
+      color: #38bdf8;
+    }
+
+    .cover-lead {
+      font-size: 10.5pt;
+      line-height: 1.45;
+      color: #cbd5e1;
+      margin-bottom: 5mm;
+    }
+
+    .cover-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2.2mm;
+    }
+
+    .cover-badge {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(125, 211, 252, 0.35);
+      color: #e0f2fe;
+      padding: 1.6mm 3.2mm;
+      border-radius: 2mm;
+      font-size: 8.3pt;
+      font-weight: 600;
+    }
+
+    .cover-right-panel {
+      background: rgba(13, 29, 55, 0.88);
+      border: 1px solid rgba(56, 189, 248, 0.38);
+      border-radius: 4mm;
+      padding: 4.8mm;
+      display: flex;
+      flex-direction: column;
+      gap: 3.2mm;
+      box-shadow: 0 12px 35px rgba(0, 0, 0, 0.45);
+    }
+
+    .cover-stat-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2.8mm;
+    }
+
+    .cover-stat {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      border-radius: 2.4mm;
+      padding: 2.6mm 3mm;
+    }
+
+    .cover-stat .val {
+      font-size: 15pt;
+      font-weight: 800;
+      color: #38bdf8;
+      line-height: 1.1;
+    }
+
+    .cover-stat .lbl {
+      font-size: 7.9pt;
+      color: #cbd5e1;
+      margin-top: 0.8mm;
+      line-height: 1.24;
+    }
+
+    .price-hero {
+      font-size: 18pt;
+      font-weight: 800;
+      color: var(--primary);
+      line-height: 1.05;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    .card.dark-box .price-hero {
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ==================== СЛАЙД 1: ОБЛОЖКА ==================== -->
+<section class="slide dark" data-slide="1" data-section="product">
+  <div class="cover-main">
+    <div>
+      <div class="cover-brand">
+        <svg class="cover-logo" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg"><rect width="64" height="64" rx="14" fill="#071426"/><path d="M32 10 L52 22 L52 42 L32 54 L12 42 L12 22 Z" fill="none" stroke="#38bdf8" stroke-width="3"/><path d="M32 18 L45 26 L32 34 L19 26 Z" fill="#ffffff"/><path d="M19 26 L32 34 L32 48 L19 40 Z" fill="#7dd3fc"/><path d="M45 26 L45 40 L32 48 L32 34 Z" fill="#0284c7"/></svg>
+        <div>
+          <div class="cover-brand-name">ODANT<span style="color:#38bdf8;">·</span>WORK</div>
+          <div class="cover-brand-sub">Учёт · Документооборот · Процессы · Приватный ИИ</div>
+        </div>
+      </div>
+      <h1 class="cover-h1">
+        Цифровая организация и <span>приватные ИИ-сотрудники</span> в одном комплексе
+      </h1>
+      <p class="cover-lead">
+        Все данные предприятия — бухгалтерский и управленческий учёт, документы, встроенный офис, задачи,
+        переписка и команда из 13 ролевых ИИ-агентов — работают в единой системе прав доступа полностью внутри
+        вашего контура без передачи коммерческой тайны во внешние облака.
+      </p>
+      <div class="cover-badges">
+        <span class="cover-badge">Реестр российского ПО № 304855</span>
+        <span class="cover-badge">25+ лет промышленной платформы ODANT</span>
+        <span class="cover-badge">Запуск за 1 минуту: ПАК или npx odant-work</span>
+        <span class="cover-badge">10 вечных лицензий в базовом комплекте</span>
+        <span class="cover-badge">Региональная франшиза в 89 субъектах РФ</span>
+      </div>
+    </div>
+
+    <div class="cover-right-panel">
+      <div style="font-size:9.5pt;font-weight:700;color:#7dd3fc;text-transform:uppercase;letter-spacing:0.08em;">
+        Два направления сотрудничества · work.odant.org
+      </div>
+      <div class="cover-stat-grid">
+        <div class="cover-stat">
+          <div class="val">5 000 000 ₽</div>
+          <div class="lbl">Готовый ПАК (AMD Ryzen™ AI Max+ PRO 495 · 192 ГБ · 4 ТБ) + 10 вечных мест</div>
+        </div>
+        <div class="cover-stat">
+          <div class="val">4 000 000 ₽</div>
+          <div class="lbl">Базовая постоянная лицензия на 10 вечных мест (на собственном сервере)</div>
+        </div>
+        <div class="cover-stat">
+          <div class="val">13 агентов</div>
+          <div class="lbl">ИИ-консультант «?» в каждой форме, 26+ навыков и 4 встроенные модели ИИ</div>
+        </div>
+        <div class="cover-stat">
+          <div class="val">10% → 50%</div>
+          <div class="lbl">Растущая скидка регионального франчайзи + 100% дохода с внедрений и ИИ</div>
+        </div>
+      </div>
+      <div style="background:rgba(56,189,248,0.12);border-left:3px solid #38bdf8;padding:2.5mm 3.2mm;border-radius:1.6mm;font-size:8.4pt;color:#e0f2fe;line-height:1.36;">
+        <strong>Предприятиям (Слайды 2–9):</strong> единая система учёта, документооборота и ИИ «под ключ» с бессрочными базовыми рабочими местами.<br>
+        <strong>Региональным партнёрам (Слайды 10–12):</strong> защищённая квота субъекта РФ, бронь региона за 100 000 ₽ и 6 высокомаржинальных потоков выручки.
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>Бизнес Интер Софт · Платформа ODANT-WORK · work.odant.org · odant.ru</span>
+    <span>Презентация для клиентов и региональных партнёров (франчайзи) · Слайд 1 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 2: ПРОБЛЕМА И РЕШЕНИЕ ==================== -->
+<section class="slide" data-slide="2" data-section="product">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел I. О платформе · 1. Вызов для современного бизнеса</div>
+      <div class="slide-title">Почему «зоопарк» корпоративных программ и внешних чат-ботов не работает</div>
+      <div class="slide-subtitle">Предприятия тратят миллионы на интеграцию разрозненных сервисов, а сотрудники вручную переносят цифры из чатов в таблицы и учёт</div>
+    </div>
+    <span class="badge-pill">От лоскутной ИТ к единому ядру</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-2">
+      <div class="card amber-left white">
+        <div class="card-head">
+          <div class="card-title">Как устроено в большинстве компаний сегодня</div>
+          <span class="tag amber">4 изолированных контура</span>
+        </div>
+        <ul>
+          <li><strong>Учётная база отдельно от реальной работы:</strong> договоры, счета и акты обсуждаются в мессенджерах и почте, а в учётную систему заносятся вручную с опозданием и ошибками.</li>
+          <li><strong>Разрозненные файлы и офисные пакеты:</strong> таблицы Excel, договоры Word и презентации рассыпаны по папкам сотрудников и облачным дискам без единой истории версий.</li>
+          <li><strong>Опасность публичных ИИ-сервисов:</strong> сотрудники копируют финансовые отчёты и персональные данные во внешние чат-боты, нарушая коммерческую тайну и 152-ФЗ.</li>
+          <li><strong>Бесконечные подписки и дорогие стыковки:</strong> каждая связка между ERP, ЭДО, CRM и таск-трекером требует постоянной оплаты интеграторов и ломается при обновлениях.</li>
+        </ul>
+      </div>
+
+      <div class="card green-left white">
+        <div class="card-head">
+          <div class="card-title">Как работает единый комплекс ODANT-WORK</div>
+          <span class="tag green">Всё в одном окне и контуре</span>
+        </div>
+        <ul>
+          <li><strong>Единое дерево предприятия:</strong> подразделения, рабочие места, справочники, первичные документы, проводки, чаты и задачи живут в одной системе с общими правами.</li>
+          <li><strong>ИИ внутри должности сотрудника:</strong> ИИ-консультант и ролевые агенты видят открытый документ, знают ваш план счетов и действуют строго в рамках полномочий пользователя.</li>
+          <li><strong>100% суверенитет данных:</strong> весь учёт, файлы и локальные модели ИИ работают автономно на сервере внутри компании — без ухода данных наружу.</li>
+          <li><strong>Прозрачная экономика:</strong> 10 вечных конкурентных лицензий в базовом комплекте работают бессрочно — бизнес не остаётся с заблокированной базой при окончании подписки.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="flow-row">
+      <div class="flow-step">
+        <div class="step-num">Шаг 1 · Поручение или документ</div>
+        <div class="step-title">Чат, голос или файл</div>
+        <p>Руководитель или сотрудник ставит задачу текстом/голосом или загружает первичный документ в подразделение.</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="step-num">Шаг 2 · Понимание контекста</div>
+        <div class="step-title">Проверка по базе организации</div>
+        <p>Система и ИИ-консультант сверяют контрагента, договор, остатки на счетах и права доступа сотрудника.</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="step-num">Шаг 3 · Учёт и оформление</div>
+        <div class="step-title">Документ + двойная запись</div>
+        <p>Формируется печатная форма документа и проводка Дебет/Кредит с подтверждением ответственным лицом.</p>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step">
+        <div class="step-num">Шаг 4 · Мгновенный контроль</div>
+        <div class="step-title">Живая ведомость и журнал</div>
+        <p>Оборотно-сальдовая ведомость, анализ счёта и журнал событий обновляются в ту же секунду.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел I. Платформа и выгода для предприятия</span>
+    <span>Слайд 2 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 3: ЧЕТЫРЕ ОПОРЫ ЦИФРОВОЙ ОРГАНИЗАЦИИ ==================== -->
+<section class="slide" data-slide="3" data-section="product">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел I. О платформе · 2. Функциональный состав</div>
+      <div class="slide-title">Четыре системы в одной коробке: Учёт, Документооборот, Процессы и Офис</div>
+      <div class="slide-subtitle">Никаких внешних Docker-контейнеров и сторонних редакторов — всё готово к работе сразу после включения</div>
+    </div>
+    <span class="badge-pill">Единый табличный и документный стандарт</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-2" style="gap:2.8mm;">
+      <div class="card accent-left white" style="padding:2.4mm 3.4mm;gap:0.8mm;">
+        <div class="card-head">
+          <div class="card-title" style="font-size:9.8pt;">1. Встроенная система бухгалтерского и управленческого учёта</div>
+          <span class="tag">Двойная запись · Сторно</span>
+        </div>
+        <ul style="font-size:8.2pt;">
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Полный план счетов (01–99) и справочники:</strong> основные средства, материалы, производство, товары, касса, банк, расчёты с контрагентами, персоналом и налогами.</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Честная двойная запись:</strong> каждая хозяйственная операция создаёт связанные записи по Дебету и Кредиту, а исправления проведённых периодов выполняются строго через <strong>сторно</strong>.</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Пять учётных представлений в 1 клик:</strong> <em>Оборотно-сальдовая ведомость</em>, <em>Анализ счёта</em>, <em>Обороты счёта</em>, <em>Проводки счёта</em> и <em>Журнал проводок</em> с фильтрами по субконто.</li>
+        </ul>
+      </div>
+
+      <div class="card accent-left white" style="padding:2.4mm 3.4mm;gap:0.8mm;">
+        <div class="card-head">
+          <div class="card-title" style="font-size:9.8pt;">2. Корпоративный документооборот и встроенный офисный пакет</div>
+          <span class="tag">Таблицы · Тексты · Презентации</span>
+        </div>
+        <ul style="font-size:8.2pt;">
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Встроенные браузерные редакторы без облаков:</strong> таблицы <code>.xlsx/.csv</code> (листы, формулы <code>SUM/AVERAGE/MIN/MAX/ROUND</code>), документы <code>.docx/.rtf</code> (А4, печать) и презентации <code>.pptx</code>.</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Прямая работа с настольным MS Office:</strong> открытие и сохранение документов напрямую в установленном Word / Excel / PowerPoint по протоколу WebDAV в 1 клик.</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Версионность и защита:</strong> генерация первички по шаблонам, маршруты согласования и мгновенное восстановление файлов из истории.</li>
+        </ul>
+      </div>
+
+      <div class="card green-left white" style="padding:2.4mm 3.4mm;gap:0.8mm;">
+        <div class="card-head">
+          <div class="card-title" style="font-size:9.8pt;">3. Организационная структура, роли BOSS / USER и процессы</div>
+          <span class="tag green">Прозрачная управляемость</span>
+        </div>
+        <ul style="font-size:8.2pt;">
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Дерево подразделений и рабочих мест:</strong> наглядная модель компании — от холдинга и отдельных юрлиц (у каждого своя изолированная база и ZIP-архивация) до отделов и должностей.</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Две понятные базовые роли:</strong> <strong>BOSS</strong> (руководитель подразделения или компании — видит структуру, аналитику и журнал точки) и <strong>USER</strong> (исполнитель на рабочем месте).</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Поручения, почта и календарь:</strong> задачи со сроками и статусами, встроенный почтовый клиент и календарь событий внутри каждого отдела.</li>
+        </ul>
+      </div>
+
+      <div class="card dark-box" style="padding:2.4mm 3.4mm;gap:0.8mm;">
+        <div class="card-head">
+          <div class="card-title" style="font-size:9.8pt;">4. Изолированная база данных на каждую организацию</div>
+          <span class="tag dark">Надёжность хранения</span>
+        </div>
+        <ul style="font-size:8.2pt;">
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Многофирменный учёт без смешения данных:</strong> внутри одного сервера можно вести десятки организаций («Маслоторг», филиалы, дочерние общества) — у каждой своя независимая база SQLite.</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Мгновенный перенос и резервирование:</strong> вся организация со структурой, документами, логами и учётной базой выгружается и восстанавливается одним <code>.zip</code>-архивом.</li>
+          <li style="font-size:8.2pt;line-height:1.3;"><strong>Конструктор форм для бизнеса:</strong> настройка полей, 12-колоночной сетки карточек и виртуальных выборок («Сотрудники в отпуске», «Должники») прямо в интерфейсе.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел I. Платформа и выгода для предприятия</span>
+    <span>Слайд 3 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 4: ИИ-КОНСУЛЬТАНТ И 13 РОЛЕВЫХ АГЕНТОВ ==================== -->
+<section class="slide" data-slide="4" data-section="product">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел I. О платформе · 3. ИИ-консультант и мультиагентная система</div>
+      <div class="slide-title">Помощник в каждой форме и команда из 13 ролевых ИИ-агентов в штате</div>
+      <div class="slide-subtitle">ИИ не просто отвечает в чате — он понимает открытый документ, проверяет проводки и выполняет поручения по ролям</div>
+    </div>
+    <span class="badge-pill">13 агентов · 26+ готовых навыков</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="col-55-45">
+      <div>
+        <table class="compact-table">
+          <thead>
+            <tr>
+              <th style="width:26%;">Ролевой ИИ-агент</th>
+              <th>Какие задачи предприятия выполняет</th>
+              <th style="width:19%;">Контур прав</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Консультант формы (?)</strong></td>
+              <td>Кнопка «?» в шапке любого документа или отчёта: разбирает цифры, находит расхождения и проводит операции</td>
+              <td>По роли сотрудника</td>
+            </tr>
+            <tr>
+              <td><strong>Аналитик</strong></td>
+              <td>Строит оборотно-сальдовые сводки, анализ счетов по контрагентам, финансовые срезы и таблицы Excel/CSV</td>
+              <td>Чтение учёта + Отчёты</td>
+            </tr>
+            <tr>
+              <td><strong>Секретарь</strong></td>
+              <td>Разбирает входящие письма, ведёт протоколы совещаний, формирует поручения со сроками и контролирует их</td>
+              <td>Задачи · Почта · Календарь</td>
+            </tr>
+            <tr>
+              <td><strong>Аудитор и Ревьюер</strong></td>
+              <td>Проверяют корректность проводок, права доступа, журнал безопасности и изменения настроек</td>
+              <td>Строго только чтение</td>
+            </tr>
+            <tr>
+              <td><strong>Интегратор</strong></td>
+              <td>Подключается к внешним учётным системам по OData, сверяет справочники, переносит контрагентов, номенклатуру и остатки</td>
+              <td>Импорт · Сверка</td>
+            </tr>
+            <tr>
+              <td><strong>Конструктор и Разработчик</strong></td>
+              <td>Создают новые справочники, печатные шаблоны документов, бизнес-правила и навыки подразделения</td>
+              <td>Только с правами BOSS</td>
+            </tr>
+            <tr>
+              <td><strong>ИТ-админ и Оператор</strong></td>
+              <td>Следят за здоровьем сервера, резервными копиями, сетевыми службами и выполняют рутину в песочнице</td>
+              <td>Изолированный контур</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:3mm;">
+        <div class="card accent-left white">
+          <div class="card-head">
+            <div class="card-title">Живой голосовой и текстовый диалог</div>
+            <span class="tag">Кнопка «?»</span>
+          </div>
+          <p>
+            Нажмите круглую кнопку <strong>«?»</strong> на любой открытой ведомости или документе либо включите микрофон:
+            ИИ уже видит текущий счёт, период и выбранного контрагента. Спросите: <em>«Почему выросло сальдо по счёту 60?»</em>
+            или <em>«Проведи оплату поставщику 125 000 ₽»</em>.
+          </p>
+        </div>
+
+        <div class="card green-left white">
+          <div class="card-head">
+            <div class="card-title">Безопасность зашита на уровне кода ядра</div>
+            <span class="tag green">Жёсткие границы прав</span>
+          </div>
+          <ul>
+            <li>Субагент никогда не получит больше прав, чем есть у сотрудника, который его вызвал.</li>
+            <li>Перед проведением финансовой операции или изменением данных ИИ запрашивает <strong>подтверждение человека</strong>.</li>
+            <li>Каждая консультация и действие ИИ сохраняются задачей в личном кабинете и в неизменяемом журнале аудита.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел I. Платформа и выгода для предприятия</span>
+    <span>Слайд 4 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 5: ПРИВАТНЫЙ И ГИБРИДНЫЙ КОНТУР МОДЕЛЕЙ ИИ ==================== -->
+<section class="slide" data-slide="5" data-section="product">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел I. О платформе · 4. Единый центр «Модели ИИ»</div>
+      <div class="slide-title">Локальные модели внутри контура + российские и мировые ИИ в 1 клик</div>
+      <div class="slide-subtitle">Встроенный сервер локального ИИ с адаптивным управлением памятью, подключением внешних провайдеров и дообучением на данных компании</div>
+    </div>
+    <span class="badge-pill green">Приватно · Без ручной настройки консоли</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-4">
+      <div class="card white accent-left">
+        <span class="tag">1. Языковое и учётное ядро</span>
+        <div class="card-title">Текстовая модель (LLM)</div>
+        <p>Диалог с сотрудниками, проведение типовых хозяйственных операций, подготовка договоров, писем и аналитических справок внутри закрытого контура.</p>
+      </div>
+      <div class="card white accent-left">
+        <span class="tag">2. Речевой контур (ASR + TTS)</span>
+        <div class="card-title">Голосовой диалог</div>
+        <p>Локальное распознавание русской речи, автоматическая расшифровка совещаний в протоколы и мгновенный синтез естественного голоса с перебиванием.</p>
+      </div>
+      <div class="card white accent-left">
+        <span class="tag">3. Графический синтез</span>
+        <div class="card-title">Генерация изображений</div>
+        <p>Создание иллюстраций, оформление карточек товаров и номенклатуры, схем и презентационных материалов без обращения во внешние сервисы.</p>
+      </div>
+      <div class="card white accent-left">
+        <span class="tag">4. Векторный поиск (RAG)</span>
+        <div class="card-title">База знаний компании</div>
+        <p>Семантическая индексация всех договоров, регламентов, первичных документов и истории задач для мгновенного поиска ответов по смыслу.</p>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card green-left white">
+        <div class="card-head">
+          <div class="card-title">Адаптивный локальный ИИ-сервер и российские провайдеры</div>
+          <span class="tag green">Управление в 1 клик</span>
+        </div>
+        <ul>
+          <li><strong>Умное управление памятью:</strong> на серверном комплексе (192 ГБ ОЗУ) все локальные модели держатся в памяти постоянно для мгновенного отклика; на обычных ПК — запускаются по запросу и сами освобождают память при простое.</li>
+          <li><strong>Предустановленные российские провайдеры:</strong> готовые профили <strong>Сбер GigaChat 2</strong>, <strong>Яндекс Alice AI (YandexGPT 5 Pro)</strong>, <strong>Т-Банк (T-Pro 2.0)</strong> и <strong>МТС ИИ (Cotype Pro)</strong> — достаточно вставить API-ключ и нажать «Проверить связь».</li>
+          <li><strong>Любой внешний или партнёрский источник:</strong> подключение OpenAI-совместимых серверов, корпоративных GPU-кластеров или платного API регионального партнёра.</li>
+        </ul>
+      </div>
+
+      <div class="card dark-box">
+        <div class="card-head">
+          <div class="card-title">Двухшаговое дообучение ИИ (LoRA) под специфику предприятия</div>
+          <span class="tag dark">Вкладка «Дообучение»</span>
+        </div>
+        <ul>
+          <li><strong>Шаг 1. Сбор обучающего набора в 1 клик:</strong> система автоматически собирает проверенные задачи сотрудников, учётные операции и структуру справочников вашей организации (с автоматической очисткой секретов и паролей).</li>
+          <li><strong>Шаг 2. Дообучение адаптера LoRA:</strong> обучение модели отраслевой терминологии, внутренним регламентам и правилам проводок вашего предприятия с автоматической публикацией готовой модели в дерево.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел I. Платформа и выгода для предприятия</span>
+    <span>Слайд 5 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 6: ЗАПУСК ЗА 1 МИНУТУ И ИНТЕГРАЦИИ ==================== -->
+<section class="slide" data-slide="6" data-section="product">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел I. О платформе · 5. Внедрение, миграция и интеграции</div>
+      <div class="slide-title">Старт за 1 минуту, перенос учётных баз и объединение филиалов в единую сеть</div>
+      <div class="slide-subtitle">От первого запуска до работающей организации с планом счетов — без многомесячных проектов внедрения</div>
+    </div>
+    <span class="badge-pill">npx odant-work · OData · MCP · Федерация</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-3">
+      <div class="card accent-left white">
+        <div class="card-head">
+          <div class="card-title">1. Развёртывание и мастер предприятия</div>
+          <span class="tag">За 60 секунд</span>
+        </div>
+        <ul>
+          <li><strong>Автономный ПАК или одна команда:</strong> включите готовый сервер в розетку или выполните <code>npx odant-work</code> на Windows / Linux.</li>
+          <li><strong>Регистрация руководителя в 1 клик:</strong> первый пользователь сразу становится <code>BOSS</code> всего сервера без настройки почтовых серверов.</li>
+          <li><strong>Мастер создания организации (3 режима):</strong> <em>Пустая база</em>, <em>Стандартный план счетов РФ (01–99)</em> или <em>Демо-предприятие с примерами операций</em>.</li>
+        </ul>
+      </div>
+
+      <div class="card green-left white">
+        <div class="card-head">
+          <div class="card-title">2. Перенос учётных баз и подключение сервисов</div>
+          <span class="tag green">OData + MCP</span>
+        </div>
+        <ul>
+          <li><strong>Бесшовная миграция исторических баз:</strong> встроенный коннектор OData выгружает из внешних учётных систем справочники контрагентов, номенклатуры, договоров, начальные остатки и документы со сверкой ОСВ.</li>
+          <li><strong>Менеджер внешних сервисов (MCP):</strong> подключение корпоративных баз данных, браузера, файловых хранилищ и внешних API через единый графический экран настроек.</li>
+        </ul>
+      </div>
+
+      <div class="card accent-left white">
+        <div class="card-head">
+          <div class="card-title">3. Федерация серверов филиалов и партнёров</div>
+          <span class="tag">Безопасная сеть</span>
+        </div>
+        <ul>
+          <li><strong>Прямое соединение узлов:</strong> серверы головного офиса, заводов, складов и компаний-контрагентов соединяются напрямую по защищённому протоколу.</li>
+          <li><strong>Монтирование удалённых разделов:</strong> разрешённые папки, справочники и задачи филиала открываются в проводнике так же прозрачно, как локальные.</li>
+          <li><strong>Сохранность при обновлениях:</strong> автоматические обновления ядра никогда не затрагивают ваши базы, настройки и доработанные классы.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="banner">
+      <strong>Бесплатный стартовый режим после установки:</strong> сразу после развёртывания через <code>npx odant-work</code> система работает бесплатно для настройки, переноса справочников и ознакомления (1 активная сессия руководителя <code>BOSS</code>). Активация базовой лицензии мгновенно включает <strong>10 вечных конкурентных мест</strong> и агентскую ИИ-систему.
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел I. Платформа и выгода для предприятия</span>
+    <span>Слайд 6 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 7: ПРОМЫШЛЕННЫЙ ФУНДАМЕНТ И КЕЙСЫ ==================== -->
+<section class="slide" data-slide="7" data-section="product">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел I. О платформе · 6. Промышленная зрелость и выгода по ролям</div>
+      <div class="slide-title">25+ лет промышленной эксплуатации платформы ODANT в реальном секторе</div>
+      <div class="slide-subtitle">В основе ODANT-WORK — отечественная объектно-ориентированная платформа, проверенная на крупнейших индустриальных и оборонных предприятиях РФ</div>
+    </div>
+    <span class="badge-pill">Реестр Минцифры РФ № 304855</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="kpi-row">
+      <div class="kpi-box">
+        <div class="kpi-num">ПАО «Газпром»</div>
+        <div class="kpi-label">Управление техобслуживанием и ремонтами</div>
+        <div class="kpi-sub">Критическая инфраструктура, высокая нагрузка и строгий регламентный учёт</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-num">ПАО «ФосАгро»</div>
+        <div class="kpi-label">Аналитика и контроль лабораторных процессов</div>
+        <div class="kpi-sub">Непрерывное химическое производство и сквозная прослеживаемость партий</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-num">АО «НПК КБМ»</div>
+        <div class="kpi-label">Более 1 500 автоматизированных рабочих мест</div>
+        <div class="kpi-sub">Управление конструкторско-производственными процессами оборонного предприятия</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-num">ВМФ России</div>
+        <div class="kpi-label">Изолированные автономные контуры</div>
+        <div class="kpi-sub">Безупречная работа в закрытых сетях без доступа к интернету</div>
+      </div>
+    </div>
+
+    <div class="grid-3">
+      <div class="card white accent-left">
+        <div class="card-head">
+          <div class="card-title">Собственнику и Генеральному директору</div>
+          <span class="tag">Контроль 24/7</span>
+        </div>
+        <ul>
+          <li>Реальная картина денег, запасов, дебиторки и исполнительской дисциплины в одном окне.</li>
+          <li>ИИ-консультант готовит управленческую сводку по предприятию за секунды по голосовому запросу.</li>
+          <li>Капитальный актив (10 вечных лицензий + собственный сервер) вместо пожизненной аренды облаков.</li>
+        </ul>
+      </div>
+
+      <div class="card white green-left">
+        <div class="card-head">
+          <div class="card-title">Главному бухгалтеру и Финансисту</div>
+          <span class="tag green">Точность учёта</span>
+        </div>
+        <ul>
+          <li>Классическая двойная запись, план счетов 01–99, многомерные аналитики и защита закрытых периодов через сторно.</li>
+          <li>Кнопка «?» в любой ведомости мгновенно находит первичную операцию и объясняет каждую цифру сальдо.</li>
+          <li>Первичные документы, таблицы и печатные формы формируются прямо из учётных карточек.</li>
+        </ul>
+      </div>
+
+      <div class="card white accent-left">
+        <div class="card-head">
+          <div class="card-title">ИТ-директору и Службе безопасности</div>
+          <span class="tag">Полный суверенитет</span>
+        </div>
+        <ul>
+          <li>Ни один байт коммерческой тайны не покидает периметр компании — ИИ работает локально.</li>
+          <li>Аппаратное шифрование памяти AMD Memory Guard и криптографические сертификаты Ed25519.</li>
+          <li>Простая эксплуатация без штата DevOps: вся база организации архивируется в один ZIP-файл.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел I. Платформа и выгода для предприятия</span>
+    <span>Слайд 7 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 8: КЛИЕНТАМ — ВАРИАНТЫ ПОСТАВКИ ==================== -->
+<section class="slide" data-slide="8" data-section="clients">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел II. Предложение для клиентов · 1. Форматы приобретения</div>
+      <div class="slide-title">Два варианта поставки: готовый комплекс (ПАК) или лицензия на ваш сервер</div>
+      <div class="slide-subtitle">Оба варианта включают 10 вечных конкурентных пользовательских мест, полный стек ИИ-агентов и 1 год поддержки Enterprise</div>
+    </div>
+    <span class="badge-pill green">10 вечных мест в базовом комплекте</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-2">
+      <div class="card dark-box" style="padding:3.2mm 3.8mm;">
+        <div class="card-head">
+          <div>
+            <span class="tag dark">Вариант 1 · С оборудованием (WORK-PAK-495-192-4T)</span>
+            <div class="card-title" style="font-size:11pt;margin-top:0.8mm;">Программно-аппаратный комплекс ODANT-WORK</div>
+          </div>
+          <div class="price-hero">5 000 000 ₽</div>
+        </div>
+        <p style="font-size:8.4pt;opacity:0.9;">Готовый сервер ИИ и корпоративного учёта — полностью настроен, протестирован и готов к включению в сеть предприятия:</p>
+        <ul>
+          <li><strong>Процессор и ИИ-ускоритель:</strong> AMD Ryzen™ AI Max+ PRO 495 (Zen 5, 16 ядер / 32 потока, до 5.2 ГГц) + нейропроцессор XDNA2 (до <strong>132 TOPS</strong> совокупной ИИ-мощности).</li>
+          <li><strong>Графика и единая память:</strong> AMD Radeon™ 8065S (40 ядер, до 61 TFLOPS FP16) + <strong>192 ГБ LPDDR5x-8533 Unified RAM</strong> (держит локальные модели ИИ в памяти постоянно).</li>
+          <li><strong>Хранилище и аппаратная защита:</strong> <strong>SSD 4 ТБ NVMe PCIe 4.0</strong> (поддержка RAID0/RAID1) + AMD PRO Memory Guard и Secure Processor.</li>
+          <li><strong>Лицензия и SLA в комплекте:</strong> <strong>10 вечных одновременных сессий</strong> + все 13 ИИ-агентов и 4 локальные модели ИИ + <strong>1 год поддержки Enterprise (24/7)</strong> и 1 год гарантии на сервер.</li>
+        </ul>
+      </div>
+
+      <div class="card accent-left white" style="padding:3.2mm 3.8mm;">
+        <div class="card-head">
+          <div>
+            <span class="tag">Вариант 2 · На свой сервер (WORK-LIC-BASE-10)</span>
+            <div class="card-title" style="font-size:11pt;margin-top:0.8mm;">Базовая постоянная лицензия (без оборудования)</div>
+          </div>
+          <div class="price-hero">4 000 000 ₽</div>
+        </div>
+        <p style="font-size:8.4pt;color:var(--text-muted);">Для предприятий, имеющих собственные серверные мощности или самостоятельно закупающих аппаратную платформу:</p>
+        <ul>
+          <li><strong>Мгновенная установка из npm:</strong> развёртывание командой <code>npx odant-work</code> на любом сервере Windows 11 / Linux (рекомендуется платформа AMD Ryzen™ AI Max+ 128–192 ГБ или GPU-сервер).</li>
+          <li><strong>Снятие стартовых ограничений:</strong> перевод сервера из бесплатного ознакомительного режима (1 сессия BOSS) в полноценный промышленный режим.</li>
+          <li><strong>Полный функционал без урезаний:</strong> <strong>10 вечных конкурентных рабочих мест</strong> (по одновременным активным сессиям — общее число заведённых сотрудников не ограничено).</li>
+          <li><strong>Агентский ИИ и поддержка:</strong> активация всех 13 ролевых ИИ-агентов, студии дообучения LoRA и <strong>1 год поддержки уровня Enterprise (24/7)</strong> в цене лицензии.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="banner green-banner">
+      <strong>Ключевая гарантия для клиента — вечная базовая лицензия:</strong> 10 базовых конкурентных мест привязываются криптографическим сертификатом <code>Ed25519</code> (<code>#system/*.lic.json</code>) к вашему серверу и <strong>работают бессрочно</strong>. Продление техподдержки и докупка дополнительных временных мест со 2-го года — исключительно по желанию клиента.
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел II. Комплектация и условия для клиентов · work.odant.org/#clients</span>
+    <span>Слайд 8 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 9: КЛИЕНТАМ — ТАРИФЫ ДОП. МЕСТ, СКИДКИ И УСЛУГИ ==================== -->
+<section class="slide" data-slide="9" data-section="clients">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел II. Предложение для клиентов · 2. Масштабирование, SLA и внедрение</div>
+      <div class="slide-title">Дополнительные рабочие места от 10 000 ₽/год, скидки до −25% и пакеты «под ключ»</div>
+      <div class="slide-subtitle">Лицензирование по одновременным (конкурентным) сессиям: 10 вечных мест уже в базе, дополнительные места докупаются на 1–5 лет по мере роста</div>
+    </div>
+    <span class="badge-pill">Оплата по счёту-договору или через ЮKassa</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-3">
+      <div class="card white accent-left">
+        <div class="card-head">
+          <div class="card-title">Тариф Start</div>
+          <span class="tag">Базовый SLA</span>
+        </div>
+        <div style="font-size:15pt;font-weight:800;color:var(--primary-dark);">10 000 ₽ <span style="font-size:8.5pt;font-weight:600;color:var(--text-muted);">/ место в год</span></div>
+        <ul>
+          <li><strong>Время реакции инженера:</strong> до 8 рабочих часов (Пн–Пт, 09:00–18:00 МСК).</li>
+          <li><strong>Лимит обращений:</strong> до 12 тикетов в год на каждое доп. место.</li>
+          <li><strong>Каналы связи:</strong> боты поддержки в MAX, Telegram и VK + все обновления ядра.</li>
+        </ul>
+      </div>
+
+      <div class="card white green-left" style="border-width:1.5px;border-left-width:4.5px;border-color:#6ee7b7;border-left-color:var(--accent-green);">
+        <div class="card-head">
+          <div class="card-title">Тариф Business</div>
+          <span class="tag green">Рекомендуемый</span>
+        </div>
+        <div style="font-size:15pt;font-weight:800;color:#065f46;">15 000 ₽ <span style="font-size:8.5pt;font-weight:600;color:var(--text-muted);">/ место в год</span></div>
+        <ul>
+          <li><strong>Приоритетная реакция:</strong> до 2 часов (ежедневно, 08:00–22:00 МСК).</li>
+          <li><strong>Лимит обращений:</strong> до 48 тикетов в год на каждое место.</li>
+          <li><strong>Консалтинг:</strong> помощь в настройке счетов учёта, документооборота и локальных моделей ИИ.</li>
+        </ul>
+      </div>
+
+      <div class="card white accent-left">
+        <div class="card-head">
+          <div class="card-title">Тариф Enterprise</div>
+          <span class="tag">Максимальный 24/7</span>
+        </div>
+        <div style="font-size:15pt;font-weight:800;color:var(--primary-dark);">20 000 ₽ <span style="font-size:8.5pt;font-weight:600;color:var(--text-muted);">/ место в год</span></div>
+        <ul>
+          <li><strong>Критическая реакция:</strong> до <strong>15 минут круглосуточно 24/7/365</strong>.</li>
+          <li><strong>Обращения:</strong> безлимитно + выделенный инженер сопровождения.</li>
+          <li><strong>ИИ-сопровождение:</strong> помощь в дообучении моделей ИИ под процессы предприятия.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col-55-45">
+      <div class="card white">
+        <div class="card-head">
+          <div class="card-title">Дополнительные пакеты внедрения и оборудования</div>
+          <span class="tag">Фиксированная цена</span>
+        </div>
+        <table class="compact-table">
+          <thead>
+            <tr>
+              <th>Артикул (SKU)</th>
+              <th>Состав пакета</th>
+              <th style="width:22%;">Стоимость</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>WORK-SRV-MIGRATION</code></td>
+              <td>Перенос исторических учётных баз, справочников и начальных остатков со сверкой ОСВ</td>
+              <td><strong>450 000 ₽</strong></td>
+            </tr>
+            <tr>
+              <td><code>WORK-HW-NAS</code></td>
+              <td>Комплект сетевого резервного копирования и автоматической архивации баз организаций (NAS)</td>
+              <td><strong>350 000 ₽</strong></td>
+            </tr>
+            <tr>
+              <td><code>WORK-SRV-FINETUNE</code></td>
+              <td>Пакет дообучения локальных моделей ИИ (LoRA) и разработки навыков (skills) под предприятие</td>
+              <td><strong>600 000 ₽</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card white">
+        <div class="card-head">
+          <div class="card-title">Шкала объёмных скидок на дополнительные места</div>
+          <span class="tag green">Автоматический расчёт</span>
+        </div>
+        <table class="compact-table">
+          <thead>
+            <tr>
+              <th>Пакет дополнительных мест</th>
+              <th>Количество</th>
+              <th>Скидка</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Малый пакет</td><td>5 – 9 мест</td><td><strong>−5%</strong></td></tr>
+            <tr><td>Командный пакет</td><td>10 – 24 места</td><td><strong>−10%</strong></td></tr>
+            <tr><td>Расширенный пакет</td><td>25 – 49 мест</td><td><strong>−15%</strong></td></tr>
+            <tr><td>Крупный пакет</td><td>50 – 99 мест</td><td><strong>−20%</strong></td></tr>
+            <tr><td>Корпоративный пакет</td><td><strong>100+ мест</strong></td><td><strong style="color:#065f46;">−25%</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел II. Комплектация и условия для клиентов · work.odant.org/#clients</span>
+    <span>Слайд 9 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 10: ФРАНШИЗА — МОДЕЛЬ И ЗАЩИТА ТЕРРИТОРИИ ==================== -->
+<section class="slide" data-slide="10" data-section="franchise">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел III. Региональная франшиза · 1. Защита территории и условия входа</div>
+      <div class="slide-title">Станьте официальным партнёром ODANT-WORK в своём субъекте РФ</div>
+      <div class="slide-subtitle">Строго ограниченная квота партнёров на регион, лёгкий вход через резерв за 100 000 ₽ и рассрочка паушального взноса на 12 месяцев</div>
+    </div>
+    <span class="badge-pill amber">Квота: 1 партнёр на 1 млн жителей</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="kpi-row">
+      <div class="kpi-box">
+        <div class="kpi-num">1 на 1 млн</div>
+        <div class="kpi-label">Жёсткая квота франшиз в регионе</div>
+        <div class="kpi-sub">Защита от демпинга: число партнёров строго ограничено населением субъекта РФ</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-num">100 000 ₽</div>
+        <div class="kpi-label">Залог для мгновенной брони региона</div>
+        <div class="kpi-sub">Фиксирует вакантную квоту субъекта РФ за вашей организацией на карте</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-num">500 000 ₽</div>
+        <div class="kpi-label">Базовый паушальный взнос (× индекс)</div>
+        <div class="kpi-sub">Справедливая корректировка по экономическому индексу конкретного региона</div>
+      </div>
+      <div class="kpi-box">
+        <div class="kpi-num">12 месяцев</div>
+        <div class="kpi-label">Рассрочка остатка паушального взноса</div>
+        <div class="kpi-sub">Погашается комфортным помесячным графиком уже из выручки от первых клиентов</div>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card accent-left white">
+        <div class="card-head">
+          <div class="card-title">Как работает производственно-сервисная модель партнёра</div>
+          <span class="tag">Полная самостоятельность</span>
+        </div>
+        <ul>
+          <li><strong>1. Закупка аппаратной платформы:</strong> партнёр самостоятельно закупает базовые серверы (AMD Ryzen™ AI Max+ PRO 495 · Radeon™ 8065S · 192 ГБ RAM · SSD 4 ТБ), оставляя себе 100% аппаратной наценки сборки.</li>
+          <li><strong>2. Предпродажная установка:</strong> партнёр разворачивает <code>ODANT-WORK</code>, учётные модули, документооборот и комплект из 4 локальных моделей ИИ.</li>
+          <li><strong>3. Выпуск лицензий и привязка оборудования:</strong> через Личный кабинет партнёр привязывает Hardware ID сервера + <code>node-key.json</code> и выпускает клиенту сертификат со своей партнёрской скидкой.</li>
+          <li><strong>4. Региональная гарантия и сопровождение:</strong> партнёр обеспечивает клиенту 1 год гарантии на железо, ведёт внедрение, перенос исторических баз и дообучение ИИ.</li>
+        </ul>
+      </div>
+
+      <div class="card green-left white">
+        <div class="card-head">
+          <div class="card-title">Прозрачный механизм бронирования субъекта РФ на карте</div>
+          <span class="tag green">work.odant.org/#franchise</span>
+        </div>
+        <ul>
+          <li><strong>Интерактивная карта всех субъектов РФ:</strong> в реальном времени отображает число вакантных и занятых франшиз, экономический индекс и точный размер взноса по каждому региону.</li>
+          <li><strong>Правило «одна компания — одна франшиза в регионе»:</strong> исключает монополизацию квоты одним игроком и защищает интересы каждого регионального интегратора.</li>
+          <li><strong>Старт за 15 минут:</strong> выберите регион на карте → войдите по Email и примите оферту → оплатите залог резервирования <strong>100 000 ₽</strong> через ЮKassa или по счёту → получите статус партнёра и годовой график.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел III. Региональная франшиза · work.odant.org/#franchise</span>
+    <span>Слайд 10 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 11: ФРАНШИЗА — ЭКОНОМИКА И 6 ПОТОКОВ ДОХОДА ==================== -->
+<section class="slide" data-slide="11" data-section="franchise">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел III. Региональная франшиза · 2. Финансовая модель партнёра</div>
+      <div class="slide-title">Скидка партнёра растёт от 10% до 50% + 100% выручки с услуг и ИИ-инфраструктуры</div>
+      <div class="slide-subtitle">Окупаемость паушального взноса — с первой же поставки комплекса ODANT-WORK в своём регионе</div>
+    </div>
+    <span class="badge-pill green">До 2 500 000 ₽ маржи с одного комплекса</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="col-55-45">
+      <div class="card white">
+        <div class="card-head">
+          <div class="card-title">6 источников дохода регионального франчайзи</div>
+          <span class="tag green">Высокая маржинальность</span>
+        </div>
+        <table class="compact-table">
+          <thead>
+            <tr>
+              <th>Направление выручки партнёра</th>
+              <th>Доля партнёра</th>
+              <th style="width:22%;">Средний чек</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>1. Продажа комплексов ПАК и лицензий ODANT-WORK</strong></td>
+              <td><strong>Скидка 10% → 50%</strong> + маржа железа</td>
+              <td><strong>1 500 000 ₽</strong></td>
+            </tr>
+            <tr>
+              <td><strong>2. Дообучение ИИ-агентов (LoRA), навыки и миграция баз</strong></td>
+              <td><strong style="color:#065f46;">100% доход партнёра</strong></td>
+              <td><strong>600 000 ₽</strong></td>
+            </tr>
+            <tr>
+              <td><strong>3. Поставка GPU-серверов и ИИ-кластеров инференса</strong></td>
+              <td><strong style="color:#065f46;">100% доход партнёра</strong></td>
+              <td><strong>1 200 000 ₽</strong></td>
+            </tr>
+            <tr>
+              <td><strong>4. Поставка NAS-систем резервного копирования</strong></td>
+              <td><strong style="color:#065f46;">100% доход партнёра</strong></td>
+              <td><strong>350 000 ₽</strong></td>
+            </tr>
+            <tr>
+              <td><strong>5. Собственный платный API партнёра к моделям ИИ</strong></td>
+              <td><strong style="color:#065f46;">100% регулярный ARR</strong></td>
+              <td><strong>360 000 ₽/год</strong></td>
+            </tr>
+            <tr>
+              <td><strong>6. Договоры региональной техподдержки SLA и ТО</strong></td>
+              <td><strong style="color:#065f46;">Доход партнёра по SLA</strong></td>
+              <td><strong>240 000 ₽/год</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:3mm;">
+        <div class="card dark-box">
+          <div class="card-head">
+            <div class="card-title">Рост партнёрской скидки от годового оборота</div>
+            <span class="tag dark">10% → 50%</span>
+          </div>
+          <table class="compact-table" style="color:#fff;">
+            <thead>
+              <tr>
+                <th style="background:rgba(255,255,255,0.12);color:#bae6fd;border-color:rgba(255,255,255,0.2);">Годовой объём продаж</th>
+                <th style="background:rgba(255,255,255,0.12);color:#bae6fd;border-color:rgba(255,255,255,0.2);">Скидка</th>
+                <th style="background:rgba(255,255,255,0.12);color:#bae6fd;border-color:rgba(255,255,255,0.2);">Доход с 1 ПАК</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);">Старт (с 1-й сделки)</td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong>10%</strong></td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong>500 000 ₽</strong></td>
+              </tr>
+              <tr>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);">25 млн ₽ (~5 комплексов)</td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong>20% (Silver)</strong></td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong>1 000 000 ₽</strong></td>
+              </tr>
+              <tr>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);">50 млн ₽ (~10 комплексов)</td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong>30% (Gold)</strong></td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong>1 500 000 ₽</strong></td>
+              </tr>
+              <tr>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);">100+ млн ₽ (~20 комплексов)</td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong style="color:#38bdf8;">50% (Platinum)</strong></td>
+                <td style="background:transparent;border-color:rgba(255,255,255,0.15);"><strong style="color:#38bdf8;">2 500 000 ₽</strong></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card green-left white">
+          <div class="card-head">
+            <div class="card-title">Постоянный подписочный доход (ARR) партнёра</div>
+            <span class="tag green">Региональный ИИ-хаб</span>
+          </div>
+          <p>
+            Развернув у себя мощный GPU-кластер, франчайзи подключает предприятия своего региона к собственному
+            модельному провайдеру в <code>/MODELS</code> по ежемесячной подписке — получая <strong>100% регулярного дохода</strong>.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>ODANT-WORK · Раздел III. Региональная франшиза · work.odant.org/#franchise</span>
+    <span>Слайд 11 / 12</span>
+  </div>
+</section>
+
+<!-- ==================== СЛАЙД 12: ОБУЧЕНИЕ И ПОШАГОВЫЙ СТАРТ (ФИНАЛ) ==================== -->
+<section class="slide dark" data-slide="12" data-section="franchise">
+  <div class="slide-header">
+    <div class="header-left">
+      <div class="kicker">Раздел III. Сертификация специалистов и начало работы</div>
+      <div class="slide-title">Программа подготовки партнёров и быстрый старт на work.odant.org</div>
+      <div class="slide-subtitle">Полное методическое сопровождение от разработчика платформы «Бизнес Интер Софт»</div>
+    </div>
+    <span class="badge-pill dark-pill">4 трека сертификации (128 часов)</span>
+  </div>
+
+  <div class="slide-body">
+    <div class="grid-4">
+      <div class="card dark-box">
+        <div class="card-head">
+          <span class="tag dark">ODANT-ADM · 24 ч</span>
+          <span class="tag green">Обязателен</span>
+        </div>
+        <div class="card-title">Инженер ПАК и безопасности</div>
+        <p>Аппаратная платформа Ryzen AI Max+ PRO 495, BIOS UMA/NPU, привязка лицензий Ed25519, резервирование NAS и диагностика.</p>
+      </div>
+
+      <div class="card dark-box">
+        <div class="card-head">
+          <span class="tag dark">ODANT-ACC · 32 ч</span>
+          <span class="tag green">Обязателен</span>
+        </div>
+        <div class="card-title">Консультант учёта и процессов</div>
+        <p>План счетов, аналитики, двойная запись, сторно, настройка документооборота, ролей BOSS/USER и перенос исторических баз.</p>
+      </div>
+
+      <div class="card dark-box">
+        <div class="card-head">
+          <span class="tag dark">ODANT-AI · 32 ч</span>
+          <span class="tag green">Обязателен</span>
+        </div>
+        <div class="card-title">Инженер локального ИИ</div>
+        <p>Администрирование 4 базовых моделей ИИ, сбор датасетов организации, дообучение адаптеров LoRA и создание навыков (skills).</p>
+      </div>
+
+      <div class="card dark-box">
+        <div class="card-head">
+          <span class="tag dark">ODANT-DEV · 40 ч</span>
+          <span class="tag dark">Проектный</span>
+        </div>
+        <div class="card-title">Прикладной разработчик</div>
+        <p>Проектирование отраслевых модулей, трёхосевое наследование классов, печатные формы, коннекторы MCP и федерация серверов.</p>
+      </div>
+    </div>
+
+    <div class="grid-2">
+      <div class="card dark-box" style="border-left:4px solid #38bdf8;">
+        <div class="card-head">
+          <div class="card-title" style="font-size:11pt;color:#fff;">Как начать клиенту (предприятию)</div>
+          <span class="tag dark">work.odant.org/#clients</span>
+        </div>
+        <ul>
+          <li><strong>1. Попробуйте прямо сейчас бесплатно:</strong> выполните <code>npx odant-work</code> на своём компьютере или сервере — создайте организацию с планом счетов за 1 минуту.</li>
+          <li><strong>2. Выберите комплектацию в калькуляторе:</strong> готовый ПАК (5 млн ₽) или базовая вечная лицензия на 10 мест (4 млн ₽) + нужное число дополнительных годовых мест со скидкой до −25%.</li>
+          <li><strong>3. Оформите заказ онлайн:</strong> войдите в Личный кабинет по Email, заполните реквизиты юрлица и оплатите по счёту-договору или через ЮKassa.</li>
+        </ul>
+      </div>
+
+      <div class="card dark-box" style="border-left:4px solid #10b981;">
+        <div class="card-head">
+          <div class="card-title" style="font-size:11pt;color:#fff;">Как занять регион франчайзи (партнёру)</div>
+          <span class="tag green">work.odant.org/#franchise</span>
+        </div>
+        <ul>
+          <li><strong>1. Откройте интерактивную карту РФ:</strong> перейдите на вкладку «Франшиза» и проверьте наличие свободной квоты в вашем субъекте РФ.</li>
+          <li><strong>2. Забронируйте территорию за 100 000 ₽:</strong> нажмите «Зарезервировать», примите условия оферты и внесите залог — квота региона мгновенно закрепляется за вами.</li>
+          <li><strong>3. Запустите продажи и обучение:</strong> получите партнёрскую скидку, пройдите сертификацию инженеров и гасите остаток взноса в течение 12 месяцев из прибыли.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div style="background:rgba(255,255,255,0.06);border:1px solid rgba(125,211,252,0.3);border-radius:2.6mm;padding:2.6mm 4mm;display:flex;justify-content:space-between;align-items:center;font-size:8.8pt;color:#e0f2fe;">
+      <div>
+        <strong>Правообладатель и разработчик:</strong> ООО «Бизнес Интер Софт» · 390000, г. Рязань, ул. Ленина, 47
+      </div>
+      <div>
+        <strong>Тел.:</strong> +7 (4912) 77-70-21, 77-70-22 · <strong>Витрина и заказ:</strong> <span style="color:#38bdf8;font-weight:700;">https://work.odant.org</span> · <strong>Сайт:</strong> <span style="color:#38bdf8;font-weight:700;">https://www.odant.ru</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="slide-footer">
+    <span>© Бизнес Интер Софт · ODANT-WORK · work.odant.org</span>
+    <span>Слайд 12 / 12</span>
+  </div>
+</section>
+
+<script>
+  (function () {
+    const params = new URLSearchParams(window.location.search);
+    const embed = params.get('embed') === '1';
+    const initialSlide = Math.max(1, Math.min(12, Number(params.get('slide')) || 1));
+    const slides = Array.from(document.querySelectorAll('.slide'));
+    let current = initialSlide;
+
+    function showSlide(n) {
+      current = Math.max(1, Math.min(slides.length, Number(n) || 1));
+      slides.forEach((el, idx) => {
+        el.classList.toggle('active-slide', idx + 1 === current);
+      });
+      if (!embed) {
+        const target = slides[current - 1];
+        if (target && params.get('slide')) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }
+      if (window.parent && window.parent !== window) {
+        const activeEl = slides[current - 1];
+        window.parent.postMessage({
+          type: 'odant-presentation-slide',
+          slide: current,
+          total: slides.length,
+          section: activeEl ? activeEl.getAttribute('data-section') : 'product'
+        }, '*');
+      }
+    }
+
+    if (embed) {
+      document.body.classList.add('embed-single');
+      function fitSlide() {
+        const active = document.querySelector('.slide.active-slide') || slides[0];
+        if (!active) return;
+        const sw = active.offsetWidth || 1122;
+        const sh = active.offsetHeight || 631;
+        const scale = Math.min(window.innerWidth / sw, window.innerHeight / sh);
+        slides.forEach(s => {
+          s.style.transform = 'scale(' + scale.toFixed(4) + ')';
+          s.style.transformOrigin = 'center center';
+        });
+      }
+      window.addEventListener('resize', fitSlide);
+      showSlide(initialSlide);
+      requestAnimationFrame(fitSlide);
+    } else if (params.get('slide')) {
+      showSlide(initialSlide);
+    }
+
+    window.addEventListener('message', (e) => {
+      const d = e.data || {};
+      if (d.type === 'odant-presentation-goto') {
+        showSlide(d.slide);
+      } else if (d.type === 'odant-presentation-step') {
+        showSlide(current + (Number(d.delta) || 0));
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+        if (embed) { e.preventDefault(); showSlide(current + 1); }
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        if (embed) { e.preventDefault(); showSlide(current - 1); }
+      } else if (e.key === 'Escape' && window.parent && window.parent !== window) {
+        window.parent.postMessage({ type: 'odant-presentation-close' }, '*');
+      }
+    });
+  })();
+</script>
+</body>
+</html>

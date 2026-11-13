@@ -82,6 +82,9 @@ const STATIC_ASSETS = Object.freeze({
     '/assets/landing.css': { file: 'landing.css', type: 'text/css; charset=utf-8' },
     '/assets/landing.js': { file: 'landing.js', type: 'text/javascript; charset=utf-8' },
     '/assets/admin.js': { file: 'admin.js', type: 'text/javascript; charset=utf-8' },
+    '/presentation': { file: 'ODANT-WORK-presentation.html', type: 'text/html; charset=utf-8' },
+    '/assets/ODANT-WORK-presentation.html': { file: 'ODANT-WORK-presentation.html', type: 'text/html; charset=utf-8' },
+    '/assets/ODANT-WORK-presentation.pdf': { file: 'ODANT-WORK-presentation.pdf', type: 'application/pdf' },
 });
 const assetCache = new Map();
 let assetVersionCache = '';

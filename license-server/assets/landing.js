@@ -2100,6 +2100,68 @@
         else requestAnimationFrame(frame);
     }
 
+    /* ================= Интерактивный плеер презентации ODANT-WORK ================= */
+    let currentPresSlide = 1;
+    const PRES_TOTAL_SLIDES = 12;
+
+    function syncPresIndicators(slideNum) {
+        currentPresSlide = Math.max(1, Math.min(PRES_TOTAL_SLIDES, Number(slideNum) || 1));
+        const cnt = $('#presCounter');
+        if (cnt) cnt.textContent = `Слайд ${currentPresSlide} / ${PRES_TOTAL_SLIDES}`;
+        $$('#presDots .pres-dot').forEach(btn => {
+            btn.classList.toggle('on', Number(btn.dataset.slide) === currentPresSlide);
+        });
+        const sec = currentPresSlide >= 10 ? 'franchise' : (currentPresSlide >= 8 ? 'clients' : 'product');
+        $$('#presSectionTabs .chip').forEach(btn => {
+            btn.classList.toggle('on', btn.dataset.sec === sec);
+        });
+    }
+
+    function openPresentationModal(startSlide = 1) {
+        const modal = $('#presentationModal');
+        const frame = $('#presFrame');
+        if (!modal || !frame) return;
+        const n = Math.max(1, Math.min(PRES_TOTAL_SLIDES, Number(startSlide) || 1));
+        syncPresIndicators(n);
+        const targetSrc = `/presentation?embed=1&slide=${n}`;
+        if (!frame.getAttribute('src')) {
+            frame.setAttribute('src', targetSrc);
+        } else {
+            try {
+                frame.contentWindow?.postMessage({ type: 'odant-presentation-goto', slide: n }, '*');
+            } catch {
+                frame.setAttribute('src', targetSrc);
+            }
+        }
+        modal.classList.add('open');
+    }
+
+    function closePresentationModal() {
+        $('#presentationModal')?.classList.remove('open');
+    }
+
+    function gotoPresentationSlide(slideNum) {
+        const n = Math.max(1, Math.min(PRES_TOTAL_SLIDES, Number(slideNum) || 1));
+        syncPresIndicators(n);
+        const frame = $('#presFrame');
+        try {
+            frame?.contentWindow?.postMessage({ type: 'odant-presentation-goto', slide: n }, '*');
+        } catch { /* ignore */ }
+    }
+
+    function stepPresentationSlide(delta) {
+        gotoPresentationSlide(currentPresSlide + (Number(delta) || 0));
+    }
+
+    window.addEventListener('message', (e) => {
+        const d = e.data || {};
+        if (d.type === 'odant-presentation-slide' && d.slide) {
+            syncPresIndicators(d.slide);
+        } else if (d.type === 'odant-presentation-close') {
+            closePresentationModal();
+        }
+    });
+
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
@@ -2223,6 +2285,26 @@
                 case 'cert-copy':
                     navigator.clipboard?.writeText($('#certJsonBox')?.textContent || '');
                     break;
+                case 'open-presentation':
+                    e.preventDefault();
+                    openPresentationModal(Number(el.dataset.slide || 1));
+                    break;
+                case 'pres-close':
+                    closePresentationModal();
+                    break;
+                case 'pres-goto':
+                    gotoPresentationSlide(Number(el.dataset.slide || 1));
+                    break;
+                case 'pres-prev':
+                    stepPresentationSlide(-1);
+                    break;
+                case 'pres-next':
+                    stepPresentationSlide(1);
+                    break;
+                case 'pres-jump-stage':
+                    closePresentationModal();
+                    if (el.dataset.targetStage) switchStage(el.dataset.targetStage);
+                    break;
                 case 'ai-toggle': toggleAi(); break;
                 case 'ai-send': sendAi(); break;
             }
@@ -2230,8 +2312,13 @@
         $('#authModal')?.addEventListener('click', (e) => { if (e.target.id === 'authModal') closeAuth(); });
         $('#ofertaModal')?.addEventListener('click', (e) => { if (e.target.id === 'ofertaModal') closeOfertaModal(); });
         $('#certModal')?.addEventListener('click', (e) => { if (e.target.id === 'certModal') $('#certModal').classList.remove('open'); });
+        $('#presentationModal')?.addEventListener('click', (e) => { if (e.target.id === 'presentationModal') closePresentationModal(); });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { closeAuth(); closeOfertaModal(); $('#certModal')?.classList.remove('open'); toggleAi(false); }
+            if (e.key === 'Escape') { closeAuth(); closeOfertaModal(); closePresentationModal(); $('#certModal')?.classList.remove('open'); toggleAi(false); }
+            else if ($('#presentationModal')?.classList.contains('open')) {
+                if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); stepPresentationSlide(1); }
+                else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); stepPresentationSlide(-1); }
+            }
         });
         $('#authModal')?.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') {

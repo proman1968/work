@@ -401,6 +401,22 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(!html.includes('id="btnAdminTop"') && !html.includes('id="stage-admin"'), 'На публичном сайте нет ссылок и верстки админки');
         assert.ok(html.includes('через API из любого источника'), 'Указано подключение более мощных моделей ИИ через API из любого источника');
         assert.ok(!html.includes('1С'), 'В лендинге нет упоминаний 1С');
+        assert.ok(html.includes('id="presentationModal"'), 'На лендинге встроен интерактивный плеер презентации');
+        assert.ok(html.includes('data-action="open-presentation"'), 'Кнопки открытия презентации встроены в разделы лендинга');
+        assert.ok(html.includes('/assets/ODANT-WORK-presentation.pdf'), 'Кнопки скачивания PDF презентации встроены в лендинг');
+
+        // Проверка раздачи веб-версии и PDF презентации для клиентов и франчайзи
+        const presHtmlRes = await fetch(`${hubUrl}/presentation`);
+        assert.equal(presHtmlRes.status, 200);
+        const presHtml = await presHtmlRes.text();
+        assert.ok(presHtml.includes('Презентация для клиентов и региональных партнёров (франчайзи)'));
+        assert.ok(presHtml.includes('Слайд 12 / 12'));
+
+        const presPdfRes = await fetch(`${hubUrl}/assets/ODANT-WORK-presentation.pdf`);
+        assert.equal(presPdfRes.status, 200);
+        assert.equal(presPdfRes.headers.get('content-type'), 'application/pdf');
+        const pdfBytes = Buffer.from(await presPdfRes.arrayBuffer());
+        assert.ok(pdfBytes.length > 50_000, 'PDF презентации непустой и корректен');
 
         // 7.1 Отдельная страница админки /admin и обязательная защита входа администратора
         const adminHtml = await fetch(`${hubUrl}/admin`).then(r => r.text());
