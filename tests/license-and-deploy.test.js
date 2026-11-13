@@ -410,6 +410,8 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.equal(presHtmlRes.status, 200);
         const presHtml = await presHtmlRes.text();
         assert.ok(presHtml.includes('Презентация для клиентов и региональных партнёров (франчайзи)'));
+        assert.ok(presHtml.includes('№ 3505'), 'Указан верный номер реестровой записи СУБД Платформа Odant № 3505 от 03.05.2017');
+        assert.ok(presHtml.includes('ПАО «Россети»') && presHtml.includes('infostandart.com'), 'Указаны реальные внедрения из портфолио infostandart.com');
         assert.ok(presHtml.includes('Слайд 12 / 12'));
 
         const presPdfRes = await fetch(`${hubUrl}/assets/ODANT-WORK-presentation.pdf`);
