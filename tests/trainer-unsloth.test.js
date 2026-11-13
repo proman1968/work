@@ -267,15 +267,79 @@ describe('Локальный ИИ-контур: адаптация под реа
             }
 
             const localHandlers = await localProvider.handlers({ path: '//form', role: 'BOSS' });
-            const localViewIds = (localHandlers?.items || []).filter(i => i.usable !== false).map(i => i.id);
-            assert.ok(localViewIds.includes('trainer'), 'на /MODELS/Local доступна вкладка Unsloth / HF (trainer)');
+            const localViews = (localHandlers?.items || []).filter(i => i.usable !== false);
+            const trainerView = localViews.find(i => i.id === 'trainer');
+            assert.ok(trainerView, 'на /MODELS/Local доступна вкладка trainer');
+            assert.equal(trainerView.label, 'Модели ИИ', 'представление на /MODELS/Local называется «Модели ИИ»');
 
             const gigaHandlers = await gigaProvider.handlers({ path: '//form', role: 'BOSS' });
-            const gigaViewIds = (gigaHandlers?.items || []).filter(i => i.usable !== false).map(i => i.id);
-            assert.ok(!gigaViewIds.includes('trainer'), 'на облачном /MODELS/GigaChat вкладка trainer скрыта');
+            const gigaViews = (gigaHandlers?.items || []).filter(i => i.usable !== false);
+            const providerView = gigaViews.find(i => i.id === 'provider');
+            assert.ok(providerView, 'на /MODELS/GigaChat доступна вкладка provider');
+            assert.equal(providerView.label, 'Модели ИИ', 'представление на облачном провайдере единообразно называется «Модели ИИ»');
+            assert.ok(!gigaViews.some(i => i.id === 'trainer'), 'на облачном /MODELS/GigaChat вкладка trainer скрыта');
+
+            const gigaLite = await WORK.get_item('/MODELS/GigaChat/GigaChat 2 Lite');
+            const modelHandlers = await gigaLite.handlers({ path: '//form', role: 'BOSS' });
+            const modelViews = (modelHandlers?.items || []).filter(i => i.usable !== false);
+            const modelCardView = modelViews.find(i => i.id === 'trainer');
+            assert.ok(modelCardView, 'при клике на конкретную модель $ai открывается карточка модели');
+            assert.equal(modelCardView.label, 'Модели ИИ');
         }
         finally {
             globalThis.WORK = prevWork;
+        }
+    });
+
+    it('встроенный сервер локального ИИ: адаптивный режим памяти (on-demand vs always-on на Halo) и удаление модели с диска в 1 клик', async () => {
+        const {
+            getLocalEngineStatus,
+            releaseLocalEngineMemory,
+            registerLocalModelNode,
+            listLocalModelsAndAdapters,
+            deleteLocalModel,
+        } = await import('../sources/modules/trainer/index.js');
+
+        const stDesktop = getLocalEngineStatus({ totalRamGb: 16, halogenOnline: false });
+        assert.equal(stDesktop.mode, 'on-demand');
+        assert.match(stDesktop.modeLabel, /Автозапуск по запросу/);
+
+        const stHalo = getLocalEngineStatus({ totalRamGb: 192, halogenOnline: true });
+        assert.equal(stHalo.mode, 'always-on');
+        assert.equal(stHalo.running, true);
+        assert.match(stHalo.modeLabel, /Halo 128–192 ГБ/);
+
+        const rel = releaseLocalEngineMemory();
+        assert.equal(rel.ok, true);
+
+        const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-del-model-'));
+        try {
+            const wDir = path.join(tmpRoot, 'MODELS', 'Local', 'Test-Model', '#weights');
+            await fsp.mkdir(wDir, { recursive: true });
+            await fsp.writeFile(path.join(wDir, 'model.gguf'), Buffer.alloc(1024, 1));
+            await registerLocalModelNode({
+                rootDir: tmpRoot,
+                folderName: 'Test-Model',
+                label: 'Test Model',
+                repoId: 'org/Test-Model',
+                weightsDir: wDir,
+                primaryFile: 'model.gguf',
+            });
+
+            const before = await listLocalModelsAndAdapters(tmpRoot);
+            assert.equal(before.models.length, 1);
+            assert.equal(before.models[0].id, 'Test-Model');
+            assert.equal(before.models[0].active, true);
+
+            const delRes = await deleteLocalModel({ rootDir: tmpRoot, modelId: 'Test-Model' });
+            assert.equal(delRes.ok, true);
+            assert.equal(fs.existsSync(path.join(tmpRoot, 'MODELS', 'Local', 'Test-Model')), false, 'папка модели и веса полностью удалены с диска');
+
+            const after = await listLocalModelsAndAdapters(tmpRoot);
+            assert.equal(after.models.length, 0);
+        }
+        finally {
+            await fsp.rm(tmpRoot, { recursive: true, force: true });
         }
     });
 });

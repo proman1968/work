@@ -230,20 +230,66 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
         const aiClassFile = path.join(localRoot, e.name, '$ai', 'class.js');
         const weightsDir = path.join(localRoot, e.name, '#weights');
         let weightFiles = [];
+        let sizeBytes = 0;
         if (fs.existsSync(weightsDir)) {
             const wf = await fsp.readdir(weightsDir).catch(() => []);
-            weightFiles = wf.filter(f => !f.endsWith('.part'));
+            weightFiles = wf.filter(f => !f.endsWith('.part') && f !== 'hf-manifest.json');
+            for (const f of weightFiles) {
+                try {
+                    const st = await fsp.stat(path.join(weightsDir, f));
+                    sizeBytes += st.size || 0;
+                }
+                catch { /* ignore */ }
+            }
+        }
+        let meta = {};
+        if (fs.existsSync(aiClassFile)) {
+            try {
+                const raw = await fsp.readFile(aiClassFile, 'utf-8');
+                const jsonPart = raw.replace(/^[^{]*/, '').replace(/;\s*$/, '');
+                meta = JSON.parse(jsonPart);
+            }
+            catch { /* non-json class.js */ }
         }
         if (fs.existsSync(aiClassFile) || weightFiles.length) {
+            const enabled = meta.enabled !== false;
+            const hasWeights = weightFiles.length > 0;
             models.push({
                 id: e.name,
+                label: meta.label || e.name,
+                icon: meta.icon || 'ai:ollama',
+                modality: meta.modality || 'llm',
+                model: meta.model || meta.hfRepo || e.name,
+                capabilities: Array.isArray(meta.capabilities) ? meta.capabilities : ['chat', 'stream'],
+                maxTokens: meta.maxTokens || 16384,
+                enabled,
+                active: enabled && hasWeights,
                 path: `/MODELS/Local/${e.name}`,
                 hasClass: fs.existsSync(aiClassFile),
                 weightFiles,
+                sizeGb: +(sizeBytes / (1024 ** 3)).toFixed(2),
             });
         }
     }
     return { models, adapters };
+}
+
+/**
+ * Полностью удалить локальную модель `/MODELS/Local/<modelId>` вместе с её весами `#weights` и узлом `$ai`.
+ */
+export async function deleteLocalModel({ rootDir = process.cwd(), modelId } = {}) {
+    const cleanId = String(modelId || '').replace(/^\/?MODELS\/Local\//i, '').replace(/[<>:"/\\|?*]/g, '').trim();
+    if (!cleanId || cleanId.startsWith('$') || cleanId.startsWith('.'))
+        throw new Error('Некорректное имя удаляемой модели: ' + modelId);
+    const targetDir = path.join(rootDir, 'MODELS', 'Local', cleanId);
+    const localRoot = path.join(rootDir, 'MODELS', 'Local');
+    const rel = path.relative(localRoot, targetDir);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel))
+        throw new Error('Запрещённый путь удаления: ' + targetDir);
+    if (fs.existsSync(targetDir)) {
+        await fsp.rm(targetDir, { recursive: true, force: true });
+    }
+    return { ok: true, deletedId: cleanId, deletedPath: `/MODELS/Local/${cleanId}` };
 }
 
 /**

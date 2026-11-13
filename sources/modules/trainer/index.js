@@ -26,13 +26,19 @@ import {
     computeAdaptiveDefaults,
     detectHardware,
     listLocalModelsAndAdapters,
+    deleteLocalModel,
     startTrainingJob,
     getTrainingJob,
     listTrainingJobs,
     stopTrainingJob,
     publishTrainedAdapter,
 } from './runner.js';
-import { localStreamChat } from './local-engine.js';
+import {
+    localStreamChat,
+    getLocalEngineStatus,
+    releaseLocalEngineMemory,
+    touchLocalEngineActivity,
+} from './local-engine.js';
 import {
     HALOGEN_DEFAULT_PORT,
     HALOGEN_DEFAULT_BASE_URL,
@@ -144,6 +150,10 @@ export {
     scrubSecrets,
     detectHardware,
     listLocalModelsAndAdapters,
+    deleteLocalModel,
+    getLocalEngineStatus,
+    releaseLocalEngineMemory,
+    touchLocalEngineActivity,
     startTrainingJob,
     getTrainingJob,
     listTrainingJobs,
@@ -167,8 +177,12 @@ export const TRAINER_METHODS = Object.freeze({
                 totalRamGb: hardware?.totalRamGb >= 120 ? hardware.totalRamGb : 192,
                 platform: hardware?.platform,
             });
+            const runtime = getLocalEngineStatus({
+                totalRamGb: hardware?.totalRamGb,
+            });
             return {
                 hardware,
+                runtime,
                 models: local.models,
                 adapters: local.adapters,
                 datasets,
@@ -183,6 +197,32 @@ export const TRAINER_METHODS = Object.freeze({
                     handles: listHalogenSessionHandles(),
                     windowsEnv: inspectWindowsHalogenEnvironment(),
                 },
+            };
+        },
+    },
+    trainer_delete_model: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const modelId = p.modelId || p.id || p.path || '';
+            const res = await deleteLocalModel({ modelId });
+            try {
+                const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                localNode?.reset?.();
+                const modelsRoot = await globalThis.WORK?.get_item?.('/MODELS');
+                modelsRoot?.reset?.();
+            }
+            catch { /* ignore */ }
+            return res;
+        },
+    },
+    trainer_release_memory: {
+        level: 'admin',
+        fn: async function () {
+            const res = releaseLocalEngineMemory();
+            const hw = await detectHardware().catch(() => null);
+            return {
+                ...res,
+                runtime: getLocalEngineStatus({ totalRamGb: hw?.totalRamGb }),
             };
         },
     },

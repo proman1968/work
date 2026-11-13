@@ -7,6 +7,7 @@
  * подмешивает точные факты из живой БД `work.db`), обеспечивая мгновенный отклик без внешних серверов.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -14,7 +15,7 @@ import { dataStore } from '../../data/api.js';
 import { classesOfType } from '../../data/classes.js';
 import { classSchema } from '../../data/schema.js';
 import { trialBalance } from '../../data/reports.js';
-import { recordHalogenSessionHandle } from './halogen.js';
+import { recordHalogenSessionHandle, stopHalogenBackend } from './halogen.js';
 
 const money = v => Number(v || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -22,6 +23,70 @@ const _tokenizerCache = new Map();
 let _workerProc = null;
 let _workerReady = false;
 const _pendingRequests = new Map();
+
+export const LOCAL_IDLE_TIMEOUT_MS = Number(process.env.WORK_LOCAL_AI_IDLE_MS) || (30 * 60 * 1000);
+let _lastActivityAt = 0;
+let _idleTimer = null;
+
+function isHaloHighMemHost(totalRamGb) {
+    const ram = Number(totalRamGb) || (os.totalmem() / (1024 ** 3));
+    return ram >= 120;
+}
+
+export function touchLocalEngineActivity(totalRamGb) {
+    _lastActivityAt = Date.now();
+    if (_idleTimer) {
+        clearTimeout(_idleTimer);
+        _idleTimer = null;
+    }
+    if (!isHaloHighMemHost(totalRamGb)) {
+        _idleTimer = setTimeout(() => {
+            _idleTimer = null;
+            if (_pendingRequests.size === 0) {
+                releaseLocalEngineMemory();
+            }
+        }, LOCAL_IDLE_TIMEOUT_MS);
+        _idleTimer.unref?.();
+    }
+}
+
+export function getLocalEngineStatus({ totalRamGb, halogenOnline = false } = {}) {
+    const highMem = isHaloHighMemHost(totalRamGb);
+    const workerAlive = Boolean(_workerProc && !_workerProc.killed);
+    const running = workerAlive || Boolean(halogenOnline);
+    const idleTimeoutMin = Math.round(LOCAL_IDLE_TIMEOUT_MS / 60000);
+    return {
+        running,
+        workerAlive,
+        halogenOnline: Boolean(halogenOnline),
+        mode: highMem ? 'always-on' : 'on-demand',
+        modeLabel: highMem
+            ? (running ? 'В памяти постоянно (Halo 128–192 ГБ)' : 'Готов к запуску (Halo 128–192 ГБ)')
+            : (running ? `В памяти (автовыгрузка через ${idleTimeoutMin} мин простоя)` : `Автозапуск по запросу (выгрузка через ${idleTimeoutMin} мин)`),
+        idleTimeoutMin: highMem ? 0 : idleTimeoutMin,
+        lastActivityAt: _lastActivityAt,
+    };
+}
+
+export function releaseLocalEngineMemory() {
+    if (_idleTimer) {
+        clearTimeout(_idleTimer);
+        _idleTimer = null;
+    }
+    closeInferWorker();
+    _tokenizerCache.clear();
+    let haloStopped = false;
+    try {
+        const res = stopHalogenBackend();
+        haloStopped = Boolean(res?.stopped);
+    }
+    catch { /* ignore */ }
+    return {
+        ok: true,
+        released: true,
+        haloStopped,
+    };
+}
 
 function resolveWeightsDir(ai, rootDir = process.cwd()) {
     const modelId = String(ai?.id || ai?.label || ai?.model || 'Local-Model').split('/').pop();
@@ -216,6 +281,7 @@ export function closeInferWorker() {
  * Потоковая генерация ответа локальной модели (`streamChat` для `/MODELS/Local/*`).
  */
 export async function* localStreamChat(ai, body = {}, options = {}) {
+    touchLocalEngineActivity();
     const weightsDir = resolveWeightsDir(ai);
     const messages = Array.isArray(body?.messages) ? body.messages : [];
     const turns = extractConversationTurns(messages);
