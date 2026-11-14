@@ -13,8 +13,10 @@
     let lastAdminData = null;
     let currentCertLic = null;
     let currentScheduleResId = '';
-    let activeTab = 'servers';
+    let activeTab = 'clients';
     let admCountdownTimer = null;
+    const expandedClients = new Set();
+    const expandedFranchisers = new Set();
 
     function readCookieSession() {
         try {
@@ -239,7 +241,7 @@
 
     /* ================= Вкладки и форматирование ================= */
     function setTab(tab) {
-        activeTab = tab || 'servers';
+        activeTab = tab || 'clients';
         $$('[data-adm-tab]').forEach(b => b.classList.toggle('active', b.dataset.admTab === activeTab));
         $$('[data-adm-sec]').forEach(sec => {
             sec.style.display = sec.dataset.admSec === activeTab ? '' : 'none';
@@ -296,6 +298,147 @@
         }
     }
 
+    function cleanOrgName(raw = '') {
+        const s = String(raw || '').trim();
+        if (!s || s.includes('@') || s === 'Организация ПАК WORK' || s === 'Клиент WORK' || s === 'Партнёр ODANT-WORK')
+            return '';
+        return s;
+    }
+
+    function buildClientGroups(users = [], licenses = []) {
+        const map = new Map();
+
+        for (const u of users) {
+            if (!u) continue;
+            const email = String(u.email || '').trim().toLowerCase();
+            const key = email || String(u.userId || '').toLowerCase();
+            if (!key) continue;
+            map.set(key, {
+                key,
+                email: u.email || key,
+                userId: u.userId || '',
+                isAdmin: Boolean(u.isAdmin),
+                name: (u.name && !String(u.name).includes('@')) ? String(u.name).trim() : '',
+                position: String(u.position || u.signerPosition || '').trim(),
+                companyName: cleanOrgName(u.companyName),
+                inn: String(u.inn || '').trim(),
+                kpp: String(u.kpp || '').trim(),
+                phone: String(u.phone || '').trim(),
+                ofertaAccepted: Boolean(u.ofertaAccepted),
+                ofertaSignatureId: String(u.ofertaSignatureId || '').trim(),
+                createdAt: Number(u.createdAt || 0),
+                lastLoginAt: Number(u.lastLoginAt || u.createdAt || 0),
+                servers: [],
+            });
+        }
+
+        const groupsList = () => Array.from(map.values());
+
+        for (const lic of licenses) {
+            if (!lic) continue;
+            const licEmail = String(lic.ownerEmail || lic.customer?.email || '').trim().toLowerCase();
+            let grp = licEmail ? map.get(licEmail) : null;
+            if (!grp && lic.ownerAccountId) {
+                grp = groupsList().find(g => g.userId && g.userId === lic.ownerAccountId) || null;
+            }
+            if (!grp) {
+                const key = licEmail || String(lic.licenseId || '').toLowerCase();
+                grp = {
+                    key,
+                    email: licEmail || lic.licenseId,
+                    userId: lic.ownerAccountId || '',
+                    isAdmin: false,
+                    name: '',
+                    position: '',
+                    companyName: cleanOrgName(lic.customer?.name),
+                    inn: String(lic.customer?.inn || '').trim(),
+                    kpp: '',
+                    phone: String(lic.customer?.phone || '').trim(),
+                    ofertaAccepted: false,
+                    ofertaSignatureId: '',
+                    createdAt: Number(lic.issuedAt || 0),
+                    lastLoginAt: Number(lic.updatedAt || lic.issuedAt || 0),
+                    servers: [],
+                };
+                map.set(key, grp);
+            }
+            else {
+                if (!grp.companyName && cleanOrgName(lic.customer?.name))
+                    grp.companyName = cleanOrgName(lic.customer?.name);
+                if (!grp.inn && lic.customer?.inn)
+                    grp.inn = String(lic.customer.inn).trim();
+                if (!grp.phone && lic.customer?.phone)
+                    grp.phone = String(lic.customer.phone).trim();
+            }
+            if (!grp.servers.some(s => s.licenseId === lic.licenseId)) {
+                grp.servers.push(lic);
+            }
+        }
+
+        const result = groupsList();
+        for (const g of result) {
+            g.servers.sort((a, b) => Number(a.issuedAt || 0) - Number(b.issuedAt || 0));
+        }
+        result.sort((a, b) => {
+            if (a.isAdmin !== b.isAdmin) return a.isAdmin ? -1 : 1;
+            return (b.lastLoginAt || b.createdAt || 0) - (a.lastLoginAt || a.createdAt || 0);
+        });
+        return result;
+    }
+
+    function buildFranchiserGroups(franchises = [], users = []) {
+        const userByEmail = new Map();
+        const userById = new Map();
+        for (const u of users) {
+            if (!u) continue;
+            if (u.email) userByEmail.set(String(u.email).trim().toLowerCase(), u);
+            if (u.userId) userById.set(String(u.userId), u);
+        }
+
+        const map = new Map();
+        for (const f of franchises) {
+            if (!f) continue;
+            const u = (f.email && userByEmail.get(String(f.email).trim().toLowerCase()))
+                || (f.ownerAccountId && userById.get(String(f.ownerAccountId)))
+                || null;
+            const email = String(f.email || u?.email || '').trim().toLowerCase();
+            const key = email || String(f.ownerAccountId || f.inn || f.reservationId || '').toLowerCase();
+            if (!key) continue;
+
+            let grp = map.get(key);
+            if (!grp) {
+                grp = {
+                    key,
+                    email: f.email || u?.email || key,
+                    userId: f.ownerAccountId || u?.userId || '',
+                    name: (u?.name && !String(u.name).includes('@')) ? String(u.name).trim() : '',
+                    companyName: cleanOrgName(f.companyName || u?.companyName),
+                    inn: String(f.inn || u?.inn || '').trim(),
+                    phone: String(f.phone || u?.phone || '').trim(),
+                    items: [],
+                };
+                map.set(key, grp);
+            }
+            else {
+                if (!grp.companyName && cleanOrgName(f.companyName)) grp.companyName = cleanOrgName(f.companyName);
+                if (!grp.inn && f.inn) grp.inn = String(f.inn).trim();
+                if (!grp.phone && f.phone) grp.phone = String(f.phone).trim();
+            }
+            grp.items.push(f);
+        }
+
+        const result = Array.from(map.values());
+        for (const g of result) {
+            g.items.sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+        }
+        result.sort((a, b) => {
+            const aMax = Math.max(0, ...a.items.map(x => Number(x.createdAt || 0)));
+            const bMax = Math.max(0, ...b.items.map(x => Number(x.createdAt || 0)));
+            return bMax - aMax;
+        });
+        return result;
+    }
+
     function renderAdminPanel(data = {}) {
         const licenses = data.licenses || [];
         const franchises = data.franchises || data.reservations || [];
@@ -303,104 +446,232 @@
         const tickets = data.tickets || [];
         const users = data.users || [];
 
+        const clientGroups = buildClientGroups(users, licenses);
         const activeFranchises = franchises.filter(f => f && f.status !== 'canceled' && f.status !== 'expired');
+        const activeFranchiserGroups = buildFranchiserGroups(activeFranchises, users);
         const openTickets = tickets.filter(t => t.status !== 'answered' && t.status !== 'closed');
 
-        if ($('#navAdmServers')) $('#navAdmServers').textContent = `Серверы и лицензии (${licenses.length})`;
-        if ($('#navAdmFranchises')) $('#navAdmFranchises').textContent = `Франшизы (${activeFranchises.length})`;
+        if ($('#navAdmClients')) $('#navAdmClients').textContent = `Клиенты (${clientGroups.length})`;
+        if ($('#navAdmFranchisers')) $('#navAdmFranchisers').textContent = `Франчайзеры (${activeFranchiserGroups.length})`;
         if ($('#navAdmOrders')) $('#navAdmOrders').textContent = `Заказы и счета (${orders.length})`;
-        if ($('#navAdmUsers')) $('#navAdmUsers').textContent = `Клиенты и администраторы (${users.length})`;
         if ($('#navAdmTickets')) $('#navAdmTickets').textContent = `Тикеты поддержки (${openTickets.length})`;
         if ($('#admDataDirLabel') && data.dataDir) {
             $('#admDataDirLabel').textContent = `Папка БД: ${data.dataDir}`;
         }
 
-        renderServersTable(licenses);
-        renderFranchisesTable(franchises);
+        renderClientsPanels(clientGroups);
+        renderFranchisersPanels(franchises, users);
         renderOrdersTable(orders);
-        renderUsersTable(users);
         renderTicketsTable(tickets);
+        renderPortalSettings(data.settings || {});
         startAdminCountdowns();
     }
 
-    /* 1. Таблица серверов и лицензий */
-    function renderServersTable(licenses = []) {
-        const tbody = $('#admLicensesBody');
-        if (!tbody) return;
-        const q = ($('#inpFilterServers')?.value || '').trim().toLowerCase();
-        const mode = $('#selFilterServers')?.value || 'all';
+    function renderPortalSettings(settings = {}) {
+        const smtp = settings.smtp || {};
+        const yk = settings.yookassa || {};
+        const bots = settings.bots || {};
+        const legal = settings.legal || {};
 
-        const filtered = licenses.filter(l => {
-            const hwidBound = Boolean(l.hwidBound || l.hardware?.hwidBound || l.hardware?.nodeFingerprint);
-            if (mode === 'base_active' && !l.baseActivated) return false;
-            if (mode === 'base_inactive' && l.baseActivated) return false;
-            if (mode === 'hwid_bound' && !hwidBound) return false;
-            if (!q) return true;
-            const hay = [
-                l.licenseId, l.serverName, l.ownerEmail, l.customer?.name,
-                l.customer?.inn, l.customer?.email, l.hardware?.hwid, l.hardware?.nodeFingerprint,
-            ].join(' ').toLowerCase();
-            return hay.includes(q);
-        });
+        if ($('#navBadgeSmtp')) {
+            $('#navBadgeSmtp').textContent = smtp.connected ? 'активна' : 'не задана';
+            $('#navBadgeSmtp').className = smtp.connected ? 'tag ok' : 'tag';
+        }
+        if ($('#admSmtpStatusTag')) {
+            $('#admSmtpStatusTag').textContent = smtp.connected
+                ? `✓ Подключена (${smtp.mailFile || 'mail.json'})`
+                : 'Не настроена';
+            $('#admSmtpStatusTag').className = smtp.connected ? 'tag ok' : 'tag';
+        }
+        if ($('#admSmtpHost')) $('#admSmtpHost').value = smtp.host || '';
+        if ($('#admSmtpPort')) $('#admSmtpPort').value = smtp.port || 465;
+        if ($('#admSmtpSecure')) $('#admSmtpSecure').checked = smtp.secure !== false;
+        if ($('#admSmtpUser')) $('#admSmtpUser').value = smtp.user || '';
+        if ($('#admSmtpPass')) $('#admSmtpPass').value = smtp.pass || '';
+        if ($('#admSmtpFrom')) $('#admSmtpFrom').value = smtp.fromEmail || smtp.user || '';
+        if ($('#admSmtpSenderName')) $('#admSmtpSenderName').value = smtp.senderName || 'ODANT-WORK';
 
-        tbody.innerHTML = filtered.map(l => {
-            const lid = l.licenseId;
-            const srvName = l.serverName || 'Сервер WORK';
-            const hwidBound = Boolean(l.hwidBound || l.hardware?.hwidBound || l.hardware?.nodeFingerprint);
-            const hwid = l.hardware?.hwid || '—';
-            const fp = l.hardware?.nodeFingerprint || '';
-            const ownerEmail = l.ownerEmail || l.customer?.email || '—';
+        if ($('#admYookassaStatusTag')) {
+            $('#admYookassaStatusTag').textContent = yk.live ? '✓ Боевой режим (API v3)' : 'Режим песочницы';
+            $('#admYookassaStatusTag').className = yk.live ? 'tag ok' : 'tag';
+        }
+        if ($('#admYkShopId')) $('#admYkShopId').value = yk.shopId || '';
+        if ($('#admYkSecretKey')) $('#admYkSecretKey').value = yk.secretKey || '';
+        if ($('#admYkSendReceipt')) $('#admYkSendReceipt').checked = Boolean(yk.sendReceipt);
 
-            const baseHtml = l.baseActivated
-                ? `<span class="tag ok">✓ Активна (${l.baseSeats || 10} вечн. + ИИ)</span>
-                   <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px;color:var(--danger)" data-adm-base="${esc(lid)}" data-activate="0">Отозвать базовую</button></div>`
-                : `<span class="tag">Не активирована (1 сессия)</span>
-                   <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-base="${esc(lid)}" data-activate="1">Активировать базовую</button></div>`;
+        if ($('#admBadgeTgBot')) {
+            const tgName = bots.telegramUsername ? `@${bots.telegramUsername}` : (bots.telegramToken ? 'токен задан' : 'не задан');
+            $('#admBadgeTgBot').textContent = `TG: ${tgName}`;
+            $('#admBadgeTgBot').className = (bots.telegramUsername || bots.telegramToken) ? 'tag ok' : 'tag';
+        }
+        if ($('#admBadgeMaxBot')) {
+            const maxName = bots.maxUsername ? `@${bots.maxUsername}` : (bots.maxToken ? 'токен задан' : 'не задан');
+            $('#admBadgeMaxBot').textContent = `MAX: ${maxName}`;
+            $('#admBadgeMaxBot').className = (bots.maxUsername || bots.maxToken) ? 'tag ok' : 'tag';
+        }
+        if ($('#admBotTgToken')) $('#admBotTgToken').value = bots.telegramToken || '';
+        if ($('#admBotTgUsername')) $('#admBotTgUsername').value = bots.telegramUsername || '';
+        if ($('#admBotMaxToken')) $('#admBotMaxToken').value = bots.maxToken || '';
+        if ($('#admBotMaxUsername')) $('#admBotMaxUsername').value = bots.maxUsername || '';
 
-            const hwidHtml = hwidBound
-                ? `<span class="tag ok">Привязан</span> <code>${esc(hwid)}</code>
-                   ${fp ? `<div class="small muted">Узел: <code>${esc(fp.slice(0, 18))}…</code></div>` : ''}
-                   <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-reset-hwid="${esc(lid)}">Сбросить привязку</button></div>`
-                : `<span class="small muted">Ожидает привязки токена</span><div class="small muted"><code>${esc(hwid)}</code></div>`;
-
-            return `<tr>
-                <td>
-                    <b>${esc(srvName)}</b>
-                    <div class="small muted"><code>${esc(lid)}</code> · создан ${fmtDate(l.issuedAt)}</div>
-                    <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
-                        <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-copy-tok="${esc(lid)}">Скопировать токен owk1</button>
-                    </div>
-                </td>
-                <td>
-                    <b>${esc(l.customer?.name || '—')}</b>
-                    <div class="small muted">ИНН ${esc(l.customer?.inn || '—')}</div>
-                    <div class="small"><code>${esc(ownerEmail)}</code></div>
-                </td>
-                <td>${hwidHtml}</td>
-                <td>${baseHtml}</td>
-                <td>
-                    <div>Всего сессий: <b>${l.totalSeats}</b> (+<b>${l.addonSeats || 0}</b> доп.)</div>
-                    <div class="small muted">SLA: ${esc(l.support?.tierName || 'Enterprise')} (пакетов: ${(l.activeAddons || []).length})</div>
-                    <div style="margin-top:4px">
-                        <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-open-grant="${esc(lid)}" data-srv-name="${esc(srvName)}">+ Начислить доп. места</button>
-                    </div>
-                </td>
-                <td style="text-align:right">
-                    <button class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:12px" data-cert="${esc(lid)}">.lic.json (${(l.licenseFiles || []).length})</button>
-                </td>
-            </tr>`;
-        }).join('') || '<tr><td colspan="6" class="muted">Серверов по заданному фильтру не найдено</td></tr>';
+        if ($('#admLegalCompany')) $('#admLegalCompany').value = legal.companyName || '';
+        if ($('#admLegalAuthor')) $('#admLegalAuthor').value = legal.authorName || '';
+        if ($('#admLegalStatus')) $('#admLegalStatus').value = legal.legalStatus || '';
+        if ($('#admLegalInn')) $('#admLegalInn').value = legal.inn || '';
+        if ($('#admLegalOgrn')) $('#admLegalOgrn').value = legal.ogrn || '';
+        if ($('#admLegalEmail')) $('#admLegalEmail').value = legal.supportEmail || '';
+        if ($('#admLegalPhone')) $('#admLegalPhone').value = legal.phone || '';
+        if ($('#admLegalAddress')) $('#admLegalAddress').value = legal.address || '';
     }
 
-    /* 2. Таблица франшиз и 12-месячных графиков погашения */
-    function renderFranchisesTable(franchises = []) {
-        const tbody = $('#admFranchisesBody');
-        if (!tbody) return;
-        const q = ($('#inpFilterFranchises')?.value || '').trim().toLowerCase();
-        const mode = $('#selFilterFranchises')?.value || 'all';
+    /* 1. Раскрывающиеся панели клиентов и вложенные серверы/лицензии */
+    function renderClientsPanels(clientGroups = []) {
+        const root = $('#admClientsList');
+        if (!root) return;
+        const q = ($('#inpFilterClients')?.value || '').trim().toLowerCase();
+        const mode = $('#selFilterClients')?.value || 'all';
+        const autoExpand = Boolean(q) || mode !== 'all';
+
+        const filtered = clientGroups.filter(c => {
+            if (mode === 'admins' && !c.isAdmin) return false;
+            if (mode === 'base_active' && !c.servers.some(l => l.baseActivated)) return false;
+            if (mode === 'base_inactive' && !(c.servers.length === 0 || c.servers.some(l => !l.baseActivated))) return false;
+            if (mode === 'hwid_bound' && !c.servers.some(l => Boolean(l.hwidBound || l.hardware?.hwidBound || l.hardware?.nodeFingerprint))) return false;
+            if (!q) return true;
+
+            const clientHay = [c.email, c.userId, c.name, c.companyName, c.inn, c.kpp, c.phone].join(' ').toLowerCase();
+            if (clientHay.includes(q)) return true;
+
+            return c.servers.some(l => [
+                l.licenseId, l.serverName, l.hardware?.hwid, l.hardware?.nodeFingerprint,
+            ].join(' ').toLowerCase().includes(q));
+        });
+
+        if (!filtered.length) {
+            root.innerHTML = '<div class="sec-box muted">Клиентов по заданному фильтру не найдено</div>';
+            return;
+        }
+
+        root.innerHTML = filtered.map(c => {
+            const isOpen = autoExpand || expandedClients.has(c.key);
+            const activeBaseCount = c.servers.filter(s => s.baseActivated).length;
+            const totalSeats = c.servers.reduce((sum, s) => sum + Number(s.totalSeats || 0), 0);
+            const addonSeatsTotal = c.servers.reduce((sum, s) => sum + Number(s.addonSeats || 0), 0);
+
+            const subParts = [
+                c.name ? `${c.name}${c.position ? ` (${c.position})` : ''}` : '',
+                c.companyName,
+                c.inn ? `ИНН ${c.inn}` : '',
+            ].filter(Boolean);
+
+            const metaItems = [];
+            if (c.userId) metaItems.push(`<span>ID: <code>${esc(c.userId)}</code></span>`);
+            if (c.name) metaItems.push(`<span>Физ. лицо: <b>${esc(c.name)}</b>${c.position ? ` (${esc(c.position)})` : ''}</span>`);
+            if (c.companyName || c.inn) {
+                metaItems.push(`<span>Юр. лицо: <b>${esc(c.companyName || '—')}</b>${c.inn ? ` · ИНН <code>${esc(c.inn)}</code>` : ''}${c.kpp ? ` · КПП <code>${esc(c.kpp)}</code>` : ''}</span>`);
+            }
+            if (c.phone) metaItems.push(`<span>Тел.: <code>${esc(c.phone)}</code></span>`);
+            metaItems.push(`<span>Оферта: ${c.ofertaAccepted ? `<b style="color:var(--ok)">✓ ПЭП</b> (<code>${esc(c.ofertaSignatureId)}</code>)` : 'не подписана'}</span>`);
+            if (c.lastLoginAt) metaItems.push(`<span>Вход: ${fmtDateTime(c.lastLoginAt)}</span>`);
+
+            const serversRowsHtml = c.servers.map(l => {
+                const lid = l.licenseId;
+                const srvName = l.serverName || 'Сервер WORK';
+                const hwidBound = Boolean(l.hwidBound || l.hardware?.hwidBound || l.hardware?.nodeFingerprint);
+                const hwid = l.hardware?.hwid || '—';
+                const fp = l.hardware?.nodeFingerprint || '';
+
+                const baseHtml = l.baseActivated
+                    ? `<span class="tag ok">✓ Активна (${l.baseSeats || 10} вечн. + ИИ)</span>
+                       <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px;color:var(--danger)" data-adm-base="${esc(lid)}" data-activate="0">Отозвать базовую</button></div>`
+                    : `<span class="tag">Не активирована (1 сессия)</span>
+                       <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-base="${esc(lid)}" data-activate="1">Активировать базовую</button></div>`;
+
+                const hwidHtml = hwidBound
+                    ? `<span class="tag ok">Привязан</span> <code>${esc(hwid)}</code>
+                       ${fp ? `<div class="small muted">Узел: <code>${esc(fp.slice(0, 18))}…</code></div>` : ''}
+                       <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-reset-hwid="${esc(lid)}">Сбросить привязку</button></div>`
+                    : `<span class="small muted">Ожидает привязки токена</span><div class="small muted"><code>${esc(hwid)}</code></div>`;
+
+                return `<tr>
+                    <td>
+                        <b>${esc(srvName)}</b>
+                        <div class="small muted"><code>${esc(lid)}</code> · создан ${fmtDate(l.issuedAt)}</div>
+                        <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
+                            <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-copy-tok="${esc(lid)}">Скопировать токен owk1</button>
+                        </div>
+                    </td>
+                    <td>${hwidHtml}</td>
+                    <td>${baseHtml}</td>
+                    <td>
+                        <div>Всего сессий: <b>${l.totalSeats}</b> (+<b>${l.addonSeats || 0}</b> доп.)</div>
+                        <div class="small muted">SLA: ${esc(l.support?.tierName || 'Enterprise')} (пакетов: ${(l.activeAddons || []).length})</div>
+                        <div style="margin-top:4px">
+                            <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-open-grant="${esc(lid)}" data-srv-name="${esc(srvName)}">+ Начислить доп. места</button>
+                        </div>
+                    </td>
+                    <td style="text-align:right">
+                        <button class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:12px" data-cert="${esc(lid)}">.lic.json (${(l.licenseFiles || []).length})</button>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            const serversTableHtml = c.servers.length
+                ? `<table class="sec-table">
+                    <thead><tr>
+                        <th>Сервер / ID</th>
+                        <th>Железо (HWID)</th>
+                        <th>Базовая лицензия</th>
+                        <th>Доп. места и SLA</th>
+                        <th style="text-align:right">Файлы</th>
+                    </tr></thead>
+                    <tbody>${serversRowsHtml}</tbody>
+                </table>`
+                : `<div class="small muted" style="padding:8px 4px">У клиента пока нет серверов. Нажмите «+ Добавить сервер», чтобы выпустить лицензию.</div>`;
+
+            return `<div class="adm-acc-card${isOpen ? ' open' : ''}" data-client-card="${esc(c.key)}">
+                <div class="adm-acc-head" data-adm-toggle-client="${esc(c.key)}">
+                    <div class="adm-acc-ident">
+                        <span class="adm-acc-chev">▸</span>
+                        <div>
+                            <div class="adm-acc-email">${esc(c.email)}</div>
+                            ${subParts.length ? `<div class="adm-acc-sub">${esc(subParts.join(' · '))}</div>` : ''}
+                        </div>
+                    </div>
+                    <div class="adm-acc-badges">
+                        ${c.isAdmin ? '<span class="tag ok">Администратор</span>' : ''}
+                        ${c.ofertaAccepted ? `<span class="tag ok" title="ПЭП: ${esc(c.ofertaSignatureId)}">✓ ПЭП</span>` : ''}
+                        <span class="tag">Серверов: <b>${c.servers.length}</b></span>
+                        <span class="tag ${activeBaseCount > 0 ? 'ok' : ''}">Сессий: <b>${totalSeats}</b>${addonSeatsTotal > 0 ? ` (+${addonSeatsTotal})` : ''}</span>
+                        <button type="button" class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:12px" data-adm-add-srv-email="${esc(c.email)}" data-adm-next-num="${c.servers.length + 1}">+ Сервер</button>
+                    </div>
+                </div>
+                <div class="adm-acc-body">
+                    <div class="adm-profile-strip">
+                        <div class="adm-profile-meta">${metaItems.join('')}</div>
+                        <div class="adm-profile-actions">
+                            ${c.isAdmin
+                                ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-toggle-admin="${esc(c.userId || c.email)}" data-make-admin="0">Снять права админа</button>`
+                                : `<button type="button" class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-toggle-admin="${esc(c.userId || c.email)}" data-make-admin="1">Сделать администратором</button>`}
+                            <button type="button" class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:12px" data-adm-add-srv-email="${esc(c.email)}" data-adm-next-num="${c.servers.length + 1}">+ Добавить сервер</button>
+                        </div>
+                    </div>
+                    ${serversTableHtml}
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    /* 2. Раскрывающиеся панели франчайзеров и вложенные регионы со статусами */
+    function renderFranchisersPanels(franchises = [], users = []) {
+        const root = $('#admFranchisersList');
+        if (!root) return;
+        const q = ($('#inpFilterFranchisers')?.value || '').trim().toLowerCase();
+        const mode = $('#selFilterFranchisers')?.value || 'all';
+        const autoExpand = Boolean(q) || mode !== 'all';
         const now = Date.now();
 
-        const filtered = franchises.filter(f => {
+        const filteredFranchises = franchises.filter(f => {
             if (!f) return false;
             const isClosed = f.status === 'canceled' || f.status === 'expired';
             const remaining = Number(f.remainingFranchiseFeeRub ?? 0);
@@ -413,74 +684,147 @@
             if (!q) return true;
             const hay = [
                 f.reservationId, f.regionName, f.regionCode, f.district,
-                f.companyName, f.inn, f.email,
+                f.companyName, f.inn, f.email, f.phone,
             ].join(' ').toLowerCase();
             return hay.includes(q);
         });
 
-        tbody.innerHTML = filtered.map(f => {
-            const rid = f.reservationId;
-            const isClosed = f.status === 'canceled' || f.status === 'expired';
-            const depositRub = Number(f.nonRefundableDepositRub || 100_000);
-            const totalFeeRub = Number(f.franchiseFeeRub || 500_000);
-            const paidRub = Number(f.totalPaidRub ?? (f.depositPaid ? depositRub : 0));
-            const remRub = Number(f.remainingFranchiseFeeRub ?? Math.max(0, totalFeeRub - paidRub));
-            const paidMonths = Number(f.paidMonthsCount || 0);
-            const overdueMonths = Number(f.overdueMonthsCount || 0);
-            const pct = totalFeeRub > 0 ? Math.min(100, Math.round((paidRub / totalFeeRub) * 100)) : 0;
+        const groups = buildFranchiserGroups(filteredFranchises, users);
+        if (!groups.length) {
+            root.innerHTML = '<div class="sec-box muted">Франчайзеров по заданному фильтру не найдено</div>';
+            return;
+        }
 
-            const dl = Number(f.depositDeadlineAt || ((f.createdAt || now) + 15 * 60_000));
-            const remSec = Math.max(0, Math.floor((dl - now) / 1000));
+        root.innerHTML = groups.map(fg => {
+            const isOpen = autoExpand || expandedFranchisers.has(fg.key);
+            let totalPaidGroup = 0;
+            let totalRemGroup = 0;
+            let pendingDepCount = 0;
+            let overdueRegionsCount = 0;
+            let activeSchedCount = 0;
+            let paidFullCount = 0;
 
-            let depositHtml = '';
-            if (isClosed) {
-                depositHtml = `<span class="tag bad">${f.status === 'expired' ? 'Истёк (15 мин)' : 'Отменён'}</span>`;
-            }
-            else if (f.depositPaid) {
-                depositHtml = `<span class="tag ok">✓ Оплачен (${rub(depositRub)})</span><div class="small muted">${fmtDateTime(f.paidAt)}</div>`;
-            }
-            else {
-                depositHtml = `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Таймер 15 мин: <b data-adm-deadline="${dl}">${fmtCountdown(remSec)}</b></span>
-                    <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-pay-deposit="${esc(rid)}">Зачесть залог (${rub(depositRub)})</button></div>`;
-            }
-
-            let schedHtml = '';
-            if (isClosed) {
-                schedHtml = '<span class="small muted">Резерв закрыт</span>';
-            }
-            else {
-                const overdueBadge = overdueMonths > 0
-                    ? ` <span class="tag bad">Просрочено: ${overdueMonths}</span>`
-                    : (f.depositPaid && remRub <= 0 ? ' <span class="tag ok">Погашен полностью</span>' : '');
-                schedHtml = `<div><b>${paidMonths} из 12</b> ежемесячных платежей${overdueBadge}</div>
-                    <div class="bar" style="width:160px;height:6px;margin-top:5px"><i style="--p:${pct}%"></i></div>
-                    ${f.nextInstallment && f.depositPaid ? `<div class="small muted" style="margin-top:4px">След. взнос №${f.nextInstallment.monthNumber}: ${rub(f.nextInstallment.amountRub)} до ${fmtDate(f.nextInstallment.dueDate)}</div>` : ''}`;
+            for (const f of fg.items) {
+                const isClosed = f.status === 'canceled' || f.status === 'expired';
+                const depositRub = Number(f.nonRefundableDepositRub || 100_000);
+                const totalFeeRub = Number(f.franchiseFeeRub || 500_000);
+                const paidRub = Number(f.totalPaidRub ?? (f.depositPaid ? depositRub : 0));
+                const remRub = Number(f.remainingFranchiseFeeRub ?? Math.max(0, totalFeeRub - paidRub));
+                if (!isClosed) {
+                    totalPaidGroup += paidRub;
+                    totalRemGroup += remRub;
+                    if (!f.depositPaid) pendingDepCount++;
+                    else if (remRub <= 0) paidFullCount++;
+                    else activeSchedCount++;
+                    if (Number(f.overdueMonthsCount || 0) > 0) overdueRegionsCount++;
+                }
             }
 
-            return `<tr>
-                <td>
-                    <b>${esc(f.regionName)}</b> <span class="tag">${esc(f.district || f.regionCode)}</span>
-                    <div class="small muted"><code>${esc(rid)}</code> · от ${fmtDateTime(f.createdAt)}</div>
-                </td>
-                <td>
-                    <b>${esc(f.companyName || '—')}</b>
-                    <div class="small muted">ИНН ${esc(f.inn || '—')} · <code>${esc(f.email || '—')}</code></div>
-                </td>
-                <td>${depositHtml}</td>
-                <td>${schedHtml}</td>
-                <td>
-                    <div>Паушальный: <b>${rub(totalFeeRub)}</b></div>
-                    <div class="small" style="color:var(--ok)">Оплачено: <b>${rub(paidRub)}</b></div>
-                    <div class="small muted">Остаток: <b>${rub(remRub)}</b></div>
-                </td>
-                <td>
-                    <div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <button class="btn btn-primary btn-sm" data-adm-sched="${esc(rid)}">График 12 мес.</button>
-                        ${!isClosed ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" data-adm-cancel-franchise="${esc(rid)}">Отозвать</button>` : ''}
+            const subParts = [
+                fg.name,
+                fg.companyName,
+                fg.inn ? `ИНН ${fg.inn}` : '',
+                fg.phone,
+            ].filter(Boolean);
+
+            const regionsRowsHtml = fg.items.map(f => {
+                const rid = f.reservationId;
+                const isClosed = f.status === 'canceled' || f.status === 'expired';
+                const depositRub = Number(f.nonRefundableDepositRub || 100_000);
+                const totalFeeRub = Number(f.franchiseFeeRub || 500_000);
+                const paidRub = Number(f.totalPaidRub ?? (f.depositPaid ? depositRub : 0));
+                const remRub = Number(f.remainingFranchiseFeeRub ?? Math.max(0, totalFeeRub - paidRub));
+                const paidMonths = Number(f.paidMonthsCount || 0);
+                const overdueMonths = Number(f.overdueMonthsCount || 0);
+                const pct = totalFeeRub > 0 ? Math.min(100, Math.round((paidRub / totalFeeRub) * 100)) : 0;
+
+                const dl = Number(f.depositDeadlineAt || ((f.createdAt || now) + 15 * 60_000));
+                const remSec = Math.max(0, Math.floor((dl - now) / 1000));
+
+                let statusAndDepositHtml = '';
+                if (isClosed) {
+                    statusAndDepositHtml = `<span class="tag bad">${f.status === 'expired' ? 'Истёк таймер залога (15 мин)' : 'Отменён / Отозван'}</span>`;
+                }
+                else if (!f.depositPaid) {
+                    statusAndDepositHtml = `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Ожидает залога · <b data-adm-deadline="${dl}">${fmtCountdown(remSec)}</b></span>
+                        <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-pay-deposit="${esc(rid)}">Зачесть залог (${rub(depositRub)})</button></div>`;
+                }
+                else if (remRub <= 0) {
+                    statusAndDepositHtml = `<span class="tag ok">✓ Франшиза полностью выкуплена</span>
+                        <div class="small muted">Залог ${rub(depositRub)} от ${fmtDateTime(f.paidAt)}</div>`;
+                }
+                else if (overdueMonths > 0) {
+                    statusAndDepositHtml = `<span class="tag bad">Просрочка (${overdueMonths} мес.)</span>
+                        <div class="small muted">Залог ✓ (${rub(depositRub)}) · от ${fmtDateTime(f.paidAt)}</div>`;
+                }
+                else {
+                    statusAndDepositHtml = `<span class="tag ok">Активна · Погашение по графику</span>
+                        <div class="small muted">Залог ✓ (${rub(depositRub)}) · от ${fmtDateTime(f.paidAt)}</div>`;
+                }
+
+                let schedHtml = '';
+                if (isClosed) {
+                    schedHtml = '<span class="small muted">Резерв закрыт</span>';
+                }
+                else {
+                    schedHtml = `<div><b>${paidMonths} из 12</b> ежемесячных платежей</div>
+                        <div class="bar" style="width:160px;height:6px;margin-top:5px"><i style="--p:${pct}%"></i></div>
+                        ${f.nextInstallment && f.depositPaid ? `<div class="small muted" style="margin-top:4px">След. взнос №${f.nextInstallment.monthNumber}: ${rub(f.nextInstallment.amountRub)} до ${fmtDate(f.nextInstallment.dueDate)}</div>` : ''}`;
+                }
+
+                return `<tr>
+                    <td>
+                        <b>${esc(f.regionName)}</b> <span class="tag">${esc(f.district || f.regionCode)}</span>
+                        <div class="small muted"><code>${esc(rid)}</code> · от ${fmtDateTime(f.createdAt)}</div>
+                    </td>
+                    <td>${statusAndDepositHtml}</td>
+                    <td>${schedHtml}</td>
+                    <td>
+                        <div>Паушальный: <b>${rub(totalFeeRub)}</b></div>
+                        <div class="small" style="color:var(--ok)">Оплачено: <b>${rub(paidRub)}</b></div>
+                        <div class="small muted">Остаток: <b>${rub(remRub)}</b></div>
+                    </td>
+                    <td style="text-align:right">
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                            <button class="btn btn-primary btn-sm" data-adm-sched="${esc(rid)}">График 12 мес.</button>
+                            ${!isClosed ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" data-adm-cancel-franchise="${esc(rid)}">Отозвать</button>` : ''}
+                        </div>
+                    </td>
+                </tr>`;
+            }).join('');
+
+            return `<div class="adm-acc-card${isOpen ? ' open' : ''}" data-franchiser-card="${esc(fg.key)}">
+                <div class="adm-acc-head" data-adm-toggle-franchiser="${esc(fg.key)}">
+                    <div class="adm-acc-ident">
+                        <span class="adm-acc-chev">▸</span>
+                        <div>
+                            <div class="adm-acc-email">${esc(fg.email)}</div>
+                            ${subParts.length ? `<div class="adm-acc-sub">${esc(subParts.join(' · '))}</div>` : ''}
+                        </div>
                     </div>
-                </td>
-            </tr>`;
-        }).join('') || '<tr><td colspan="6" class="muted">Франшиз по заданному фильтру не найдено</td></tr>';
+                    <div class="adm-acc-badges">
+                        <span class="tag">Регионов: <b>${fg.items.length}</b></span>
+                        ${pendingDepCount > 0 ? `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Ждёт залога: ${pendingDepCount}</span>` : ''}
+                        ${overdueRegionsCount > 0 ? `<span class="tag bad">Просрочка: ${overdueRegionsCount}</span>` : ''}
+                        ${activeSchedCount > 0 && overdueRegionsCount === 0 ? `<span class="tag ok">В графике: ${activeSchedCount}</span>` : ''}
+                        ${paidFullCount > 0 ? `<span class="tag ok">✓ Выкуплено: ${paidFullCount}</span>` : ''}
+                        <span class="small muted">Оплачено: <b style="color:var(--ok)">${rub(totalPaidGroup)}</b> · Остаток: <b>${rub(totalRemGroup)}</b></span>
+                    </div>
+                </div>
+                <div class="adm-acc-body">
+                    <table class="sec-table">
+                        <thead><tr>
+                            <th>Регион РФ / ID</th>
+                            <th>Текущий статус и залог</th>
+                            <th>График погашения (12 мес.)</th>
+                            <th>Оплачено / Остаток</th>
+                            <th style="text-align:right">Управление</th>
+                        </tr></thead>
+                        <tbody>${regionsRowsHtml}</tbody>
+                    </table>
+                </div>
+            </div>`;
+        }).join('');
     }
 
     /* 3. Таблица заказов и счетов */
@@ -546,41 +890,7 @@
         }).join('') || '<tr><td colspan="6" class="muted">Заказов по заданному фильтру не найдено</td></tr>';
     }
 
-    /* 4. Таблица клиентов и администраторов */
-    function renderUsersTable(users = []) {
-        const tbody = $('#admUsersBody');
-        if (!tbody) return;
-        const q = ($('#inpFilterUsers')?.value || '').trim().toLowerCase();
-
-        const filtered = users.filter(u => {
-            if (!q) return true;
-            const hay = [u.userId, u.email, u.companyName, u.inn, u.name].join(' ').toLowerCase();
-            return hay.includes(q);
-        });
-
-        tbody.innerHTML = filtered.map(u => {
-            const srvCount = Array.isArray(u.servers) ? u.servers.length : (u.licenseId ? 1 : 0);
-            const frCount = Array.isArray(u.franchises) ? u.franchises.length : 0;
-            return `<tr>
-                <td><b>${esc(u.email)}</b><div class="small muted"><code>${esc(u.userId)}</code></div></td>
-                <td>
-                    ${u.isAdmin
-                        ? `<span class="tag ok">Администратор</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="0">Снять права</button>`
-                        : `<span class="tag">Клиент</span> <button class="btn btn-ghost btn-sm" style="margin-left:6px" data-toggle-admin="${esc(u.userId)}" data-make-admin="1">Сделать администратором</button>`}
-                </td>
-                <td><b>${esc(u.companyName || '—')}</b><div class="small muted">ИНН ${esc(u.inn || '—')}</div></td>
-                <td>Серверов: <b>${srvCount}</b> · Франшиз: <b>${frCount}</b></td>
-                <td>
-                    ${u.ofertaAccepted
-                        ? `<span class="tag ok">✓ Подписана ПЭП</span><div class="small muted"><code>${esc(u.ofertaSignatureId)}</code></div>`
-                        : '<span class="tag bad">Не подписана</span>'}
-                </td>
-                <td class="small muted">${fmtDateTime(u.lastLoginAt || u.createdAt)}</td>
-            </tr>`;
-        }).join('') || '<tr><td colspan="6" class="muted">Клиентов не найдено</td></tr>';
-    }
-
-    /* 5. Таблица тикетов SLA */
+    /* 4. Таблица тикетов SLA */
     function renderTicketsTable(tickets = []) {
         const tbody = $('#admTicketsBody');
         if (!tbody) return;
@@ -671,17 +981,28 @@
     }
 
     /* ================= Действия администратора ================= */
+    function openCreateServerModal(prefillEmail = '', nextSrvNum = 1) {
+        if ($('#admCreateServerStatus')) $('#admCreateServerStatus').textContent = '';
+        if ($('#admNewSrvEmail')) $('#admNewSrvEmail').value = prefillEmail || '';
+        if ($('#admNewSrvName')) $('#admNewSrvName').value = `Сервер WORK #${Math.max(1, Number(nextSrvNum) || 1)}`;
+        if ($('#admNewSrvHwid')) $('#admNewSrvHwid').value = '';
+        if ($('#admNewSrvActivateBase')) $('#admNewSrvActivateBase').checked = true;
+        $('#admCreateServerModal')?.classList.add('open');
+        setTimeout(() => {
+            if (prefillEmail) $('#admNewSrvName')?.focus();
+            else $('#admNewSrvEmail')?.focus();
+        }, 50);
+    }
+
     async function adminSubmitCreateServer() {
         const st = $('#admCreateServerStatus');
         if (st) st.textContent = '';
         const serverName = $('#admNewSrvName')?.value.trim() || 'Сервер WORK #1';
-        const org = $('#admNewSrvOrg')?.value.trim() || '';
-        const inn = $('#admNewSrvInn')?.value.trim() || '';
         const email = $('#admNewSrvEmail')?.value.trim() || '';
         const hwid = $('#admNewSrvHwid')?.value.trim() || '';
         const baseActivated = Boolean($('#admNewSrvActivateBase')?.checked);
         if (!email || !email.includes('@')) {
-            if (st) st.textContent = 'Укажите корректный Email владельца сервера.';
+            if (st) st.textContent = 'Укажите корректный Email клиента.';
             return;
         }
         try {
@@ -691,11 +1012,10 @@
                 baseActivated,
                 ownerEmail: email,
                 customer: {
-                    name: org || email,
-                    inn,
                     email,
                 },
             });
+            expandedClients.add(email.toLowerCase());
             $('#admCreateServerModal')?.classList.remove('open');
             await refreshRegistry();
         }
@@ -924,13 +1244,147 @@
         }
     }
 
+    function showFeedback(elId, msg, isErr = false) {
+        const el = document.getElementById(elId);
+        if (!el) return;
+        el.textContent = msg;
+        el.style.color = isErr ? 'var(--danger)' : 'var(--ok)';
+        setTimeout(() => {
+            if (el.textContent === msg) el.textContent = '';
+        }, 4500);
+    }
+
+    function applySmtpPreset(preset = '') {
+        const map = {
+            yandex: { host: 'smtp.yandex.ru', port: 465, secure: true },
+            gmail: { host: 'smtp.gmail.com', port: 465, secure: true },
+            mailru: { host: 'smtp.mail.ru', port: 465, secure: true },
+        };
+        const p = map[preset];
+        if (!p) return;
+        if ($('#admSmtpHost')) $('#admSmtpHost').value = p.host;
+        if ($('#admSmtpPort')) $('#admSmtpPort').value = p.port;
+        if ($('#admSmtpSecure')) $('#admSmtpSecure').checked = p.secure;
+    }
+
+    async function saveSmtpSettings() {
+        try {
+            const res = await api('/api/admin/settings/smtp', {
+                host: $('#admSmtpHost')?.value.trim() || '',
+                port: Number($('#admSmtpPort')?.value || 465),
+                secure: Boolean($('#admSmtpSecure')?.checked),
+                user: $('#admSmtpUser')?.value.trim() || '',
+                pass: $('#admSmtpPass')?.value || '',
+                fromEmail: $('#admSmtpFrom')?.value.trim() || '',
+                senderName: $('#admSmtpSenderName')?.value.trim() || 'ODANT-WORK',
+            });
+            if (lastAdminData && res.settings) lastAdminData.settings = res.settings;
+            renderPortalSettings(res.settings || {});
+            showFeedback('admSmtpFeedback', '✓ Настройки SMTP сохранены');
+        }
+        catch (err) {
+            showFeedback('admSmtpFeedback', err.message, true);
+        }
+    }
+
+    async function testSmtpSettings() {
+        try {
+            await saveSmtpSettings();
+            const to = $('#admProfileEmail')?.textContent?.includes('@')
+                ? $('#admProfileEmail').textContent.trim()
+                : ($('#admSmtpFrom')?.value.trim() || $('#admSmtpUser')?.value.trim() || '');
+            const res = await api('/api/admin/settings/smtp/test', { to });
+            showFeedback('admSmtpFeedback', `✓ ${res.message || 'Тестовое письмо отправлено'}`);
+        }
+        catch (err) {
+            showFeedback('admSmtpFeedback', err.message, true);
+        }
+    }
+
+    async function saveYooKassaSettings() {
+        try {
+            const res = await api('/api/admin/settings/yookassa', {
+                shopId: $('#admYkShopId')?.value.trim() || '',
+                secretKey: $('#admYkSecretKey')?.value.trim() || '',
+                sendReceipt: Boolean($('#admYkSendReceipt')?.checked),
+            });
+            if (lastAdminData && res.settings) lastAdminData.settings = res.settings;
+            renderPortalSettings(res.settings || {});
+            showFeedback('admYkFeedback', '✓ Настройки ЮKassa сохранены');
+        }
+        catch (err) {
+            showFeedback('admYkFeedback', err.message, true);
+        }
+    }
+
+    async function saveBotsSettings() {
+        try {
+            const res = await api('/api/admin/settings/bots', {
+                telegramToken: $('#admBotTgToken')?.value.trim() || '',
+                telegramUsername: $('#admBotTgUsername')?.value.trim() || '',
+                maxToken: $('#admBotMaxToken')?.value.trim() || '',
+                maxUsername: $('#admBotMaxUsername')?.value.trim() || '',
+            });
+            if (lastAdminData && res.settings) lastAdminData.settings = res.settings;
+            renderPortalSettings(res.settings || {});
+            showFeedback('admBotsFeedback', '✓ Боты платформы сохранены');
+        }
+        catch (err) {
+            showFeedback('admBotsFeedback', err.message, true);
+        }
+    }
+
+    async function saveLegalSettings() {
+        try {
+            const res = await api('/api/admin/settings/legal', {
+                companyName: $('#admLegalCompany')?.value.trim() || '',
+                authorName: $('#admLegalAuthor')?.value.trim() || '',
+                legalStatus: $('#admLegalStatus')?.value.trim() || '',
+                inn: $('#admLegalInn')?.value.trim() || '',
+                ogrn: $('#admLegalOgrn')?.value.trim() || '',
+                supportEmail: $('#admLegalEmail')?.value.trim() || '',
+                phone: $('#admLegalPhone')?.value.trim() || '',
+                address: $('#admLegalAddress')?.value.trim() || '',
+            });
+            if (lastAdminData && res.settings) lastAdminData.settings = res.settings;
+            renderPortalSettings(res.settings || {});
+            showFeedback('admLegalFeedback', '✓ Юридические реквизиты оферты сохранены');
+        }
+        catch (err) {
+            showFeedback('admLegalFeedback', err.message, true);
+        }
+    }
+
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-action],[data-adm-tab],[data-cert],[data-adm-dl-licfile],[data-adm-base],[data-adm-reset-hwid],[data-adm-open-grant],[data-adm-copy-tok],[data-adm-sched],[data-adm-pay-deposit],[data-adm-confirm-inst],[data-adm-cancel-franchise],[data-pay-order],[data-cancel-order],[data-reply-ticket],[data-close-ticket],[data-toggle-admin]');
+            const el = e.target.closest('[data-action],[data-adm-tab],[data-smtp-preset],[data-adm-add-srv-email],[data-adm-toggle-client],[data-adm-toggle-franchiser],[data-cert],[data-adm-dl-licfile],[data-adm-base],[data-adm-reset-hwid],[data-adm-open-grant],[data-adm-copy-tok],[data-adm-sched],[data-adm-pay-deposit],[data-adm-confirm-inst],[data-adm-cancel-franchise],[data-pay-order],[data-cancel-order],[data-reply-ticket],[data-close-ticket],[data-toggle-admin]');
             if (!el) return;
 
             if (el.dataset.admTab) { setTab(el.dataset.admTab); return; }
+            if (el.dataset.smtpPreset) { applySmtpPreset(el.dataset.smtpPreset); return; }
+            if (el.dataset.admAddSrvEmail !== undefined) {
+                openCreateServerModal(el.dataset.admAddSrvEmail, el.dataset.admNextNum || 1);
+                return;
+            }
+            if (el.dataset.admToggleClient) {
+                const key = el.dataset.admToggleClient;
+                const card = el.closest('.adm-acc-card');
+                const nowOpen = !card?.classList.contains('open');
+                if (nowOpen) expandedClients.add(key);
+                else expandedClients.delete(key);
+                card?.classList.toggle('open', nowOpen);
+                return;
+            }
+            if (el.dataset.admToggleFranchiser) {
+                const key = el.dataset.admToggleFranchiser;
+                const card = el.closest('.adm-acc-card');
+                const nowOpen = !card?.classList.contains('open');
+                if (nowOpen) expandedFranchisers.add(key);
+                else expandedFranchisers.delete(key);
+                card?.classList.toggle('open', nowOpen);
+                return;
+            }
             if (el.dataset.cert) { openCertModal(el.dataset.cert); return; }
             if (el.dataset.admDlLicfile !== undefined) { downloadCertLicFile(el.dataset.admDlLicfile); return; }
             if (el.dataset.admBase) {
@@ -987,7 +1441,7 @@
                 case 'close-adm-profile': $('#admProfileModal')?.classList.remove('open'); break;
                 case 'admin-logout': logoutAdmin(); break;
                 case 'registry': refreshRegistry(); break;
-                case 'open-create-server-modal': $('#admCreateServerModal')?.classList.add('open'); break;
+                case 'open-create-server-modal': openCreateServerModal('', 1); break;
                 case 'close-create-server-modal': $('#admCreateServerModal')?.classList.remove('open'); break;
                 case 'submit-create-server': adminSubmitCreateServer(); break;
                 case 'close-grant-modal': $('#admGrantSeatsModal')?.classList.remove('open'); break;
@@ -1001,6 +1455,11 @@
                 case 'admin-export-backup': exportAdminBackup(); break;
                 case 'admin-import-backup': $('#inpAdmBackupFile')?.click(); break;
                 case 'admin-recover-npx': recoverAdminFromNpx(); break;
+                case 'save-smtp-settings': saveSmtpSettings(); break;
+                case 'test-smtp-settings': testSmtpSettings(); break;
+                case 'save-yookassa-settings': saveYooKassaSettings(); break;
+                case 'save-bots-settings': saveBotsSettings(); break;
+                case 'save-legal-settings': saveLegalSettings(); break;
             }
         });
 
@@ -1018,7 +1477,7 @@
             }
         });
 
-        ['inpFilterServers', 'selFilterServers', 'inpFilterFranchises', 'selFilterFranchises', 'inpFilterOrders', 'selFilterOrders', 'inpFilterUsers', 'selFilterTickets'].forEach(id => {
+        ['inpFilterClients', 'selFilterClients', 'inpFilterFranchisers', 'selFilterFranchisers', 'inpFilterOrders', 'selFilterOrders', 'selFilterTickets'].forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
             el.addEventListener('input', () => lastAdminData && renderAdminPanel(lastAdminData));
@@ -1036,7 +1495,7 @@
     function start() {
         applyTheme(document.documentElement.getAttribute('data-theme') || 'dark');
         bind();
-        setTab('servers');
+        setTab('clients');
         if (document.fonts?.ready) document.fonts.ready.then(moveIndicator);
         checkAdminSession();
     }

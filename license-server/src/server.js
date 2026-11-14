@@ -39,7 +39,7 @@ import {
     calculateRegionPartnerQuota,
     PUBLIC_OFERTA,
 } from './catalog.js';
-import { LicenseStore, resolvePersistentDataDir } from './store.js';
+import { LicenseStore, resolvePersistentDataDir, isMaskedSecret } from './store.js';
 import { YooKassaService } from './yookassa.js';
 import { SupportBotsHub } from './bots.js';
 import { LicenseServerAiAgent } from './agent.js';
@@ -119,13 +119,21 @@ function sendHtml(res, status, html) {
     res.end(html);
 }
 
-function loadSmtpConfig() {
+function loadSmtpConfig(store = null) {
+    if (store && typeof store.getSmtpConfig === 'function') {
+        const sc = store.getSmtpConfig();
+        if (sc?.host && sc?.user && sc?.pass)
+            return sc;
+    }
     if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
         return {
             host: process.env.SMTP_HOST,
             port: Number(process.env.SMTP_PORT || 465),
+            secure: Number(process.env.SMTP_PORT || 465) === 465,
             user: process.env.SMTP_USER,
             pass: process.env.SMTP_PASS,
+            fromEmail: process.env.SMTP_FROM || process.env.SMTP_USER,
+            senderName: process.env.SMTP_SENDER_NAME || 'ODANT-WORK',
         };
     }
     const candidates = [
@@ -141,8 +149,11 @@ function loadSmtpConfig() {
                     return {
                         host: j.host,
                         port: Number(j.port || 465),
+                        secure: j.secure !== undefined ? Boolean(j.secure) : Number(j.port || 465) === 465,
                         user: j.auth.user,
                         pass: j.auth.pass,
+                        fromEmail: j.fromEmail || j.auth.user,
+                        senderName: j.senderName || 'ODANT-WORK',
                     };
                 }
             }
@@ -152,8 +163,11 @@ function loadSmtpConfig() {
     return {
         host: 'smtp.yandex.ru',
         port: 465,
+        secure: true,
         user: 'proman1968.perepelkin@yandex.ru',
         pass: 'zifeomdqijldyece',
+        fromEmail: 'proman1968.perepelkin@yandex.ru',
+        senderName: 'ODANT-WORK',
     };
 }
 
@@ -162,11 +176,17 @@ function loadSmtpConfig() {
  * с полноценными RFC 5322 заголовками Date, Message-ID и text+html, чтобы Gmail доставлял письмо мгновенно).
  */
 let _cachedTransporter = null;
-async function sendOtpEmail({ to, code }) {
-    const cfg = loadSmtpConfig();
-    const subject = 'Код подтверждения ODANT-WORK';
-    const textBody = `Ваш одноразовый код: ${code}\n\nДействует 10 минут.`;
-    const htmlBody = `
+async function sendOtpEmail({ to, code, store = null, isTest = false }) {
+    const cfg = loadSmtpConfig(store);
+    const senderName = cfg.senderName || 'ODANT-WORK';
+    const fromAddr = cfg.fromEmail || cfg.user;
+    const subject = isTest ? `Тестовое письмо SMTP · ${senderName}` : `Код подтверждения ${senderName}`;
+    const textBody = isTest
+        ? `Почтовый сервер SMTP (${cfg.host}:${cfg.port}) успешно настроен и отправляет письма от ${senderName} <${fromAddr}>.`
+        : `Ваш одноразовый код: ${code}\n\nДействует 10 минут.`;
+    const htmlBody = isTest
+        ? `<h2>Проверка SMTP прошла успешно</h2><p>Почтовый сервер <b>${cfg.host}:${cfg.port}</b> подключён и доставляет письма от <b>${senderName} &lt;${fromAddr}&gt;</b>.</p>`
+        : `
         <h2>Код подтверждения</h2>
         <p>Ваш код для входа/регистрации на work.odant.org:</p>
         <h1 style="font-size: 48px; letter-spacing: 10px; font-weight: bold; text-align: center;">
@@ -174,7 +194,7 @@ async function sendOtpEmail({ to, code }) {
         </h1>
         <p>Код действителен <strong>10 минут</strong>. Ни с кем не делитесь.</p>
         <p>Если это не вы — просто проигнорируйте письмо.</p>
-        <p>С уважением,<br>ODANT-WORK</p>
+        <p>С уважением,<br>${senderName}</p>
     `;
 
     try {
@@ -190,7 +210,7 @@ async function sendOtpEmail({ to, code }) {
             _cachedTransporter = nodemailer.createTransport({
                 host: cfg.host,
                 port: cfg.port,
-                secure: cfg.port === 465,
+                secure: cfg.secure !== undefined ? Boolean(cfg.secure) : cfg.port === 465,
                 auth: {
                     user: cfg.user,
                     pass: cfg.pass,
@@ -198,7 +218,7 @@ async function sendOtpEmail({ to, code }) {
             });
         }
         const info = await _cachedTransporter.sendMail({
-            from: `"ODANT-WORK" <${cfg.user}>`,
+            from: `"${senderName}" <${fromAddr}>`,
             to,
             subject,
             text: textBody,
@@ -215,7 +235,7 @@ async function sendOtpEmail({ to, code }) {
     }
 
     // Резервный нативный SMTPS-клиент с полными RFC 5322 заголовками (Date + Message-ID + multipart/alternative text+html)
-    const domain = (cfg.user.split('@')[1] || 'yandex.ru').trim();
+    const domain = (fromAddr.split('@')[1] || 'yandex.ru').trim();
     const msgId = `<${crypto.randomUUID()}@${domain}>`;
     const dateHdr = new Date().toUTCString();
     const boundary = `----=_Part_${crypto.randomBytes(8).toString('hex')}`;
@@ -225,7 +245,7 @@ async function sendOtpEmail({ to, code }) {
     const mimeMsg = [
         `Date: ${dateHdr}`,
         `Message-ID: ${msgId}`,
-        `From: "ODANT-WORK" <${cfg.user}>`,
+        `From: "${senderName}" <${fromAddr}>`,
         `To: <${to}>`,
         `Subject: =?UTF-8?B?${subjectB64}?=`,
         'MIME-Version: 1.0',
@@ -289,11 +309,13 @@ export function createLicenseServerApp(options = {}) {
         autoRecover: options.autoRecover,
         extraSearchRoots: options.extraSearchRoots,
     });
+    const initSettings = store._ensureSettingsObject();
     let bots = null;
     const yookassa = options.yookassa || new YooKassaService({
         store,
-        shopId: options.yookassaShopId,
-        secretKey: options.yookassaSecretKey,
+        shopId: options.yookassaShopId ?? initSettings.yookassa.shopId,
+        secretKey: options.yookassaSecretKey ?? initSettings.yookassa.secretKey,
+        sendReceipt: initSettings.yookassa.sendReceipt,
         publicOrigin: options.publicOrigin || 'https://work.odant.org',
         fetchImpl: options.fetchImpl,
         onOrderPaid: async (order, license) => {
@@ -303,8 +325,8 @@ export function createLicenseServerApp(options = {}) {
     bots = options.bots || new SupportBotsHub({
         store,
         yookassa,
-        maxBotSecret: options.maxBotSecret,
-        telegramBotSecret: options.telegramBotSecret,
+        maxBotSecret: options.maxBotSecret ?? initSettings.bots.maxToken,
+        telegramBotSecret: options.telegramBotSecret ?? initSettings.bots.telegramToken,
         vkBotSecret: options.vkBotSecret,
         vkConfirmationCode: options.vkConfirmationCode,
         publicOrigin: options.publicOrigin || 'https://work.odant.org',
@@ -443,7 +465,7 @@ export function createLicenseServerApp(options = {}) {
                 });
                 console.log('[work.odant.org] Registration/Login code for', cleanEmail, ':', code);
                 if (!options.skipEmailSend) {
-                    await sendOtpEmail({ to: cleanEmail, code });
+                    await sendOtpEmail({ to: cleanEmail, code, store });
                 }
                 return sendJson(res, 200, {
                     ok: true,
@@ -996,7 +1018,127 @@ export function createLicenseServerApp(options = {}) {
                     reservations: allFranchises,
                     regions: store.listRegionsWithQuotas(),
                     users: store.listUsers(),
+                    settings: store.getAdminSettingsSummary(),
                 });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/settings/smtp') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                _cachedTransporter = null;
+                const settings = store.updateSmtpSettings(body);
+                return sendJson(res, 200, { ok: true, settings });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/settings/smtp/test') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                const admSession = store.verifyAdminToken(tok);
+                if (!admSession)
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const smtpCfg = store.getSmtpConfig();
+                const targetEmail = String(body.to || admSession.email || smtpCfg.fromEmail || smtpCfg.user || '').trim();
+                if (!targetEmail || !targetEmail.includes('@'))
+                    return sendJson(res, 400, { error: 'Укажите Email для отправки тестового письма' });
+                if (!options.skipEmailSend) {
+                    _cachedTransporter = null;
+                    await sendOtpEmail({ to: targetEmail, code: '000000', store, isTest: true });
+                }
+                return sendJson(res, 200, {
+                    ok: true,
+                    to: targetEmail,
+                    message: `Тестовое письмо отправлено на ${targetEmail}`,
+                });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/settings/yookassa') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const settings = store.updateYooKassaSettings(body);
+                const rawYk = store._ensureSettingsObject().yookassa;
+                yookassa.shopId = rawYk.shopId;
+                yookassa.secretKey = rawYk.secretKey;
+                yookassa.sendReceipt = Boolean(rawYk.sendReceipt);
+                return sendJson(res, 200, { ok: true, settings });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/settings/bots') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+
+                const rawBots = store._ensureSettingsObject().bots;
+                const nextTgToken = (body.telegramToken !== undefined && !isMaskedSecret(body.telegramToken))
+                    ? String(body.telegramToken || '').trim()
+                    : rawBots.telegramToken;
+                const nextMaxToken = (body.maxToken !== undefined && !isMaskedSecret(body.maxToken))
+                    ? String(body.maxToken || '').trim()
+                    : rawBots.maxToken;
+
+                let tgUsername = body.telegramUsername !== undefined
+                    ? String(body.telegramUsername || '').trim().replace(/^@+/, '')
+                    : rawBots.telegramUsername;
+                let maxUsername = body.maxUsername !== undefined
+                    ? String(body.maxUsername || '').trim().replace(/^@+/, '')
+                    : rawBots.maxUsername;
+
+                const fetchFn = options.fetchImpl || globalThis.fetch;
+                if (nextTgToken && typeof fetchFn === 'function') {
+                    try {
+                        const r = await fetchFn(`https://api.telegram.org/bot${encodeURIComponent(nextTgToken)}/getMe`, {
+                            signal: AbortSignal.timeout(5000),
+                        });
+                        if (r.ok) {
+                            const j = await r.json().catch(() => ({}));
+                            if (j?.result?.username) {
+                                tgUsername = String(j.result.username).replace(/^@+/, '');
+                            }
+                        }
+                    }
+                    catch { /* офлайн или тестовый токен */ }
+                }
+
+                if (nextMaxToken && typeof fetchFn === 'function') {
+                    try {
+                        const r = await fetchFn(`https://botapi.max.ru/me?access_token=${encodeURIComponent(nextMaxToken)}`, {
+                            headers: { 'Authorization': nextMaxToken },
+                            signal: AbortSignal.timeout(5000),
+                        });
+                        if (r.ok) {
+                            const j = await r.json().catch(() => ({}));
+                            const uname = j?.username || j?.user?.username || (j?.user_id ? `id${j.user_id}_bot` : '');
+                            if (uname) {
+                                maxUsername = String(uname).replace(/^@+/, '');
+                            }
+                        }
+                    }
+                    catch { /* офлайн или тестовый токен */ }
+                }
+
+                const settings = store.updateBotsSettings({
+                    telegramToken: body.telegramToken,
+                    telegramUsername: tgUsername,
+                    maxToken: body.maxToken,
+                    maxUsername,
+                });
+                const updatedRawBots = store._ensureSettingsObject().bots;
+                bots.telegramBotSecret = updatedRawBots.telegramToken;
+                bots.maxBotSecret = updatedRawBots.maxToken;
+                return sendJson(res, 200, { ok: true, settings });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/settings/legal') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const settings = store.updateLegalSettings(body);
+                return sendJson(res, 200, { ok: true, settings });
             }
 
             if (req.method === 'GET' && pathname === '/api/admin/backup/export') {

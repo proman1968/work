@@ -254,12 +254,62 @@ function isAutoPlaceholderLicense(lic, allOrders = {}) {
     return !hasOrders;
 }
 
+export function maskSecret(value = '') {
+    const s = String(value || '').trim();
+    if (!s) return '';
+    if (s.length >= 10)
+        return `${s.slice(0, 6)}•••••••${s.slice(-4)}`;
+    return '•••••••';
+}
+
+export function isMaskedSecret(value = '') {
+    return String(value || '').includes('•••');
+}
+
+export function createDefaultPortalSettings() {
+    return {
+        smtp: {
+            host: process.env.SMTP_HOST || 'smtp.yandex.ru',
+            port: Number(process.env.SMTP_PORT || 465),
+            secure: process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) === 465 : true,
+            user: process.env.SMTP_USER || 'proman1968.perepelkin@yandex.ru',
+            pass: process.env.SMTP_PASS || 'zifeomdqijldyece',
+            fromEmail: process.env.SMTP_FROM || process.env.SMTP_USER || 'proman1968.perepelkin@yandex.ru',
+            senderName: process.env.SMTP_SENDER_NAME || 'ODANT-WORK',
+        },
+        yookassa: {
+            shopId: process.env.YOOKASSA_SHOP_ID || '',
+            secretKey: process.env.YOOKASSA_SECRET_KEY || '',
+            sendReceipt: true,
+        },
+        bots: {
+            telegramToken: process.env.TELEGRAM_BOT_TOKEN || '',
+            telegramUsername: process.env.TELEGRAM_BOT_USERNAME || '',
+            maxToken: process.env.MAX_BOT_TOKEN || '',
+            maxUsername: process.env.MAX_BOT_USERNAME || '',
+        },
+        legal: {
+            companyName: 'ООО «БИС» («Бизнес Интер Софт»)',
+            authorName: 'Перепелкин Роман Александрович',
+            legalStatus: 'Правообладатель и Оператор платформы · Проприетарное ПО (Все права защищены)',
+            inn: '6234049193',
+            ogrn: '',
+            supportEmail: 'support@odant.org',
+            phone: '+7 (4912) 77-70-21',
+            address: VENDOR_CONTACTS.address || '390000, г. Рязань, ул. Ленина, 47',
+        },
+    };
+}
+
 /**
  * Безопасное объединение (merge без потери записей) двух состояний store.json.
  * Сохраняет всех пользователей, их реквизиты, токены привязки (owk1...), серверы/лицензии,
  * заказы, франшизы, партнёров, тикеты и привязки ботов.
  */
 export function mergeStoreStates(baseState = {}, incomingState = {}) {
+    const defSettings = createDefaultPortalSettings();
+    const baseSet = baseState.settings || {};
+    const incSet = incomingState.settings || {};
     const out = {
         licenses: { ...(baseState.licenses || {}) },
         orders: { ...(baseState.orders || {}) },
@@ -269,6 +319,12 @@ export function mergeStoreStates(baseState = {}, incomingState = {}) {
         reservations: { ...(baseState.reservations || {}) },
         certificates: { ...(baseState.certificates || {}) },
         users: { ...(baseState.users || {}) },
+        settings: {
+            smtp: { ...defSettings.smtp, ...(baseSet.smtp || {}), ...(incSet.smtp || {}) },
+            yookassa: { ...defSettings.yookassa, ...(baseSet.yookassa || {}), ...(incSet.yookassa || {}) },
+            bots: { ...defSettings.bots, ...(baseSet.bots || {}), ...(incSet.bots || {}) },
+            legal: { ...defSettings.legal, ...(baseSet.legal || {}), ...(incSet.legal || {}) },
+        },
     };
 
     // 1. Заказы (предпочитаем оплаченные или более свежие)
@@ -531,6 +587,7 @@ export class LicenseStore {
         this.stateFile = path.join(this.dataDir, 'store.json');
         this.prevStateFile = path.join(this.dataDir, 'store.prev.json');
         this.keyFile = path.join(this.dataDir, 'authority-key.json');
+        this.mailFile = path.join(this.dataDir, 'mail.json');
 
         // Если в новой постоянной папке ещё нет authority-key.json, восстанавливаем его из прежних папок / кэша npx
         if (this.autoRecover && !fs.existsSync(this.keyFile)) {
@@ -557,8 +614,10 @@ export class LicenseStore {
             reservations: {},
             certificates: {},
             users: {},
+            settings: createDefaultPortalSettings(),
         };
         this._load();
+        this._loadOrSyncMailFile();
     }
 
     /**
@@ -660,9 +719,13 @@ export class LicenseStore {
      */
     setUserAdminRole(emailOrUserId = '', isAdmin = true) {
         const key = String(emailOrUserId || '').trim();
-        const user = Object.values(this.state.users || {}).find(
+        let user = Object.values(this.state.users || {}).find(
             u => u.userId === key || String(u.email || '').toLowerCase() === key.toLowerCase()
         );
+        if (!user && key.includes('@')) {
+            this.registerOrLoginUser({ email: key.toLowerCase() });
+            user = this.state.users[key.toLowerCase()] || null;
+        }
         if (!user)
             throw new Error('Пользователь не найден');
         const nextAdmin = Boolean(isAdmin);
@@ -676,6 +739,172 @@ export class LicenseStore {
         user.role = nextAdmin ? 'ADMIN' : 'CLIENT';
         this._save();
         return this._formatUserResponse(user);
+    }
+
+    _ensureSettingsObject() {
+        const def = createDefaultPortalSettings();
+        if (!this.state.settings || typeof this.state.settings !== 'object') {
+            this.state.settings = def;
+        }
+        this.state.settings.smtp = { ...def.smtp, ...(this.state.settings.smtp || {}) };
+        this.state.settings.yookassa = { ...def.yookassa, ...(this.state.settings.yookassa || {}) };
+        this.state.settings.bots = { ...def.bots, ...(this.state.settings.bots || {}) };
+        this.state.settings.legal = { ...def.legal, ...(this.state.settings.legal || {}) };
+        return this.state.settings;
+    }
+
+    _loadOrSyncMailFile() {
+        const s = this._ensureSettingsObject();
+        try {
+            if (fs.existsSync(this.mailFile)) {
+                const j = JSON.parse(fs.readFileSync(this.mailFile, 'utf8'));
+                if (j?.host) s.smtp.host = String(j.host).trim();
+                if (j?.port) s.smtp.port = Number(j.port);
+                if (typeof j?.secure === 'boolean') s.smtp.secure = j.secure;
+                if (j?.auth?.user || j?.user) s.smtp.user = String(j.auth?.user || j.user).trim();
+                if (j?.auth?.pass || j?.pass) s.smtp.pass = String(j.auth?.pass || j.pass);
+                if (j?.fromEmail) s.smtp.fromEmail = String(j.fromEmail).trim();
+                if (j?.senderName) s.smtp.senderName = String(j.senderName).trim();
+            }
+            else {
+                this._writeMailFile();
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    _writeMailFile() {
+        try {
+            const smtp = this._ensureSettingsObject().smtp;
+            const payload = {
+                host: smtp.host,
+                port: Number(smtp.port || 465),
+                secure: Boolean(smtp.secure),
+                fromEmail: smtp.fromEmail || smtp.user,
+                senderName: smtp.senderName || 'ODANT-WORK',
+                auth: {
+                    user: smtp.user,
+                    pass: smtp.pass,
+                },
+            };
+            fs.writeFileSync(this.mailFile, JSON.stringify(payload, null, 2), 'utf8');
+        }
+        catch { /* ignore */ }
+    }
+
+    getSmtpConfig() {
+        const smtp = this._ensureSettingsObject().smtp;
+        return {
+            host: String(smtp.host || 'smtp.yandex.ru').trim(),
+            port: Number(smtp.port || 465),
+            secure: smtp.secure !== undefined ? Boolean(smtp.secure) : Number(smtp.port || 465) === 465,
+            user: String(smtp.user || '').trim(),
+            pass: String(smtp.pass || ''),
+            fromEmail: String(smtp.fromEmail || smtp.user || '').trim(),
+            senderName: String(smtp.senderName || 'ODANT-WORK').trim(),
+            mailFile: this.mailFile,
+        };
+    }
+
+    getLegalSettings() {
+        return { ...this._ensureSettingsObject().legal };
+    }
+
+    getAdminSettingsSummary() {
+        const s = this._ensureSettingsObject();
+        const smtpConnected = Boolean(s.smtp.host && s.smtp.user && s.smtp.pass);
+        const yookassaLive = Boolean(s.yookassa.shopId && s.yookassa.secretKey);
+        return {
+            smtp: {
+                host: s.smtp.host || '',
+                port: Number(s.smtp.port || 465),
+                secure: Boolean(s.smtp.secure),
+                user: s.smtp.user || '',
+                pass: maskSecret(s.smtp.pass),
+                fromEmail: s.smtp.fromEmail || s.smtp.user || '',
+                senderName: s.smtp.senderName || 'ODANT-WORK',
+                connected: smtpConnected,
+                mailFile: this.mailFile,
+            },
+            yookassa: {
+                shopId: s.yookassa.shopId || '',
+                secretKey: maskSecret(s.yookassa.secretKey),
+                sendReceipt: Boolean(s.yookassa.sendReceipt),
+                live: yookassaLive,
+            },
+            bots: {
+                telegramToken: maskSecret(s.bots.telegramToken),
+                telegramUsername: String(s.bots.telegramUsername || '').replace(/^@+/, ''),
+                maxToken: maskSecret(s.bots.maxToken),
+                maxUsername: String(s.bots.maxUsername || '').replace(/^@+/, ''),
+            },
+            legal: {
+                companyName: s.legal.companyName || '',
+                authorName: s.legal.authorName || '',
+                legalStatus: s.legal.legalStatus || '',
+                inn: s.legal.inn || '',
+                ogrn: s.legal.ogrn || '',
+                supportEmail: s.legal.supportEmail || '',
+                phone: s.legal.phone || '',
+                address: s.legal.address || '',
+            },
+        };
+    }
+
+    updateSmtpSettings(patch = {}) {
+        const s = this._ensureSettingsObject().smtp;
+        if (patch.host !== undefined) s.host = String(patch.host || '').trim();
+        if (patch.port !== undefined) s.port = Number(patch.port || 465);
+        if (patch.secure !== undefined) s.secure = Boolean(patch.secure);
+        if (patch.user !== undefined) s.user = String(patch.user || '').trim();
+        if (patch.pass !== undefined && !isMaskedSecret(patch.pass)) {
+            s.pass = String(patch.pass || '');
+        }
+        if (patch.fromEmail !== undefined) s.fromEmail = String(patch.fromEmail || '').trim();
+        if (patch.senderName !== undefined) s.senderName = String(patch.senderName || '').trim();
+        this._writeMailFile();
+        this._save();
+        return this.getAdminSettingsSummary();
+    }
+
+    updateYooKassaSettings(patch = {}) {
+        const y = this._ensureSettingsObject().yookassa;
+        if (patch.shopId !== undefined) y.shopId = String(patch.shopId || '').trim();
+        if (patch.secretKey !== undefined && !isMaskedSecret(patch.secretKey)) {
+            y.secretKey = String(patch.secretKey || '').trim();
+        }
+        if (patch.sendReceipt !== undefined) y.sendReceipt = Boolean(patch.sendReceipt);
+        this._save();
+        return this.getAdminSettingsSummary();
+    }
+
+    updateBotsSettings(patch = {}) {
+        const b = this._ensureSettingsObject().bots;
+        if (patch.telegramToken !== undefined && !isMaskedSecret(patch.telegramToken)) {
+            b.telegramToken = String(patch.telegramToken || '').trim();
+        }
+        if (patch.telegramUsername !== undefined) {
+            b.telegramUsername = String(patch.telegramUsername || '').trim().replace(/^@+/, '');
+        }
+        if (patch.maxToken !== undefined && !isMaskedSecret(patch.maxToken)) {
+            b.maxToken = String(patch.maxToken || '').trim();
+        }
+        if (patch.maxUsername !== undefined) {
+            b.maxUsername = String(patch.maxUsername || '').trim().replace(/^@+/, '');
+        }
+        this._save();
+        return this.getAdminSettingsSummary();
+    }
+
+    updateLegalSettings(patch = {}) {
+        const l = this._ensureSettingsObject().legal;
+        for (const k of ['companyName', 'authorName', 'legalStatus', 'inn', 'ogrn', 'supportEmail', 'phone', 'address']) {
+            if (patch[k] !== undefined) {
+                l[k] = String(patch[k] || '').trim();
+            }
+        }
+        this._save();
+        return this.getAdminSettingsSummary();
     }
 
     _recoverAuthorityKeyFromCandidates() {
@@ -730,6 +959,7 @@ export class LicenseStore {
                 reservations: stateObj.reservations || {},
                 certificates: stateObj.certificates || {},
                 users: stateObj.users || {},
+                settings: stateObj.settings || {},
             };
         }
         catch {
@@ -1083,8 +1313,11 @@ export class LicenseStore {
             ? Boolean(baseActivated)
             : (existing?.baseActivated !== undefined ? Boolean(existing.baseActivated) : true);
 
-        const resolvedOwnerAccountId = String(ownerAccountId || existing?.ownerAccountId || '');
         const resolvedOwnerEmail = String(ownerEmail || customer.email || existing?.ownerEmail || existing?.customer?.email || '').toLowerCase();
+        const matchedUser = resolvedOwnerEmail
+            ? (this.state.users?.[resolvedOwnerEmail] || Object.values(this.state.users || {}).find(u => String(u.email || '').toLowerCase() === resolvedOwnerEmail))
+            : null;
+        const resolvedOwnerAccountId = String(ownerAccountId || existing?.ownerAccountId || matchedUser?.userId || '');
         const resolvedServerName = String(serverName || existing?.serverName || 'Сервер WORK #1').trim();
         const resolvedHubUrl = String(hubUrl || existing?.hubUrl || 'https://work.odant.org').replace(/\/+$/, '');
 
@@ -1122,10 +1355,10 @@ export class LicenseStore {
             baseActivated: isBaseActivated,
             baseSku: String(baseSku || existing?.baseSku || PAK_PRODUCT.sku),
             customer: {
-                name: customer.name || existing?.customer?.name || 'Организация ПАК WORK',
-                inn: customer.inn || existing?.customer?.inn || '',
-                email: customer.email || existing?.customer?.email || '',
-                phone: customer.phone || existing?.customer?.phone || '',
+                name: customer.name || existing?.customer?.name || matchedUser?.companyName || matchedUser?.name || resolvedOwnerEmail || 'Клиент WORK',
+                inn: customer.inn || existing?.customer?.inn || matchedUser?.inn || '',
+                email: customer.email || existing?.customer?.email || resolvedOwnerEmail || '',
+                phone: customer.phone || existing?.customer?.phone || matchedUser?.phone || '',
             },
             hardware: {
                 hwid: hwid || existing?.hardware?.hwid || ('PAK-' + crypto.randomBytes(6).toString('hex').toUpperCase()),
@@ -1729,6 +1962,10 @@ export class LicenseStore {
             return null;
         const dateStr = new Date(ord.createdAt || Date.now()).toLocaleDateString('ru-RU');
         const c = ord.customer || {};
+        const legal = this.getLegalSettings();
+        const vendorTitle = legal.companyName || `ООО «${VENDOR_CONTACTS.company}»`;
+        const vendorAddr = legal.address || VENDOR_CONTACTS.address;
+        const vendorPhone = legal.phone || VENDOR_CONTACTS.phones.join(', ');
         const custName = (c.name && !String(c.name).includes('@')) ? c.name : 'Организация (не указана)';
         const rowsHtml = (ord.items || []).map((it, idx) => `
             <tr>
@@ -1777,7 +2014,7 @@ export class LicenseStore {
         <span class="status">${ord.status === 'paid' ? 'ОПЛАЧЕН' : 'ОЖИДАЕТ ОПЛАТЫ ПО СЧЁТУ'}</span>
     </div>
     <div class="meta" style="margin-top:14px;">
-        <div><strong>Поставщик (Лицензиар):</strong> ООО «${VENDOR_CONTACTS.company}», адрес: ${VENDOR_CONTACTS.address}, тел.: ${VENDOR_CONTACTS.phones.join(', ')}</div>
+        <div><strong>Поставщик (Лицензиар):</strong> ${vendorTitle}${legal.inn ? `, ИНН: ${legal.inn}` : ''}${legal.ogrn ? `, ОГРН: ${legal.ogrn}` : ''}, адрес: ${vendorAddr}, тел.: ${vendorPhone}</div>
         <div style="margin-top:8px;">
             <strong>Покупатель (Лицензиат):</strong> ${custName}, ИНН: ${c.inn || '—'}${c.kpp ? ', КПП: ' + c.kpp : ''}
             ${c.legalAddress ? `<br><strong>Юридический адрес:</strong> ${c.legalAddress}` : ''}
@@ -1812,8 +2049,8 @@ export class LicenseStore {
     <div class="sig-grid">
         <div class="sig-box">
             <strong>От Поставщика (Лицензиара):</strong><br>
-            ООО «${VENDOR_CONTACTS.company}»<br><br>
-            ______________________ / Руководитель /
+            ${vendorTitle}<br><br>
+            ______________________ / ${legal.authorName || 'Руководитель'} /
         </div>
         <div class="sig-box">
             <strong>От Покупателя (Лицензиата):</strong><br>

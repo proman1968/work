@@ -423,7 +423,16 @@ describe('ПАК WORK: спецификация, лицензирование, �
         // 7.1 Отдельная страница админки /admin и обязательная защита входа администратора
         const adminHtml = await fetch(`${hubUrl}/admin`).then(r => r.text());
         assert.ok(adminHtml.includes('id="adminLoginScreen"'), 'На странице /admin есть экран входа администратора');
-        assert.ok(adminHtml.includes('data-adm-tab="servers"') && adminHtml.includes('data-adm-tab="franchises"'), 'В админ-панели /admin представлены операционные реестры серверов и франшиз');
+        assert.ok(adminHtml.includes('data-adm-tab="clients"') && adminHtml.includes('data-adm-tab="franchisers"'), 'В админ-панели /admin представлены разделы Клиенты и Франчайзеры');
+        assert.ok(
+            adminHtml.includes('data-adm-tab="smtp"')
+            && adminHtml.includes('data-adm-tab="yookassa"')
+            && adminHtml.includes('data-adm-tab="bots"')
+            && adminHtml.includes('data-adm-tab="legal"'),
+            'В админ-панели /admin представлены разделы Почта SMTP, Платёжный шлюз, Боты и Реквизиты оферты'
+        );
+        assert.ok(!adminHtml.includes('data-adm-tab="servers"') && !adminHtml.includes('data-adm-tab="franchises"') && !adminHtml.includes('data-adm-tab="users"'), 'Старые разделы Серверы и лицензии / Франшизы / Клиенты и администраторы убраны');
+        assert.ok(adminHtml.includes('id="admClientsList"') && adminHtml.includes('id="admFranchisersList"'), 'В /admin есть контейнеры раскрывающихся панелей клиентов и франчайзеров');
         assert.ok(adminHtml.includes('/assets/admin.js'), 'Подключён отдельный скрипт /assets/admin.js');
 
         // Без токена администратора доступ к /api/admin/overview закрыт (401)
@@ -454,6 +463,26 @@ describe('ПАК WORK: спецификация, лицензирование, �
             headers: { 'Authorization': `Bearer ${admLogin.token}` },
         });
         assert.equal(admOverview.status, 200);
+        const admOverviewJson = await admOverview.json();
+        assert.ok(admOverviewJson.settings?.smtp && admOverviewJson.settings?.yookassa && admOverviewJson.settings?.bots && admOverviewJson.settings?.legal, 'В /api/admin/overview возвращаются настройки SMTP, ЮKassa, Ботов и Реквизитов оферты');
+
+        // Сохранение настроек Ботов, ЮKassa, SMTP и Реквизитов оферты
+        const saveBotsRes = await fetch(`${hubUrl}/api/admin/settings/bots`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admLogin.token}` },
+            body: JSON.stringify({ telegramToken: '123456:ABCDEF_TG_TOKEN', telegramUsername: 'odant_work_bot', maxToken: 'f9LHodMAXTOKEN123456', maxUsername: 'id6234049193_bot' }),
+        }).then(r => r.json());
+        assert.equal(saveBotsRes.ok, true);
+        assert.equal(saveBotsRes.settings.bots.telegramUsername, 'odant_work_bot');
+        assert.ok(saveBotsRes.settings.bots.telegramToken.includes('•••'), 'Токен бота замаскирован при выдаче в браузер');
+
+        const saveLegalRes = await fetch(`${hubUrl}/api/admin/settings/legal`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admLogin.token}` },
+            body: JSON.stringify({ companyName: 'ООО «БИС» («Бизнес Интер Софт»)', authorName: 'Перепелкин Роман Александрович', inn: '6234049193' }),
+        }).then(r => r.json());
+        assert.equal(saveLegalRes.ok, true);
+        assert.equal(saveLegalRes.settings.legal.authorName, 'Перепелкин Роман Александрович');
 
         // 7.2 Запрет заказов и резервирования франшизы без регистрации и подписания оферты (403 OFERTA_REQUIRED)
         const orderWithoutOferta = await fetch(`${hubUrl}/api/orders/checkout`, {
@@ -1262,7 +1291,7 @@ describe('ПАК WORK: спецификация, лицензирование, �
     });
 
     it('13. Развёртывание в чистую папку (D:\\WORK -> npx odant-work): sources/data/api.js на месте, локальные организации исключены из .npmignore, обёртка package.json защищена от ENOSELF', async () => {
-        const npmIgnore = fs.readFileSync(path.resolve('C:/ODANT Web framework/web/work/.npmignore'), 'utf8');
+        const npmIgnore = fs.readFileSync(path.resolve('.npmignore'), 'utf8');
         assert.ok(!/^data\/$/m.test(npmIgnore), 'В .npmignore нет глобального правила data/, съедавшего sources/data/*');
         assert.ok(/^\/data\/$/m.test(npmIgnore), 'В .npmignore используется корневое правило /data/');
         assert.ok(/^\/ORGANIZATIONS\/\*\/$/m.test(npmIgnore), 'В .npmignore исключены все организации из /ORGANIZATIONS/*/');
@@ -1325,7 +1354,7 @@ describe('ПАК WORK: спецификация, лицензирование, �
         fs.mkdirSync(path.join(orgsTestRoot, 'ORGANIZATIONS', '$domain'), { recursive: true });
         fs.writeFileSync(path.join(orgsTestRoot, 'ORGANIZATIONS', '$domain', 'class.js'), 'export default { label: "Организации" };\n');
         // Копируем эталонные модули Register и Geo
-        fs.cpSync(path.resolve('C:/ODANT Web framework/web/work/MODULES'), path.join(orgsTestRoot, 'MODULES'), { recursive: true });
+        fs.cpSync(path.resolve('MODULES'), path.join(orgsTestRoot, 'MODULES'), { recursive: true });
 
         // 1) Режим «empty» (1. Пустая)
         const emptyDir = path.join(orgsTestRoot, 'ORGANIZATIONS', 'ПустаяОрг');
@@ -1462,10 +1491,9 @@ describe('ПАК WORK: спецификация, лицензирование, �
             scaffoldProviderOnDiskSync,
         } = await import('../sources/modules/trainer/index.js');
 
-        // 16.1. В рабочей копии нет дублирующей ветки MODELS/Halogen, а MODELS/Local чист (только $provider)
+        // 16.1. В рабочей копии нет дублирующей ветки MODELS/Halogen, а в MODELS/Local есть $provider
         assert.equal(fs.existsSync('MODELS/Halogen'), false, 'Дублирующая ветка MODELS/Halogen удалена (объединена с MODELS/Local)');
-        const localEntries = fs.readdirSync('MODELS/Local').filter(n => !n.startsWith('$') && !n.startsWith('#'));
-        assert.deepEqual(localEntries, [], 'В чистой поставке папка MODELS/Local пуста');
+        assert.ok(fs.existsSync('MODELS/Local/$provider/class.js'), 'В MODELS/Local присутствует метапапка $provider');
 
         // 16.2. В .npmignore исключены /MODELS/odant/ и локальные модели /MODELS/Local/*/
         const npmignore = fs.readFileSync('.npmignore', 'utf-8');

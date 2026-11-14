@@ -121,14 +121,20 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
 
         <section class="stage active" style="padding-top:24px">
             <div class="sec-layout">
-                <!-- Левое вертикальное меню разделов со счётчиками в скобках (как на Скрине 1) -->
+                <!-- Левое вертикальное меню разделов со счётчиками в скобках -->
                 <aside class="sec-nav" aria-label="Разделы администрирования">
-                    <button type="button" class="sec-nav-item active" data-adm-tab="servers" id="navAdmServers">Серверы и лицензии (0)</button>
-                    <button type="button" class="sec-nav-item" data-adm-tab="franchises" id="navAdmFranchises">Франшизы (0)</button>
-                    <div class="sec-nav-sep"></div>
+                    <button type="button" class="sec-nav-item active" data-adm-tab="clients" id="navAdmClients">Клиенты (0)</button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="franchisers" id="navAdmFranchisers">Франчайзеры (0)</button>
                     <button type="button" class="sec-nav-item" data-adm-tab="orders" id="navAdmOrders">Заказы и счета (0)</button>
-                    <button type="button" class="sec-nav-item" data-adm-tab="users" id="navAdmUsers">Клиенты и администраторы (0)</button>
                     <button type="button" class="sec-nav-item" data-adm-tab="tickets" id="navAdmTickets">Тикеты поддержки (0)</button>
+                    <div class="sec-nav-sep"></div>
+                    <button type="button" class="sec-nav-item" data-adm-tab="smtp" id="navAdmSmtp">
+                        <span>Почта SMTP</span>
+                        <span class="tag ok" id="navBadgeSmtp" style="padding:2px 8px;font-size:11px">активна</span>
+                    </button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="yookassa" id="navAdmYookassa">Платёжный шлюз ЮKassa</button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="bots" id="navAdmBots">Боты</button>
+                    <button type="button" class="sec-nav-item" data-adm-tab="legal" id="navAdmLegal">Реквизиты оферты</button>
                     <div class="sec-nav-sep"></div>
                     <div style="padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:6px">
                         <div class="small muted" style="font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em">Резервная копия базы</div>
@@ -142,43 +148,34 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
 
                 <!-- Правая область выбранного раздела -->
                 <div class="sec-main">
-                    <!-- 1. СЕРВЕРЫ И ЛИЦЕНЗИИ -->
-                    <div data-adm-sec="servers">
+                    <!-- 1. КЛИЕНТЫ (РАСКРЫВАЮЩИЕСЯ ПАНЕЛИ С СЕРВЕРАМИ И ЛИЦЕНЗИЯМИ) -->
+                    <div data-adm-sec="clients">
                         <div class="sec-bar" style="margin-bottom:12px">
-                            <h2 class="sec-title">Серверы (устройства) WORK и лицензии клиентов</h2>
+                            <h2 class="sec-title">Клиенты (серверы WORK и лицензии)</h2>
                             <div class="sec-controls">
-                                <input type="search" id="inpFilterServers" placeholder="Поиск по клиенту, Email, HWID…">
-                                <select id="selFilterServers">
-                                    <option value="all">Все серверы</option>
-                                    <option value="base_active">Базовая активна</option>
+                                <input type="search" id="inpFilterClients" placeholder="Поиск по Email, HWID, ИНН…">
+                                <select id="selFilterClients">
+                                    <option value="all">Все клиенты</option>
+                                    <option value="base_active">Базовая лицензия активна</option>
                                     <option value="base_inactive">Без базовой лицензии</option>
                                     <option value="hwid_bound">HWID привязан</option>
+                                    <option value="admins">Администраторы</option>
                                 </select>
                                 <button type="button" class="btn btn-primary btn-sm" data-action="open-create-server-modal">+ Добавить сервер</button>
                             </div>
                         </div>
-                        <div class="sec-box">
-                            <table class="sec-table">
-                                <thead><tr>
-                                    <th>Сервер / ID</th>
-                                    <th>Владелец / Организация</th>
-                                    <th>Железо (HWID)</th>
-                                    <th>Базовая лицензия</th>
-                                    <th>Доп. места и SLA</th>
-                                    <th style="text-align:right">Файлы</th>
-                                </tr></thead>
-                                <tbody id="admLicensesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                            </table>
+                        <div class="adm-acc-list" id="admClientsList">
+                            <div class="sec-box muted">Загрузка…</div>
                         </div>
                     </div>
 
-                    <!-- 2. ФРАНШИЗЫ И ГРАФИКИ ПОГАШЕНИЯ (12 МЕС.) -->
-                    <div data-adm-sec="franchises" style="display:none">
+                    <!-- 2. ФРАНЧАЙЗЕРЫ (РАСКРЫВАЮЩИЕСЯ ПАНЕЛИ С РЕГИОНАМИ И СТАТУСАМИ) -->
+                    <div data-adm-sec="franchisers" style="display:none">
                         <div class="sec-bar" style="margin-bottom:12px">
-                            <h2 class="sec-title">Региональные франшизы и графики погашения (12 мес.)</h2>
+                            <h2 class="sec-title">Франчайзеры (регионы РФ и текущие статусы)</h2>
                             <div class="sec-controls">
-                                <input type="search" id="inpFilterFranchises" placeholder="Поиск по региону, компании, ИНН…">
-                                <select id="selFilterFranchises">
+                                <input type="search" id="inpFilterFranchisers" placeholder="Поиск по Email, региону, ИНН…">
+                                <select id="selFilterFranchisers">
                                     <option value="all">Все активные</option>
                                     <option value="pending_deposit">Ожидают залога (15 мин)</option>
                                     <option value="deposit_paid">Погашение по графику</option>
@@ -188,18 +185,8 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                                 </select>
                             </div>
                         </div>
-                        <div class="sec-box">
-                            <table class="sec-table">
-                                <thead><tr>
-                                    <th>Субъект РФ / ID</th>
-                                    <th>Франчайзи</th>
-                                    <th>Залог (100 тыс. ₽)</th>
-                                    <th>График (12 мес.)</th>
-                                    <th>Оплачено / Остаток</th>
-                                    <th style="text-align:right">Управление</th>
-                                </tr></thead>
-                                <tbody id="admFranchisesBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                            </table>
+                        <div class="adm-acc-list" id="admFranchisersList">
+                            <div class="sec-box muted">Загрузка…</div>
                         </div>
                     </div>
 
@@ -232,30 +219,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                         </div>
                     </div>
 
-                    <!-- 4. КЛИЕНТЫ И АДМИНИСТРАТОРЫ -->
-                    <div data-adm-sec="users" style="display:none">
-                        <div class="sec-bar" style="margin-bottom:12px">
-                            <h2 class="sec-title">Зарегистрированные клиенты и администраторы</h2>
-                            <div class="sec-controls">
-                                <input type="search" id="inpFilterUsers" placeholder="Поиск по Email, организации, ИНН…">
-                            </div>
-                        </div>
-                        <div class="sec-box">
-                            <table class="sec-table">
-                                <thead><tr>
-                                    <th>Email / ID</th>
-                                    <th>Роль</th>
-                                    <th>Организация / ИНН</th>
-                                    <th>Реестры клиента</th>
-                                    <th>Оферта (ПЭП)</th>
-                                    <th style="text-align:right">Вход</th>
-                                </tr></thead>
-                                <tbody id="admUsersBody"><tr><td colspan="6" class="muted">Загрузка…</td></tr></tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <!-- 5. ТИКЕТЫ ПОДДЕРЖКИ SLA -->
+                    <!-- 4. ТИКЕТЫ ПОДДЕРЖКИ SLA -->
                     <div data-adm-sec="tickets" style="display:none">
                         <div class="sec-bar" style="margin-bottom:12px">
                             <h2 class="sec-title">Тикеты техподдержки SLA (MAX · Telegram · VK)</h2>
@@ -281,6 +245,183 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                             </table>
                         </div>
                     </div>
+
+                    <!-- 5. ПОЧТА SMTP -->
+                    <div data-adm-sec="smtp" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Почтовый сервер SMTP (отправка кодов входа)</h2>
+                            <span class="tag ok" id="admSmtpStatusTag">✓ Подключена</span>
+                        </div>
+                        <div class="sec-box">
+                            <div class="adm-preset-bar" style="margin-bottom:14px">
+                                <span class="adm-form-label" style="margin-right:4px">Шаблон сервера:</span>
+                                <button type="button" class="adm-preset-btn" data-smtp-preset="yandex">Яндекс (465)</button>
+                                <button type="button" class="adm-preset-btn" data-smtp-preset="gmail">Gmail (465)</button>
+                                <button type="button" class="adm-preset-btn" data-smtp-preset="mailru">Mail.ru (465)</button>
+                            </div>
+                            <div class="adm-form-grid">
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admSmtpHost">SMTP сервер (Host)</label>
+                                    <input type="text" id="admSmtpHost" placeholder="smtp.yandex.ru">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admSmtpPort">Порт</label>
+                                    <input type="number" id="admSmtpPort" placeholder="465">
+                                </div>
+                                <div class="adm-form-row">
+                                    <span class="adm-form-label">Прямой TLS (465)</span>
+                                    <label style="display:flex;align-items:center;gap:10px;font-size:13.5px;cursor:pointer">
+                                        <input type="checkbox" id="admSmtpSecure" checked style="width:17px;height:17px">
+                                        <span>Включён (выключите для порта 587 STARTTLS)</span>
+                                    </label>
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admSmtpUser">Логин SMTP</label>
+                                    <input type="text" id="admSmtpUser" placeholder="user@yandex.ru">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admSmtpPass">Пароль приложения</label>
+                                    <input type="text" id="admSmtpPass" placeholder="Пароль приложения SMTP">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admSmtpFrom">Отправитель (From)</label>
+                                    <input type="text" id="admSmtpFrom" placeholder="user@yandex.ru">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admSmtpSenderName">Имя отправителя</label>
+                                    <input type="text" id="admSmtpSenderName" placeholder="ODANT-WORK">
+                                </div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap">
+                                <button type="button" class="btn btn-primary" data-action="save-smtp-settings">Сохранить настройки SMTP</button>
+                                <button type="button" class="btn btn-ghost" data-action="test-smtp-settings">Отправить тестовое письмо</button>
+                                <span class="small" id="admSmtpFeedback"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 6. ПЛАТЁЖНЫЙ ШЛЮЗ ЮKASSA -->
+                    <div data-adm-sec="yookassa" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Платёжный шлюз ЮKassa (API v3)</h2>
+                            <span class="tag" id="admYookassaStatusTag">Режим песочницы</span>
+                        </div>
+                        <div class="sec-box">
+                            <div style="margin-bottom:16px;font-size:13.5px;color:var(--text-2)">
+                                Webhook URL для личного кабинета ЮKassa:
+                                <code id="admYookassaWebhookUrl" style="padding:3px 8px;border-radius:6px;background:color-mix(in srgb,var(--brand) 8%,var(--panel))">https://${esc(P.domain)}/api/payments/yookassa/webhook</code>
+                            </div>
+                            <div class="adm-form-grid">
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admYkShopId">Shop ID магазина</label>
+                                    <input type="text" id="admYkShopId" placeholder="123456">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admYkSecretKey">Секретный ключ</label>
+                                    <input type="text" id="admYkSecretKey" placeholder="live_... или test_...">
+                                </div>
+                                <div class="adm-form-row">
+                                    <span class="adm-form-label">Онлайн-чеки 54-ФЗ</span>
+                                    <label style="display:flex;align-items:center;gap:10px;font-size:13.5px;cursor:pointer">
+                                        <input type="checkbox" id="admYkSendReceipt" style="width:17px;height:17px">
+                                        <span>Передавать структуру чека (receipt)</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap">
+                                <button type="button" class="btn btn-primary" data-action="save-yookassa-settings">Сохранить ЮKassa</button>
+                                <span class="small" id="admYkFeedback"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 7. БОТЫ TELEGRAM И MAX -->
+                    <div data-adm-sec="bots" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Боты Telegram / MAX</h2>
+                        </div>
+                        <div class="sec-box">
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+                                <h3 class="h3" style="margin:0;font-size:15.5px">Единые боты платформы Telegram и MAX</h3>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap" id="admBotsBadges">
+                                    <span class="tag" id="admBadgeTgBot">TG: не задан</span>
+                                    <span class="tag" id="admBadgeMaxBot">MAX: не задан</span>
+                                </div>
+                            </div>
+                            <p class="small muted" style="margin:0 0 16px;line-height:1.5">
+                                Вставьте токен бота — имя бота (<code>@username</code>) определится по API автоматически. Каждый клиент привязывает свой личный чат в 1 клик и получает строго только свои собственные уведомления.
+                            </p>
+                            <div class="adm-form-grid">
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admBotTgToken">Токен Telegram Bot API</label>
+                                    <input type="text" id="admBotTgToken" placeholder="123456789:AA...">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admBotTgUsername">Имя Telegram-бота (авто)</label>
+                                    <input type="text" id="admBotTgUsername" placeholder="odant_work_bot">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admBotMaxToken">Токен MAX Bot API</label>
+                                    <input type="text" id="admBotMaxToken" placeholder="f9LHod...">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admBotMaxUsername">Имя бота MAX (авто)</label>
+                                    <input type="text" id="admBotMaxUsername" placeholder="id6234049193_bot">
+                                </div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap">
+                                <button type="button" class="btn btn-primary" data-action="save-bots-settings">Сохранить ботов платформы</button>
+                                <span class="small" id="admBotsFeedback"></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 8. РЕКВИЗИТЫ ОФЕРТЫ -->
+                    <div data-adm-sec="legal" style="display:none">
+                        <div class="sec-bar" style="margin-bottom:12px">
+                            <h2 class="sec-title">Юридические реквизиты оферты (<code>/api/oferta</code>)</h2>
+                        </div>
+                        <div class="sec-box">
+                            <div class="adm-form-grid">
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalCompany">Оператор / Наименование</label>
+                                    <input type="text" id="admLegalCompany" placeholder="ООО «БИС» («Бизнес Интер Софт»)">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalAuthor">Автор ПО</label>
+                                    <input type="text" id="admLegalAuthor" placeholder="Перепелкин Роман Александрович">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalStatus">Правовой статус</label>
+                                    <input type="text" id="admLegalStatus" placeholder="Правообладатель и Оператор платформы · Проприетарное ПО (Все права защищены)">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalInn">ИНН</label>
+                                    <input type="text" id="admLegalInn" placeholder="6234049193">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalOgrn">ОГРН / ОГРНИП</label>
+                                    <input type="text" id="admLegalOgrn" placeholder="">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalEmail">Email поддержки</label>
+                                    <input type="email" id="admLegalEmail" placeholder="support@odant.org">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalPhone">Телефон</label>
+                                    <input type="text" id="admLegalPhone" placeholder="+7 (4912) 77-70-21">
+                                </div>
+                                <div class="adm-form-row">
+                                    <label class="adm-form-label" for="admLegalAddress">Адрес</label>
+                                    <input type="text" id="admLegalAddress" placeholder="390000, г. Рязань, ул. Ленина, 47">
+                                </div>
+                            </div>
+                            <div style="display:flex;align-items:center;gap:10px;margin-top:18px;flex-wrap:wrap">
+                                <button type="button" class="btn btn-primary" data-action="save-legal-settings">Сохранить реквизиты</button>
+                                <span class="small" id="admLegalFeedback"></span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -295,23 +436,28 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
 
     <!-- Модальное окно: Создание сервера / Выпуск лицензии клиенту -->
     <div class="modal" id="admCreateServerModal" role="dialog" aria-modal="true">
-        <div class="card" style="max-width:540px">
+        <div class="card" style="max-width:500px">
             <div class="modal-head">
                 <img src="/assets/odant-logo.png" alt="">
                 <div>
-                    <h3 class="h3" style="margin:0">Добавить сервер / выпустить лицензию</h3>
+                    <h3 class="h3" style="margin:0">Добавить сервер клиенту</h3>
                     <div class="small muted">Создание записи сервера в реестре с подписью Ed25519</div>
                 </div>
                 <button class="icon-btn" data-action="close-create-server-modal" aria-label="Закрыть">${icon('close')}</button>
             </div>
-            <div class="field"><label for="admNewSrvName">Название сервера (устройства)</label><input type="text" id="admNewSrvName" placeholder="Основной сервер WORK"></div>
-            <div class="row2">
-                <div class="field"><label for="admNewSrvOrg">Организация клиента</label><input type="text" id="admNewSrvOrg" placeholder="ООО «Компания»"></div>
-                <div class="field"><label for="admNewSrvInn">ИНН</label><input type="text" id="admNewSrvInn" placeholder="7701234567"></div>
+            <div class="field">
+                <label for="admNewSrvEmail">Email клиента *</label>
+                <input type="email" id="admNewSrvEmail" placeholder="client@company.ru">
             </div>
             <div class="row2">
-                <div class="field"><label for="admNewSrvEmail">Email владельца *</label><input type="email" id="admNewSrvEmail" placeholder="client@company.ru"></div>
-                <div class="field"><label for="admNewSrvHwid">HWID (необязательно)</label><input type="text" id="admNewSrvHwid" placeholder="PAK-..."></div>
+                <div class="field">
+                    <label for="admNewSrvName">Название сервера (устройства)</label>
+                    <input type="text" id="admNewSrvName" placeholder="Сервер WORK #1">
+                </div>
+                <div class="field">
+                    <label for="admNewSrvHwid">HWID (необязательно)</label>
+                    <input type="text" id="admNewSrvHwid" placeholder="PAK-...">
+                </div>
             </div>
             <label style="display:flex;align-items:center;gap:10px;font-size:13.5px;margin:8px 0 14px;cursor:pointer">
                 <input type="checkbox" id="admNewSrvActivateBase" checked style="width:17px;height:17px">

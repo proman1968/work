@@ -17,6 +17,7 @@ export class YooKassaService {
         store,
         shopId = process.env.YOOKASSA_SHOP_ID || '',
         secretKey = process.env.YOOKASSA_SECRET_KEY || '',
+        sendReceipt = true,
         publicOrigin = process.env.PUBLIC_ORIGIN || 'https://work.odant.org',
         onOrderPaid = null,
         fetchImpl = globalThis.fetch,
@@ -24,6 +25,7 @@ export class YooKassaService {
         this.store = store;
         this.shopId = shopId;
         this.secretKey = secretKey;
+        this.sendReceipt = sendReceipt !== undefined ? Boolean(sendReceipt) : true;
         this.publicOrigin = String(publicOrigin).replace(/\/+$/, '');
         this.onOrderPaid = onOrderPaid;
         this.fetchImpl = fetchImpl;
@@ -44,7 +46,7 @@ export class YooKassaService {
                 ? `Заказ ${order.orderId}: ПАК ODANT-WORK (10 вечных лицензий + 1 год Enterprise) + доп. места (${order.addonSeats} мест, ${order.tierName})`
                 : `Заказ ${order.orderId}: Годовая лицензия WORK (${order.addonSeats} польз., уровень ${order.tierName}, ${order.years} г.)`;
 
-        return {
+        const payload = {
             amount: {
                 value: valueStr,
                 currency: 'RUB',
@@ -63,7 +65,9 @@ export class YooKassaService {
                 years: String(order.years),
                 includeBasePak: String(!!order.includeBasePak),
             },
-            receipt: {
+        };
+        if (this.sendReceipt !== false) {
+            payload.receipt = {
                 customer: {
                     email: order.customer?.email || 'billing@odant.org',
                     ...(order.customer?.inn ? { inn: String(order.customer.inn) } : {}),
@@ -80,8 +84,9 @@ export class YooKassaService {
                     payment_mode: 'full_payment',
                     payment_subject: 'intellectual_activity',
                 })),
-            },
-        };
+            };
+        }
+        return payload;
     }
 
     /**
