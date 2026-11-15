@@ -295,6 +295,10 @@ export default {
             cursor: pointer;
             white-space: nowrap;
         }
+        .btn:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
         .btn.primary {
             background: var(--accent-color, #2563eb);
             border-color: var(--accent-color, #2563eb);
@@ -438,23 +442,16 @@ export default {
                     <div class="field">
                         <label>HF Token (опционально, только для huggingface.co)</label>
                         <div class="toolbar">
-                            <input type="password" style="flex:1;min-width:180px;" :value="netToken" :placeholder="netHasToken ? ('Установлен (' + netTokenMask + ')') : 'hf_... (для закрытых моделей)'" @input="setNetworkField('netToken', $this.value)">
-                            <button type="button" class="btn" ~if="netHasToken || netToken" @tap="clearNetworkToken()">Удалить</button>
+                            <input type="password" style="flex:1;min-width:180px;" :value="netToken" :placeholder="netClearToken ? 'Токен будет удалён после сохранения' : (netHasToken ? ('Установлен (' + netTokenMask + ')') : 'hf_... (для закрытых моделей)')" @input="setNetworkField('netToken', $this.value)">
+                            <button type="button" class="btn" ~if="(netHasToken && !netClearToken) || netToken" @tap="clearNetworkToken()">Удалить</button>
                         </div>
                     </div>
                 </div>
                 <div class="toolbar" style="margin-top:10px;">
-                    <button type="button" class="btn primary" @tap="saveNetworkSettings()" :disabled="netBusy">Сохранить настройки</button>
-                    <button type="button" class="btn" @tap="probeNetwork()" :disabled="netBusy">
-                        {{netBusy ? 'Проверка…' : 'Проверить скорость'}}
+                    <button type="button" class="btn primary" @tap="saveNetworkSettings()" :disabled="netBusy || !hasNetworkChanges">
+                        {{netBusy ? 'Сохранение…' : 'Сохранить настройки'}}
                     </button>
                     <button type="button" class="btn" @tap="networkOpen = false">Скрыть</button>
-                </div>
-                <div class="msg ok" style="margin-top:8px;" ~if="netProbe && netProbe.ok">
-                    {{netProbe.sourceLabel}}<span ~if="netProbe.usingProxy"> (через прокси {{netProbe.proxyUrl}})</span>: {{netProbe.message}} · отклик {{netProbe.latencyMs}} мс
-                </div>
-                <div class="msg err" style="margin-top:8px;" ~if="netProbe && !netProbe.ok">
-                    Ошибка проверки ({{netProbe.sourceLabel}}): {{netProbe.error}}
                 </div>
             </div>
 
@@ -581,7 +578,7 @@ export default {
 
                 <!-- Подсказка при стабильно низкой скорости (< 2 МБ/с) -->
                 <div class="inline-warn" ~if="$for.item.state === 'downloading' && $for.item.download?.lowSpeedWarning">
-                    <span>Низкая скорость ({{$for.item.download?.speedMBs || 0}} МБ/с). Попробуйте переключить источник на HF-Mirror или указать прокси для моделей.</span>
+                    <span>{{lowSpeedHint($for.item.download)}}</span>
                     <button type="button" class="btn" @tap="networkOpen = true">Настроить сеть</button>
                 </div>
 
@@ -710,11 +707,37 @@ export default {
     netToken: '',
     netHasToken: false,
     netTokenMask: '',
+    netClearProxy: false,
+    netClearToken: false,
     netBusy: false,
-    netProbe: null,
-    _networkDirty: false,
     _pollTimer: null,
 
+    get hasNetworkChanges() {
+        const n = this.network || {};
+        const savedPreset = n.sourcePreset || 'official';
+        const savedEndpoint = String(n.endpointUrl || 'https://huggingface.co').replace(/\/+$/, '');
+        const savedThreads = Number(n.threads) || 8;
+        const savedProxy = String(n.proxyUrl || '').trim();
+
+        if (String(this.netPreset || 'official') !== savedPreset)
+            return true;
+        const curEndpoint = this.netPreset === 'official'
+            ? 'https://huggingface.co'
+            : (this.netPreset === 'hf-mirror' ? 'https://hf-mirror.com' : String(this.netEndpoint || '').trim().replace(/\/+$/, ''));
+        if (this.netPreset === 'custom' && curEndpoint !== savedEndpoint)
+            return true;
+        if (Number(this.netThreads || 8) !== savedThreads)
+            return true;
+        if (this.netClearProxy && Boolean(savedProxy || n.hasProxy))
+            return true;
+        if (String(this.netProxy || '').trim() !== savedProxy)
+            return true;
+        if (this.netClearToken && Boolean(n.hasToken))
+            return true;
+        if (String(this.netToken || '').trim() !== '')
+            return true;
+        return false;
+    },
     get networkSummary() {
         const n = this.network;
         const src = n?.sourceLabel || 'huggingface.co';
@@ -1022,14 +1045,23 @@ export default {
         this.jobs = st.jobs || [];
         this.transfers = st.transfers || [];
         if (st.network) {
+            const hadChanges = this.hasNetworkChanges;
             this.network = st.network;
-            if (!this._networkDirty)
+            if (!hadChanges)
                 this._applyNetworkState(st.network);
         }
         if (st.halogen?.catalog)
             this.halogenCatalog = st.halogen.catalog;
         if (this.localModels.length !== prevCount)
             this._invalidateClientModelsTree();
+    },
+    lowSpeedHint(dl) {
+        const sp = dl?.speedMBs || 0;
+        if (dl?.usingProxy)
+            return `Низкая скорость через прокси (${sp} МБ/с). Проверьте скорость прокси-сервера или попробуйте другой источник.`;
+        if (dl?.sourceLabel === 'hf-mirror' || String(dl?.endpointUrl || '').includes('hf-mirror'))
+            return `Низкая скорость на HF-Mirror (${sp} МБ/с). Попробуйте указать прокси или включить VPN.`;
+        return `Низкая скорость (${sp} МБ/с). Попробуйте переключить источник на HF-Mirror или указать прокси для моделей.`;
     },
     _applyNetworkState(n) {
         if (!n)
@@ -1042,15 +1074,16 @@ export default {
         this.netHasToken = Boolean(n.hasToken);
         this.netTokenMask = n.tokenMask || '';
         this.netToken = '';
+        this.netClearProxy = false;
+        this.netClearToken = false;
     },
     toggleNetworkPanel() {
         this.networkOpen = !this.networkOpen;
-        if (this.networkOpen && this.network && !this._networkDirty)
+        if (this.networkOpen && this.network && !this.hasNetworkChanges)
             this._applyNetworkState(this.network);
     },
     onNetworkPresetChange(val) {
         this.netPreset = String(val || 'official');
-        this._networkDirty = true;
         if (this.netPreset === 'official')
             this.netEndpoint = 'https://huggingface.co';
         else if (this.netPreset === 'hf-mirror')
@@ -1058,11 +1091,15 @@ export default {
     },
     setNetworkField(field, val) {
         this[field] = val;
-        this._networkDirty = true;
+        if (field === 'netProxy' && String(val || '').trim())
+            this.netClearProxy = false;
+        if (field === 'netToken' && String(val || '').trim())
+            this.netClearToken = false;
     },
     async saveNetworkSettings() {
+        if (!this.hasNetworkChanges)
+            return;
         this.netBusy = true;
-        this.netProbe = null;
         try {
             const payload = {
                 sourcePreset: this.netPreset,
@@ -1072,72 +1109,35 @@ export default {
                 proxyUrl: this.netProxy,
                 threads: this.netThreads,
             };
-            if (this.netToken)
+            if (this.netClearProxy && !String(this.netProxy || '').trim())
+                payload.clearProxy = true;
+            if (this.netClearToken && !String(this.netToken || '').trim())
+                payload.clearToken = true;
+            else if (this.netToken)
                 payload.token = this.netToken;
             const res = await this._call('trainer_network_set', payload);
             if (res) {
                 this.network = res;
-                this._networkDirty = false;
                 this._applyNetworkState(res);
-                this.notice = `Сетевые настройки загрузчика сохранены (${res.sourceLabel}, ${res.threads} потоков).`;
+                const extra = res.restartedCount > 0
+                    ? ` · активных загрузок перезапущено на новых настройках: ${res.restartedCount}`
+                    : '';
+                this.notice = `Сетевые настройки загрузчика сохранены (${res.sourceLabel}, ${res.threads} потоков${extra}).`;
+                if (res.restartedCount > 0)
+                    await this.reloadAll();
             }
         }
         finally {
             this.netBusy = false;
         }
     },
-    async probeNetwork() {
-        this.netBusy = true;
-        this.netProbe = null;
-        try {
-            const endpointUrl = this.netPreset === 'official'
-                ? 'https://huggingface.co'
-                : (this.netPreset === 'hf-mirror' ? 'https://hf-mirror.com' : this.netEndpoint);
-            const payload = {
-                sourcePreset: this.netPreset,
-                endpointUrl,
-                proxyUrl: this.netProxy,
-                threads: this.netThreads,
-            };
-            if (this.netToken)
-                payload.token = this.netToken;
-            const res = await this._call('trainer_network_probe', payload);
-            if (res)
-                this.netProbe = res;
-        }
-        finally {
-            this.netBusy = false;
-        }
+    clearNetworkProxy() {
+        this.netProxy = '';
+        this.netClearProxy = Boolean(this.network?.hasProxy || this.network?.proxyUrl);
     },
-    async clearNetworkProxy() {
-        this.netBusy = true;
-        try {
-            const res = await this._call('trainer_network_set', { clearProxy: true });
-            if (res) {
-                this.network = res;
-                this._networkDirty = false;
-                this._applyNetworkState(res);
-                this.notice = 'Прокси для загрузки моделей отключён.';
-            }
-        }
-        finally {
-            this.netBusy = false;
-        }
-    },
-    async clearNetworkToken() {
-        this.netBusy = true;
-        try {
-            const res = await this._call('trainer_network_set', { clearToken: true });
-            if (res) {
-                this.network = res;
-                this._networkDirty = false;
-                this._applyNetworkState(res);
-                this.notice = 'Сохранённый HF Token удалён.';
-            }
-        }
-        finally {
-            this.netBusy = false;
-        }
+    clearNetworkToken() {
+        this.netToken = '';
+        this.netClearToken = Boolean(this.network?.hasToken);
     },
     async setModality(mod) {
         this.hfModality = String(mod || 'all');

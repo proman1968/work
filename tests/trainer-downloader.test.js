@@ -30,6 +30,7 @@ import {
 import {
     startHuggingFaceDownload,
     listHuggingFaceDownloads,
+    restartActiveHuggingFaceDownloads,
     TRAINER_METHODS,
 } from '../sources/modules/trainer/index.js';
 
@@ -112,6 +113,20 @@ function startRangeServer(payloadBuf, opts = {}) {
             });
             res.write(slice.subarray(0, 32 * 1024));
             res.socket?.destroy();
+            return;
+        }
+
+        const resBody = slice;
+        if (opts.chunkDelayMs) {
+            res.writeHead(206, {
+                'Content-Type': 'application/octet-stream',
+                'Content-Range': `bytes ${start}-${end}/${payloadBuf.length}`,
+                'Content-Length': String(resBody.length),
+            });
+            setTimeout(() => {
+                if (!res.destroyed)
+                    res.end(resBody);
+            }, opts.chunkDelayMs);
             return;
         }
 
@@ -464,6 +479,64 @@ describe('trainer-downloader: многопоточная загрузка, пр�
         }
         finally {
             await srv.close();
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('restartActiveHuggingFaceDownloads бесшовно переключает активную загрузку на новый источник и потоки', async () => {
+        const tmp = makeTempDir();
+        const payload = crypto.randomBytes(6 * 1024 * 1024);
+        const srv1 = await startRangeServer(payload, { chunkDelayMs: 400 });
+        const srv2 = await startRangeServer(payload);
+        try {
+            saveTrainerNetworkSettings({
+                sourcePreset: 'custom',
+                endpointUrl: srv1.url,
+                threads: 2,
+            }, tmp);
+
+            const job1 = await startHuggingFaceDownload({
+                repoId: 'Test/SwitchModel',
+                quant: '',
+                rootDir: tmp,
+                registerInWork: false,
+                waitForCompletion: false,
+            });
+            assert.equal(job1.endpointUrl, srv1.url);
+            assert.equal(job1.threads, 2);
+
+            await new Promise(r => setTimeout(r, 40));
+
+            saveTrainerNetworkSettings({
+                sourcePreset: 'custom',
+                endpointUrl: srv2.url,
+                threads: 4,
+            }, tmp);
+
+            const restarted = await restartActiveHuggingFaceDownloads({ rootDir: tmp });
+            assert.equal(restarted.length, 1);
+            assert.equal(restarted[0].endpointUrl, srv2.url);
+            assert.equal(restarted[0].threads, 4);
+
+            // Дожидаемся завершения новой задачи
+            const deadline = Date.now() + 10000;
+            while (Date.now() < deadline) {
+                const active = listHuggingFaceDownloads(tmp).find(d => d.repoId === 'Test/SwitchModel');
+                if (!active || active.status === 'completed')
+                    break;
+                if (active.status === 'failed')
+                    assert.fail(`Загрузка упала после рестарта: ${active.error}`);
+                await new Promise(r => setTimeout(r, 50));
+            }
+
+            const outFile = path.join(restarted[0].weightsDir, 'weights.gguf');
+            const got = await fsp.readFile(outFile);
+            assert.equal(sha256(got), sha256(payload));
+            assert.ok(srv2.requests.length >= 1, 'новая загрузка должна идти со второго сервера');
+        }
+        finally {
+            await srv1.close();
+            await srv2.close();
             fs.rmSync(tmp, { recursive: true, force: true });
         }
     });

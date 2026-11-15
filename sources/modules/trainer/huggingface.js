@@ -1277,6 +1277,10 @@ export async function startHuggingFaceDownload({
         controller,
         nodeMeta,
         registerInWork,
+        quant,
+        files,
+        fetchImpl,
+        runPromise: null,
         setKeepFiles: (v) => { keepFilesOnAbort = Boolean(v); },
     };
     _downloads.set(jobId, entryMeta);
@@ -1476,6 +1480,7 @@ export async function startHuggingFaceDownload({
             }
         }
     })();
+    entryMeta.runPromise = runPromise;
 
     if (waitForCompletion)
         await runPromise;
@@ -1616,6 +1621,7 @@ export async function resumeHuggingFaceDownload({
     jobId = '',
     folderName = '',
     repoId = '',
+    files = null,
     quant = 'Q8_0',
     token = '',
     nodeMeta = null,
@@ -1643,7 +1649,8 @@ export async function resumeHuggingFaceDownload({
 
     return startHuggingFaceDownload({
         repoId: resolvedRepo,
-        quant,
+        files: files ?? entry?.files ?? null,
+        quant: quant || entry?.quant || 'Q8_0',
         revision: entry?.job?.revision || state.revision || 'main',
         token,
         rootDir,
@@ -1655,8 +1662,40 @@ export async function resumeHuggingFaceDownload({
         proxyUrl,
         threads,
         parallelFiles,
-        fetchImpl,
+        fetchImpl: fetchImpl || entry?.fetchImpl || globalThis.fetch,
     });
+}
+
+/**
+ * Бесшовно перезапустить все активные загрузки после изменения сетевых настроек
+ * (новый источник/зеркало, прокси или число потоков) с сохранением скачанных диапазонов.
+ */
+export async function restartActiveHuggingFaceDownloads({ rootDir = '' } = {}) {
+    const active = [..._downloads.values()].filter(e =>
+        e?.job?.status === 'downloading'
+        && (!rootDir || path.resolve(e.job.rootDir || '') === path.resolve(rootDir))
+    );
+    const restarted = [];
+    for (const entry of active) {
+        const snapshot = {
+            jobId: entry.job.id,
+            folderName: entry.job.folderName,
+            repoId: entry.job.repoId,
+            files: entry.files ?? null,
+            quant: entry.quant || 'Q8_0',
+            nodeMeta: entry.nodeMeta || null,
+            rootDir: entry.job.rootDir || process.cwd(),
+            fetchImpl: entry.fetchImpl || globalThis.fetch,
+        };
+        pauseHuggingFaceDownload(entry.job.id);
+        try {
+            await entry.runPromise;
+        }
+        catch { /* остановка по паузе — ожидаема */ }
+        const resumed = await resumeHuggingFaceDownload(snapshot);
+        restarted.push(resumed);
+    }
+    return restarted;
 }
 
 export function cancelHuggingFaceDownload(jobId, { keepFiles = false } = {}) {

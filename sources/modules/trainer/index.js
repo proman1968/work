@@ -16,6 +16,7 @@ import {
     pauseHuggingFaceDownload,
     discardHuggingFaceDownload,
     resumeHuggingFaceDownload,
+    restartActiveHuggingFaceDownloads,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
 } from './huggingface.js';
@@ -180,6 +181,7 @@ export {
     pauseHuggingFaceDownload,
     discardHuggingFaceDownload,
     resumeHuggingFaceDownload,
+    restartActiveHuggingFaceDownloads,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
     buildWorkDataset,
@@ -875,7 +877,11 @@ export const TRAINER_METHODS = Object.freeze({
                 clearProxy: args.clearProxy,
                 clearToken: args.clearToken,
             });
-            return sanitizeTrainerNetworkForClient(updated);
+            const restarted = await restartActiveHuggingFaceDownloads().catch(() => []);
+            return {
+                ...sanitizeTrainerNetworkForClient(updated),
+                restartedCount: restarted.length,
+            };
         },
     },
     trainer_network_probe: {
