@@ -10,8 +10,19 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import {
+    DEFAULT_HF_ORIGIN,
+    loadTrainerNetworkSettings,
+    normalizeEndpointUrl,
+    describeSourceLabel,
+    canSendAuthToUrl,
+    createNetworkFetch,
+    downloadFileMultipart,
+    mergeRanges,
+    sumRangesBytes,
+} from './downloader.js';
 
-const HF_ORIGIN = 'https://huggingface.co';
+const HF_ORIGIN = DEFAULT_HF_ORIGIN;
 const REPO_ID_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 
 /**
@@ -617,10 +628,10 @@ export function evaluateModelFit(model, usableMemoryGb = 16) {
     };
 }
 
-function hfHeaders(token) {
+function hfHeaders(token, targetUrl = '', endpointUrl = HF_ORIGIN) {
     const h = { 'User-Agent': 'WORK-AI-Trainer/2.0' };
     const t = String(token || process.env.HF_TOKEN || '').trim();
-    if (t)
+    if (t && (!targetUrl || canSendAuthToUrl(targetUrl, endpointUrl)))
         h.Authorization = `Bearer ${t}`;
     return h;
 }
@@ -686,6 +697,9 @@ export async function searchHuggingFaceModels({
     limit = 25,
     token = '',
     usableMemoryGb = 24,
+    rootDir = process.cwd(),
+    endpointUrl,
+    proxyUrl,
     fetchImpl = globalThis.fetch,
 } = {}) {
     const q = String(query || '').trim();
@@ -724,6 +738,12 @@ export async function searchHuggingFaceModels({
     }
 
     try {
+        const netCfg = loadTrainerNetworkSettings(rootDir);
+        const effEndpoint = normalizeEndpointUrl(endpointUrl || netCfg.endpointUrl || HF_ORIGIN);
+        const effProxy = proxyUrl !== undefined ? proxyUrl : (fetchImpl === globalThis.fetch ? netCfg.proxyUrl : '');
+        const effToken = token || netCfg.token || '';
+        const netFetch = createNetworkFetch({ proxyUrl: effProxy, fetchImpl });
+
         const params = new URLSearchParams();
         if (q)
             params.set('search', q);
@@ -736,9 +756,9 @@ export async function searchHuggingFaceModels({
         params.set('direction', '-1');
         params.set('limit', String(Math.min(50, Math.max(5, Number(limit) || 25))));
 
-        const url = `${HF_ORIGIN}/api/models?${params.toString()}`;
-        const res = await fetchImpl(url, {
-            headers: { Accept: 'application/json', ...hfHeaders(token) },
+        const url = `${effEndpoint}/api/models?${params.toString()}`;
+        const res = await netFetch(url, {
+            headers: { Accept: 'application/json', ...hfHeaders(effToken, url, effEndpoint) },
             signal: AbortSignal.timeout?.(10000),
         });
         if (!res.ok)
@@ -806,6 +826,9 @@ export async function inspectHuggingFaceRepo(repoId, {
     revision = 'main',
     token = '',
     usableMemoryGb = 24,
+    rootDir = process.cwd(),
+    endpointUrl,
+    proxyUrl,
     fetchImpl = globalThis.fetch,
 } = {}) {
     const cleanId = validateRepoId(repoId);
@@ -813,9 +836,15 @@ export async function inspectHuggingFaceRepo(repoId, {
 
     if (typeof fetchImpl === 'function') {
         try {
-            const url = `${HF_ORIGIN}/api/models/${cleanId}?blobs=true`;
-            const res = await fetchImpl(url, {
-                headers: { Accept: 'application/json', ...hfHeaders(token) },
+            const netCfg = loadTrainerNetworkSettings(rootDir);
+            const effEndpoint = normalizeEndpointUrl(endpointUrl || netCfg.endpointUrl || HF_ORIGIN);
+            const effProxy = proxyUrl !== undefined ? proxyUrl : (fetchImpl === globalThis.fetch ? netCfg.proxyUrl : '');
+            const effToken = token || netCfg.token || '';
+            const netFetch = createNetworkFetch({ proxyUrl: effProxy, fetchImpl });
+
+            const url = `${effEndpoint}/api/models/${cleanId}?blobs=true`;
+            const res = await netFetch(url, {
+                headers: { Accept: 'application/json', ...hfHeaders(effToken, url, effEndpoint) },
                 signal: AbortSignal.timeout?.(12000),
             });
             if (res.ok) {
@@ -1033,9 +1062,18 @@ async function writeDownloadStateSafe(stagingDir, job, extra = {}) {
             revision: job.revision,
             providerFolder: job.providerFolder,
             folderName: job.folderName,
+            endpointUrl: job.endpointUrl || HF_ORIGIN,
+            sourceLabel: job.sourceLabel || describeSourceLabel(job.endpointUrl || HF_ORIGIN),
+            threads: Number(job.threads) || 1,
             registerInWork: extra.registerInWork !== false,
             nodeMeta: extra.nodeMeta || null,
-            files: (job.files || []).map(f => ({ name: f.name, size: Number(f.size) || 0 })),
+            files: (job.files || []).map(f => ({
+                name: f.name,
+                size: Number(f.size) || 0,
+                downloaded: Number(f.downloaded) || 0,
+                done: Boolean(f.done),
+                ranges: Array.isArray(f.ranges) ? f.ranges : [],
+            })),
             totalBytes: Number(job.totalBytes) || 0,
             downloadedBytes: Number(job.downloadedBytes) || 0,
             status: job.status,
@@ -1087,6 +1125,10 @@ export async function startHuggingFaceDownload({
     waitForCompletion = false,
     maxRetries = 20,
     retryBaseDelayMs = 3000,
+    endpointUrl,
+    proxyUrl,
+    threads,
+    parallelFiles,
     fetchImpl = globalThis.fetch,
 } = {}) {
     const cleanId = validateRepoId(repoId);
@@ -1103,7 +1145,22 @@ export async function startHuggingFaceDownload({
         }
     }
 
-    const repoMeta = await inspectHuggingFaceRepo(cleanId, { revision, token, fetchImpl });
+    const netCfg = loadTrainerNetworkSettings(rootDir);
+    const effEndpoint = normalizeEndpointUrl(endpointUrl || netCfg.endpointUrl || HF_ORIGIN);
+    const effProxy = proxyUrl !== undefined ? proxyUrl : (fetchImpl === globalThis.fetch ? netCfg.proxyUrl : '');
+    const effThreads = threads !== undefined ? Math.min(16, Math.max(1, Math.round(Number(threads) || 1))) : netCfg.threads;
+    const effParallelFiles = parallelFiles !== undefined ? Math.min(4, Math.max(1, Math.round(Number(parallelFiles) || 1))) : netCfg.parallelFiles;
+    const effToken = token || netCfg.token || '';
+    const netFetch = createNetworkFetch({ proxyUrl: effProxy, fetchImpl });
+
+    const repoMeta = await inspectHuggingFaceRepo(cleanId, {
+        revision,
+        token: effToken,
+        rootDir,
+        endpointUrl: effEndpoint,
+        proxyUrl: effProxy,
+        fetchImpl,
+    });
     const selected = selectFilesToDownload(repoMeta, { files, quant });
     if (!selected.length)
         throw new Error(`В репозитории ${cleanId} не найдено подходящих файлов весов (.gguf / .safetensors)`);
@@ -1123,6 +1180,15 @@ export async function startHuggingFaceDownload({
 
     await fsp.mkdir(stagingDir, { recursive: true });
 
+    // Читаем предыдущий download-state.json (если был), чтобы не потерять карту диапазонов при докачке
+    let prevState = {};
+    const stateFilePath = path.join(stagingDir, DOWNLOAD_STATE_FILE);
+    if (fs.existsSync(stateFilePath)) {
+        try { prevState = JSON.parse(await fsp.readFile(stateFilePath, 'utf-8')) || {}; }
+        catch { /* ignore */ }
+    }
+    const prevFilesMap = new Map((Array.isArray(prevState.files) ? prevState.files : []).map(pf => [pf.name, pf]));
+
     // Убираем старые завершённые/паузовые записи для той же папки из памяти
     for (const [k, entry] of _downloads.entries()) {
         if (entry.job.status !== 'downloading' && entry.job.providerFolder === safeProvider && entry.job.folderName === folderName)
@@ -1136,23 +1202,35 @@ export async function startHuggingFaceDownload({
         const partFile = stagedFile + '.part';
         let downloaded = 0;
         let done = false;
+        let ranges = [];
         try {
             const stDone = await fsp.stat(stagedFile);
             if (stDone.isFile() && stDone.size > 0 && (!size || stDone.size === size)) {
                 downloaded = stDone.size;
                 done = true;
+                ranges = [[0, downloaded]];
             }
         }
         catch { /* ещё не завершён */ }
         if (!done) {
             try {
                 const stPart = await fsp.stat(partFile);
-                if (stPart.isFile())
-                    downloaded = stPart.size;
+                if (stPart.isFile()) {
+                    const prevF = prevFilesMap.get(f.name);
+                    if (Array.isArray(prevF?.ranges) && prevF.ranges.length) {
+                        ranges = mergeRanges(prevF.ranges);
+                        downloaded = sumRangesBytes(ranges);
+                    }
+                    else {
+                        // Совместимость со старым однопоточным .part: считаем [0, size) уже готовым!
+                        downloaded = stPart.size;
+                        ranges = downloaded > 0 ? [[0, downloaded]] : [];
+                    }
+                }
             }
             catch { /* .part ещё нет */ }
         }
-        jobFiles.push({ name: f.name, size: size || (done ? downloaded : 0), downloaded, done });
+        jobFiles.push({ name: f.name, size: size || (done ? downloaded : 0), downloaded, done, ranges });
     }
 
     const jobId = 'hf_' + crypto.randomUUID().slice(0, 8);
@@ -1174,6 +1252,11 @@ export async function startHuggingFaceDownload({
         rootDir,
         stagingDir,
         weightsDir,
+        endpointUrl: effEndpoint,
+        sourceLabel: describeSourceLabel(effEndpoint),
+        threads: effThreads,
+        usingProxy: Boolean(effProxy),
+        lowSpeedWarning: false,
         status: 'downloading',
         files: jobFiles,
         currentFile: (jobFiles.find(f => !f.done) || jobFiles[0])?.name || '',
@@ -1201,148 +1284,120 @@ export async function startHuggingFaceDownload({
 
     const runPromise = (async () => {
         const t0 = Date.now();
-        let sessionDownloadedBytes = 0;
-        const updateMetrics = () => {
+        const speedSamples = [];
+        let lastStateSave = 0;
+
+        const updateMetrics = (deltaBytes = 0) => {
+            const now = Date.now();
+            if (deltaBytes > 0)
+                speedSamples.push([now, deltaBytes]);
+            const cutoff = now - 5000;
+            while (speedSamples.length && speedSamples[0][0] < cutoff)
+                speedSamples.shift();
+
             job.downloadedBytes = job.files.reduce((acc, f) => acc + (Number(f.downloaded) || 0), 0);
+            job.totalBytes = job.files.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
             if (job.totalBytes > 0)
                 job.progress = Math.min(99, Math.round((job.downloadedBytes / job.totalBytes) * 100));
-            const elapsedSec = Math.max(0.2, (Date.now() - t0) / 1000);
-            const bytesPerSec = sessionDownloadedBytes / elapsedSec;
+
+            let windowBytes = 0;
+            for (const [, b] of speedSamples)
+                windowBytes += b;
+            const spanSec = speedSamples.length
+                ? Math.max(0.5, (now - Math.min(speedSamples[0][0], now - 500)) / 1000)
+                : Math.max(0.5, (now - t0) / 1000);
+            const bytesPerSec = windowBytes / spanSec;
             job.speedMBs = +(bytesPerSec / (1024 * 1024)).toFixed(2);
+
             if (job.totalBytes > 0 && bytesPerSec > 1024) {
                 const remaining = Math.max(0, job.totalBytes - job.downloadedBytes);
                 job.etaSeconds = Math.round(remaining / bytesPerSec);
             }
+            const activeSec = (now - t0) / 1000;
+            job.lowSpeedWarning = activeSec >= 15 && job.speedMBs > 0 && job.speedMBs < 2 && !job.retryAttempt;
+
+            if (now - lastStateSave >= 1500) {
+                lastStateSave = now;
+                writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
+            }
         };
 
         try {
-            for (const fileEntry of job.files) {
+            const pendingQueue = job.files.filter(f => !f.done);
+            const workerCount = Math.min(effParallelFiles, Math.max(1, pendingQueue.length));
+            // Делим потоки между одновременно качаемыми файлами, но минимум 1 поток на файл
+            const perFileThreads = pendingQueue.length > 1 && effParallelFiles > 1
+                ? Math.max(1, Math.min(effThreads, Math.ceil(effThreads / Math.min(2, pendingQueue.length)) + 1))
+                : effThreads;
+            let fileFatalErr = null;
+
+            const processFile = async (fileEntry) => {
                 if (controller.signal.aborted)
                     throw new Error('Загрузка приостановлена пользователем');
-                if (fileEntry.done)
-                    continue;
-
                 job.currentFile = fileEntry.name;
                 const stagedFile = path.join(stagingDir, path.basename(fileEntry.name));
                 const partFile = stagedFile + '.part';
                 const encodedPath = fileEntry.name.split('/').map(encodeURIComponent).join('/');
-                const url = `${HF_ORIGIN}/${cleanId}/resolve/${encodeURIComponent(job.revision)}/${encodedPath}`;
+                const url = `${effEndpoint}/${cleanId}/resolve/${encodeURIComponent(job.revision)}/${encodedPath}`;
+                const headers = hfHeaders(effToken, url, effEndpoint);
 
-                let attempt = 0;
-                while (true) {
-                    if (controller.signal.aborted)
-                        throw new Error('Загрузка приостановлена пользователем');
-
-                    let existingSize = 0;
-                    try {
-                        const st = await fsp.stat(partFile);
-                        if (st.isFile())
-                            existingSize = st.size;
-                    }
-                    catch { /* файла ещё нет */ }
-
-                    if (fileEntry.size > 0 && existingSize >= fileEntry.size) {
-                        await fsp.rename(partFile, stagedFile);
-                        fileEntry.downloaded = fileEntry.size;
-                        fileEntry.done = true;
-                        updateMetrics();
-                        break;
-                    }
-
-                    try {
-                        const headers = hfHeaders(token);
-                        if (existingSize > 0)
-                            headers.Range = `bytes=${existingSize}-`;
-
-                        const res = await fetchImpl(url, { headers, signal: controller.signal });
-                        if (res.status === 416) {
-                            if (existingSize > 0 && (!fileEntry.size || existingSize >= fileEntry.size)) {
-                                await fsp.rename(partFile, stagedFile);
-                                fileEntry.size = fileEntry.size || existingSize;
-                                fileEntry.downloaded = existingSize;
-                                fileEntry.done = true;
-                                updateMetrics();
-                                break;
-                            }
-                            await fsp.rm(partFile, { force: true }).catch(() => {});
-                            existingSize = 0;
-                            const err416 = new Error(`Сбой Range для ${fileEntry.name}: HTTP 416`);
-                            err416.retryable = true;
-                            throw err416;
-                        }
-                        if (!res.ok && res.status !== 206) {
-                            const errHttp = new Error(`Ошибка загрузки ${fileEntry.name}: HTTP ${res.status}`);
-                            errHttp.httpStatus = res.status;
-                            throw errHttp;
-                        }
-
-                        const isPartial = res.status === 206;
-                        if (!isPartial)
-                            existingSize = 0;
-
-                        const contentLen = Number(res.headers?.get?.('content-length') || 0);
-                        if (!fileEntry.size && contentLen > 0) {
-                            fileEntry.size = existingSize + contentLen;
-                            job.totalBytes = job.files.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
-                        }
-
-                        fileEntry.downloaded = existingSize;
+                const res = await downloadFileMultipart({
+                    url,
+                    stagedFile,
+                    partFile,
+                    expectedSize: Number(fileEntry.size) || 0,
+                    headers,
+                    threads: perFileThreads,
+                    initialRanges: fileEntry.ranges,
+                    signal: controller.signal,
+                    maxRetries,
+                    retryBaseDelayMs,
+                    fetchImpl: netFetch,
+                    onProgress: ({ downloadedBytes, totalBytes: fTotal, deltaBytes, ranges }) => {
+                        if (fTotal > 0 && !fileEntry.size)
+                            fileEntry.size = fTotal;
+                        fileEntry.downloaded = downloadedBytes;
+                        fileEntry.ranges = ranges;
                         job.retryAttempt = 0;
                         job.retryError = '';
-                        updateMetrics();
-
-                        if (res.body) {
-                            const flags = isPartial ? 'a' : 'w';
-                            const out = fs.createWriteStream(partFile, { flags });
-                            try {
-                                for await (const chunk of res.body) {
-                                    if (controller.signal.aborted)
-                                        throw new Error('Загрузка приостановлена пользователем');
-                                    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-                                    if (!out.write(buf))
-                                        await new Promise(r => out.once('drain', r));
-                                    fileEntry.downloaded += buf.length;
-                                    sessionDownloadedBytes += buf.length;
-                                    updateMetrics();
-                                }
-                                await new Promise((resolve, reject) => {
-                                    out.end();
-                                    out.once('finish', resolve);
-                                    out.once('error', reject);
-                                });
-                            }
-                            catch (streamErr) {
-                                await new Promise((resolve) => {
-                                    out.once('finish', resolve);
-                                    out.once('error', resolve);
-                                    out.once('close', resolve);
-                                    try { out.end(); } catch { resolve(); }
-                                });
-                                if (!controller.signal.aborted && !streamErr.httpStatus)
-                                    streamErr.retryable = true;
-                                throw streamErr;
-                            }
-                        }
-
-                        await fsp.rename(partFile, stagedFile);
-                        fileEntry.done = true;
-                        updateMetrics();
-                        break;
-                    }
-                    catch (err) {
-                        if (controller.signal.aborted)
-                            throw err;
-                        if (!isRetryableDownloadError(err) || attempt >= maxRetries)
-                            throw err;
-                        attempt++;
+                        updateMetrics(deltaBytes);
+                    },
+                    onRetry: ({ attempt, error }) => {
                         job.retryAttempt = attempt;
-                        job.retryError = String(err?.message || err);
-                        await writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
-                        const delay = Math.min(30000, retryBaseDelayMs * attempt);
-                        await waitAbortable(delay, controller.signal);
+                        job.retryError = error;
+                        writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
+                    },
+                });
+
+                fileEntry.size = fileEntry.size || res.size;
+                fileEntry.downloaded = fileEntry.size || res.size;
+                fileEntry.ranges = res.ranges;
+                fileEntry.done = true;
+                updateMetrics(0);
+            };
+
+            const fileWorkers = [];
+            for (let fw = 0; fw < workerCount; fw++) {
+                fileWorkers.push((async () => {
+                    while (!fileFatalErr && !controller.signal.aborted) {
+                        const nextFile = pendingQueue.shift();
+                        if (!nextFile)
+                            break;
+                        try {
+                            await processFile(nextFile);
+                        }
+                        catch (err) {
+                            if (!fileFatalErr)
+                                fileFatalErr = err;
+                        }
                     }
-                }
+                })());
             }
+            await Promise.all(fileWorkers);
+            if (fileFatalErr)
+                throw fileFatalErr;
+            if (controller.signal.aborted)
+                throw new Error('Загрузка приостановлена пользователем');
 
             // Переносим готовые файлы из скрытой папки #downloads в целевую папку модели #weights
             await fsp.mkdir(weightsDir, { recursive: true });
@@ -1455,6 +1510,7 @@ export function listHuggingFaceDownloads(rootDir = process.cwd()) {
                     catch { /* ignore */ }
                 }
                 const dirFiles = fs.readdirSync(folderDir, { withFileTypes: true });
+                const stateFilesMap = new Map((Array.isArray(state.files) ? state.files : []).map(sf => [sf.name, sf]));
                 let diskBytes = 0;
                 const parsedFiles = [];
                 for (const f of dirFiles) {
@@ -1462,12 +1518,23 @@ export function listHuggingFaceDownloads(rootDir = process.cwd()) {
                         continue;
                     try {
                         const st = fs.statSync(path.join(folderDir, f.name));
-                        diskBytes += st.size || 0;
+                        const baseName = f.name.replace(/\.part$/, '');
+                        const isPart = f.name.endsWith('.part');
+                        const sf = stateFilesMap.get(baseName);
+                        let downloaded = st.size || 0;
+                        if (isPart && sf) {
+                            if (Array.isArray(sf.ranges) && sf.ranges.length)
+                                downloaded = sumRangesBytes(sf.ranges);
+                            else if (Number(sf.downloaded) > 0)
+                                downloaded = Math.min(downloaded || Number(sf.downloaded), Number(sf.downloaded));
+                        }
+                        diskBytes += downloaded;
                         parsedFiles.push({
-                            name: f.name.replace(/\.part$/, ''),
-                            size: st.size || 0,
-                            downloaded: st.size || 0,
-                            done: !f.name.endsWith('.part'),
+                            name: baseName,
+                            size: Number(sf?.size) || st.size || 0,
+                            downloaded,
+                            done: !isPart,
+                            ranges: sf?.ranges || [],
                         });
                     }
                     catch { /* ignore */ }
@@ -1485,6 +1552,9 @@ export function listHuggingFaceDownloads(rootDir = process.cwd()) {
                     revision: state.revision || 'main',
                     providerFolder: 'Local',
                     folderName: e.name,
+                    endpointUrl: state.endpointUrl || HF_ORIGIN,
+                    sourceLabel: state.sourceLabel || describeSourceLabel(state.endpointUrl || HF_ORIGIN),
+                    threads: Number(state.threads) || 1,
                     status: state.status === 'failed' ? 'failed' : 'paused',
                     files: Array.isArray(state.files) && state.files.length ? state.files : parsedFiles,
                     currentFile: parsedFiles[0]?.name || '',
@@ -1518,6 +1588,7 @@ export function pauseHuggingFaceDownload(jobId) {
     entry.job.status = 'paused';
     entry.job.etaSeconds = null;
     entry.job.finishedAt = Date.now();
+    writeDownloadStateSafe(entry.job.stagingDir, entry.job, { nodeMeta: entry.nodeMeta, registerInWork: entry.registerInWork });
     return { ...entry.job };
 }
 
@@ -1549,6 +1620,10 @@ export async function resumeHuggingFaceDownload({
     token = '',
     nodeMeta = null,
     rootDir = process.cwd(),
+    endpointUrl,
+    proxyUrl,
+    threads,
+    parallelFiles,
     fetchImpl = globalThis.fetch,
 } = {}) {
     const key = String(jobId || '');
@@ -1576,6 +1651,10 @@ export async function resumeHuggingFaceDownload({
         targetNodeName: cleanFolder,
         nodeMeta: nodeMeta || entry?.nodeMeta || state.nodeMeta || null,
         registerInWork: entry?.registerInWork ?? state.registerInWork ?? true,
+        endpointUrl,
+        proxyUrl,
+        threads,
+        parallelFiles,
         fetchImpl,
     });
 }

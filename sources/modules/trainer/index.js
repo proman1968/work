@@ -80,6 +80,17 @@ import {
     toggleAiNodeEnabledSync,
 } from './providers.js';
 import {
+    SOURCE_PRESETS,
+    THREAD_OPTIONS,
+    DEFAULT_HF_ORIGIN,
+    HF_MIRROR_ORIGIN,
+    loadTrainerNetworkSettings,
+    saveTrainerNetworkSettings,
+    sanitizeTrainerNetworkForClient,
+    maskProxyUrl,
+    probeTrainerNetwork,
+} from './downloader.js';
+import {
     TRANSFER_MANIFEST_FILE,
     listStorageRoots,
     browseDirectory,
@@ -115,6 +126,12 @@ export const halogenFallback = Object.freeze({
 
 export {
     localStreamChat,
+    SOURCE_PRESETS,
+    THREAD_OPTIONS,
+    loadTrainerNetworkSettings,
+    saveTrainerNetworkSettings,
+    sanitizeTrainerNetworkForClient,
+    probeTrainerNetwork,
     AI_PROVIDER_PRESETS,
     findProviderPreset,
     buildProviderClassScripts,
@@ -299,6 +316,7 @@ export const TRAINER_METHODS = Object.freeze({
                 downloads: listHuggingFaceDownloads(),
                 jobs: listTrainingJobs(),
                 transfers: listTransferJobs(),
+                network: sanitizeTrainerNetworkForClient(loadTrainerNetworkSettings()),
                 modalities: MODEL_MODALITIES,
                 capabilities: Object.values(MODEL_CAPABILITIES),
                 curated: CURATED_HF_MODELS,
@@ -835,6 +853,60 @@ export const TRAINER_METHODS = Object.freeze({
             }
             catch { /* ignore */ }
             return job;
+        },
+    },
+    trainer_network_get: {
+        level: 'admin',
+        fn: async function () {
+            return sanitizeTrainerNetworkForClient(loadTrainerNetworkSettings());
+        },
+    },
+    trainer_network_set: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            const updated = saveTrainerNetworkSettings({
+                sourcePreset: args.sourcePreset,
+                endpointUrl: args.endpointUrl,
+                proxyUrl: args.proxyUrl,
+                threads: args.threads,
+                parallelFiles: args.parallelFiles,
+                token: args.token,
+                clearProxy: args.clearProxy,
+                clearToken: args.clearToken,
+            });
+            return sanitizeTrainerNetworkForClient(updated);
+        },
+    },
+    trainer_network_probe: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            const saved = loadTrainerNetworkSettings();
+            let endpointUrl = args.endpointUrl;
+            if (!endpointUrl) {
+                if (args.sourcePreset === 'hf-mirror')
+                    endpointUrl = HF_MIRROR_ORIGIN;
+                else if (args.sourcePreset === 'official')
+                    endpointUrl = DEFAULT_HF_ORIGIN;
+                else
+                    endpointUrl = saved.endpointUrl;
+            }
+            let proxyUrl = args.proxyUrl;
+            if (proxyUrl !== undefined) {
+                const masked = maskProxyUrl(saved.proxyUrl || '');
+                if (saved.proxyUrl && (proxyUrl === masked))
+                    proxyUrl = saved.proxyUrl;
+            }
+            let token = args.token;
+            if (token !== undefined && (String(token).includes('…') || token === '***'))
+                token = saved.token;
+            return probeTrainerNetwork({
+                endpointUrl,
+                proxyUrl,
+                threads: args.threads !== undefined ? Number(args.threads) : saved.threads,
+                token,
+            });
         },
     },
 });

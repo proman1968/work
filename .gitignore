@@ -13,6 +13,7 @@ node_modules/
 /#system/license*.json
 /#system/owner-token.json
 /#system/lan/
+/#system/trainer-network.json
 .env
 **/#secret/
 **/#system/email.json

@@ -238,6 +238,18 @@ export default {
             color: light-dark(#b91c1c, #fca5a5);
             margin-top: 2px;
         }
+        .inline-warn {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            background: light-dark(#fef3c7, #451a03);
+            color: light-dark(#92400e, #fde68a);
+        }
 
         .bios-box {
             padding: 10px 14px;
@@ -373,6 +385,10 @@ export default {
                     Локальные модели (/MODELS/Local) · установлено: {{localModels.length}}
                 </div>
                 <div class="toolbar">
+                    <button type="button" class="btn" @tap="toggleNetworkPanel()">
+                        <oda-icon icon="carbon:network-4" icon-size="15"></oda-icon>
+                        <span>Сеть: {{networkSummary}}</span>
+                    </button>
                     <button type="button" class="btn" @tap="openTransferDialog('export')" :disabled="!localModels.length && !adapters.length && !datasets.length">
                         <oda-icon icon="carbon:usb" icon-size="15"></oda-icon>
                         <span>Выгрузить на диск / флешку</span>
@@ -381,6 +397,64 @@ export default {
                         <oda-icon icon="carbon:download" icon-size="15"></oda-icon>
                         <span>Загрузить с диска / флешки</span>
                     </button>
+                </div>
+            </div>
+
+            <!-- Панель настроек источника (зеркало), потоков и точечного прокси (только для загрузок моделей) -->
+            <div class="bios-box" ~if="networkOpen">
+                <div class="model-main" style="margin-bottom:8px;">
+                    <strong>Сеть и ускорение скачивания моделей (только для загрузок ИИ)</strong>
+                    <span style="font-size:12px;opacity:0.75;">Многопоточная Range-докачка и точечный прокси не затрагивают остальной WORK</span>
+                </div>
+                <div class="grid-2" style="gap:10px;">
+                    <div class="field">
+                        <label>Источник моделей</label>
+                        <select @change="onNetworkPresetChange($this.value)">
+                            <option value="official" :selected="netPreset === 'official'">Официальный Hugging Face (huggingface.co)</option>
+                            <option value="hf-mirror" :selected="netPreset === 'hf-mirror'">HF-Mirror (ускоренное зеркало)</option>
+                            <option value="custom" :selected="netPreset === 'custom'">Свой URL / зеркало</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label>Параллельных потоков на файл</label>
+                        <select @change="setNetworkField('netThreads', Number($this.value))">
+                            <option value="1" :selected="netThreads === 1">1 поток (обычный)</option>
+                            <option value="4" :selected="netThreads === 4">4 потока</option>
+                            <option value="8" :selected="netThreads === 8">8 потоков (рекомендуется)</option>
+                            <option value="12" :selected="netThreads === 12">12 потоков</option>
+                        </select>
+                    </div>
+                    <div class="field" ~if="netPreset === 'custom'">
+                        <label>URL источника (формат http(s)://...)</label>
+                        <input :value="netEndpoint" placeholder="https://hf-mirror.com" @input="setNetworkField('netEndpoint', $this.value)">
+                    </div>
+                    <div class="field">
+                        <label>Прокси (HTTP/HTTPS или SOCKS5/SOCKS5h — опционально)</label>
+                        <div class="toolbar">
+                            <input style="flex:1;min-width:220px;" :value="netProxy" placeholder="socks5://127.0.0.1:1080 или http://user:pass@host:3128" @input="setNetworkField('netProxy', $this.value)">
+                            <button type="button" class="btn" ~if="netProxy || netHasProxy" @tap="clearNetworkProxy()">Сбросить</button>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label>HF Token (опционально, только для huggingface.co)</label>
+                        <div class="toolbar">
+                            <input type="password" style="flex:1;min-width:180px;" :value="netToken" :placeholder="netHasToken ? ('Установлен (' + netTokenMask + ')') : 'hf_... (для закрытых моделей)'" @input="setNetworkField('netToken', $this.value)">
+                            <button type="button" class="btn" ~if="netHasToken || netToken" @tap="clearNetworkToken()">Удалить</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="toolbar" style="margin-top:10px;">
+                    <button type="button" class="btn primary" @tap="saveNetworkSettings()" :disabled="netBusy">Сохранить настройки</button>
+                    <button type="button" class="btn" @tap="probeNetwork()" :disabled="netBusy">
+                        {{netBusy ? 'Проверка…' : 'Проверить скорость'}}
+                    </button>
+                    <button type="button" class="btn" @tap="networkOpen = false">Скрыть</button>
+                </div>
+                <div class="msg ok" style="margin-top:8px;" ~if="netProbe && netProbe.ok">
+                    {{netProbe.sourceLabel}}<span ~if="netProbe.usingProxy"> (через прокси {{netProbe.proxyUrl}})</span>: {{netProbe.message}} · отклик {{netProbe.latencyMs}} мс
+                </div>
+                <div class="msg err" style="margin-top:8px;" ~if="netProbe && !netProbe.ok">
+                    Ошибка проверки ({{netProbe.sourceLabel}}): {{netProbe.error}}
                 </div>
             </div>
 
@@ -455,7 +529,7 @@ export default {
                         <!-- Состояние: скачивается прямо сейчас -->
                         <div class="toolbar" ~if="$for.item.state === 'downloading'">
                             <span style="font-size:12px;font-weight:600;white-space:nowrap;">
-                                {{$for.item.download?.speedMBs || 0}} МБ/с
+                                <span ~if="$for.item.download?.sourceLabel">{{$for.item.download.sourceLabel}} · </span><span ~if="$for.item.download?.threads">{{$for.item.download.threads}} пот. · </span>{{$for.item.download?.speedMBs || 0}} МБ/с
                                 <span ~if="$for.item.etaText"> · {{$for.item.etaText}}</span>
                             </span>
                             <button type="button" class="btn" @tap="pauseDownload($for.item)">Пауза</button>
@@ -503,6 +577,12 @@ export default {
                             Авто-повтор #{{$for.item.download.retryAttempt}}: {{$for.item.download.retryError}}
                         </span>
                     </div>
+                </div>
+
+                <!-- Подсказка при стабильно низкой скорости (< 2 МБ/с) -->
+                <div class="inline-warn" ~if="$for.item.state === 'downloading' && $for.item.download?.lowSpeedWarning">
+                    <span>Низкая скорость ({{$for.item.download?.speedMBs || 0}} МБ/с). Попробуйте переключить источник на HF-Mirror или указать прокси для моделей.</span>
+                    <button type="button" class="btn" @tap="networkOpen = true">Настроить сеть</button>
                 </div>
 
                 <!-- Текст ошибки на той же карточке при обрыве -->
@@ -620,7 +700,28 @@ export default {
     trainMaxSeq: 8192,
     notice: '',
     error: '',
+    network: null,
+    networkOpen: false,
+    netPreset: 'official',
+    netEndpoint: 'https://huggingface.co',
+    netProxy: '',
+    netHasProxy: false,
+    netThreads: 8,
+    netToken: '',
+    netHasToken: false,
+    netTokenMask: '',
+    netBusy: false,
+    netProbe: null,
+    _networkDirty: false,
     _pollTimer: null,
+
+    get networkSummary() {
+        const n = this.network;
+        const src = n?.sourceLabel || 'huggingface.co';
+        const thr = n?.threads || this.netThreads || 8;
+        const pxy = n?.hasProxy ? ' · прокси' : '';
+        return `${src} · ${thr} пот.${pxy}`;
+    },
 
     get categoryTabs() {
         return [
@@ -920,10 +1021,123 @@ export default {
         this.downloads = st.downloads || [];
         this.jobs = st.jobs || [];
         this.transfers = st.transfers || [];
+        if (st.network) {
+            this.network = st.network;
+            if (!this._networkDirty)
+                this._applyNetworkState(st.network);
+        }
         if (st.halogen?.catalog)
             this.halogenCatalog = st.halogen.catalog;
         if (this.localModels.length !== prevCount)
             this._invalidateClientModelsTree();
+    },
+    _applyNetworkState(n) {
+        if (!n)
+            return;
+        this.netPreset = n.sourcePreset || 'official';
+        this.netEndpoint = n.endpointUrl || 'https://huggingface.co';
+        this.netProxy = n.proxyUrl || '';
+        this.netHasProxy = Boolean(n.hasProxy);
+        this.netThreads = Number(n.threads) || 8;
+        this.netHasToken = Boolean(n.hasToken);
+        this.netTokenMask = n.tokenMask || '';
+        this.netToken = '';
+    },
+    toggleNetworkPanel() {
+        this.networkOpen = !this.networkOpen;
+        if (this.networkOpen && this.network && !this._networkDirty)
+            this._applyNetworkState(this.network);
+    },
+    onNetworkPresetChange(val) {
+        this.netPreset = String(val || 'official');
+        this._networkDirty = true;
+        if (this.netPreset === 'official')
+            this.netEndpoint = 'https://huggingface.co';
+        else if (this.netPreset === 'hf-mirror')
+            this.netEndpoint = 'https://hf-mirror.com';
+    },
+    setNetworkField(field, val) {
+        this[field] = val;
+        this._networkDirty = true;
+    },
+    async saveNetworkSettings() {
+        this.netBusy = true;
+        this.netProbe = null;
+        try {
+            const payload = {
+                sourcePreset: this.netPreset,
+                endpointUrl: this.netPreset === 'official'
+                    ? 'https://huggingface.co'
+                    : (this.netPreset === 'hf-mirror' ? 'https://hf-mirror.com' : this.netEndpoint),
+                proxyUrl: this.netProxy,
+                threads: this.netThreads,
+            };
+            if (this.netToken)
+                payload.token = this.netToken;
+            const res = await this._call('trainer_network_set', payload);
+            if (res) {
+                this.network = res;
+                this._networkDirty = false;
+                this._applyNetworkState(res);
+                this.notice = `Сетевые настройки загрузчика сохранены (${res.sourceLabel}, ${res.threads} потоков).`;
+            }
+        }
+        finally {
+            this.netBusy = false;
+        }
+    },
+    async probeNetwork() {
+        this.netBusy = true;
+        this.netProbe = null;
+        try {
+            const endpointUrl = this.netPreset === 'official'
+                ? 'https://huggingface.co'
+                : (this.netPreset === 'hf-mirror' ? 'https://hf-mirror.com' : this.netEndpoint);
+            const payload = {
+                sourcePreset: this.netPreset,
+                endpointUrl,
+                proxyUrl: this.netProxy,
+                threads: this.netThreads,
+            };
+            if (this.netToken)
+                payload.token = this.netToken;
+            const res = await this._call('trainer_network_probe', payload);
+            if (res)
+                this.netProbe = res;
+        }
+        finally {
+            this.netBusy = false;
+        }
+    },
+    async clearNetworkProxy() {
+        this.netBusy = true;
+        try {
+            const res = await this._call('trainer_network_set', { clearProxy: true });
+            if (res) {
+                this.network = res;
+                this._networkDirty = false;
+                this._applyNetworkState(res);
+                this.notice = 'Прокси для загрузки моделей отключён.';
+            }
+        }
+        finally {
+            this.netBusy = false;
+        }
+    },
+    async clearNetworkToken() {
+        this.netBusy = true;
+        try {
+            const res = await this._call('trainer_network_set', { clearToken: true });
+            if (res) {
+                this.network = res;
+                this._networkDirty = false;
+                this._applyNetworkState(res);
+                this.notice = 'Сохранённый HF Token удалён.';
+            }
+        }
+        finally {
+            this.netBusy = false;
+        }
     },
     async setModality(mod) {
         this.hfModality = String(mod || 'all');

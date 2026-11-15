@@ -35,6 +35,7 @@ import https from 'node:https';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { startHuggingFaceDownload, listHuggingFaceDownloads, registerLocalModelNode } from './huggingface.js';
+import { loadTrainerNetworkSettings, createNetworkFetch, downloadFileMultipart } from './downloader.js';
 
 export const HALOGEN_DEFAULT_PORT = Number(process.env.HALOGEN_API_PORT) || 8731;
 export const HALOGEN_DEFAULT_BASE_URL = process.env.HALOGEN_BASE_URL || `http://127.0.0.1:${HALOGEN_DEFAULT_PORT}/v1/chat/completions`;
@@ -852,43 +853,57 @@ export async function prepareWindowsBuboRuntime({
         // Шаг 1: Если `bubo.exe` ещё не установлен, скачиваем официальный релиз `bubo-v0.1.2-windows-x64-gfx1151.zip`
         if (!envInfo.buboInstalled || step === 'download-bubo') {
             const zipPath = path.join(runtimeRoot, BUBO_WINDOWS_RELEASE.zipFileName);
-            appendLog(`Скачивание ${BUBO_WINDOWS_RELEASE.zipFileName} (${(BUBO_WINDOWS_RELEASE.sizeBytes / (1024 * 1024)).toFixed(1)} МБ)…`);
+            const netCfg = loadTrainerNetworkSettings(rootDir);
+            const effProxy = fetchImpl === globalThis.fetch ? netCfg.proxyUrl : '';
+            const netFetch = createNetworkFetch({ proxyUrl: effProxy, fetchImpl });
+
+            appendLog(`Скачивание ${BUBO_WINDOWS_RELEASE.zipFileName} (${(BUBO_WINDOWS_RELEASE.sizeBytes / (1024 * 1024)).toFixed(1)} МБ, ${netCfg.threads} потоков)…`);
             _windowsPrepareState.progress = 15;
 
-            const res = await fetchImpl(BUBO_WINDOWS_RELEASE.downloadUrl);
-            if (!res?.ok)
-                throw new Error(`Ошибка загрузки Bubo ZIP: HTTP ${res?.status || 'unknown'}`);
+            const dlRes = await downloadFileMultipart({
+                url: BUBO_WINDOWS_RELEASE.downloadUrl,
+                stagedFile: zipPath,
+                expectedSize: BUBO_WINDOWS_RELEASE.sizeBytes,
+                threads: netCfg.threads,
+                fetchImpl: netFetch,
+                onProgress: ({ downloadedBytes, totalBytes }) => {
+                    const denom = totalBytes || BUBO_WINDOWS_RELEASE.sizeBytes;
+                    if (denom > 0)
+                        _windowsPrepareState.progress = Math.min(55, 15 + Math.round((downloadedBytes / denom) * 40));
+                },
+            });
 
-            const hash = crypto.createHash('sha256');
-            const chunks = [];
-            let received = 0;
-            if (res.body && typeof res.body[Symbol.asyncIterator] === 'function') {
-                for await (const chunk of res.body) {
-                    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-                    hash.update(buf);
-                    chunks.push(buf);
-                    received += buf.length;
-                    _windowsPrepareState.progress = Math.min(55, 15 + Math.round((received / BUBO_WINDOWS_RELEASE.sizeBytes) * 40));
+            const statZip = await fsp.stat(zipPath);
+            if (statZip.size === BUBO_WINDOWS_RELEASE.sizeBytes) {
+                const hash = crypto.createHash('sha256');
+                await new Promise((resolve, reject) => {
+                    const rs = fs.createReadStream(zipPath);
+                    rs.on('data', c => hash.update(c));
+                    rs.once('end', resolve);
+                    rs.once('error', reject);
+                });
+                const digest = hash.digest('hex');
+                if (digest !== BUBO_WINDOWS_RELEASE.sha256) {
+                    await fsp.rm(zipPath, { force: true }).catch(() => {});
+                    throw new Error(`Контрольная сумма SHA-256 архива Bubo не совпала: ожидалась ${BUBO_WINDOWS_RELEASE.sha256}, получена ${digest}`);
                 }
             }
-            else if (typeof res.arrayBuffer === 'function') {
-                const buf = Buffer.from(await res.arrayBuffer());
-                hash.update(buf);
-                chunks.push(buf);
-            }
 
-            const fullZip = Buffer.concat(chunks);
-            const digest = hash.digest('hex');
-            if (fullZip.length === BUBO_WINDOWS_RELEASE.sizeBytes && digest !== BUBO_WINDOWS_RELEASE.sha256) {
-                throw new Error(`Контрольная сумма SHA-256 архива Bubo не совпала: ожидалась ${BUBO_WINDOWS_RELEASE.sha256}, получена ${digest}`);
-            }
-
-            await fsp.writeFile(zipPath, fullZip);
             await fsp.mkdir(buboDir, { recursive: true });
             appendLog('Распаковка архива Halowin Bubo…');
             _windowsPrepareState.progress = 60;
 
-            if (os.platform() === 'win32' && fullZip.slice(0, 2).toString('ascii') === 'PK') {
+            let isPkZip = false;
+            try {
+                const fh = await fsp.open(zipPath, 'r');
+                const magic = Buffer.alloc(2);
+                await fh.read(magic, 0, 2, 0);
+                await fh.close();
+                isPkZip = magic.toString('ascii') === 'PK';
+            }
+            catch { /* ignore */ }
+
+            if (os.platform() === 'win32' && isPkZip) {
                 await new Promise((resolve, reject) => {
                     const ps = spawnImpl('powershell', [
                         '-NoProfile',

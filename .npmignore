@@ -18,6 +18,7 @@
 /#system/updates/
 /#system/lan/
 /#system/oauth/
+/#system/trainer-network.json
 /#system/license*.json
 /#system/owner-token.json
 **/#system/email.json
