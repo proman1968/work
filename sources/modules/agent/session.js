@@ -185,25 +185,58 @@ const APPROVAL_ACTIONS = [
     { action: 'task-reject', title: 'Отклонить' },
 ];
 
+/** Обрезка строки push-сообщения по границе слова (заголовок — имя задачи, тело — состояние). */
+function clipPushText(v, max) {
+    const t = String(v ?? '').replace(/\s+/g, ' ').trim();
+    if (t.length <= max)
+        return t;
+    return t.slice(0, max).replace(/\s+\S*$/, '') + '…';
+}
+
+/** Заголовок уведомления — имя задачи: крупная строка, не смешивается с текстом разрешения. */
+export const PUSH_TITLE_MAX = 80;
+/** Тело уведомления — состояние и что именно ждёт/вышло (одна короткая фраза). */
+export const PUSH_BODY_MAX = 180;
+
+/** Состояние задачи словами для тела уведомления. */
+function pushStateText(kind, detail) {
+    if (kind === 'waiting') {
+        if (detail.waitingKind === 'approval')
+            return 'Нужно ваше разрешение';
+        if (detail.waitingKind === 'question')
+            return 'Нужен ваш ответ';
+        if (detail.waitingKind === 'connect')
+            return 'Нужно подключение';
+        return 'Задача ждёт вас';
+    }
+    return { done: 'Задача выполнена', error: 'Задача прервана ошибкой', review: 'Проверьте задачу' }[kind] || 'Задача';
+}
+
 /**
- * Push-сообщение о задаче (чистая — покрыта тестами): заголовок, тело, данные для
- * service worker (url для клика, состояние, задача). Ожидающее РАЗРЕШЕНИЕ — с кнопками
- * «Разрешить/Отклонить» (service worker подтверждает через POST file?approve) и
- * признаком approval с id вызова; вопрос и прочее — без кнопок (клик открывает задачу).
+ * Push-сообщение о задаче (чистая — покрыта тестами): ЗАГОЛОВОК — имя задачи (визуально
+ * отдельная крупная строка), тело — состояние («Нужно ваше разрешение: …», «Задача
+ * выполнена: …»), данные для service worker (url для клика, состояние, задача).
+ * Ожидающее РАЗРЕШЕНИЕ — с кнопками «Разрешить/Отклонить» (service worker подтверждает
+ * через POST file?approve) и признаком approval с id вызова; вопрос и прочее — без кнопок
+ * (клик открывает задачу).
  * @param {{ body?: any, file?: { path?: string } }} s состояние задачи
  * @param {'waiting'|'done'|'error'|'review'} kind
  * @param {string} [text] что ждёт / что вышло
  * @param {{ waitingKind?: string, call?: string, reason?: string }} [detail] 9.7: вид ожидания
  */
 export function pushMessageOf(s, kind, text, detail = {}) {
-    const title = { waiting: 'Задача ждёт вас', done: 'Задача выполнена', error: 'Задача прервана ошибкой', review: 'Проверьте задачу' }[kind] || 'Задача';
-    const name = String(s.body?.title || s.body?.name || 'Задача').slice(0, 80);
+    const title = clipPushText(s.body?.title || s.body?.name, PUSH_TITLE_MAX) || 'Задача';
+    const state = pushStateText(kind, detail);
+    // префикс служебного вида («разрешить: …», «подключить …») не повторяем — состояние уже в теле
+    const what = clipPushText(String(text || '')
+        .replace(/^\s*разрешить\s*:\s*/i, '')
+        .replace(/^\s*подключить\s+/i, ''), PUSH_BODY_MAX);
     const path = String(s.file?.path || '');
     const url = encodeURI(path + '/~/handlers//form/index.html');
     const isApproval = kind === 'waiting' && detail.waitingKind === 'approval' && !!detail.call;
     return {
         type: 'task:' + path, tag: 'task:' + path, title,
-        body: name + (text ? '\n' + String(text).replace(/\s+/g, ' ').slice(0, 160) : ''),
+        body: state + (what ? ': ' + what : ''),
         data: {
             url, kind: 'task', state: kind, task: path,
             ...(isApproval ? { approval: { call: detail.call, reason: detail.reason || '' } } : {}),
@@ -216,7 +249,9 @@ export function pushMessageOf(s, kind, text, detail = {}) {
 
 /**
  * Push пользователю: задача ждёт его / закончила долгую работу / упала.
- * Показывать ли — решает service worker: если вкладка WORK видима и в фокусе, уведомление не показывается.
+ * Показывать ли — решает service worker: если эта задача уже открыта на экране (в видимой
+ * вкладке — в проводнике или отдельной страницей), уведомление не показывается; открытый
+ * и сфокусированный проводник тоже подавляет push.
  * 9.7: ожидающее разрешение — с кнопками «Разрешить/Отклонить» прямо в уведомлении.
  */
 async function pushNotify(s, session, kind, text, detail = {}) {

@@ -343,8 +343,8 @@ ODA({ is: 'microchat-tool',
             .ask { @apply --vertical; gap: 8px; padding: 10px; border-top: 1px solid var(--subtle-border); background: var(--accent-soft); }
             .ask .q { font-weight: 600; line-height: 1.4; white-space: pre-wrap; }
             .ask .why { @apply --muted; font-size: x-small; }
-            .btns { @apply --horizontal; flex-wrap: wrap; gap: 6px; }
-            .btns oda-button { border-radius: var(--radius-s); padding: 2px 10px; }
+            .btns { @apply --horizontal; flex-wrap: wrap; gap: 8px; }
+            .btns oda-button { border-radius: var(--radius-s); padding: 9px 18px; min-height: 36px; }
             .ghost { border: 1px solid var(--subtle-border); background: var(--content-background); }
             .danger { color: var(--error-color); fill: var(--error-color); }
             .opt[selected] { outline: 2px solid var(--accent-color); }
@@ -381,8 +381,6 @@ ODA({ is: 'microchat-tool',
         <div class="ask" ~if="isApproval">
             <div class="q">Разрешить «{{meta.label}}»{{target ? ': ' + target : ''}}?</div>
             <div class="why" ~if="data?.reason">{{data.reason}}</div>
-            <pre ~if="argsPreview && !data?.hideArgs">{{argsPreview}}</pre>
-            <textarea placeholder="Комментарий или что сделать иначе (необязательно)" ::value="comment"></textarea>
             <div class="btns">
                 <oda-button hide-icon accent-invert label="Разрешить" @tap="approve(true)"></oda-button>
                 <oda-button hide-icon class="ghost" ~if="!data?.noAlways" label="Разрешить всегда" :title="'Не спрашивать про «' + meta.label + '» в этой задаче'" @tap="approve(true, true)"></oda-button>
@@ -565,13 +563,6 @@ ODA({ is: 'microchat-tool',
     },
     get argsFull() {
         const a = { ...(this.data?.args || {}) };
-        return JSON.stringify(a, null, 2);
-    },
-    get argsPreview() {
-        const a = { ...(this.data?.args || {}) };
-        for (const k of Object.keys(a))
-            if (typeof a[k] === 'string' && a[k].length > 1500)
-                a[k] = a[k].slice(0, 1500) + '…';
         return JSON.stringify(a, null, 2);
     },
     get diffLines() {

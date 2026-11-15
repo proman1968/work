@@ -160,7 +160,7 @@ const approvalEntry = (noAlways) => ({
     reason: 'изменение системы: /ORG/Отчёты/годовой.md',
 });
 
-await test('approval: что именно и причина видны; три кнопки; noAlways убирает «всегда»', async () => {
+await test('approval: что именно и причина видны; без служебного JSON и поля комментария; крупные кнопки', async () => {
     const el = mount(approvalEntry(false));
     try {
         const ask = await waitFor(() => el.$$('.ask').find(a => a.textContent.includes('Разрешить')), 'карточка разрешения');
@@ -168,10 +168,15 @@ await test('approval: что именно и причина видны; три �
         assert(/Разрешить «[^»]+»/.test(text), 'название действия: ' + text);
         assert(text.includes('/ORG/Отчёты/годовой.md'), 'цель: ' + text);
         assert(text.includes('изменение системы'), 'причина: ' + text);
-        assert(ask.querySelector('textarea'), 'нет поля комментария');
+        eq(ask.querySelectorAll('textarea').length, 0, 'в карточке не должно быть поля комментария');
+        eq(ask.querySelectorAll('pre').length, 0, 'в карточке не должно быть служебного JSON');
         const labels = el.$$('oda-button').map(b => b.getAttribute('label')).filter(Boolean);
         for (const want of ['Разрешить', 'Разрешить всегда', 'Отклонить'])
             assert(labels.includes(want), 'нет кнопки «' + want + '»: ' + labels.join('|'));
+        const btn = el.$$('oda-button').find(b => b.getAttribute('label') === 'Разрешить');
+        const cs = getComputedStyle(btn);
+        assert(parseFloat(cs.minHeight) >= 34, 'кнопка низкая: ' + cs.minHeight);
+        assert(parseFloat(cs.paddingTop) >= 6 && parseFloat(cs.paddingBottom) >= 6, 'мало падинга по вертикали: ' + cs.padding);
     }
     finally {
         el.remove();

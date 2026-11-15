@@ -127,6 +127,21 @@
                 pushHandler.remove();
             }
         });
+    // Страница сообщает, что задача снова на экране (человек открыл/вернулся): уведомление
+    // по ней уже лишнее — закрываем, даже если оно висело с requireInteraction.
+    self.addEventListener('message', async (event) => {
+        const msg = event.data || {};
+        if (msg.type !== 'work:task-visible' || !msg.path)
+            return;
+        const tag = 'task:' + String(msg.path);
+        delete pushHandlers[tag];
+        try {
+            const list = await self.registration.getNotifications({ tag });
+            for (const n of list)
+                n.close();
+        }
+        catch { /* ignore */ }
+    });
 
 const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -148,6 +163,44 @@ const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"
 <p style="margin-top:10px">Сообщения, написанные без сети, сохранятся и отправятся при подключении (если задача открыта).</p>
 <button onclick="location.reload()">Повторить</button>
 </div></body></html>`;
+
+    /**
+     * Задача прямо сейчас на экране у пользователя? Спрашиваем сами страницы: URL не всегда
+     * содержит путь задачи (в ленте чата карточка задачи разворачивается без смены адреса),
+     * поэтому видимая форма задачи отвечает `{ visible: true }`; молчание/таймаут — «нет».
+     * @param {string} taskPath путь задачи
+     * @param {Array<any>} wins окна WORK
+     */
+    async function taskOnScreen(taskPath, wins) {
+        if (!taskPath || !wins?.length)
+            return false;
+        if (typeof MessageChannel !== 'function' || typeof setTimeout !== 'function')
+            return false;
+        const ask = c => new Promise(resolve => {
+            if (typeof c?.postMessage !== 'function')
+                return resolve(false);
+            const ch = new MessageChannel();
+            let settled = false;
+            const done = v => {
+                if (settled)
+                    return;
+                settled = true;
+                try { ch.port1.close(); } catch { /* ignore */ }
+                resolve(v);
+            };
+            const timer = setTimeout(() => done(false), 350);
+            ch.port1.onmessage = e => {
+                clearTimeout(timer);
+                done(!!e.data?.visible);
+            };
+            try { c.postMessage({ type: 'work:is-task-visible', path: taskPath }, [ch.port2]); }
+            catch {
+                clearTimeout(timer);
+                done(false);
+            }
+        });
+        return (await Promise.all(wins.map(ask))).some(Boolean);
+    }
 
     /**@param {{type: string, [key: string]: any}} data  */
     async function handleNotification(data) {        if (!(self.Notification && self.Notification.permission === "granted")) {
@@ -230,22 +283,45 @@ const OFFLINE_PAGE = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"
                 }
             } break;
             default: {
-                // Вопрос/разрешение/ошибка требуют внимания даже при открытой другой вкладке WORK.
-                // Завершение подавляем только когда пользователь уже смотрит именно эту задачу.
+                // Пуш по задаче не нужен, если эта задача уже на экране (видимая вкладка показывает
+                // её в проводнике или отдельной страницей) — даже когда окно не в фокусе: человек
+                // видит запрос и так, а второй раз он только сбивает. Открытый и сфокусированный
+                // проводник WORK подавляет push целиком.
                 if (String(data.type || '').startsWith('task:')) {
                     const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+                    let taskPath = String(data.data?.task || '').replace(/\/+$/, '');
+                    try { taskPath = decodeURI(taskPath); } catch { /* как есть */ }
+                    const clientPlace = c => {
+                        try {
+                            const u = new URL(c.url);
+                            return decodeURI(u.pathname + u.hash);
+                        }
+                        catch { return c.url || ''; }
+                    };
+                    const showsTask = c => {
+                        if (!taskPath || c.visibilityState !== 'visible')
+                            return false;
+                        const place = clientPlace(c);
+                        const at = place.indexOf(taskPath);
+                        if (at < 0)
+                            return false;
+                        // путь задачи целиком, а не префикс другой (…/1.task ≠ …/1.task2)
+                        const next = place[at + taskPath.length];
+                        return !next || '/#?'.includes(next);
+                    };
+                    if (wins.some(showsTask))
+                        return;
+                    // задача открыта в ленте чата/вкладкой — форма на экране отвечает сама
+                    if (await taskOnScreen(taskPath, wins))
+                        return;
                     const target = data.data?.url && new URL(data.data.url, self.location.origin).pathname;
-                    const isViewingTask = c => {
+                    const isViewingExplorer = c => {
                         if (c.visibilityState !== 'visible' || !c.focused)
                             return false;
                         const p = new URL(c.url).pathname;
-                        if (target && p === target)
-                            return true;
-                        if (p === '/' || p === '/index.html' || p.startsWith('/~/handlers/pages/explorer'))
-                            return true;
-                        return false;
+                        return p === target || p === '/' || p === '/index.html' || p.startsWith('/~/handlers/pages/explorer');
                     };
-                    if (wins.some(isViewingTask))
+                    if (wins.some(isViewingExplorer))
                         return;
                     // 9.7: ожидающее разрешение — кнопки «Разрешить/Отклонить» прямо в уведомлении:
                     // подтверждение уходит на сервер (POST file?approve — те же права, что в интерфейсе),

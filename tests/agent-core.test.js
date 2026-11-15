@@ -2340,9 +2340,10 @@ describe('push-сообщение задачи (9.7)', () => {
         const { pushMessageOf: build } = await import('../sources/modules/agent/session.js');
         const st = () => ({ body: { title: 'Годовой отчёт' }, file: { path: '/ORG/task/2026-10-15/1.A000000000000001.task' } });
         const m = build(st(), 'waiting', 'разрешить: изменение системы', { waitingKind: 'approval', call: 'c42', reason: 'изменение системы' });
-        assert.equal(m.title, 'Задача ждёт вас');
-        assert.match(m.body, /Годовой отчёт/);
-        assert.match(m.body, /разрешить: изменение системы/, 'что ждёт — в теле уведомления');
+        assert.equal(m.title, 'Годовой отчёт', 'заголовок уведомления — имя задачи (отдельная крупная строка)');
+        assert.match(m.body, /^Нужно ваше разрешение: изменение системы/, 'состояние и что именно — в теле уведомления');
+        assert.doesNotMatch(m.body, /Годовой отчёт/, 'имя задачи не дублируется в теле');
+        assert.doesNotMatch(m.body, /разрешить:/i, 'служебный префикс не повторяется в теле');
         assert.ok(m.actions.some(a => a.action === 'task-approve' && a.title === 'Разрешить'), 'нет кнопки Разрешить');
         assert.ok(m.actions.some(a => a.action === 'task-reject' && a.title === 'Отклонить'), 'нет кнопки Отклонить');
         assert.equal(m.data.approval.call, 'c42', 'sw не узнает вызов');
@@ -2351,11 +2352,14 @@ describe('push-сообщение задачи (9.7)', () => {
         assert.equal(m.requireInteraction, true, 'разрешение не держит уведомление');
         // вопрос — без кнопок (клик открывает задачу, ответ требует контекста)
         const q = build(st(), 'waiting', 'Какой год?', { waitingKind: 'question', call: 'c43' });
+        assert.match(q.body, /^Нужен ваш ответ: Какой год\?/);
         assert.equal(q.actions, undefined, 'вопросу дали кнопки разрешения');
         assert.equal(q.data.approval, undefined, 'вопросу дали признак approval');
         assert.equal(q.requireInteraction, true);
         // прочее — без кнопок и без взаимодействия
         const d = build(st(), 'done', 'готово');
+        assert.equal(d.title, 'Годовой отчёт');
+        assert.match(d.body, /^Задача выполнена: готово$/);
         assert.equal(d.actions, undefined);
         assert.equal(d.requireInteraction, false);
         assert.equal(d.data.approval, undefined);

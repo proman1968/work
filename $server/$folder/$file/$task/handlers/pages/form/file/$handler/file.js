@@ -160,6 +160,62 @@ export default {
         this._bound = null;
         this._h = null;
     },
+    /**
+     * Задача на экране (вкладка активна, форма видна) — просим service worker закрыть
+     * висящее уведомление по ней: человек уже смотрит запрос, пуш только сбивает.
+     */
+    _watchPresence() {
+        this._presenceIO ??= new IntersectionObserver(entries => {
+            if (entries.some(e => e.isIntersecting))
+                this._notifyPresence();
+        });
+        this._presenceIO.observe(this);
+        this._presenceOnVis = () => this._notifyPresence();
+        document.addEventListener('visibilitychange', this._presenceOnVis);
+        // service worker перед показом пуша спрашивает, видна ли задача на экране
+        // (в чате адрес не содержит путь задачи — сравнивать URL недостаточно)
+        this._presenceOnSw = e => {
+            const msg = e?.data;
+            const mine = this._bound?.path || this.$item?.path;
+            if (msg?.type !== 'work:is-task-visible' || !msg.port || !mine || msg.path !== mine)
+                return;
+            if (this._isOnScreen())
+                try { msg.port.postMessage({ visible: true }); } catch { /* порт закрыт */ }
+        };
+        navigator.serviceWorker?.addEventListener?.('message', this._presenceOnSw);
+        this.async(() => this._notifyPresence(), 150);
+    },
+    _unwatchPresence() {
+        this._presenceIO?.disconnect();
+        this._presenceIO = null;
+        if (this._presenceOnVis)
+            document.removeEventListener('visibilitychange', this._presenceOnVis);
+        this._presenceOnVis = null;
+        if (this._presenceOnSw)
+            navigator.serviceWorker?.removeEventListener?.('message', this._presenceOnSw);
+        this._presenceOnSw = null;
+    },
+    /** Форма задачи действительно видна на экране (а не просто в DOM скрытой вкладки). */
+    _isOnScreen() {
+        if (document.visibilityState !== 'visible' || !this.isConnected)
+            return false;
+        const r = this.getBoundingClientRect?.();
+        if (!r || r.width < 2 || r.height < 2)
+            return false;
+        const w = window.innerWidth || 0, h = window.innerHeight || 0;
+        return r.bottom > 0 && r.right > 0 && r.top < h && r.left < w;
+    },
+    _notifyPresence() {
+        const path = this._bound?.path || this.$item?.path;
+        if (!path || document.visibilityState !== 'visible')
+            return;
+        try {
+            navigator.serviceWorker?.ready
+                ?.then(reg => reg.active?.postMessage({ type: 'work:task-visible', path }))
+                .catch(() => { /* sw недоступен — не ошибка */ });
+        }
+        catch { /* ignore */ }
+    },
     $listeners: {
         resize() {
             if (this._lastMobile !== ODA.states.mobileMode) {
@@ -207,9 +263,11 @@ export default {
                 this._ro.observe(col);
         }, 50);
         this._startPcPoll();
+        this._watchPresence();
     },
     detached() {
         this._unbindItem();
+        this._unwatchPresence();
         this._voice?.disable();
         this.voiceOn = false;
         this.removeEventListener('md-link', onMdLink);
