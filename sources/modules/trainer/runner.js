@@ -9,6 +9,15 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { registerLocalModelNode, estimateModelMemoryFromId, listHuggingFaceDownloads } from './huggingface.js';
 import { verifyCompletion } from './dataset.js';
+import {
+    localRootDir,
+    localAdaptersDir,
+    localDatasetsDir,
+    modelWeightsDir,
+    modelClassFile,
+    migrateLocalModelsLayoutSync,
+    WEIGHT_FILE_EXT_RE,
+} from './paths.js';
 
 const _jobs = new Map();
 let _hwCache = null;
@@ -200,7 +209,7 @@ export async function detectHardware({ force = false } = {}) {
  * Инвентарь локальных моделей и обученных LoRA-адаптеров в `/MODELS/Local`.
  */
 export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
-    const localRoot = path.join(rootDir, 'MODELS', 'Local');
+    const localRoot = localRootDir(rootDir);
     const legacyHalogenRoot = path.join(rootDir, 'MODELS', 'Halogen');
 
     // Автоматическая миграция и очистка устаревшей дублирующей папки MODELS/Halogen
@@ -213,7 +222,7 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
                 const oldWeights = path.join(legacyHalogenRoot, he.name, '#weights');
                 if (fs.existsSync(oldWeights)) {
                     const wf = await fsp.readdir(oldWeights).catch(() => []);
-                    const hasRealWeight = wf.some(f => !f.endsWith('.part') && /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i.test(f));
+                    const hasRealWeight = wf.some(f => !f.endsWith('.part') && WEIGHT_FILE_EXT_RE.test(f));
                     if (hasRealWeight) {
                         const targetModelDir = path.join(localRoot, he.name);
                         if (!fs.existsSync(targetModelDir)) {
@@ -228,46 +237,62 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
         catch { /* ignore */ }
     }
 
+    const activeDownloads = listHuggingFaceDownloads(rootDir).filter(d => d.status === 'downloading');
+    migrateLocalModelsLayoutSync(rootDir, { skipModels: new Set(activeDownloads.map(d => d.folderName)) });
+
     const models = [];
     const adapters = [];
+
+    // Адаптеры хранятся внутри метапапки провайдера Local: MODELS/Local/$provider/#adapters
+    const adaptersDir = localAdaptersDir(rootDir);
+    if (fs.existsSync(adaptersDir)) {
+        const adEntries = await fsp.readdir(adaptersDir, { withFileTypes: true }).catch(() => []);
+        for (const ad of adEntries) {
+            if (!ad.isDirectory())
+                continue;
+            const cfgPath = path.join(adaptersDir, ad.name, 'adapter_config.json');
+            if (fs.existsSync(cfgPath)) {
+                try {
+                    adapters.push(JSON.parse(await fsp.readFile(cfgPath, 'utf-8')));
+                }
+                catch { /* ignore */ }
+            }
+        }
+    }
+
     if (!fs.existsSync(localRoot))
         return { models, adapters };
 
-    const activeDownloads = listHuggingFaceDownloads().filter(d => d.status === 'downloading');
     const entries = await fsp.readdir(localRoot, { withFileTypes: true });
     for (const e of entries) {
-        if (!e.isDirectory() || e.name.startsWith('$'))
-            continue;
-        if (e.name === '#adapters') {
-            const adEntries = await fsp.readdir(path.join(localRoot, '#adapters'), { withFileTypes: true }).catch(() => []);
-            for (const ad of adEntries) {
-                if (!ad.isDirectory())
-                    continue;
-                const cfgPath = path.join(localRoot, '#adapters', ad.name, 'adapter_config.json');
-                if (fs.existsSync(cfgPath)) {
-                    try {
-                        adapters.push(JSON.parse(await fsp.readFile(cfgPath, 'utf-8')));
-                    }
-                    catch { /* ignore */ }
-                }
-            }
-            continue;
-        }
-        if (e.name.startsWith('#'))
+        if (!e.isDirectory() || e.name.startsWith('$') || e.name.startsWith('#'))
             continue;
 
         const isDownloading = activeDownloads.some(
             d => d.folderName === e.name || d.modelPath === `/MODELS/Local/${e.name}`
         );
-        const aiClassFile = path.join(localRoot, e.name, '$ai', 'class.js');
-        const weightsDir = path.join(localRoot, e.name, '#weights');
+        const aiClassFile = modelClassFile(rootDir, e.name, 'Local');
+        const weightsDir = modelWeightsDir(rootDir, e.name, 'Local');
         let weightFiles = [];
         let hasRealWeightBinary = false;
+        let hasPendingDownload = false;
         let sizeBytes = 0;
         if (fs.existsSync(weightsDir)) {
             const wf = await fsp.readdir(weightsDir).catch(() => []);
-            weightFiles = wf.filter(f => !f.endsWith('.part') && f !== 'hf-manifest.json');
-            hasRealWeightBinary = weightFiles.some(f => /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i.test(f));
+            const hasParts = wf.some(f => f.endsWith('.part'));
+            let pendingState = false;
+            if (wf.includes('download-state.json')) {
+                try {
+                    const st = JSON.parse(await fsp.readFile(path.join(weightsDir, 'download-state.json'), 'utf-8'));
+                    pendingState = st?.status !== 'completed';
+                }
+                catch {
+                    pendingState = true;
+                }
+            }
+            hasPendingDownload = hasParts || pendingState;
+            weightFiles = wf.filter(f => !f.endsWith('.part') && f !== 'hf-manifest.json' && f !== 'download-state.json' && !f.endsWith('.tmp'));
+            hasRealWeightBinary = weightFiles.some(f => WEIGHT_FILE_EXT_RE.test(f));
             for (const f of weightFiles) {
                 try {
                     const st = await fsp.stat(path.join(weightsDir, f));
@@ -288,8 +313,8 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
 
         const isAdapterNode = Boolean(meta.adapterPath);
 
-        // Если папка модели была создана преждевременно прежней версией без скачанных весов и сейчас не качается — убираем пустой дубль
-        if (!isDownloading && !hasRealWeightBinary && !isAdapterNode) {
+        // Если папка модели пустая (ни готовых весов, ни незавершённой загрузки, ни адаптера) — убираем мусор
+        if (!isDownloading && !hasPendingDownload && !hasRealWeightBinary && !isAdapterNode) {
             try {
                 await fsp.rm(path.join(localRoot, e.name), { recursive: true, force: true });
             }
@@ -297,8 +322,8 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
             continue;
         }
 
-        // Пока модель ещё скачивается, она отображается только в блоке «Идёт установка», а не в «Установленных моделях»
-        if (isDownloading && !hasRealWeightBinary && !isAdapterNode) {
+        // Пока модель качается или стоит на паузе/обрыве, она отображается только в загрузках, а не в «Установленных»
+        if ((isDownloading || hasPendingDownload) && !isAdapterNode) {
             continue;
         }
 
@@ -370,8 +395,9 @@ export async function startTrainingJob({
     const resolvedMaxSeq = Number(maxSeqLength) || hw.recommendedMaxSeq || 8192;
 
     const safeAdapter = String(adapterName || 'work-lora').replace(/[<>:"/\\|?*]/g, '-').trim();
-    const datasetFile = path.join(rootDir, 'MODELS', 'Local', '#datasets', `${datasetName}.jsonl`);
-    const outputDir = path.join(rootDir, 'MODELS', 'Local', '#adapters', safeAdapter);
+    migrateLocalModelsLayoutSync(rootDir);
+    const datasetFile = path.join(localDatasetsDir(rootDir), `${datasetName}.jsonl`);
+    const outputDir = path.join(localAdaptersDir(rootDir), safeAdapter);
     await fsp.mkdir(outputDir, { recursive: true });
 
     let datasetLines = 0;

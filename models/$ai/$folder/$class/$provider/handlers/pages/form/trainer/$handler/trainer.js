@@ -850,7 +850,7 @@ export default {
                 id: d.folderName || halo?.nodeName || d.repoId,
                 repoId: d.repoId || halo?.hfRepo || '',
                 label: halo?.label || d.label || d.folderName || d.repoId,
-                desc: halo?.role || d.repoId || `Папка загрузки: #downloads/${d.folderName}`,
+                desc: halo?.role || d.repoId || `Папка модели: ${d.folderName}/$ai/#weights`,
                 icon: halo?.icon || 'ai:ollama',
                 modality: halo?.modality || d.modality || 'llm',
                 isHalo: Boolean(halo),

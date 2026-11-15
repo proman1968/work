@@ -41,6 +41,7 @@
 **/#adapters/
 **/#runtime/
 **/#cache/
+**/#tmp/
 **/*.safetensors
 **/*.gguf
 **/*.bin

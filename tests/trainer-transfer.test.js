@@ -32,11 +32,10 @@ import trainerFormMeta from '../MODELS/$ai/$folder/$class/$provider/handlers/pag
 async function createSampleLocalRoot(rootDir) {
     const localRoot = path.join(rootDir, 'MODELS', 'Local');
 
-    // 1. Модель Qwen3-Demo
-    const m1Weights = path.join(localRoot, 'Qwen3-Demo', '#weights');
+    // 1. Модель Qwen3-Demo (в канонической структуре: всё внутри $ai)
     const m1Ai = path.join(localRoot, 'Qwen3-Demo', '$ai');
+    const m1Weights = path.join(m1Ai, '#weights');
     await fsp.mkdir(m1Weights, { recursive: true });
-    await fsp.mkdir(m1Ai, { recursive: true });
     await fsp.writeFile(path.join(m1Weights, 'config.json'), '{"arch":"qwen3"}', 'utf-8');
     await fsp.writeFile(path.join(m1Weights, 'model.safetensors'), Buffer.from('SAFETENSORS_WEIGHTS_DEMO_DATA_001'));
     await fsp.writeFile(path.join(m1Weights, 'hf-manifest.json'), JSON.stringify({
@@ -50,13 +49,13 @@ async function createSampleLocalRoot(rootDir) {
         protocol: 'local',
         modality: 'llm',
         hfRepo: 'Qwen/Qwen3-Demo',
-        weightsDir: 'OLD_MACHINE/MODELS/Local/Qwen3-Demo/#weights',
+        weightsDir: 'OLD_MACHINE/MODELS/Local/Qwen3-Demo/$ai/#weights',
         primaryFile: 'model.safetensors',
         capabilities: ['chat', 'stream', 'tools'],
     }, null, 4)};\n`, 'utf-8');
 
-    // 2. Модель с кириллическим именем и адаптером
-    const adDir = path.join(localRoot, '#adapters', 'Бухгалтер-LoRA');
+    // 2. Модель с кириллическим именем и адаптером (внутри $provider/#adapters)
+    const adDir = path.join(localRoot, '$provider', '#adapters', 'Бухгалтер-LoRA');
     await fsp.mkdir(adDir, { recursive: true });
     await fsp.writeFile(path.join(adDir, 'adapter_config.json'), JSON.stringify({
         name: 'Бухгалтер-LoRA',
@@ -65,22 +64,22 @@ async function createSampleLocalRoot(rootDir) {
     }), 'utf-8');
     await fsp.writeFile(path.join(adDir, 'adapter_model.safetensors'), Buffer.from('LORA_WEIGHTS_12345'));
 
-    // 3. Датасет
-    const dsDir = path.join(localRoot, '#datasets');
+    // 3. Датасет (внутри $provider/#datasets)
+    const dsDir = path.join(localRoot, '$provider', '#datasets');
     await fsp.mkdir(dsDir, { recursive: true });
     await fsp.writeFile(path.join(dsDir, 'org-sft.jsonl'), '{"messages":[]}\n', 'utf-8');
     await fsp.writeFile(path.join(dsDir, 'org-sft.meta.json'), '{"totalExamples":1}', 'utf-8');
 
-    // 4. Рантайм #runtime
-    const rtDir = path.join(localRoot, '#runtime', 'bubo');
+    // 4. Рантайм #runtime (внутри $provider/#runtime)
+    const rtDir = path.join(localRoot, '$provider', '#runtime', 'bubo');
     await fsp.mkdir(rtDir, { recursive: true });
     await fsp.writeFile(path.join(rtDir, 'bubo.exe'), Buffer.from('MZ_FAKE_BUBO'));
 
-    // 5. Мусорные папки #downloads и #cache, которые НЕ должны выгружаться
-    await fsp.mkdir(path.join(localRoot, '#downloads', 'PartialModel'), { recursive: true });
-    await fsp.writeFile(path.join(localRoot, '#downloads', 'PartialModel', 'w.gguf.part'), 'partial', 'utf-8');
-    await fsp.mkdir(path.join(localRoot, '#cache', 'disk'), { recursive: true });
-    await fsp.writeFile(path.join(localRoot, '#cache', 'disk', 'slot0.bin'), 'cache', 'utf-8');
+    // 5. Недокачанная модель (.part) и #cache, которые НЕ должны выгружаться
+    await fsp.mkdir(path.join(localRoot, 'PartialModel', '$ai', '#weights'), { recursive: true });
+    await fsp.writeFile(path.join(localRoot, 'PartialModel', '$ai', '#weights', 'w.gguf.part'), 'partial', 'utf-8');
+    await fsp.mkdir(path.join(localRoot, '$provider', '#cache', 'disk'), { recursive: true });
+    await fsp.writeFile(path.join(localRoot, '$provider', '#cache', 'disk', 'slot0.bin'), 'cache', 'utf-8');
 
     return localRoot;
 }
@@ -193,7 +192,7 @@ describe('Выгрузка и загрузка локальных моделей
             assert.equal(localList.models.length, 1);
             assert.equal(localList.adapters.length, 1);
             const classContent = await fsp.readFile(path.join(dstRoot, 'MODELS', 'Local', 'Qwen3-Demo', '$ai', 'class.js'), 'utf-8');
-            assert.ok(classContent.includes('"weightsDir": "MODELS/Local/Qwen3-Demo/#weights"'), 'путь weightsDir должен быть обновлён под новую машину');
+            assert.ok(classContent.includes('"weightsDir": "MODELS/Local/Qwen3-Demo/$ai/#weights"'), 'путь weightsDir должен быть обновлён под новую машину');
 
             // Повторный импорт без overwrite должен пропустить уже установленную модель
             const imp2 = await startImportFromDisk({
@@ -207,7 +206,7 @@ describe('Выгрузка и загрузка локальных моделей
             assert.ok(imp2.skipped.includes('Qwen3-Demo'));
 
             // Портим файл на флешке и проверяем реакцию контроля целостности при overwrite: true
-            await fsp.writeFile(path.join(usbDir, 'Qwen3-Demo', '#weights', 'config.json'), '{"arch":"CORRUPTED"}', 'utf-8');
+            await fsp.writeFile(path.join(usbDir, 'Qwen3-Demo', '$ai', '#weights', 'config.json'), '{"arch":"CORRUPTED"}', 'utf-8');
             const impBroken = await startImportFromDisk({
                 rootDir: dstRoot,
                 sourceDir: usbDir,
@@ -381,18 +380,20 @@ describe('Выгрузка и загрузка локальных моделей
             });
             assert.equal(job.status, 'completed');
             assert.equal(rangeHeaderSeen, 'bytes=6-', 'повторная попытка должна докачивать через Range');
-            assert.equal(fs.readFileSync(path.join(tmpRoot, 'MODELS', 'Local', job.folderName, '#weights', 'RetryTest-Q8_0.gguf'), 'utf-8'), '0123456789AB');
+            assert.equal(fs.readFileSync(path.join(tmpRoot, 'MODELS', 'Local', job.folderName, '$ai', '#weights', 'RetryTest-Q8_0.gguf'), 'utf-8'), '0123456789AB');
 
-            // 2. Подхват незавершённого .part с диска (включая старый формат без download-state.json)
+            // 2. Автомиграция и подхват незавершённого .part из старой #downloads в $ai/#weights
             const legacyPartDir = path.join(tmpRoot, 'MODELS', 'Local', '#downloads', 'Qwen3.8-Flash-Next');
             await fsp.mkdir(legacyPartDir, { recursive: true });
             await fsp.writeFile(path.join(legacyPartDir, 'qwen38-flash-next-ht43.hgn.part'), Buffer.from('ABCDEF'));
 
             const foundDls = listHuggingFaceDownloads(tmpRoot);
             const legacyDl = foundDls.find(d => d.folderName === 'Qwen3.8-Flash-Next');
-            assert.ok(legacyDl, 'недокачанная папка в #downloads должна подхватываться с диска');
+            assert.ok(legacyDl, 'недокачанная папка должна быть перенесена в $ai/#weights и подхвачена');
             assert.equal(legacyDl.status, 'paused');
             assert.equal(legacyDl.downloadedBytes, 6);
+            assert.equal(fs.existsSync(legacyPartDir), false, 'старая папка #downloads должна быть очищена после миграции');
+            assert.ok(fs.existsSync(path.join(tmpRoot, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '$ai', '#weights', 'qwen38-flash-next-ht43.hgn.part')), 'файл .part перенесён внутрь $ai/#weights');
 
             // 3. Единый список моделей unifiedModels не дублирует запись из downloads и halogenCatalog
             const trainerHost = Object.assign(Object.create(trainerFormMeta), {
@@ -410,9 +411,9 @@ describe('Выгрузка и загрузка локальных моделей
             assert.equal(haloMatches[0].state, 'paused');
             assert.equal(trainerHost.formatEta(3665), '~1 ч 1 мин');
 
-            // Сброс недокачанной папки
+            // Сброс недокачанной папки очищает её из $ai/#weights
             await discardHuggingFaceDownload({ folderName: 'Qwen3.8-Flash-Next', rootDir: tmpRoot });
-            assert.equal(fs.existsSync(legacyPartDir), false);
+            assert.equal(fs.existsSync(path.join(tmpRoot, 'MODELS', 'Local', 'Qwen3.8-Flash-Next')), false);
             void resumeHuggingFaceDownload;
         }
         finally {

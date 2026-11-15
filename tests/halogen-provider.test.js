@@ -619,18 +619,17 @@ describe('Единый локальный контур /MODELS/Local для ма
             assert.equal(statusCatalog.length, 8);
             for (const item of statusCatalog) {
                 assert.equal(item.weightsDownloaded, true, `веса модели ${item.nodeName} скачаны в ${item.weightsDir}`);
-                assert.ok(item.downloadedFiles.length >= 2, `в папке ${item.nodeName}/#weights лежат файлы весов и конфига`);
-                const weightPath = path.join(tmpRoot, 'MODELS', 'Local', item.nodeName, '#weights');
+                assert.ok(item.downloadedFiles.length >= 2, `в папке ${item.nodeName}/$ai/#weights лежат файлы весов и конфига`);
+                const weightPath = path.join(tmpRoot, 'MODELS', 'Local', item.nodeName, '$ai', '#weights');
                 assert.ok(fs.existsSync(path.join(weightPath, 'hf-manifest.json')));
             }
 
             // Проверим, что пустые/недокачанные папки (только с config.json без файла весов) не попадают в установленные модели и очищаются
             const { listLocalModelsAndAdapters } = await import('../sources/modules/trainer/runner.js');
             const ghostDir = path.join(tmpRoot, 'MODELS', 'Local', 'Ghost-Incomplete');
-            await fsp.mkdir(path.join(ghostDir, '$ai'), { recursive: true });
-            await fsp.mkdir(path.join(ghostDir, '#weights'), { recursive: true });
+            await fsp.mkdir(path.join(ghostDir, '$ai', '#weights'), { recursive: true });
             await fsp.writeFile(path.join(ghostDir, '$ai', 'class.js'), 'export default {"label":"Ghost"};');
-            await fsp.writeFile(path.join(ghostDir, '#weights', 'config.json'), '{"ok":true}');
+            await fsp.writeFile(path.join(ghostDir, '$ai', '#weights', 'config.json'), '{"ok":true}');
 
             const inv = await listLocalModelsAndAdapters(tmpRoot);
             assert.equal(inv.models.length, 8, 'В установленных числятся только 8 реально скачанных моделей');
@@ -645,8 +644,8 @@ describe('Единый локальный контур /MODELS/Local для ма
     it('7. Нативный стек Windows 11 (Halowin Bubo / Gufo ROCm 10.0.0 gfx1151): диагностика окружения, подготовка рантайма и запуск bubo.exe serve llm', async () => {
         const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-halogen-bubo-'));
         try {
-            const buboBinDir = path.join(tmpRoot, 'MODELS', 'Local', '#runtime', 'bubo', 'bin');
-            const rocmDir = path.join(tmpRoot, 'MODELS', 'Local', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151');
+            const buboBinDir = path.join(tmpRoot, 'MODELS', 'Local', '$provider', '#runtime', 'bubo', 'bin');
+            const rocmDir = path.join(tmpRoot, 'MODELS', 'Local', '$provider', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151');
             const manifestDir = path.join(tmpRoot, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1');
             await fsp.mkdir(buboBinDir, { recursive: true });
             await fsp.mkdir(rocmDir, { recursive: true });

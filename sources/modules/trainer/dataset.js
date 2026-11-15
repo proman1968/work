@@ -16,6 +16,7 @@ import { classSchema, checkSchema, objectTitle } from '../../data/schema.js';
 import { queryObjects } from '../../data/objects.js';
 import { previewEntries } from '../../data/posting.js';
 import { trialBalance, journal } from '../../data/reports.js';
+import { localDatasetsDir, migrateLocalModelsLayoutSync } from './paths.js';
 
 const SECRET_PATTERNS = [
     /\bsk-[A-Za-z0-9_-]{16,}\b/g,
@@ -317,7 +318,8 @@ export async function buildWorkDataset({
     });
 
     const safeName = String(name || 'work-sft-dataset').replace(/[^A-Za-z0-9_.-]/g, '-');
-    const datasetsDir = path.join(rootDir, 'MODELS', 'Local', '#datasets');
+    migrateLocalModelsLayoutSync(rootDir);
+    const datasetsDir = localDatasetsDir(rootDir);
     await fsp.mkdir(datasetsDir, { recursive: true });
 
     const jsonlFile = path.join(datasetsDir, `${safeName}.jsonl`);
@@ -353,7 +355,8 @@ export async function buildWorkDataset({
  * Список собранных датасетов в `MODELS/Local/#datasets/`.
  */
 export async function listWorkDatasets(rootDir = process.cwd()) {
-    const datasetsDir = path.join(rootDir, 'MODELS', 'Local', '#datasets');
+    migrateLocalModelsLayoutSync(rootDir);
+    const datasetsDir = localDatasetsDir(rootDir);
     if (!fs.existsSync(datasetsDir))
         return [];
     const entries = await fsp.readdir(datasetsDir);

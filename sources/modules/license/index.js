@@ -850,13 +850,15 @@ export function inspectPreinstalledModels(rootDir = '.') {
     return PAK_HARDWARE_SPEC.preinstalledModels.map(m => {
         const rel = m.path.replace(/^\/+/, '');
         const classFile = path.join(rootDir, rel, '$ai', 'class.js');
-        const weightsDir = path.join(rootDir, rel, '#weights');
+        const canonicalWeightsDir = path.join(rootDir, rel, '$ai', '#weights');
+        const legacyWeightsDir = path.join(rootDir, rel, '#weights');
+        const weightsDir = fs.existsSync(canonicalWeightsDir) ? canonicalWeightsDir : legacyWeightsDir;
         const configured = fs.existsSync(classFile);
         let weightsReady = false;
         try {
             if (fs.existsSync(weightsDir)) {
                 const files = fs.readdirSync(weightsDir);
-                weightsReady = files.some(f => /\.(safetensors|gguf|bin|onnx)$/i.test(f));
+                weightsReady = files.some(f => !f.endsWith('.part') && /\.(safetensors|gguf|bin|onnx|hgn|hnpw)$/i.test(f));
             }
         }
         catch { /* ignore */ }

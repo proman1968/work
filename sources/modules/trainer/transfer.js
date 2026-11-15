@@ -15,6 +15,19 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { registerLocalModelNode } from './huggingface.js';
 import { createTarExportStream, extractTarStream, sanitizeTarRelPath } from './tar-stream.js';
+import {
+    localRootDir,
+    localAdaptersDir,
+    localDatasetsDir,
+    localRuntimeDir,
+    localTempDir,
+    modelDir as getModelDir,
+    modelWeightsDir as getModelWeightsDir,
+    modelClassFile as getModelClassFile,
+    migrateLocalModelsLayoutSync,
+    mergeMoveDirSync,
+    hasReadyWeightFilesSync,
+} from './paths.js';
 
 export const TRANSFER_MANIFEST_FILE = 'work-models-manifest.json';
 const COPY_CHUNK_BYTES = 4 * 1024 * 1024;
@@ -186,11 +199,11 @@ function hasBackupContentSync(dirPath) {
         for (const e of entries) {
             if (!e.isDirectory())
                 continue;
-            if (e.name === '#adapters' || e.name === '#datasets' || e.name === '#runtime')
+            if (e.name === '#adapters' || e.name === '#datasets' || e.name === '#runtime' || e.name === '$provider')
                 return true;
             if (e.name.startsWith('$') || e.name.startsWith('#'))
                 continue;
-            if (fs.existsSync(path.join(dirPath, e.name, '#weights')) || fs.existsSync(path.join(dirPath, e.name, '$ai', 'class.js')))
+            if (fs.existsSync(path.join(dirPath, e.name, '$ai', '#weights')) || fs.existsSync(path.join(dirPath, e.name, '#weights')) || fs.existsSync(path.join(dirPath, e.name, '$ai', 'class.js')))
                 return true;
         }
     }
@@ -270,7 +283,7 @@ async function collectFilesRecursive(baseDir, relPrefix = '', { skipPart = true,
         const cur = stack.pop();
         const entries = await fsp.readdir(cur.abs, { withFileTypes: true }).catch(() => []);
         for (const e of entries) {
-            if (skipPart && e.name.endsWith('.part'))
+            if (skipPart && (e.name.endsWith('.part') || e.name.endsWith('.tmp') || e.name === 'download-state.json'))
                 continue;
             if (skipLogs && e.isDirectory() && e.name === 'logs')
                 continue;
@@ -312,123 +325,113 @@ function parseAiClassMetaSync(classFilePath) {
  * Получить полный инвентарь переносимых элементов в `MODELS/Local`.
  */
 export async function listTransferableLocalItems(rootDir = process.cwd()) {
-    const localRoot = path.join(rootDir, 'MODELS', 'Local');
+    migrateLocalModelsLayoutSync(rootDir);
+    const localRoot = localRootDir(rootDir);
     const models = [];
     const adapters = [];
     const datasets = [];
     let runtime = { present: false, filesCount: 0, sizeBytes: 0, sizeGb: 0, files: [] };
+
+    // Адаптеры из MODELS/Local/$provider/#adapters
+    const adaptersDir = localAdaptersDir(rootDir);
+    if (fs.existsSync(adaptersDir)) {
+        const adEntries = await fsp.readdir(adaptersDir, { withFileTypes: true }).catch(() => []);
+        for (const ad of adEntries) {
+            if (!ad.isDirectory())
+                continue;
+            const adDir = path.join(adaptersDir, ad.name);
+            const files = await collectFilesRecursive(adDir, '', { skipPart: true, skipLogs: true });
+            if (!files.length)
+                continue;
+            const cfgPath = path.join(adDir, 'adapter_config.json');
+            let cfg = {};
+            if (fs.existsSync(cfgPath)) {
+                try { cfg = JSON.parse(await fsp.readFile(cfgPath, 'utf-8')); } catch { /* ignore */ }
+            }
+            const sizeBytes = files.reduce((s, f) => s + f.size, 0);
+            adapters.push({
+                id: ad.name,
+                label: cfg.name || ad.name,
+                baseModel: cfg.base_model_name_or_path || '',
+                mode: cfg.mode || '',
+                filesCount: files.length,
+                sizeBytes,
+                sizeGb: formatGb(sizeBytes),
+                files,
+            });
+        }
+    }
+
+    // Датасеты из MODELS/Local/$provider/#datasets
+    const dsDir = localDatasetsDir(rootDir);
+    if (fs.existsSync(dsDir)) {
+        const dsEntries = await fsp.readdir(dsDir, { withFileTypes: true }).catch(() => []);
+        const byName = new Map();
+        for (const f of dsEntries) {
+            if (!f.isFile())
+                continue;
+            if (f.name.endsWith('.jsonl') || f.name.endsWith('.meta.json')) {
+                const id = f.name.endsWith('.jsonl') ? f.name.slice(0, -6) : f.name.slice(0, -10);
+                const rec = byName.get(id) || { id, files: [] };
+                const fullPath = path.join(dsDir, f.name);
+                const st = await fsp.stat(fullPath);
+                rec.files.push({ relPath: f.name, insideRel: f.name, fullPath, size: st.size || 0, mtimeMs: st.mtimeMs || Date.now() });
+                byName.set(id, rec);
+            }
+        }
+        for (const rec of byName.values()) {
+            const sizeBytes = rec.files.reduce((s, f) => s + f.size, 0);
+            datasets.push({
+                id: rec.id,
+                label: rec.id,
+                filesCount: rec.files.length,
+                sizeBytes,
+                sizeGb: formatGb(sizeBytes),
+                files: rec.files,
+            });
+        }
+    }
+
+    // Рантайм из MODELS/Local/$provider/#runtime
+    const rtDir = localRuntimeDir(rootDir);
+    if (fs.existsSync(rtDir)) {
+        const files = await collectFilesRecursive(rtDir, '', { skipPart: true, skipLogs: true });
+        if (files.length) {
+            const sizeBytes = files.reduce((s, f) => s + f.size, 0);
+            runtime = {
+                present: true,
+                filesCount: files.length,
+                sizeBytes,
+                sizeGb: formatGb(sizeBytes),
+                files,
+            };
+        }
+    }
 
     if (!fs.existsSync(localRoot))
         return { localRoot, models, adapters, datasets, runtime };
 
     const entries = await fsp.readdir(localRoot, { withFileTypes: true });
     for (const e of entries) {
-        if (!e.isDirectory() || e.name.startsWith('$'))
+        if (!e.isDirectory() || e.name.startsWith('$') || e.name.startsWith('#'))
             continue;
 
-        if (e.name === '#downloads' || e.name === '#cache')
-            continue;
-
-        if (e.name === '#adapters') {
-            const adEntries = await fsp.readdir(path.join(localRoot, '#adapters'), { withFileTypes: true }).catch(() => []);
-            for (const ad of adEntries) {
-                if (!ad.isDirectory())
-                    continue;
-                const adDir = path.join(localRoot, '#adapters', ad.name);
-                const files = await collectFilesRecursive(adDir, '', { skipPart: true, skipLogs: true });
-                if (!files.length)
-                    continue;
-                const cfgPath = path.join(adDir, 'adapter_config.json');
-                let cfg = {};
-                if (fs.existsSync(cfgPath)) {
-                    try { cfg = JSON.parse(await fsp.readFile(cfgPath, 'utf-8')); } catch { /* ignore */ }
-                }
-                const sizeBytes = files.reduce((s, f) => s + f.size, 0);
-                adapters.push({
-                    id: ad.name,
-                    label: cfg.name || ad.name,
-                    baseModel: cfg.base_model_name_or_path || '',
-                    mode: cfg.mode || '',
-                    filesCount: files.length,
-                    sizeBytes,
-                    sizeGb: formatGb(sizeBytes),
-                    files,
-                });
-            }
-            continue;
-        }
-
-        if (e.name === '#datasets') {
-            const dsDir = path.join(localRoot, '#datasets');
-            const dsEntries = await fsp.readdir(dsDir, { withFileTypes: true }).catch(() => []);
-            const byName = new Map();
-            for (const f of dsEntries) {
-                if (!f.isFile())
-                    continue;
-                if (f.name.endsWith('.jsonl')) {
-                    const id = f.name.slice(0, -6);
-                    const rec = byName.get(id) || { id, files: [] };
-                    const fullPath = path.join(dsDir, f.name);
-                    const st = await fsp.stat(fullPath);
-                    rec.files.push({ relPath: f.name, insideRel: f.name, fullPath, size: st.size || 0, mtimeMs: st.mtimeMs || Date.now() });
-                    byName.set(id, rec);
-                }
-                else if (f.name.endsWith('.meta.json')) {
-                    const id = f.name.slice(0, -10);
-                    const rec = byName.get(id) || { id, files: [] };
-                    const fullPath = path.join(dsDir, f.name);
-                    const st = await fsp.stat(fullPath);
-                    rec.files.push({ relPath: f.name, insideRel: f.name, fullPath, size: st.size || 0, mtimeMs: st.mtimeMs || Date.now() });
-                    byName.set(id, rec);
-                }
-            }
-            for (const rec of byName.values()) {
-                const sizeBytes = rec.files.reduce((s, f) => s + f.size, 0);
-                datasets.push({
-                    id: rec.id,
-                    label: rec.id,
-                    filesCount: rec.files.length,
-                    sizeBytes,
-                    sizeGb: formatGb(sizeBytes),
-                    files: rec.files,
-                });
-            }
-            continue;
-        }
-
-        if (e.name === '#runtime') {
-            const rtDir = path.join(localRoot, '#runtime');
-            const files = await collectFilesRecursive(rtDir, '', { skipPart: true, skipLogs: true });
-            if (files.length) {
-                const sizeBytes = files.reduce((s, f) => s + f.size, 0);
-                runtime = {
-                    present: true,
-                    filesCount: files.length,
-                    sizeBytes,
-                    sizeGb: formatGb(sizeBytes),
-                    files,
-                };
-            }
-            continue;
-        }
-
-        if (e.name.startsWith('#'))
-            continue;
-
-        const modelDir = path.join(localRoot, e.name);
-        const aiClassFile = path.join(modelDir, '$ai', 'class.js');
-        const weightsDir = path.join(modelDir, '#weights');
+        const mDir = getModelDir(rootDir, e.name, 'Local');
+        const aiClassFile = getModelClassFile(rootDir, e.name, 'Local');
+        const weightsDir = getModelWeightsDir(rootDir, e.name, 'Local');
         const meta = parseAiClassMetaSync(aiClassFile);
         const isAdapterNode = Boolean(meta.adapterPath);
+        let hasPendingDownload = false;
         let hasRealWeightBinary = false;
         if (fs.existsSync(weightsDir)) {
             const wf = await fsp.readdir(weightsDir).catch(() => []);
+            hasPendingDownload = wf.some(f => f.endsWith('.part') || f === 'download-state.json');
             hasRealWeightBinary = wf.some(f => !f.endsWith('.part') && WEIGHT_EXT_RE.test(f));
         }
-        if (!hasRealWeightBinary && !isAdapterNode)
+        if ((hasPendingDownload || !hasRealWeightBinary) && !isAdapterNode)
             continue;
 
-        const files = await collectFilesRecursive(modelDir, '', { skipPart: true, skipLogs: true });
+        const files = await collectFilesRecursive(mDir, '', { skipPart: true, skipLogs: true });
         if (!files.length)
             continue;
         const sizeBytes = files.reduce((s, f) => s + f.size, 0);
@@ -467,18 +470,12 @@ export async function listTransferableLocalItems(rootDir = process.cwd()) {
     };
 }
 
-function isModelInstalledSync(localRoot, modelId) {
-    const modelDir = path.join(localRoot, modelId);
-    const weightsDir = path.join(modelDir, '#weights');
-    if (fs.existsSync(weightsDir)) {
-        try {
-            const wf = fs.readdirSync(weightsDir);
-            if (wf.some(f => !f.endsWith('.part') && WEIGHT_EXT_RE.test(f)))
-                return true;
-        }
-        catch { /* ignore */ }
-    }
-    const meta = parseAiClassMetaSync(path.join(modelDir, '$ai', 'class.js'));
+function isModelInstalledSync(rootDir, modelId) {
+    if (hasReadyWeightFilesSync(getModelWeightsDir(rootDir, modelId, 'Local')))
+        return true;
+    if (hasReadyWeightFilesSync(path.join(getModelDir(rootDir, modelId, 'Local'), '#weights')))
+        return true;
+    const meta = parseAiClassMetaSync(getModelClassFile(rootDir, modelId, 'Local'));
     return Boolean(meta.adapterPath);
 }
 
@@ -486,16 +483,20 @@ function isModelInstalledSync(localRoot, modelId) {
  * Проанализировать папку-источник на диске/флешке (манифест или автообнаружение папок).
  */
 export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) {
+    migrateLocalModelsLayoutSync(rootDir);
     const resolved = path.resolve(String(sourceDir || ''));
     if (!fs.existsSync(resolved))
         throw new Error(`Папка источника не найдена: ${resolved}`);
-    const localRoot = path.join(rootDir, 'MODELS', 'Local');
+    const localRoot = localRootDir(rootDir);
+    const adaptersTarget = localAdaptersDir(rootDir);
+    const datasetsTarget = localDatasetsDir(rootDir);
+    const runtimeTarget = localRuntimeDir(rootDir);
     const manifestPath = path.join(resolved, TRANSFER_MANIFEST_FILE);
 
     const models = [];
     const adapters = [];
     const datasets = [];
-    let runtime = { present: false, filesCount: 0, sizeBytes: 0, sizeGb: 0, files: [], alreadyInstalled: fs.existsSync(path.join(localRoot, '#runtime')) };
+    let runtime = { present: false, filesCount: 0, sizeBytes: 0, sizeGb: 0, files: [], alreadyInstalled: fs.existsSync(runtimeTarget) };
     let hasManifest = false;
     let createdAt = null;
     let sourceHost = '';
@@ -532,7 +533,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                 filesCount: files.length,
                 sizeBytes,
                 sizeGb: formatGb(sizeBytes),
-                alreadyInstalled: isModelInstalledSync(localRoot, id),
+                alreadyInstalled: isModelInstalledSync(rootDir, id),
                 files,
             });
         }
@@ -552,7 +553,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                 filesCount: files.length,
                 sizeBytes,
                 sizeGb: formatGb(sizeBytes),
-                alreadyInstalled: fs.existsSync(path.join(localRoot, '#adapters', id, 'adapter_config.json')),
+                alreadyInstalled: fs.existsSync(path.join(adaptersTarget, id, 'adapter_config.json')),
                 files,
             });
         }
@@ -572,7 +573,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                 filesCount: files.length,
                 sizeBytes,
                 sizeGb: formatGb(sizeBytes),
-                alreadyInstalled: fs.existsSync(path.join(localRoot, '#datasets', `${id}.jsonl`)),
+                alreadyInstalled: fs.existsSync(path.join(datasetsTarget, `${id}.jsonl`)),
                 files,
             });
         }
@@ -588,7 +589,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                 filesCount: files.length,
                 sizeBytes,
                 sizeGb: formatGb(sizeBytes),
-                alreadyInstalled: fs.existsSync(path.join(localRoot, '#runtime', 'bubo')),
+                alreadyInstalled: fs.existsSync(path.join(runtimeTarget, 'bubo')),
                 files,
             };
         }
@@ -616,7 +617,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                         filesCount: files.length,
                         sizeBytes,
                         sizeGb: formatGb(sizeBytes),
-                        alreadyInstalled: fs.existsSync(path.join(localRoot, '#adapters', ad.name)),
+                        alreadyInstalled: fs.existsSync(path.join(adaptersTarget, ad.name)),
                         files,
                     });
                 }
@@ -646,7 +647,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                         filesCount: rec.files.length,
                         sizeBytes,
                         sizeGb: formatGb(sizeBytes),
-                        alreadyInstalled: fs.existsSync(path.join(localRoot, '#datasets', `${rec.id}.jsonl`)),
+                        alreadyInstalled: fs.existsSync(path.join(datasetsTarget, `${rec.id}.jsonl`)),
                         files: rec.files,
                     });
                 }
@@ -661,7 +662,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                         filesCount: files.length,
                         sizeBytes,
                         sizeGb: formatGb(sizeBytes),
-                        alreadyInstalled: fs.existsSync(path.join(localRoot, '#runtime', 'bubo')),
+                        alreadyInstalled: fs.existsSync(path.join(runtimeTarget, 'bubo')),
                         files,
                     };
                 }
@@ -670,12 +671,12 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
             if (e.name.startsWith('#'))
                 continue;
 
-            const modelDir = path.join(resolved, e.name);
-            const meta = parseAiClassMetaSync(path.join(modelDir, '$ai', 'class.js'));
-            const hasWeights = fs.existsSync(path.join(modelDir, '#weights'));
+            const mDir = path.join(resolved, e.name);
+            const meta = parseAiClassMetaSync(path.join(mDir, '$ai', 'class.js'));
+            const hasWeights = fs.existsSync(path.join(mDir, '$ai', '#weights')) || fs.existsSync(path.join(mDir, '#weights'));
             if (!hasWeights && !meta.adapterPath)
                 continue;
-            const files = await collectFilesRecursive(modelDir);
+            const files = await collectFilesRecursive(mDir);
             if (!files.length)
                 continue;
             const sizeBytes = files.reduce((s, f) => s + f.size, 0);
@@ -688,7 +689,7 @@ export async function inspectTransferSource(sourceDir, rootDir = process.cwd()) 
                 filesCount: files.length,
                 sizeBytes,
                 sizeGb: formatGb(sizeBytes),
-                alreadyInstalled: isModelInstalledSync(localRoot, e.name),
+                alreadyInstalled: isModelInstalledSync(rootDir, e.name),
                 files,
             });
         }
@@ -788,9 +789,14 @@ async function copyFileWithVerify(src, dest, { expectedSize = null, expectedSha2
 }
 
 async function ensureImportedModelNode(rootDir, modelId) {
-    const modelDir = path.join(rootDir, 'MODELS', 'Local', modelId);
-    const aiClassFile = path.join(modelDir, '$ai', 'class.js');
-    const weightsDir = path.join(modelDir, '#weights');
+    const mDir = getModelDir(rootDir, modelId, 'Local');
+    const aiClassFile = getModelClassFile(rootDir, modelId, 'Local');
+    const weightsDir = getModelWeightsDir(rootDir, modelId, 'Local');
+    const legacyWeightsDir = path.join(mDir, '#weights');
+    // Если импортирован старый бэкап, где #weights лежали рядом с $ai — переносим внутрь метапапки $ai/#weights
+    if (fs.existsSync(legacyWeightsDir))
+        mergeMoveDirSync(legacyWeightsDir, weightsDir);
+
     const hasWeightsDir = fs.existsSync(weightsDir);
     const meta = parseAiClassMetaSync(aiClassFile);
 
@@ -805,7 +811,7 @@ async function ensureImportedModelNode(rootDir, modelId) {
         }
         if (meta.adapterPath) {
             const adapterName = path.basename(String(meta.adapterPath));
-            const relAdapter = path.relative(rootDir, path.join(rootDir, 'MODELS', 'Local', '#adapters', adapterName)).replace(/\\/g, '/');
+            const relAdapter = path.relative(rootDir, path.join(localAdaptersDir(rootDir), adapterName)).replace(/\\/g, '/');
             if (meta.adapterPath !== relAdapter) {
                 meta.adapterPath = relAdapter;
                 changed = true;
@@ -1110,7 +1116,7 @@ export async function startImportFromDisk({
 
     const jobId = 'imp_' + crypto.randomUUID().slice(0, 8);
     const controller = new AbortController();
-    const stagingRoot = path.join(localRoot, '#downloads', `_import_${jobId}`);
+    const stagingRoot = path.join(localTempDir(rootDir), `_import_${jobId}`);
     const job = {
         id: jobId,
         type: 'import_disk',
@@ -1175,7 +1181,7 @@ export async function startImportFromDisk({
                         },
                     });
                 }
-                await moveDirReplace(adStaging, path.join(localRoot, '#adapters', ad.id));
+                await moveDirReplace(adStaging, path.join(localAdaptersDir(rootDir), ad.id));
                 job.imported.adapters.push(ad.id);
             }
 
@@ -1195,7 +1201,7 @@ export async function startImportFromDisk({
                         },
                     });
                 }
-                const targetDsDir = path.join(localRoot, '#datasets');
+                const targetDsDir = localDatasetsDir(rootDir);
                 await fsp.mkdir(targetDsDir, { recursive: true });
                 for (const f of ds.files) {
                     const srcF = path.join(dsStaging, f.insideRel);
@@ -1225,7 +1231,7 @@ export async function startImportFromDisk({
                         },
                     });
                 }
-                await moveDirReplace(rtStaging, path.join(localRoot, '#runtime'));
+                await moveDirReplace(rtStaging, localRuntimeDir(rootDir));
                 job.imported.runtime = true;
             }
 
@@ -1401,7 +1407,7 @@ export async function importTarFromStream({
 
     const jobId = 'tar_imp_' + crypto.randomUUID().slice(0, 8);
     const controller = new AbortController();
-    const stagingRoot = path.join(localRoot, '#downloads', `_tar_import_${jobId}`);
+    const stagingRoot = path.join(localTempDir(rootDir), `_tar_import_${jobId}`);
     const job = {
         id: jobId,
         type: 'import_tar',
@@ -1478,7 +1484,7 @@ export async function importTarFromStream({
                 for (const ad of ads) {
                     if (!ad.isDirectory())
                         continue;
-                    const destAd = path.join(localRoot, '#adapters', ad.name);
+                    const destAd = path.join(localAdaptersDir(rootDir), ad.name);
                     if (!overwrite && fs.existsSync(destAd)) {
                         job.skipped.push(ad.name);
                         continue;
@@ -1491,7 +1497,7 @@ export async function importTarFromStream({
             if (e.name === '#datasets') {
                 const dsDir = path.join(stagingRoot, '#datasets');
                 const files = await fsp.readdir(dsDir, { withFileTypes: true }).catch(() => []);
-                const targetDsDir = path.join(localRoot, '#datasets');
+                const targetDsDir = localDatasetsDir(rootDir);
                 await fsp.mkdir(targetDsDir, { recursive: true });
                 for (const f of files) {
                     if (!f.isFile())
@@ -1506,7 +1512,7 @@ export async function importTarFromStream({
                 continue;
             }
             if (e.name === '#runtime') {
-                const destRt = path.join(localRoot, '#runtime');
+                const destRt = localRuntimeDir(rootDir);
                 if (overwrite || !fs.existsSync(path.join(destRt, 'bubo'))) {
                     await moveDirReplace(path.join(stagingRoot, '#runtime'), destRt);
                     job.imported.runtime = true;
@@ -1517,11 +1523,11 @@ export async function importTarFromStream({
                 continue;
 
             const srcModel = path.join(stagingRoot, e.name);
-            const hasWeights = fs.existsSync(path.join(srcModel, '#weights'));
+            const hasWeights = fs.existsSync(path.join(srcModel, '$ai', '#weights')) || fs.existsSync(path.join(srcModel, '#weights'));
             const meta = parseAiClassMetaSync(path.join(srcModel, '$ai', 'class.js'));
             if (!hasWeights && !meta.adapterPath)
                 continue;
-            if (!overwrite && isModelInstalledSync(localRoot, e.name)) {
+            if (!overwrite && isModelInstalledSync(rootDir, e.name)) {
                 job.skipped.push(e.name);
                 continue;
             }

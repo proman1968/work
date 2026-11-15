@@ -53,8 +53,11 @@ if (!candidates.length) {
     process.exit(1);
 }
 
+const NPM_INTENTIONAL_EXCLUDE = /^MODELS\/(?:odant|Halogen)\/|^MODELS\/Local\/(?!\$provider\/)/;
+const gitCandidates = candidates.filter(f => !/^MODELS\/Local\/(?!\$provider\/)/.test(f));
+
 // git check-ignore --stdin печатает только игнорируемые пути; код 1 — «ни один» (это норма)
-const res = spawnSync('git', ['check-ignore', '--no-index', '--stdin'], { cwd: ROOT, input: candidates.join('\n') + '\n', encoding: 'utf-8' });
+const res = spawnSync('git', ['check-ignore', '--no-index', '--stdin'], { cwd: ROOT, input: gitCandidates.join('\n') + '\n', encoding: 'utf-8' });
 if (res.error) {
     console.error('check-ignored-code: git недоступен (' + res.error.message + ')');
     process.exit(1);
@@ -69,7 +72,6 @@ if (ignored.length) {
 
 // Проверяем также .npmignore через npm pack --dry-run --json (кроме tests и license-server)
 const NPM_CODE_ROOTS = new Set(['$server', 'sources', 'oda', 'scripts', 'rules', 'MODELS', 'NODES', 'SERVICES']);
-const NPM_INTENTIONAL_EXCLUDE = /^MODELS\/(?:odant|Halogen)\/|^MODELS\/Local\/(?!\$provider\/)/;
 const npmCandidates = candidates.filter(f => {
     if (NPM_INTENTIONAL_EXCLUDE.test(f))
         return false;

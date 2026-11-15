@@ -60,6 +60,12 @@ torus/binnet/models/
 **/#downloads/
 **/#cache/
 **/#runtime/
+**/#tmp/
+
+# Скачанные и загружаемые локальные модели в MODELS/Local (в Git хранится только $provider)
+/MODELS/Local/*/
+!/MODELS/Local/$provider/
+!/MODELS/Local/$provider/**
 
 !*.js
 

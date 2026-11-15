@@ -144,7 +144,7 @@ describe('Локальный ИИ-контур: адаптация под реа
             assert.equal(dlJob.progress, 100);
             assert.equal(dlJob.downloadedBytes, 12);
 
-            const weightFile = path.join(tmpRoot, 'MODELS', 'Local', dlJob.folderName, '#weights', 'Qwen3-14B-Q8_0.gguf');
+            const weightFile = path.join(tmpRoot, 'MODELS', 'Local', dlJob.folderName, '$ai', '#weights', 'Qwen3-14B-Q8_0.gguf');
             assert.equal(fs.readFileSync(weightFile, 'utf-8'), 'GGUF_WEIGHTS');
 
             const aiClassFile = path.join(tmpRoot, 'MODELS', 'Local', dlJob.folderName, '$ai', 'class.js');
@@ -179,8 +179,8 @@ describe('Локальный ИИ-контур: адаптация под реа
             assert.ok(list.some(d => d.name === 'test-work-sft'));
 
             // Удалим тестовые файлы датасета из рабочего дерева после проверки
-            await fsp.rm(path.join(process.cwd(), 'MODELS', 'Local', '#datasets', 'test-work-sft.jsonl'), { force: true });
-            await fsp.rm(path.join(process.cwd(), 'MODELS', 'Local', '#datasets', 'test-work-sft.meta.json'), { force: true });
+            await fsp.rm(path.join(process.cwd(), 'MODELS', 'Local', '$provider', '#datasets', 'test-work-sft.jsonl'), { force: true });
+            await fsp.rm(path.join(process.cwd(), 'MODELS', 'Local', '$provider', '#datasets', 'test-work-sft.meta.json'), { force: true });
         }
         finally {
             await fsp.rm(tmpRoot, { recursive: true, force: true });
@@ -314,7 +314,7 @@ describe('Локальный ИИ-контур: адаптация под реа
 
         const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-del-model-'));
         try {
-            const wDir = path.join(tmpRoot, 'MODELS', 'Local', 'Test-Model', '#weights');
+            const wDir = path.join(tmpRoot, 'MODELS', 'Local', 'Test-Model', '$ai', '#weights');
             await fsp.mkdir(wDir, { recursive: true });
             await fsp.writeFile(path.join(wDir, 'model.gguf'), Buffer.alloc(1024, 1));
             await registerLocalModelNode({

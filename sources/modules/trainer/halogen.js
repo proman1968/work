@@ -36,6 +36,14 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { startHuggingFaceDownload, listHuggingFaceDownloads, registerLocalModelNode } from './huggingface.js';
 import { loadTrainerNetworkSettings, createNetworkFetch, downloadFileMultipart } from './downloader.js';
+import {
+    localRuntimeDir,
+    localCacheDir,
+    modelWeightsDir,
+    modelClassFile,
+    migrateLocalModelsLayoutSync,
+    WEIGHT_FILE_EXT_RE,
+} from './paths.js';
 
 export const HALOGEN_DEFAULT_PORT = Number(process.env.HALOGEN_API_PORT) || 8731;
 export const HALOGEN_DEFAULT_BASE_URL = process.env.HALOGEN_BASE_URL || `http://127.0.0.1:${HALOGEN_DEFAULT_PORT}/v1/chat/completions`;
@@ -467,16 +475,16 @@ export function computeHalogenMemoryPlan({
         `  --served-model-name halogen-qwen3.8-flash-next ^`,
         `  --profile ${kvSlots > 1 ? 'subagents' : 'default'} --context ${contextTokens} ^`,
         `  --npu-prefill on ^`,
-        `  --cache-disk "MODELS\\Local\\#cache\\disk"`,
+        `  --cache-disk "MODELS\\Local\\$provider\\#cache\\disk"`,
     ].join('\n');
 
     const windowsGufoServicesCommand = [
-        `gufo.exe serve --host 127.0.0.1 --port ${HALOGEN_DEFAULT_PORT} llm --model "MODELS\\Local\\Qwen3.8-Flash-Next\\#weights\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf" --served-model-name halogen-qwen3.8-flash-next --speculative mtp`,
-        `gufo.exe serve asr --model "MODELS\\Local\\Qwen3-ASR-NPU\\#weights"`,
-        `gufo.exe serve tts --model "MODELS\\Local\\Qwen3-TTS-NPU\\#weights"`,
-        `gufo.exe serve embedding --model "MODELS\\Local\\Qwen3-Embedding-NPU\\#weights"`,
-        `gufo.exe serve image --model "MODELS\\Local\\Flux2-Klein-NPU\\#weights"`,
-        `gufo.exe serve decision --model "MODELS\\Local\\Decider-NPU\\#weights"`,
+        `gufo.exe serve --host 127.0.0.1 --port ${HALOGEN_DEFAULT_PORT} llm --model "MODELS\\Local\\Qwen3.8-Flash-Next\\$ai\\#weights\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf" --served-model-name halogen-qwen3.8-flash-next --speculative mtp`,
+        `gufo.exe serve asr --model "MODELS\\Local\\Qwen3-ASR-NPU\\$ai\\#weights"`,
+        `gufo.exe serve tts --model "MODELS\\Local\\Qwen3-TTS-NPU\\$ai\\#weights"`,
+        `gufo.exe serve embedding --model "MODELS\\Local\\Qwen3-Embedding-NPU\\$ai\\#weights"`,
+        `gufo.exe serve image --model "MODELS\\Local\\Flux2-Klein-NPU\\$ai\\#weights"`,
+        `gufo.exe serve decision --model "MODELS\\Local\\Decider-NPU\\$ai\\#weights"`,
     ].join('\n');
 
     const windowsStrataCommand = `strata launch --family qwen --model iq3_s --port ${HALOGEN_DEFAULT_PORT}`;
@@ -530,8 +538,11 @@ export function computeHalogenMemoryPlan({
 export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {}) {
     const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
     const systemRoot = process.env.SystemRoot || 'C:\\Windows';
+    const rtBase = localRuntimeDir(rootDir);
 
     const buboCandidates = [
+        path.join(rtBase, 'bubo', 'bin', 'bubo.exe'),
+        path.join(rtBase, 'bubo', 'bubo.exe'),
         path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'bin', 'bubo.exe'),
         path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'bubo.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'bubo', 'bin', 'bubo.exe'),
@@ -544,10 +555,11 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
         ? (path.basename(path.dirname(buboExePath)).toLowerCase() === 'bin'
             ? path.dirname(path.dirname(buboExePath))
             : path.dirname(buboExePath))
-        : path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo');
+        : path.join(rtBase, 'bubo');
 
     const rocmCandidates = [
         process.env.BUBO_RUNTIME_DIR || '',
+        path.join(rtBase, 'bubo', 'runtime', 'rocm-10.0.0-gfx1151'),
         path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151'),
         path.join(localAppData, 'Bubo', 'runtime', 'rocm-10.0.0-gfx1151'),
@@ -556,6 +568,7 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
 
     const manifestCandidates = [
         process.env.BUBO_MANIFEST || '',
+        path.join(modelWeightsDir(rootDir, 'Qwen3.8-Flash-Next', 'Local'), 'bubo-package.json'),
         path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'),
         path.join(rootDir, 'MODELS', 'Local', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'),
         path.join(rootDir, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '#weights', 'bubo-package.json'),
@@ -568,6 +581,8 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
     const buboManifestPath = manifestCandidates.find(p => fs.existsSync(p)) || null;
 
     const gufoCandidates = [
+        path.join(rtBase, 'gufo', 'gufo.exe'),
+        path.join(rtBase, 'bubo', 'bin', 'gufo.exe'),
         path.join(rootDir, 'MODELS', 'Local', '#runtime', 'gufo', 'gufo.exe'),
         path.join(rootDir, 'MODELS', 'Local', '#runtime', 'bubo', 'bin', 'gufo.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'gufo', 'gufo.exe'),
@@ -579,6 +594,7 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
     const strataCandidates = [
         path.join(localAppData, 'Programs', 'Strata', 'strata.exe'),
         path.join(localAppData, 'Strata', 'strata.exe'),
+        path.join(rtBase, 'strata', 'strata.exe'),
         path.join(rootDir, 'MODELS', 'Local', '#runtime', 'strata', 'strata.exe'),
         path.join(rootDir, 'MODELS', 'Halogen', '#runtime', 'strata', 'strata.exe'),
     ];
@@ -789,6 +805,7 @@ function findLocalGgufModel(rootDir = process.cwd()) {
                 if (!entry.isDirectory() || entry.name.startsWith('$') || entry.name.startsWith('#'))
                     continue;
                 const candidates = [
+                    path.join(base, entry.name, '$ai', '#weights'),
                     path.join(base, entry.name, '#weights'),
                     path.join(base, entry.name),
                 ];
@@ -819,7 +836,8 @@ export async function prepareWindowsBuboRuntime({
     fetchImpl = globalThis.fetch,
     spawnImpl = spawn,
 } = {}) {
-    const runtimeRoot = path.join(rootDir, 'MODELS', 'Local', '#runtime');
+    migrateLocalModelsLayoutSync(rootDir);
+    const runtimeRoot = localRuntimeDir(rootDir);
     const buboDir = path.join(runtimeRoot, 'bubo');
     const rocmDir = path.join(buboDir, 'runtime', 'rocm-10.0.0-gfx1151');
     const modelsOutDir = path.join(rootDir, 'MODELS', 'Local');
@@ -1010,7 +1028,7 @@ export async function startHalogenBackend({
     }
 
     const winEnv = inspectWindowsHalogenEnvironment({ rootDir });
-    const cacheDir = path.join(rootDir, 'MODELS', 'Local', '#cache');
+    const cacheDir = localCacheDir(rootDir);
     fs.mkdirSync(path.join(cacheDir, 'disk'), { recursive: true });
     fs.mkdirSync(path.join(cacheDir, 'slots'), { recursive: true });
 
@@ -1363,12 +1381,12 @@ export async function ensureHalogenModelNodes(rootDir = process.cwd(), { models 
 
     const registered = [];
     for (const spec of targets) {
-        const weightsDir = path.join(rootDir, 'MODELS', 'Local', spec.nodeName, '#weights');
+        const weightsDir = modelWeightsDir(rootDir, spec.nodeName, 'Local');
         if (onlyWithWeights) {
             let hasFiles = false;
             try {
                 if (fs.existsSync(weightsDir)) {
-                    hasFiles = fs.readdirSync(weightsDir).some(f => !f.endsWith('.part') && f !== 'hf-manifest.json');
+                    hasFiles = fs.readdirSync(weightsDir).some(f => !f.endsWith('.part') && f !== 'hf-manifest.json' && f !== 'download-state.json');
                 }
             }
             catch { /* ignore */ }
@@ -1405,30 +1423,37 @@ export async function ensureHalogenModelNodes(rootDir = process.cwd(), { models 
  * Проверить наличие скачанных весов и узлов `$ai` для каждой модели из `HALOGEN_MODELS_CATALOG` в `MODELS/Local/<nodeName>/#weights`.
  */
 export function inspectHalogenCatalogWithStatus(rootDir = process.cwd()) {
-    const activeDownloads = listHuggingFaceDownloads();
+    migrateLocalModelsLayoutSync(rootDir);
+    const activeDownloads = listHuggingFaceDownloads(rootDir);
     return HALOGEN_MODELS_CATALOG.map(spec => {
-        const localWeightsDir = path.join(rootDir, 'MODELS', 'Local', spec.nodeName, '#weights');
-        const legacyWeightsDir = path.join(rootDir, 'MODELS', 'Halogen', spec.nodeName, '#weights');
-        const weightsDir = fs.existsSync(localWeightsDir) || !fs.existsSync(legacyWeightsDir) ? localWeightsDir : legacyWeightsDir;
+        const localWeightsDir = modelWeightsDir(rootDir, spec.nodeName, 'Local');
+        const legacyLocalDir = path.join(rootDir, 'MODELS', 'Local', spec.nodeName, '#weights');
+        const legacyHalogenDir = path.join(rootDir, 'MODELS', 'Halogen', spec.nodeName, '#weights');
+        const weightsDir = fs.existsSync(localWeightsDir) ? localWeightsDir
+            : (fs.existsSync(legacyLocalDir) ? legacyLocalDir
+            : (fs.existsSync(legacyHalogenDir) ? legacyHalogenDir : localWeightsDir));
         let downloadedFiles = [];
+        let hasPendingDownload = false;
         if (fs.existsSync(weightsDir)) {
             try {
-                downloadedFiles = fs.readdirSync(weightsDir)
-                    .filter(f => !f.endsWith('.part') && f !== 'hf-manifest.json');
+                const rawEntries = fs.readdirSync(weightsDir);
+                hasPendingDownload = rawEntries.some(f => f.endsWith('.part') || f === 'download-state.json');
+                downloadedFiles = rawEntries
+                    .filter(f => !f.endsWith('.part') && f !== 'hf-manifest.json' && f !== 'download-state.json' && !f.endsWith('.tmp'));
             }
             catch { /* ignore */ }
         }
-        const nodeConfigured = fs.existsSync(path.join(rootDir, 'MODELS', 'Local', spec.nodeName, '$ai', 'class.js'));
+        const nodeConfigured = fs.existsSync(modelClassFile(rootDir, spec.nodeName, 'Local'));
         const activeJob = activeDownloads.find(d =>
-            d.status === 'downloading'
+            (d.status === 'downloading' || d.status === 'paused' || d.status === 'failed')
             && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
         ) || null;
-        const hasRealWeightFile = downloadedFiles.some(f => /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i.test(f));
+        const hasRealWeightFile = downloadedFiles.some(f => WEIGHT_FILE_EXT_RE.test(f));
         return {
             ...spec,
             nodeConfigured,
             weightsDir: path.relative(rootDir, weightsDir).replace(/\\/g, '/'),
-            weightsDownloaded: !activeJob && hasRealWeightFile,
+            weightsDownloaded: !activeJob && !hasPendingDownload && hasRealWeightFile,
             downloadedFiles,
             activeDownload: activeJob,
         };
@@ -1461,7 +1486,7 @@ export async function downloadHalogenBundle({
         )
         : [...HALOGEN_MODELS_CATALOG];
 
-    const existingDownloads = listHuggingFaceDownloads();
+    const existingDownloads = listHuggingFaceDownloads(rootDir);
     const jobs = [];
     let startedCount = 0;
     let alreadyActiveCount = 0;

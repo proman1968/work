@@ -90,13 +90,19 @@ export function releaseLocalEngineMemory() {
 
 function resolveWeightsDir(ai, rootDir = process.cwd()) {
     const modelId = String(ai?.id || ai?.label || ai?.model || 'Local-Model').split('/').pop();
-    const weightsRel = ai?.weightsDir || ai?.DATA?.weightsDir || `MODELS/Local/${modelId}/#weights`;
+    const weightsRel = ai?.weightsDir || ai?.DATA?.weightsDir || `MODELS/Local/${modelId}/$ai/#weights`;
     const primary = path.resolve(rootDir, weightsRel);
     if (fs.existsSync(primary))
         return primary;
+    const canonical = path.resolve(rootDir, `MODELS/Local/${modelId}/$ai/#weights`);
+    if (fs.existsSync(canonical))
+        return canonical;
+    const legacy = path.resolve(rootDir, `MODELS/Local/${modelId}/#weights`);
+    if (fs.existsSync(legacy))
+        return legacy;
     const isHalogen = ai?.protocol === 'halogen' || String(ai?.path || ai?.short || '').startsWith('/MODELS/Halogen/');
     if (isHalogen) {
-        const fallback06 = path.resolve(rootDir, 'MODELS/Local/Qwen3-0.6B/#weights');
+        const fallback06 = path.resolve(rootDir, 'MODELS/Local/Qwen3-0.6B/$ai/#weights');
         if (fs.existsSync(fallback06))
             return fallback06;
     }

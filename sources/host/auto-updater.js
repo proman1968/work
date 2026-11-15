@@ -103,6 +103,7 @@ export function isProtectedUserPath(relPath) {
     if (
         rel.includes('/#weights/') || rel.includes('/#datasets/') || rel.includes('/#adapters/')
         || rel.includes('/#downloads/') || rel.includes('/#cache/') || rel.includes('/#runtime/')
+        || rel.includes('/#tmp/')
     )
         return true;
     if (/\.(safetensors|gguf|bin|pt|pth|onnx)$/i.test(rel))

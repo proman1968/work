@@ -782,9 +782,22 @@ function hasWeightFilesInDirSync(dir) {
     if (!dir || !fs.existsSync(dir))
         return false;
     try {
-        return fs.readdirSync(dir).some(f =>
+        const entries = fs.readdirSync(dir);
+        if (entries.includes('download-state.json')) {
+            try {
+                const st = JSON.parse(fs.readFileSync(path.join(dir, 'download-state.json'), 'utf-8'));
+                if (st?.status !== 'completed')
+                    return false;
+            }
+            catch {
+                return false;
+            }
+        }
+        return entries.some(f =>
             !f.endsWith('.part')
+            && !f.endsWith('.tmp')
             && f !== 'hf-manifest.json'
+            && f !== 'download-state.json'
             && /\.(safetensors|gguf|bin|onnx|pt|pth|hgn|hnpw|json)$/i.test(f)
         );
     }
@@ -861,7 +874,8 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
                         if (!entry.isDirectory() || entry.name.startsWith('$') || entry.name.startsWith('#') || entry.name === 'models')
                             continue;
                         if (
-                            hasWeightFilesInDirSync(path.join(localDir, entry.name, '#weights'))
+                            hasWeightFilesInDirSync(path.join(localDir, entry.name, '$ai', '#weights'))
+                            || hasWeightFilesInDirSync(path.join(localDir, entry.name, '#weights'))
                             || hasWeightFilesInDirSync(path.join(localDir, entry.name, '#adapters'))
                         ) {
                             installedCount++;
@@ -879,15 +893,18 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
 
         // Дочерняя модель в /MODELS/Local/<Model>
         const modelName = parts[2] || item.id || '';
-        const weightsRel = data.weightsDir || path.join('MODELS', 'Local', modelName, '#weights');
-        const adapterRel = data.adapterPath || path.join('MODELS', 'Local', modelName, '#adapters');
-        const hasWeights = hasWeightFilesInDirSync(path.resolve(rootDir, weightsRel))
+        const canonicalWeightsRel = path.join('MODELS', 'Local', modelName, '$ai', '#weights');
+        const legacyWeightsRel = path.join('MODELS', 'Local', modelName, '#weights');
+        const adapterRel = data.adapterPath || path.join('MODELS', 'Local', '$provider', '#adapters', modelName);
+        const hasWeights = hasWeightFilesInDirSync(path.resolve(rootDir, data.weightsDir || canonicalWeightsRel))
+            || hasWeightFilesInDirSync(path.resolve(rootDir, canonicalWeightsRel))
+            || hasWeightFilesInDirSync(path.resolve(rootDir, legacyWeightsRel))
             || hasWeightFilesInDirSync(path.resolve(rootDir, adapterRel))
             || fs.existsSync(path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'));
         if (hasWeights) {
             return { active: true, reason: 'Активна (веса модели на диске)', configuredKey: true };
         }
-        return { active: false, reason: 'Веса модели не скачаны в #weights', configuredKey: false };
+        return { active: false, reason: 'Веса модели не скачаны в $ai/#weights', configuredKey: false };
     }
 
     // 2. Внешние и облачные провайдеры ($provider и их $ai)

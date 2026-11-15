@@ -21,6 +21,13 @@ import {
     mergeRanges,
     sumRangesBytes,
 } from './downloader.js';
+import {
+    localRootDir,
+    modelDir as getModelDir,
+    modelWeightsDir as getModelWeightsDir,
+    migrateLocalModelsLayoutSync,
+    hasReadyWeightFilesSync,
+} from './paths.js';
 
 const HF_ORIGIN = DEFAULT_HF_ORIGIN;
 const REPO_ID_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -1168,9 +1175,12 @@ export async function startHuggingFaceDownload({
     const folderName = targetNodeName
         ? String(targetNodeName).replace(/[<>:"/\\|?*]/g, '-')
         : safeModelFolderName(cleanId, quant && selected.some(f => f.kind === 'gguf') ? quant : '');
-    const modelDir = path.join(rootDir, 'MODELS', safeProvider, folderName);
-    const weightsDir = path.join(modelDir, '#weights');
-    const stagingDir = path.join(rootDir, 'MODELS', safeProvider, '#downloads', folderName);
+
+    migrateLocalModelsLayoutSync(rootDir, { skipModels: new Set([folderName]) });
+
+    const modelDir = getModelDir(rootDir, folderName, safeProvider);
+    const weightsDir = getModelWeightsDir(rootDir, folderName, safeProvider);
+    const stagingDir = weightsDir;
     const primary = selected.find(f => f.name.endsWith('.gguf'))?.name
         || selected.find(f => f.name.endsWith('.safetensors') || f.name.endsWith('.hgn') || f.name.endsWith('.hnpw'))?.name
         || selected[0]?.name || '';
@@ -1178,7 +1188,33 @@ export async function startHuggingFaceDownload({
     const displayLabel = nodeMeta?.label
         || `${cleanId.split('/')[1] || cleanId}${quant && primary.endsWith('.gguf') ? ' (' + quant + ')' : ''}`;
 
-    await fsp.mkdir(stagingDir, { recursive: true });
+    await fsp.mkdir(weightsDir, { recursive: true });
+
+    // Если осталась недокачанная старая папка в #downloads/<folderName>, аккуратно перенесём её в $ai/#weights
+    const legacyStaging = path.join(rootDir, 'MODELS', safeProvider, '#downloads', folderName);
+    if (fs.existsSync(legacyStaging))
+        migrateLocalModelsLayoutSync(rootDir);
+
+    // Создаём узел $ai/class.js сразу внутри папки модели (неактивен, пока веса не докачаны)
+    if (registerInWork && safeProvider === 'Local') {
+        await registerLocalModelNode({
+            rootDir,
+            folderName,
+            label: displayLabel,
+            repoId: cleanId,
+            model: nodeMeta?.model || '',
+            protocol: nodeMeta?.protocol || '',
+            icon: nodeMeta?.icon || '',
+            modality: nodeMeta?.modality || repoMeta.modality || 'llm',
+            capabilities: nodeMeta?.capabilities || repoMeta.capabilities || ['chat'],
+            efforts: nodeMeta?.efforts || null,
+            maxTokens: nodeMeta?.maxTokens,
+            maxOutput: nodeMeta?.maxOutput,
+            baseUrl: nodeMeta?.baseUrl,
+            weightsDir,
+            primaryFile: path.basename(primary),
+        });
+    }
 
     // Читаем предыдущий download-state.json (если был), чтобы не потерять карту диапазонов при докачке
     let prevState = {};
@@ -1289,7 +1325,19 @@ export async function startHuggingFaceDownload({
     const runPromise = (async () => {
         const t0 = Date.now();
         const speedSamples = [];
-        let lastStateSave = 0;
+        let lastStateSave = Date.now();
+        let downloadFinished = false;
+        let stateWriteChain = Promise.resolve();
+
+        const scheduleStateSave = () => {
+            if (downloadFinished)
+                return;
+            stateWriteChain = stateWriteChain.then(() => {
+                if (downloadFinished)
+                    return;
+                return writeDownloadStateSafe(weightsDir, job, { nodeMeta, registerInWork });
+            }).catch(() => {});
+        };
 
         const updateMetrics = (deltaBytes = 0) => {
             const now = Date.now();
@@ -1322,7 +1370,7 @@ export async function startHuggingFaceDownload({
 
             if (now - lastStateSave >= 1500) {
                 lastStateSave = now;
-                writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
+                scheduleStateSave();
             }
         };
 
@@ -1369,7 +1417,7 @@ export async function startHuggingFaceDownload({
                     onRetry: ({ attempt, error }) => {
                         job.retryAttempt = attempt;
                         job.retryError = error;
-                        writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
+                        scheduleStateSave();
                     },
                 });
 
@@ -1403,20 +1451,11 @@ export async function startHuggingFaceDownload({
             if (controller.signal.aborted)
                 throw new Error('Загрузка приостановлена пользователем');
 
-            // Переносим готовые файлы из скрытой папки #downloads в целевую папку модели #weights
-            await fsp.mkdir(weightsDir, { recursive: true });
-            for (const fileEntry of job.files) {
-                const stagedFile = path.join(stagingDir, path.basename(fileEntry.name));
-                const destFile = path.join(weightsDir, path.basename(fileEntry.name));
-                try {
-                    await fsp.rename(stagedFile, destFile);
-                }
-                catch {
-                    await fsp.copyFile(stagedFile, destFile);
-                    await fsp.unlink(stagedFile).catch(() => {});
-                }
-            }
-            await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+            // Скачивание шло сразу в `$ai/#weights/` — перенос между папками не требуется;
+            // дожидаемся завершения фоновых записей состояния, удаляем служебный файл и пишем итоговый манифест.
+            downloadFinished = true;
+            await stateWriteChain;
+            await fsp.rm(path.join(weightsDir, DOWNLOAD_STATE_FILE), { force: true }).catch(() => {});
 
             const manifestFile = path.join(weightsDir, 'hf-manifest.json');
             await fsp.writeFile(manifestFile, JSON.stringify({
@@ -1428,7 +1467,6 @@ export async function startHuggingFaceDownload({
                 files: job.files,
             }, null, 2), 'utf-8');
 
-            // Регистрируем узел $ai/class.js только после полного завершения скачивания весов
             if (registerInWork && safeProvider === 'Local') {
                 await registerLocalModelNode({
                     rootDir,
@@ -1462,6 +1500,8 @@ export async function startHuggingFaceDownload({
             catch { /* ignore */ }
         }
         catch (err) {
+            downloadFinished = true;
+            await stateWriteChain;
             if (controller.signal.aborted) {
                 job.status = keepFilesOnAbort ? 'paused' : 'cancelled';
                 job.error = keepFilesOnAbort ? null : String(err?.message || err);
@@ -1473,10 +1513,14 @@ export async function startHuggingFaceDownload({
             job.etaSeconds = null;
             job.finishedAt = Date.now();
             if (controller.signal.aborted && !keepFilesOnAbort) {
-                await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+                await fsp.rm(path.join(weightsDir, DOWNLOAD_STATE_FILE), { force: true }).catch(() => {});
+                for (const fileEntry of job.files)
+                    await fsp.rm(path.join(weightsDir, path.basename(fileEntry.name) + '.part'), { force: true }).catch(() => {});
+                if (!hasReadyWeightFilesSync(weightsDir))
+                    await fsp.rm(modelDir, { recursive: true, force: true }).catch(() => {});
             }
             else {
-                await writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
+                await writeDownloadStateSafe(weightsDir, job, { nodeMeta, registerInWork });
             }
         }
     })();
@@ -1494,32 +1538,47 @@ export function getHuggingFaceDownload(jobId) {
 }
 
 export function listHuggingFaceDownloads(rootDir = process.cwd()) {
-    const inMemory = [..._downloads.values()].map(e => ({ ...e.job }));
+    const resolvedRoot = path.resolve(rootDir);
+    const inMemory = [..._downloads.values()]
+        .filter(e => path.resolve(e.job.rootDir || process.cwd()) === resolvedRoot)
+        .map(e => ({ ...e.job }));
+    const activeNames = new Set(inMemory.filter(j => j.status === 'downloading').map(j => j.folderName));
+    migrateLocalModelsLayoutSync(rootDir, { skipModels: activeNames });
+
     const seenFolders = new Set(inMemory.map(j => `${j.providerFolder}:${j.folderName}`));
 
-    // Подхватываем недокачанные папки из MODELS/Local/#downloads/* (включая оставшиеся после рестарта)
-    const downloadsRoot = path.join(rootDir, 'MODELS', 'Local', '#downloads');
-    if (fs.existsSync(downloadsRoot)) {
+    // Подхватываем незавершённые загрузки из метапапок моделей: MODELS/Local/<Модель>/$ai/#weights/
+    const localRoot = localRootDir(rootDir);
+    if (fs.existsSync(localRoot)) {
         try {
-            const entries = fs.readdirSync(downloadsRoot, { withFileTypes: true });
+            const entries = fs.readdirSync(localRoot, { withFileTypes: true });
             for (const e of entries) {
-                if (!e.isDirectory() || e.name.startsWith('.') || e.name.startsWith('_import_') || e.name.startsWith('_tar_import_'))
+                if (!e.isDirectory() || e.name.startsWith('$') || e.name.startsWith('#') || e.name === 'models')
                     continue;
                 if (seenFolders.has(`Local:${e.name}`))
                     continue;
-                const folderDir = path.join(downloadsRoot, e.name);
+                const folderDir = getModelWeightsDir(rootDir, e.name, 'Local');
+                if (!fs.existsSync(folderDir))
+                    continue;
                 const stateFile = path.join(folderDir, DOWNLOAD_STATE_FILE);
+                const hasStateFile = fs.existsSync(stateFile);
                 let state = {};
-                if (fs.existsSync(stateFile)) {
+                if (hasStateFile) {
                     try { state = JSON.parse(fs.readFileSync(stateFile, 'utf-8')); }
                     catch { /* ignore */ }
                 }
                 const dirFiles = fs.readdirSync(folderDir, { withFileTypes: true });
+                const hasParts = dirFiles.some(f => f.isFile() && f.name.endsWith('.part'));
+                if (!hasStateFile && !hasParts)
+                    continue;
+                if (state.status === 'completed' && !hasParts)
+                    continue;
+
                 const stateFilesMap = new Map((Array.isArray(state.files) ? state.files : []).map(sf => [sf.name, sf]));
                 let diskBytes = 0;
                 const parsedFiles = [];
                 for (const f of dirFiles) {
-                    if (!f.isFile() || f.name === DOWNLOAD_STATE_FILE || f.name.endsWith('.tmp'))
+                    if (!f.isFile() || f.name === DOWNLOAD_STATE_FILE || f.name === 'hf-manifest.json' || f.name.endsWith('.tmp'))
                         continue;
                     try {
                         const st = fs.statSync(path.join(folderDir, f.name));
@@ -1611,8 +1670,19 @@ export async function discardHuggingFaceDownload({ jobId = '', folderName = '', 
     if (!targetFolder && key.startsWith('disk_'))
         targetFolder = key.slice(5);
     if (targetFolder) {
-        const stagingDir = path.join(rootDir, 'MODELS', 'Local', '#downloads', targetFolder);
-        await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+        const weightsDir = getModelWeightsDir(rootDir, targetFolder, 'Local');
+        if (fs.existsSync(weightsDir)) {
+            await fsp.rm(path.join(weightsDir, DOWNLOAD_STATE_FILE), { force: true }).catch(() => {});
+            const files = await fsp.readdir(weightsDir).catch(() => []);
+            for (const f of files) {
+                if (f.endsWith('.part') || f.endsWith('.tmp'))
+                    await fsp.rm(path.join(weightsDir, f), { force: true }).catch(() => {});
+            }
+            if (!hasReadyWeightFilesSync(weightsDir))
+                await fsp.rm(getModelDir(rootDir, targetFolder, 'Local'), { recursive: true, force: true }).catch(() => {});
+        }
+        const legacyDir = path.join(rootDir, 'MODELS', 'Local', '#downloads', targetFolder);
+        await fsp.rm(legacyDir, { recursive: true, force: true }).catch(() => {});
     }
     return { ok: true, discarded: targetFolder || key };
 }
@@ -1635,9 +1705,12 @@ export async function resumeHuggingFaceDownload({
     const key = String(jobId || '');
     const entry = key ? _downloads.get(key) : null;
     const cleanFolder = String(folderName || entry?.job?.folderName || (key.startsWith('disk_') ? key.slice(5) : '')).trim();
+    if (cleanFolder)
+        migrateLocalModelsLayoutSync(rootDir, { skipModels: new Set() });
+
     let state = {};
     if (cleanFolder) {
-        const stateFile = path.join(rootDir, 'MODELS', 'Local', '#downloads', cleanFolder, DOWNLOAD_STATE_FILE);
+        const stateFile = path.join(getModelWeightsDir(rootDir, cleanFolder, 'Local'), DOWNLOAD_STATE_FILE);
         if (fs.existsSync(stateFile)) {
             try { state = JSON.parse(await fsp.readFile(stateFile, 'utf-8')); }
             catch { /* ignore */ }
