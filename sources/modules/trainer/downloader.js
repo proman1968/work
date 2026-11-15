@@ -44,6 +44,8 @@ export const THREAD_OPTIONS = Object.freeze([1, 4, 8, 12]);
 export const DEFAULT_THREADS = 8;
 export const DEFAULT_PARALLEL_FILES = 2;
 export const DEFAULT_MIN_MULTIPART_BYTES = 4 * 1024 * 1024; // 4 МБ
+/** Сколько миллисекунд молчания соединения считаем зависанием (после — переподключение). */
+export const DEFAULT_IDLE_TIMEOUT_MS = 45000;
 
 const ALLOWED_ENDPOINT_PROTOCOLS = new Set(['http:', 'https:']);
 const ALLOWED_PROXY_PROTOCOLS = new Set(['http:', 'https:', 'socks5:', 'socks5h:']);
@@ -338,6 +340,78 @@ function makeAbortError(msg = 'Запрос отменён') {
     const err = new Error(msg);
     err.name = 'AbortError';
     return err;
+}
+
+/**
+ * Ошибка «источник молчит»: соединение открыто, но данные не приходят.
+ * Помечается retryable, чтобы сегмент переподключился вместо бесконечного ожидания.
+ */
+function makeStallError(idleTimeoutMs) {
+    const seconds = Math.max(1, Math.round((Number(idleTimeoutMs) || DEFAULT_IDLE_TIMEOUT_MS) / 1000));
+    const err = new Error(`Источник не передаёт данные дольше ${seconds} с — переподключаюсь`);
+    err.retryable = true;
+    err.stalled = true;
+    return err;
+}
+
+/**
+ * `fetch` с таймаутом ожидания заголовков ответа: зависшее соединение обрывается
+ * и уходит в штатный авто-повтор, а не висит до перезапуска сервера.
+ */
+async function fetchWithIdleTimeout(netFetch, url, options = {}, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
+    const parentSignal = options.signal;
+    if (parentSignal?.aborted)
+        throw makeAbortError('Загрузка приостановлена пользователем');
+    const local = new AbortController();
+    let stalled = false;
+    const onAbort = () => {
+        try { local.abort(); } catch { /* ignore */ }
+    };
+    parentSignal?.addEventListener?.('abort', onAbort, { once: true });
+    const timer = setTimeout(() => {
+        stalled = true;
+        onAbort();
+    }, idleTimeoutMs);
+    try {
+        return await netFetch(url, { ...options, signal: local.signal });
+    }
+    catch (err) {
+        if (stalled)
+            throw makeStallError(idleTimeoutMs);
+        throw err;
+    }
+    finally {
+        clearTimeout(timer);
+        parentSignal?.removeEventListener?.('abort', onAbort);
+    }
+}
+
+/**
+ * Чтение тела ответа с таймаутом простоя: если очередной чанк не пришёл за
+ * `idleTimeoutMs`, чтение прерывается ошибкой `makeStallError`.
+ */
+function makeIdleChunkReader(body, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
+    const iterator = body[Symbol.asyncIterator]();
+    const next = async () => {
+        let timer = null;
+        const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(makeStallError(idleTimeoutMs)), idleTimeoutMs);
+        });
+        const chunkPromise = iterator.next();
+        chunkPromise.catch(() => { /* обработаем ниже или при закрытии */ });
+        try {
+            return await Promise.race([chunkPromise, timeoutPromise]);
+        }
+        finally {
+            if (timer)
+                clearTimeout(timer);
+        }
+    };
+    const close = () => {
+        try { iterator.return?.(); } catch { /* ignore */ }
+        try { body.cancel?.(); } catch { /* ignore */ }
+    };
+    return { next, close };
 }
 
 function readExactBytes(socket, count, { signal, buffered = [] } = {}) {
@@ -969,6 +1043,7 @@ export async function downloadFileMultipart({
     signal,
     maxRetries = 20,
     retryBaseDelayMs = 3000,
+    idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
     fetchImpl,
     onProgress,
     onRetry,
@@ -978,7 +1053,9 @@ export async function downloadFileMultipart({
     if (!stagedFile)
         throw new Error('Не указан целевой путь файла');
 
-    const netFetch = fetchImpl || createNetworkFetch();
+    const netFetchRaw = fetchImpl || createNetworkFetch();
+    const effIdleTimeoutMs = Math.max(100, Number(idleTimeoutMs) || DEFAULT_IDLE_TIMEOUT_MS);
+    const netFetch = (u, opts = {}) => fetchWithIdleTimeout(netFetchRaw, u, opts, effIdleTimeoutMs);
     const targetThreads = Math.min(16, Math.max(1, Math.round(Number(threads) || 1)));
 
     // 1. Проверяем состояние на диске (готовый файл или старый/текущий `.part`)
@@ -1025,6 +1102,7 @@ export async function downloadFileMultipart({
             signal,
             maxRetries,
             retryBaseDelayMs,
+            idleTimeoutMs: effIdleTimeoutMs,
             netFetch,
             onProgress,
             onRetry,
@@ -1102,6 +1180,7 @@ export async function downloadFileMultipart({
             signal,
             maxRetries,
             retryBaseDelayMs,
+            idleTimeoutMs: effIdleTimeoutMs,
             netFetch,
             onProgress,
             onRetry,
@@ -1126,6 +1205,7 @@ export async function downloadFileMultipart({
             signal,
             maxRetries,
             retryBaseDelayMs,
+            idleTimeoutMs: effIdleTimeoutMs,
             netFetch,
             onProgress,
             onRetry,
@@ -1183,21 +1263,31 @@ export async function downloadFileMultipart({
         let pos = segStart;
         activeCursors.set(workerId, [segStart, segStart]);
         if (res.body) {
-            for await (const raw of res.body) {
-                if (signal?.aborted)
-                    throw makeAbortError('Загрузка приостановлена пользователем');
-                let buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-                const maxAllowed = segEnd - pos;
-                if (maxAllowed <= 0)
-                    break;
-                if (buf.length > maxAllowed)
-                    buf = buf.subarray(0, maxAllowed);
-                await fh.write(buf, 0, buf.length, pos);
-                pos += buf.length;
-                activeCursors.set(workerId, [segStart, pos]);
-                emitProgress(buf.length);
-                if (pos >= segEnd)
-                    break;
+            const reader = makeIdleChunkReader(res.body, effIdleTimeoutMs);
+            try {
+                while (true) {
+                    if (signal?.aborted)
+                        throw makeAbortError('Загрузка приостановлена пользователем');
+                    const step = await reader.next();
+                    if (step.done)
+                        break;
+                    let buf = Buffer.isBuffer(step.value) ? step.value : Buffer.from(step.value);
+                    const maxAllowed = segEnd - pos;
+                    if (maxAllowed <= 0)
+                        break;
+                    if (buf.length > maxAllowed)
+                        buf = buf.subarray(0, maxAllowed);
+                    await fh.write(buf, 0, buf.length, pos);
+                    pos += buf.length;
+                    activeCursors.set(workerId, [segStart, pos]);
+                    emitProgress(buf.length);
+                    if (pos >= segEnd)
+                        break;
+                }
+            }
+            catch (err) {
+                reader.close();
+                throw err;
             }
         }
         activeCursors.delete(workerId);
@@ -1334,6 +1424,7 @@ async function downloadSingleStream({
     signal,
     maxRetries = 20,
     retryBaseDelayMs = 3000,
+    idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
     netFetch,
     onProgress,
     onRetry,
@@ -1390,6 +1481,7 @@ async function downloadSingleStream({
                 signal,
                 maxRetries,
                 retryBaseDelayMs,
+                idleTimeoutMs,
                 netFetch,
                 onProgress,
                 onRetry,
@@ -1424,6 +1516,7 @@ async function consumeSingleResponseToFile({
     signal,
     maxRetries = 20,
     retryBaseDelayMs = 3000,
+    idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
     netFetch,
     onProgress,
     onRetry,
@@ -1455,14 +1548,24 @@ async function consumeSingleResponseToFile({
     if (res.body) {
         const out = fs.createWriteStream(partFile, { flags: isPartial ? 'a' : 'w' });
         try {
-            for await (const raw of res.body) {
-                if (signal?.aborted)
-                    throw makeAbortError('Загрузка приостановлена пользователем');
-                const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-                if (!out.write(buf))
-                    await new Promise(r => out.once('drain', r));
-                curSize += buf.length;
-                emit(buf.length);
+            const reader = makeIdleChunkReader(res.body, idleTimeoutMs);
+            try {
+                while (true) {
+                    if (signal?.aborted)
+                        throw makeAbortError('Загрузка приостановлена пользователем');
+                    const step = await reader.next();
+                    if (step.done)
+                        break;
+                    const buf = Buffer.isBuffer(step.value) ? step.value : Buffer.from(step.value);
+                    if (!out.write(buf))
+                        await new Promise(r => out.once('drain', r));
+                    curSize += buf.length;
+                    emit(buf.length);
+                }
+            }
+            catch (readErr) {
+                reader.close();
+                throw readErr;
             }
             await new Promise((resolve, reject) => {
                 out.end();
@@ -1481,7 +1584,7 @@ async function consumeSingleResponseToFile({
                 throw streamErr;
             if (!isRetryableNetError(streamErr) || initialAttempt >= maxRetries)
                 throw streamErr;
-            // При обрыве на лету — переходим в докачку (если сервер поддерживает Range, дальше пойдёт с curSize)
+            // При обрыве или простое на лету — переходим в докачку (если сервер поддерживает Range, дальше пойдёт с curSize)
             onRetry?.({ attempt: initialAttempt + 1, error: String(streamErr?.message || streamErr) });
             await waitAbortable(Math.min(30000, retryBaseDelayMs * (initialAttempt + 1)), signal);
             return downloadSingleStream({
@@ -1494,6 +1597,7 @@ async function consumeSingleResponseToFile({
                 signal,
                 maxRetries: Math.max(0, maxRetries - initialAttempt - 1),
                 retryBaseDelayMs,
+                idleTimeoutMs,
                 netFetch,
                 onProgress,
                 onRetry,

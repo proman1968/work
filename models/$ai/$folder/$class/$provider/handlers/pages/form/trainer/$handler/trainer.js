@@ -527,8 +527,10 @@ export default {
                         <div class="toolbar" ~if="$for.item.state === 'downloading'">
                             <span style="font-size:12px;font-weight:600;white-space:nowrap;">
                                 <span ~if="$for.item.download?.sourceLabel">{{$for.item.download.sourceLabel}} · </span><span ~if="$for.item.download?.threads">{{$for.item.download.threads}} пот. · </span>{{$for.item.download?.speedMBs || 0}} МБ/с
+                                <span ~if="$for.item.download?.avgSpeedMBs"> · средняя {{$for.item.download.avgSpeedMBs}} МБ/с</span>
                                 <span ~if="$for.item.etaText"> · {{$for.item.etaText}}</span>
                             </span>
+                            <span class="status-chip warn" ~if="$for.item.download?.stalled">Нет данных {{$for.item.download.idleSec}} с</span>
                             <button type="button" class="btn" @tap="pauseDownload($for.item)">Пауза</button>
                         </div>
 
@@ -576,8 +578,8 @@ export default {
                     </div>
                 </div>
 
-                <!-- Подсказка при стабильно низкой скорости (< 2 МБ/с) -->
-                <div class="inline-warn" ~if="$for.item.state === 'downloading' && $for.item.download?.lowSpeedWarning">
+                <!-- Подсказка при стабильно низкой скорости (< 2 МБ/с) или зависшем соединении -->
+                <div class="inline-warn" ~if="$for.item.state === 'downloading' && ($for.item.download?.lowSpeedWarning || $for.item.download?.stalled)">
                     <span>{{lowSpeedHint($for.item.download)}}</span>
                     <button type="button" class="btn" @tap="openNetworkPanel()">Настроить сеть</button>
                 </div>
@@ -834,7 +836,7 @@ export default {
             const progressPct = d.totalBytes > 0
                 ? Math.min(99, Math.max(0, Number(d.progress) || Math.round((d.downloadedBytes / d.totalBytes) * 100)))
                 : (d.downloadedBytes > 0 ? 15 : 0);
-            const etaText = this.formatEta(d.etaSeconds);
+            const etaText = d.stalled ? '' : this.formatEta(d.etaSeconds);
             if (existing) {
                 if (existing.state !== 'installed') {
                     existing.state = state;
@@ -1056,7 +1058,9 @@ export default {
             this._invalidateClientModelsTree();
     },
     lowSpeedHint(dl) {
-        const sp = dl?.speedMBs || 0;
+        const sp = dl?.avgSpeedMBs || dl?.speedMBs || 0;
+        if (dl?.stalled)
+            return `Источник не передаёт данные ${dl.idleSec || 0} с — соединение переподключается автоматически. Если простой повторяется, смените источник на HF-Mirror или включите прокси/VPN.`;
         if (dl?.usingProxy)
             return `Низкая скорость через прокси (${sp} МБ/с). Проверьте скорость прокси-сервера или попробуйте другой источник.`;
         if (dl?.sourceLabel === 'hf-mirror' || String(dl?.endpointUrl || '').includes('hf-mirror'))

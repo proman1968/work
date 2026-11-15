@@ -29,7 +29,9 @@ import {
 } from '../sources/modules/trainer/downloader.js';
 import {
     startHuggingFaceDownload,
+    computeDownloadEta,
     listHuggingFaceDownloads,
+    pauseHuggingFaceDownload,
     restartActiveHuggingFaceDownloads,
     TRAINER_METHODS,
 } from '../sources/modules/trainer/index.js';
@@ -537,6 +539,169 @@ describe('trainer-downloader: многопоточная загрузка, пр�
         finally {
             await srv1.close();
             await srv2.close();
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('computeDownloadEta считает по устойчивой средней скорости, а не по 5-секундной просадке', () => {
+        // Реальные числа незавершённой загрузки Qwen3.8-Flash-Next: 50,9 ГБ из 307 ГБ за ~3 часа,
+        // текущая мгновенная скорость просела до 0,22 МБ/с, средняя — 4,5 МБ/с.
+        const remaining = 307069219876 - 50931797771;
+        const shortBytesPerSec = 0.22 * 1024 * 1024;
+        const avgBytesPerSec = 4.5 * 1024 * 1024;
+
+        const eta = computeDownloadEta({ remainingBytes: remaining, avgBytesPerSec, shortBytesPerSec });
+        assert.ok(eta > 50000 && eta < 80000, `ETA должно быть ~15–16 ч, получено ${Math.round(eta / 3600)} ч`);
+        assert.equal(eta, Math.round(remaining / avgBytesPerSec), 'приоритет у средней скорости');
+
+        // Без накопленной средней — запасной расчёт по мгновенной (старое поведение)
+        assert.equal(
+            computeDownloadEta({ remainingBytes: remaining, avgBytesPerSec: 0, shortBytesPerSec }),
+            Math.round(remaining / shortBytesPerSec)
+        );
+        assert.equal(computeDownloadEta({ remainingBytes: 0, avgBytesPerSec }), 0);
+        assert.equal(computeDownloadEta({ remainingBytes: 1024 * 1024, avgBytesPerSec: 100, shortBytesPerSec: 100 }), null);
+    });
+
+    it('зависшее соединение обрывается по таймауту простоя и уходит в переподключение', async () => {
+        const tmp = makeTempDir();
+        const payload = crypto.randomBytes(256 * 1024);
+        let requests = 0;
+
+        const stalledBody = (firstChunk) => ({
+            [Symbol.asyncIterator]() {
+                let step = 0;
+                return {
+                    next() {
+                        if (step === 0) {
+                            step = 1;
+                            return Promise.resolve({ done: false, value: firstChunk });
+                        }
+                        // «Соединение открыто, но данные не приходят»
+                        return new Promise(() => {});
+                    },
+                    return() {
+                        return Promise.resolve({ done: true, value: undefined });
+                    },
+                };
+            },
+            cancel() { /* ignore */ },
+        });
+
+        const fetchImpl = async (url, opts = {}) => {
+            requests++;
+            const m = String(opts.headers?.Range || '').match(/^bytes=(\d+)-(\d*)$/);
+            const start = m ? Number(m[1]) : 0;
+            const end = m && m[2] ? Math.min(payload.length - 1, Number(m[2])) : payload.length - 1;
+            const slice = payload.subarray(start, end + 1);
+            const headers = new Map([
+                ['content-range', `bytes ${start}-${end}/${payload.length}`],
+                ['content-length', String(slice.length)],
+            ]);
+            if (requests === 1)
+                return { ok: true, status: 206, headers, body: stalledBody(slice.subarray(0, 1024)) };
+            return {
+                ok: true,
+                status: 206,
+                headers,
+                body: (async function* () { yield slice; })(),
+            };
+        };
+
+        try {
+            const staged = path.join(tmp, 'stall.bin');
+            const part = staged + '.part';
+            const res = await downloadFileMultipart({
+                url: 'https://example.test/stall.bin',
+                stagedFile: staged,
+                partFile: part,
+                expectedSize: payload.length,
+                threads: 1,
+                fetchImpl,
+                idleTimeoutMs: 150,
+                retryBaseDelayMs: 10,
+                maxRetries: 5,
+            });
+
+            assert.equal(res.size, payload.length);
+            assert.ok(requests >= 2, 'после зависания должен пройти повторный запрос');
+            assert.equal(sha256(await fsp.readFile(staged)), sha256(payload));
+        }
+        finally {
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('живая загрузка накапливает устойчивую среднюю скорость и сохраняет статистику для ETA', async () => {
+        const tmp = makeTempDir();
+        const payload = crypto.randomBytes(2 * 1024 * 1024);
+        const chunkBytes = 32 * 1024;
+
+        // Медленный поток: 64 чанка по 50 мс — чтобы накопилось ~3 с активной передачи
+        const fetchImpl = async (url, opts = {}) => {
+            const u = String(url);
+            if (u.includes('/api/models/')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        id: 'Test/Model',
+                        siblings: [{ rfilename: 'weights.gguf', size: payload.length }],
+                    }),
+                };
+            }
+            const m = String(opts.headers?.Range || '').match(/^bytes=(\d+)-(\d*)$/);
+            const start = m ? Number(m[1]) : 0;
+            const end = m && m[2] ? Math.min(payload.length - 1, Number(m[2])) : payload.length - 1;
+            const body = (async function* () {
+                for (let off = start; off <= end; off += chunkBytes) {
+                    yield payload.subarray(off, Math.min(end + 1, off + chunkBytes));
+                    await new Promise(r => setTimeout(r, 50));
+                }
+            })();
+            return {
+                ok: true,
+                status: start > 0 ? 206 : 200,
+                headers: new Map([
+                    ['content-range', `bytes ${start}-${end}/${payload.length}`],
+                    ['content-length', String(end - start + 1)],
+                ]),
+                body,
+            };
+        };
+
+        let job = null;
+        try {
+            job = await startHuggingFaceDownload({
+                repoId: 'Test/Model',
+                quant: '',
+                rootDir: tmp,
+                registerInWork: false,
+                threads: 1,
+                waitForCompletion: false,
+                fetchImpl,
+            });
+
+            let snap = null;
+            const deadline = Date.now() + 15000;
+            while (Date.now() < deadline) {
+                snap = listHuggingFaceDownloads(tmp).find(d => d.folderName === job.folderName);
+                if (snap?.avgSpeedMBs > 0)
+                    break;
+                await new Promise(r => setTimeout(r, 50));
+            }
+            assert.ok(snap, 'загрузка должна быть видна в списке');
+            assert.ok(snap.avgSpeedMBs > 0, 'средняя скорость должна считаться по накопленному времени');
+            assert.ok(snap.etaSeconds > 0, 'ETA должно считаться по средней скорости');
+            assert.equal(snap.stalled, false, 'данные идут — простоя нет');
+
+            const state = JSON.parse(await fsp.readFile(path.join(job.weightsDir, 'download-state.json'), 'utf-8'));
+            assert.equal(state.stats.baseBytes, 0);
+            assert.ok(state.stats.activeMs > 0, 'активное время передачи должно сохраняться в состояние');
+        }
+        finally {
+            if (job)
+                pauseHuggingFaceDownload(job.id);
             fs.rmSync(tmp, { recursive: true, force: true });
         }
     });

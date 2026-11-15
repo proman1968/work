@@ -1083,6 +1083,11 @@ async function writeDownloadStateSafe(stagingDir, job, extra = {}) {
             })),
             totalBytes: Number(job.totalBytes) || 0,
             downloadedBytes: Number(job.downloadedBytes) || 0,
+            avgSpeedMBs: Number(job.avgSpeedMBs) || 0,
+            stats: {
+                baseBytes: Math.max(0, Number(job.statsBaseBytes) || 0),
+                activeMs: Math.max(0, Math.round(Number(job.statsActiveMs) || 0)),
+            },
             status: job.status,
             error: job.error || null,
             updatedAt: Date.now(),
@@ -1118,6 +1123,23 @@ function waitAbortable(ms, signal) {
  * Запустить прямую загрузку модели с Hugging Face в `MODELS/Local/<Имя>/#weights/`
  * с поддержкой докачки (`Range`), авто-ретраев при обрывах, паузы без потери скачанного и авто-созданием узла `$ai`.
  */
+/**
+ * Время до конца загрузки. Базой служит устойчивая средняя скорость за всё время
+ * скачивания, а не мгновенный 5-секундный замер: при просадке канала мгновенная
+ * скорость занижает ETA в десятки раз (например, «осталось 318 ч» при 16 % за 3 ч).
+ */
+export function computeDownloadEta({ remainingBytes = 0, avgBytesPerSec = 0, shortBytesPerSec = 0 } = {}) {
+    const remaining = Math.max(0, Number(remainingBytes) || 0);
+    const avg = Number(avgBytesPerSec) || 0;
+    const short = Number(shortBytesPerSec) || 0;
+    if (remaining <= 0)
+        return 0;
+    const basis = avg >= 1024 ? avg : short;
+    if (basis <= 1024)
+        return null;
+    return Math.round(remaining / basis);
+}
+
 export async function startHuggingFaceDownload({
     repoId,
     files = null,
@@ -1132,6 +1154,7 @@ export async function startHuggingFaceDownload({
     waitForCompletion = false,
     maxRetries = 20,
     retryBaseDelayMs = 3000,
+    idleTimeoutMs,
     endpointUrl,
     proxyUrl,
     threads,
@@ -1276,6 +1299,14 @@ export async function startHuggingFaceDownload({
     const controller = new AbortController();
     let keepFilesOnAbort = true;
 
+    // Статистика для честного ETA: база (уже скачано до старта) и накопленное «активное» время.
+    // Переживает паузы и перезапуски сервера — хранится в download-state.json.
+    const prevStats = (prevState && typeof prevState.stats === 'object' && prevState.stats) || null;
+    const statsBaseBytes = prevStats && Number.isFinite(Number(prevStats.baseBytes))
+        ? Number(prevStats.baseBytes)
+        : initialDownloaded;
+    const statsActiveMs = Math.max(0, Number(prevStats?.activeMs) || 0);
+
     const job = {
         id: jobId,
         repoId: cleanId,
@@ -1300,7 +1331,11 @@ export async function startHuggingFaceDownload({
         totalBytes,
         progress: initialProgress,
         speedMBs: 0,
+        avgSpeedMBs: 0,
         etaSeconds: null,
+        lastDataAt: Date.now(),
+        statsBaseBytes,
+        statsActiveMs,
         retryAttempt: 0,
         retryError: '',
         startedAt: Date.now(),
@@ -1326,6 +1361,7 @@ export async function startHuggingFaceDownload({
         const t0 = Date.now();
         const speedSamples = [];
         let lastStateSave = Date.now();
+        let lastDataAt = Date.now();
         let downloadFinished = false;
         let stateWriteChain = Promise.resolve();
 
@@ -1341,8 +1377,15 @@ export async function startHuggingFaceDownload({
 
         const updateMetrics = (deltaBytes = 0) => {
             const now = Date.now();
-            if (deltaBytes > 0)
+            if (deltaBytes > 0) {
                 speedSamples.push([now, deltaBytes]);
+                // Копим «активное» время передачи данных (простои ограничиваем минутой),
+                // чтобы средняя скорость отражала реальный темп, а не 5-секундный всплеск.
+                const gap = lastDataAt ? now - lastDataAt : 0;
+                job.statsActiveMs = (Number(job.statsActiveMs) || 0) + Math.min(60000, Math.max(0, gap));
+                lastDataAt = now;
+                job.lastDataAt = now;
+            }
             const cutoff = now - 5000;
             while (speedSamples.length && speedSamples[0][0] < cutoff)
                 speedSamples.shift();
@@ -1361,12 +1404,21 @@ export async function startHuggingFaceDownload({
             const bytesPerSec = windowBytes / spanSec;
             job.speedMBs = +(bytesPerSec / (1024 * 1024)).toFixed(2);
 
-            if (job.totalBytes > 0 && bytesPerSec > 1024) {
-                const remaining = Math.max(0, job.totalBytes - job.downloadedBytes);
-                job.etaSeconds = Math.round(remaining / bytesPerSec);
-            }
+            // Устойчивая средняя скорость с начала загрузки (переживает паузы и рестарты)
+            const newBytes = Math.max(0, job.downloadedBytes - (Number(job.statsBaseBytes) || 0));
+            const activeMs = Number(job.statsActiveMs) || 0;
+            const avgBytesPerSec = activeMs >= 3000 ? newBytes / (activeMs / 1000) : 0;
+            job.avgSpeedMBs = +(avgBytesPerSec / (1024 * 1024)).toFixed(2);
+
+            job.etaSeconds = computeDownloadEta({
+                remainingBytes: job.totalBytes - job.downloadedBytes,
+                avgBytesPerSec,
+                shortBytesPerSec: bytesPerSec,
+            });
+
             const activeSec = (now - t0) / 1000;
-            job.lowSpeedWarning = activeSec >= 15 && job.speedMBs > 0 && job.speedMBs < 2 && !job.retryAttempt;
+            const effectiveMBs = job.avgSpeedMBs > 0 ? job.avgSpeedMBs : job.speedMBs;
+            job.lowSpeedWarning = activeSec >= 15 && effectiveMBs > 0 && effectiveMBs < 2 && !job.retryAttempt;
 
             if (now - lastStateSave >= 1500) {
                 lastStateSave = now;
@@ -1404,6 +1456,7 @@ export async function startHuggingFaceDownload({
                     signal: controller.signal,
                     maxRetries,
                     retryBaseDelayMs,
+                    idleTimeoutMs,
                     fetchImpl: netFetch,
                     onProgress: ({ downloadedBytes, totalBytes: fTotal, deltaBytes, ranges }) => {
                         if (fTotal > 0 && !fileEntry.size)
@@ -1539,9 +1592,20 @@ export function getHuggingFaceDownload(jobId) {
 
 export function listHuggingFaceDownloads(rootDir = process.cwd()) {
     const resolvedRoot = path.resolve(rootDir);
+    const now = Date.now();
     const inMemory = [..._downloads.values()]
         .filter(e => path.resolve(e.job.rootDir || process.cwd()) === resolvedRoot)
-        .map(e => ({ ...e.job }));
+        .map(e => {
+            const snapshot = { ...e.job };
+            const idleSec = Math.max(0, Math.round((now - Number(e.job.lastDataAt || e.job.startedAt || now)) / 1000));
+            snapshot.idleSec = idleSec;
+            snapshot.stalled = e.job.status === 'downloading' && idleSec >= 20;
+            if (snapshot.stalled) {
+                snapshot.speedMBs = 0;
+                snapshot.lowSpeedWarning = false;
+            }
+            return snapshot;
+        });
     const activeNames = new Set(inMemory.filter(j => j.status === 'downloading').map(j => j.folderName));
     migrateLocalModelsLayoutSync(rootDir, { skipModels: activeNames });
 
@@ -1626,7 +1690,10 @@ export function listHuggingFaceDownloads(rootDir = process.cwd()) {
                     totalBytes,
                     progress,
                     speedMBs: 0,
+                    avgSpeedMBs: Number(state.avgSpeedMBs) || 0,
                     etaSeconds: null,
+                    idleSec: 0,
+                    stalled: false,
                     startedAt: state.updatedAt || Date.now(),
                     finishedAt: state.updatedAt || Date.now(),
                     modelPath: `/MODELS/Local/${e.name}`,
