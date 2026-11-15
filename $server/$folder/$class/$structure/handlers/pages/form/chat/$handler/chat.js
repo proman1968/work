@@ -327,12 +327,12 @@ ODA({is: 'oda-chat',
             }
         </style>
         <div class="back"></div>
-        <chat-ribbon id="ribbon" :$item></chat-ribbon>
+        <chat-ribbon id="ribbon" :$item @chat-item-expanded="onCardExpanded($event)"></chat-ribbon>
         <div class="mover" vertical hidden>
             <oda-button :hidden="$('#ribbon').scrollTop < 0" content shadow icon="icons:chevron-right:270" @tap="$('#ribbon').scrollTop = -($('#ribbon').scrollHeight)"></oda-button>
             <oda-button :hidden="$('#ribbon').scrollTop > 0" content shadow icon="icons:chevron-right:90"  @tap="$('#ribbon').scrollTop = 0"></oda-button>
         </div>
-        <div vertical shadow content style="z-index: 10; max-height: 50%; overflow: visible;">
+        <div vertical shadow content :hidden="hasExpandedCard" style="z-index: 10; max-height: 50%; overflow: visible;">
             <div ~if="replyTarget" horizontal accent-invert style="padding: 4px;">
                 <div horizontal flex style="overflow: auto; align-self: center;"></div>
                 <oda-button icon="icons:close" @tap="clear" style="padding: 0"></oda-button>
@@ -356,6 +356,25 @@ ODA({is: 'oda-chat',
             return this.$pdp.$handler.short + '/~/background.jpg';
     },
     files: [],
+    hasExpandedCard: false,
+    onCardExpanded(e) {
+        const detail = e?.detail || {};
+        this._expandedCards ??= new Set();
+        if (detail.card) {
+            if (detail.expanded)
+                this._expandedCards.add(detail.card);
+            else
+                this._expandedCards.delete(detail.card);
+            for (const c of [...this._expandedCards]) {
+                if (!c.isConnected || !c.expanded)
+                    this._expandedCards.delete(c);
+            }
+            this.hasExpandedCard = this._expandedCards.size > 0;
+        }
+        else {
+            this.hasExpandedCard = Boolean(detail.expanded);
+        }
+    },
     get placeholder(){
         if(this.$pdp.receivers.length)
             return 'Сообщение для ' + this.$pdp.receivers.map(user => user.label).join(', ') + ' ...';

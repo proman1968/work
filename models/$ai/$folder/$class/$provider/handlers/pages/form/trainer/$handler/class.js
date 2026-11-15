@@ -1,7 +1,7 @@
-/** Мета хендлера form/trainer (Локальные модели и дообучение ИИ). */
+/** Мета хендлера form/trainer (Модели ИИ для локального провайдера /MODELS/Local). */
 export default {
-    icon: 'carbon:machine-learning-model',
-    label: 'Обучение',
+    icon: 'carbon:chip',
+    label: 'Модели ИИ',
     roles: ['BOSS'],
     order: 1,
     allowUse($context) {

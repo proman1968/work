@@ -575,6 +575,11 @@ export function createRequestHandler() {
 
                             await promise;
                         }
+                        else if (method === 'trainer_transfer_import_tar') {
+                            const { Readable } = await import('node:stream');
+                            params.stream = request.rawBody ? Readable.from(request.rawBody) : request;
+                            params.contentLength = Number(request.headers['content-length']) || 0;
+                        }
                         else {
                             const body = request.rawBody ?? await readBody(request, MAX_BODY_BYTES);
                             params.post = parsePostBody(body, contentType);
@@ -704,6 +709,20 @@ export function createRequestHandler() {
                 header["Content-Type"] = "audio/wav";
             }
         }
+        else if (result && typeof result.pipe === 'function') {
+            if (method === 'trainer_transfer_export_tar') {
+                const rawName = String(params.filename || 'work-local-models.tar');
+                const safeAscii = rawName.replace(/[^\x20-\x7E]|[\r\n"\\;]/g, '_');
+                header["Content-Type"] = "application/x-tar";
+                header["Content-Disposition"] = `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(rawName)}`;
+                header["Cache-Control"] = "no-cache";
+                if (Number(params.contentLength) > 0)
+                    header["Content-Length"] = Number(params.contentLength);
+            }
+            else {
+                header["Content-Type"] = "application/octet-stream";
+            }
+        }
         else if (typeof result === 'object') {
             result = JSON.stringify(result, null, +params.space || 2);
         }
@@ -722,6 +741,10 @@ export function createRequestHandler() {
         if (result){
             response.writeHead(200, header);
                 if(result.pipe){
+                    response.on('close', () => {
+                        if (!response.writableEnded)
+                            result.destroy?.();
+                    });
                     result.pipe(response);
                     result.on('error', (err) => {
                         console.error('File stream error:', err);

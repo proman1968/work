@@ -1,35 +1,9 @@
 /**
- * form/trainer — мультимодальная витрина локальных моделей Hugging Face Hub (LLM, VLM/OCR, Image, Audio ASR/TTS/Music, Video, RAG),
- * сборщик датасетов WORK и контур дообучения ИИ (LoRA / SFT / GRPO) с адаптацией под реальное железо хоста.
+ * form/trainer («Модели ИИ» на /MODELS/Local) — чистый интерфейс управления локальными моделями ИИ:
+ *  - встроенный в WORK сервер локального ИИ (автозапуск по запросу, постоянный режим на Halo ≥ 128 ГБ, выгрузка при простое на обычных ПК);
+ *  - вкладка «Модели»: установленные модели (Вкл/Выкл, Удалить с диска) + установка моделей в 1 клик (включая комплект Halo);
+ *  - вкладка «Дообучение»: двухшаговый мастер (1. Собрать данные организации → 2. Дообучить модель LoRA).
  */
-
-const MODALITY_TABS = [
-    { id: 'all', label: 'Все типы', icon: 'icons:apps' },
-    { id: 'llm', label: 'Текст и Код', icon: 'icons:description' },
-    { id: 'vlm', label: 'Зрение / OCR', icon: 'image:remove-red-eye' },
-    { id: 'image', label: 'Картинки', icon: 'image:brush' },
-    { id: 'audio', label: 'Звук и Речь', icon: 'av:mic' },
-    { id: 'video', label: 'Видео', icon: 'av:videocam' },
-    { id: 'embed', label: 'Поиск (RAG)', icon: 'icons:search' },
-];
-
-const CAPABILITY_OPTIONS = [
-    { id: '', label: 'Все умения' },
-    { id: 'chat', label: 'Диалог и консультации' },
-    { id: 'tools', label: 'Вызов инструментов WORK' },
-    { id: 'thinking', label: 'Глубокие рассуждения (CoT)' },
-    { id: 'coding', label: 'Генерация кода и схем' },
-    { id: 'vision', label: 'Зрение и чтение документов (OCR)' },
-    { id: 'image', label: 'Генерация изображений' },
-    { id: 'stt', label: 'Распознавание речи (ASR / STT)' },
-    { id: 'tts', label: 'Синтез речи и голоса (TTS)' },
-    { id: 'music', label: 'Генерация музыки и звуков' },
-    { id: 'video', label: 'Генерация видеороликов' },
-    { id: 'embeddings', label: 'Векторные эмбеддинги (RAG)' },
-    { id: 'rerank', label: 'Ранжирование поиска (Rerank)' },
-    { id: 'lora', label: 'Поддержка дообучения LoRA' },
-];
-
 export default {
     imports: 'oda//button, oda//icon',
     template: /*html*/`
@@ -37,860 +11,857 @@ export default {
         :host {
             @apply --vertical;
             @apply --flex;
-            overflow: hidden;
+            overflow-y: auto;
             background: var(--content-background, #ffffff);
             color: var(--content-color, #1e293b);
             font-size: 13px;
+            padding: 16px 20px;
+            gap: 14px;
+            box-sizing: border-box;
         }
-        /* Верхняя плашка оборудования */
-        .hw-banner {
+        .header-card {
             @apply --horizontal;
-            flex-shrink: 0;
             align-items: center;
             justify-content: space-between;
-            gap: 10px;
-            padding: 8px 14px;
-            background: light-dark(linear-gradient(90deg, #f3f0ff 0%, #f8fafc 100%), linear-gradient(90deg, #271745 0%, #1a1b22 100%));
-            border-bottom: 1px solid light-dark(#d8b4fe, #4c1d95);
+            gap: 12px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--subtle-background, #f8fafc);
             flex-wrap: wrap;
         }
-        .hw-left {
-            @apply --vertical;
-            gap: 3px;
+        .header-left {
+            @apply --horizontal;
+            align-items: center;
+            gap: 12px;
             min-width: 0;
         }
-        .hw-title {
+        .title {
+            font-size: 16px;
             font-weight: 700;
-            font-size: 14px;
-            color: light-dark(#4c1d95, #e9d5ff);
         }
-        .hw-specs {
+        .hw-line {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-top: 2px;
+        }
+        .toolbar {
             @apply --horizontal;
-            gap: 6px;
+            gap: 8px;
             align-items: center;
             flex-wrap: wrap;
-            font-size: 12px;
-            color: light-dark(#334155, #cbd5e1);
         }
-        .hw-chip {
+        .badge {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 1px 8px;
-            border-radius: 4px;
-            background: light-dark(rgba(255,255,255,0.85), rgba(255,255,255,0.07));
-            border: 1px solid light-dark(#cbd5e1, #3f3f46);
+            gap: 6px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
             white-space: nowrap;
         }
-        .hw-badges {
+        .badge.active {
+            background: light-dark(#dcfce7, #14532d);
+            color: light-dark(#166534, #bbf7d0);
+            border: 1px solid light-dark(#86efac, #16a34a);
+        }
+        .badge.neutral {
+            background: light-dark(#f1f5f9, #27272a);
+            color: light-dark(#475569, #a1a1aa);
+            border: 1px solid light-dark(#cbd5e1, #3f3f46);
+        }
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            flex-shrink: 0;
+        }
+        .dot.on { background: #22c55e; }
+        .dot.warn { background: #f59e0b; }
+        .dot.off { background: #94a3b8; }
+
+        /* Спокойные вкладки */
+        .tabs-bar {
             @apply --horizontal;
-            gap: 6px;
+            gap: 4px;
+            border-bottom: 1px solid var(--border-color, #cbd5e1);
+        }
+        .tab-btn {
+            appearance: none;
+            border: none;
+            border-bottom: 2px solid transparent;
+            background: transparent;
+            color: inherit;
+            opacity: 0.7;
+            padding: 8px 16px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .tab-btn:hover {
+            opacity: 1;
+        }
+        .tab-btn.tab-active {
+            opacity: 1;
+            color: var(--accent-color, #2563eb);
+            border-bottom-color: var(--accent-color, #2563eb);
+        }
+
+        .card {
+            @apply --vertical;
+            gap: 10px;
+            padding: 14px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--content-background, #ffffff);
+        }
+        .section-title {
+            font-weight: 700;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            opacity: 0.75;
+            border-bottom: 1px solid var(--border-color, #e2e8f0);
+            padding-bottom: 6px;
+        }
+
+        /* Фильтры каталога */
+        .filter-pill {
+            display: inline-flex;
             align-items: center;
+            gap: 5px;
+            padding: 5px 11px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--subtle-background, #f8fafc);
+            color: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .filter-pill.active {
+            background: var(--accent-color, #2563eb);
+            border-color: var(--accent-color, #2563eb);
+            color: #ffffff;
+        }
+
+        /* Строка модели (установленной или в каталоге) */
+        .model-row {
+            @apply --vertical;
+            gap: 6px;
+            padding: 10px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color, #e2e8f0);
+            background: var(--subtle-background, #f8fafc);
+        }
+        .model-row.off {
+            opacity: 0.55;
+        }
+        .model-main {
+            @apply --horizontal;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
             flex-wrap: wrap;
         }
-        /* Универсальные неразрывные бейджи */
-        .badge {
+        .model-left {
+            @apply --horizontal;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            flex: 1;
+        }
+        .model-name {
+            font-weight: 700;
+            font-size: 13.5px;
+        }
+        .model-desc {
+            font-size: 12px;
+            opacity: 0.8;
+            margin-top: 2px;
+        }
+        .mem-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 12px;
+            color: inherit;
+            opacity: 0.85;
+            white-space: nowrap;
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 6px;
+            background: var(--border-color, #e2e8f0);
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--accent-color, #2563eb);
+            transition: width 0.2s ease;
+        }
+        .progress-fill.paused {
+            background: #f59e0b;
+        }
+        .status-chip {
             display: inline-flex;
             align-items: center;
             gap: 4px;
             padding: 2px 8px;
             border-radius: 999px;
-            font-size: 11.5px;
-            font-weight: 600;
-            line-height: 1.35;
-            white-space: nowrap;
-            flex-shrink: 0;
-            background: light-dark(#f1f5f9, #2d2f39);
-            color: light-dark(#334155, #e2e8f0);
-            border: 1px solid light-dark(#cbd5e1, #475569);
-        }
-        .badge.purple {
-            background: light-dark(#f3e8ff, #3b0764);
-            border-color: light-dark(#c084fc, #7e22ce);
-            color: light-dark(#6b21a8, #e9d5ff);
-        }
-        .badge.optimal {
-            background: light-dark(#dcfce7, #14532d);
-            border-color: light-dark(#86efac, #16a34a);
-            color: light-dark(#166534, #bbf7d0);
-        }
-        .badge.warn {
-            background: light-dark(#fef9c3, #422006);
-            border-color: light-dark(#fde047, #ca8a04);
-            color: light-dark(#854d0e, #fef08a);
-        }
-        .badge.heavy {
-            background: light-dark(#fee2e2, #450a0a);
-            border-color: light-dark(#fca5a5, #dc2626);
-            color: light-dark(#991b1b, #fecaca);
-        }
-        .badge.mod {
-            background: light-dark(#e0e7ff, #1e1b4b);
-            border-color: light-dark(#a5b4fc, #4338ca);
-            color: light-dark(#3730a3, #c7d2fe);
-        }
-        .cap-pill {
-            display: inline-flex;
-            align-items: center;
-            padding: 1px 7px;
-            border-radius: 4px;
             font-size: 11px;
             font-weight: 600;
             white-space: nowrap;
-            background: light-dark(#f8fafc, #1e293b);
-            color: light-dark(#0f172a, #cbd5e1);
-            border: 1px solid light-dark(#cbd5e1, #334155);
+        }
+        .status-chip.ok {
+            background: light-dark(#dcfce7, #14532d);
+            color: light-dark(#166534, #bbf7d0);
+        }
+        .status-chip.busy {
+            background: var(--accent-soft, rgba(37, 99, 235, 0.12));
+            color: var(--accent-color, #2563eb);
+        }
+        .status-chip.warn {
+            background: light-dark(#fef3c7, #451a03);
+            color: light-dark(#92400e, #fde68a);
+        }
+        .status-chip.err {
+            background: light-dark(#fee2e2, #450a0a);
+            color: light-dark(#991b1b, #fecaca);
+        }
+        .inline-err {
+            font-size: 12px;
+            color: light-dark(#b91c1c, #fca5a5);
+            margin-top: 2px;
         }
 
-        /* Главные вкладки экрана */
-        .tabs-bar {
-            @apply --horizontal;
-            flex-shrink: 0;
-            gap: 4px;
-            padding: 5px 12px 0 12px;
-            background: light-dark(#efeee4, #24252b);
-            border-bottom: 1px solid light-dark(#b5b4ac, #3e4049);
-        }
-        .tab-btn {
-            padding: 6px 14px;
+        .bios-box {
+            padding: 10px 14px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--subtle-background, #f8fafc);
             font-size: 12.5px;
-            font-weight: 600;
-            border: 1px solid transparent;
-            border-bottom: none;
-            border-radius: 5px 5px 0 0;
-            background: transparent;
-            color: light-dark(#475569, #94a3b8);
-            cursor: pointer;
-            white-space: nowrap;
-        }
-        .tab-btn:hover {
-            color: light-dark(#1e293b, #f1f5f9);
-        }
-        .tab-btn.tab-active {
-            background: var(--content-background, #ffffff);
-            border-color: light-dark(#b5b4ac, #3e4049);
-            color: light-dark(#5b21b6, #c4b5fd);
+            line-height: 1.5;
         }
 
-        .error {
-            padding: 6px 12px;
-            color: var(--error-color, #c53030);
-            background: light-dark(#fff5f5, rgba(229, 62, 62, 0.15));
-            border-bottom: 1px solid var(--error-color, #feb2b2);
-            flex-shrink: 0;
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 14px;
         }
-
-        /* Двухпанельная рабочая область */
-        .workspace {
-            @apply --horizontal;
-            flex: 1;
-            min-height: 0;
-            overflow: hidden;
-        }
-        .panel-left {
+        .field {
             @apply --vertical;
-            flex: 1.38;
-            min-width: 0;
-            min-height: 0;
-            overflow: hidden;
-            border-right: 1px solid light-dark(#c8c7be, #3e4049);
+            gap: 4px;
         }
-        .sticky-header {
-            @apply --vertical;
-            flex-shrink: 0;
-            gap: 8px;
-            padding: 10px 12px;
-            background: light-dark(#f8f8f4, #202127);
-            border-bottom: 1px solid light-dark(#dcdbd2, #343640);
-        }
-        .cards-scroll {
-            @apply --vertical;
-            flex: 1;
-            min-height: 0;
-            overflow-y: auto;
-            padding: 10px 12px;
-            gap: 8px;
-        }
-        .panel-right {
-            @apply --vertical;
-            flex: 1;
-            min-width: 320px;
-            min-height: 0;
-            overflow-y: auto;
-            padding: 10px 12px;
-            gap: 10px;
-            background: light-dark(#fafaf7, #1b1c22);
-        }
-
-        /* Полоса выбора категории модели (Текст, Зрение, Картинки, Звук, Видео, RAG) */
-        .modality-bar {
-            @apply --horizontal;
-            gap: 5px;
-            flex-wrap: wrap;
-        }
-        .mod-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            padding: 4px 10px;
+        .field label {
             font-size: 12px;
             font-weight: 600;
-            border: 1px solid light-dark(#cbd5e1, #3f414d);
+        }
+        input:not([type="checkbox"]), select {
+            padding: 6px 10px;
+            font-size: 13px;
+            border: 1px solid var(--border-color, #cbd5e1);
             border-radius: 6px;
-            background: light-dark(#ffffff, #282a33);
-            color: light-dark(#334155, #cbd5e1);
-            cursor: pointer;
-            white-space: nowrap;
-            transition: all 0.12s ease;
-        }
-        .mod-btn:hover {
-            border-color: #7c3aed;
-        }
-        .mod-btn.mod-active {
-            background: light-dark(#6d28d9, #7c3aed);
-            border-color: light-dark(#5b21b6, #6d28d9);
-            color: #ffffff;
-        }
-
-        .section-title {
-            font-weight: 700;
-            font-size: 11.5px;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: light-dark(#475569, #94a3b8);
-            border-bottom: 1px solid light-dark(#e2e8f0, #334155);
-            padding-bottom: 4px;
-            flex-shrink: 0;
-        }
-        .toolbar {
-            @apply --horizontal;
-            gap: 6px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        input:not([type="checkbox"]):not([type="radio"]), select, textarea {
-            padding: 4px 8px;
-            font-size: 12.5px;
-            border: 1px solid light-dark(#b8b7ae, #475569);
-            border-radius: 4px;
-            background: light-dark(#ffffff, #15161a);
+            background: var(--content-background, #ffffff);
             color: inherit;
-            box-sizing: border-box;
         }
         .btn {
             display: inline-flex;
             align-items: center;
-            justify-content: center;
-            gap: 5px;
-            padding: 5px 12px;
+            gap: 6px;
+            padding: 6px 13px;
             font-size: 12.5px;
             font-weight: 600;
-            border: 1px solid light-dark(#b8b7ae, #4a4c56);
-            border-radius: 4px;
-            background: light-dark(linear-gradient(180deg, #fafaf8 0%, #e8e7de 100%), linear-gradient(180deg, #32343a 0%, #26282d 100%));
+            border-radius: 6px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--content-background, #ffffff);
             color: inherit;
             cursor: pointer;
             white-space: nowrap;
         }
         .btn.primary {
-            background: linear-gradient(180deg, #6d28d9 0%, #5b21b6 100%);
-            border-color: #4c1d95;
+            background: var(--accent-color, #2563eb);
+            border-color: var(--accent-color, #2563eb);
             color: #ffffff;
         }
         .btn.danger {
-            background: #dc2626;
-            border-color: #b91c1c;
-            color: #ffffff;
+            color: light-dark(#b91c1c, #fca5a5);
+            border-color: light-dark(#fecaca, #7f1d1d);
         }
-
-        /* Карточка модели (используем .card-active вместо глобального .selected!) */
-        .card {
-            @apply --vertical;
-            flex-shrink: 0;
-            gap: 6px;
-            padding: 9px 11px;
-            border: 1px solid light-dark(#d6d5cc, #343642);
+        .msg {
+            padding: 8px 12px;
             border-radius: 6px;
-            background: light-dark(#ffffff, #23252f);
-            transition: border-color 0.12s ease, background 0.12s ease;
+            font-size: 12.5px;
         }
-        .card.clickable {
-            cursor: pointer;
+        .msg.ok {
+            background: light-dark(#dcfce7, #14532d);
+            color: light-dark(#166534, #bbf7d0);
         }
-        .card.clickable:hover {
-            border-color: light-dark(#a78bfa, #8b5cf6);
-        }
-        .card.card-active {
-            background: light-dark(#f5f3ff, #2b2342) !important;
-            border: 1.5px solid #7c3aed !important;
-            box-shadow: 0 2px 8px rgba(109, 40, 217, 0.12);
-        }
-        .model-top {
-            @apply --horizontal;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .model-title-group {
-            @apply --horizontal;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
-            min-width: 0;
-        }
-        .model-id {
-            font-weight: 700;
-            font-size: 13.5px;
-            color: light-dark(#0f172a, #f8fafc);
-        }
-        .model-what {
-            font-size: 12px;
-            line-height: 1.4;
-            color: light-dark(#334155, #cbd5e1);
-        }
-        .caps-row {
-            @apply --horizontal;
-            align-items: center;
-            gap: 5px;
-            flex-wrap: wrap;
-        }
-        .caps-label {
-            font-size: 11px;
-            font-weight: 700;
-            color: light-dark(#64748b, #94a3b8);
-            margin-right: 2px;
-        }
-        .progress-track {
-            width: 100%;
-            height: 8px;
-            background: light-dark(#e2e8f0, #334155);
-            border-radius: 4px;
-            overflow: hidden;
-        }
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #7c3aed, #2563eb);
-            transition: width 0.2s ease;
-        }
-        .form-grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(140px, 1fr));
-            gap: 8px;
-        }
-        .field-box {
-            @apply --vertical;
-            gap: 3px;
-        }
-        .field-box label {
-            font-size: 11.5px;
-            font-weight: 600;
-            color: light-dark(#475569, #94a3b8);
-        }
-        .chart-box {
-            padding: 8px;
-            border: 1px solid light-dark(#cbd5e1, #334155);
-            border-radius: 4px;
-            background: light-dark(#ffffff, #15161a);
-        }
-        .file-list {
-            max-height: 170px;
-            overflow-y: auto;
-            margin-top: 4px;
-            border-top: 1px solid light-dark(#e2e8f0, #334155);
-            padding-top: 4px;
-        }
-        .file-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 8px;
-            font-size: 11.5px;
-            padding: 2px 0;
-        }
-        .mono {
-            font-family: Consolas, monospace;
-            font-size: 11.5px;
-            white-space: pre-wrap;
-            word-break: break-word;
+        .msg.err {
+            background: light-dark(#fee2e2, #450a0a);
+            color: light-dark(#991b1b, #fecaca);
         }
     </style>
 
-    <!-- Верхний баннер реального аппаратного профиля хоста -->
-    <div class="hw-banner">
-        <div class="hw-left">
-            <div class="hw-title">Локальные модели ИИ и дообучение (LoRA / SFT / GRPO)</div>
-            <div class="hw-specs">
-                <span class="hw-chip">CPU: <strong>{{hardware?.cpuModel || 'Определение…'}}</strong> ({{hardware?.cpuCores || 0}} потоков)</span>
-                <span class="hw-chip">ОЗУ: <strong>{{hardware?.totalRamGb || 0}} ГБ</strong> (свободно {{hardware?.freeRamGb || 0}} ГБ)</span>
-                <span class="hw-chip">Бюджет под ИИ: <strong>~{{hardware?.usableMemoryGb || 0}} ГБ</strong></span>
+    <!-- Компактная шапка состояния локального ИИ и памяти -->
+    <div class="header-card">
+        <div class="header-left">
+            <oda-icon icon="carbon:chip" icon-size="30"></oda-icon>
+            <div>
+                <div class="title">Локальный ИИ</div>
+                <div class="hw-line">
+                    {{hardware?.cpuModel || 'Процессор'}} · ОЗУ {{hardware?.totalRamGb || 0}} ГБ (доступно под ИИ ~{{hardware?.usableMemoryGb || 0}} ГБ)
+                </div>
             </div>
         </div>
-        <div class="hw-badges">
-            <span class="badge purple">Локальных моделей: {{localModels.length}}</span>
-            <span class="badge purple">LoRA-адаптеров: {{adapters.length}}</span>
-            <span class="badge">Датасетов WORK: {{datasets.length}}</span>
+        <div class="toolbar">
+            <span class="badge" ~class="runtime?.running ? 'active' : 'neutral'">
+                <span class="dot" ~class="runtime?.running ? 'on' : 'off'"></span>
+                <span>{{runtime?.modeLabel || 'Автозапуск по запросу'}}</span>
+            </span>
+            <button type="button" class="btn" ~if="runtime?.running" @tap="releaseMemory()">Освободить память</button>
         </div>
     </div>
 
+    <div class="msg ok" ~if="notice">{{notice}}</div>
+    <div class="msg err" ~if="error">{{error}}</div>
+
+    <!-- Две чистые вкладки -->
     <div class="tabs-bar">
-        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'hf'}" @tap="activeTab = 'hf'">1. Каталог моделей Hugging Face ({{hfModels.length}})</button>
-        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'dataset'}" @tap="activeTab = 'dataset'">2. Датасеты WORK ({{datasets.length}})</button>
-        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'train'}" @tap="activeTab = 'train'">3. Дообучение (LoRA / SFT / GRPO)</button>
-        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'halogen'}" @tap="openHalogenTab()">4. Контур Halogen (Ryzen AI 192 ГБ: GPU + NPU)</button>
+        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'models'}" @tap="activeTab = 'models'">
+            Модели ({{localModels.length}})
+        </button>
+        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'train'}" @tap="activeTab = 'train'">
+            Дообучение ({{adapters.length}})
+        </button>
     </div>
 
-    <div class="error" ~if="error">{{error}}</div>
+    <!-- ВКЛАДКА 1: ЕДИНЫЙ СПИСОК МОДЕЛЕЙ (УСТАНОВЛЕННЫЕ, ЗАГРУЖАЕМЫЕ, НЕДОКАЧАННЫЕ И КАТАЛОГ) -->
+    <div ~if="activeTab === 'models'" class="vertical" style="gap:14px;">
 
-    <!-- ВКЛАДКА 1: КАТАЛОГ МОДЕЛЕЙ HUGGING FACE -->
-    <div class="workspace" ~if="activeTab === 'hf'">
-        <div class="panel-left">
-            <!-- Закреплённая сверху панель выбора типа модели, умений и поиска -->
-            <div class="sticky-header">
-                <div class="modality-bar">
-                    <button type="button" class="mod-btn" ~for="modalityTabs"
-                        ~class="{'mod-active': hfModality === $for.item.id}"
+        <!-- Активный перенос на диск / с диска (если запущен в фоне) -->
+        <div class="card" ~if="activeTransfers.length">
+            <div class="section-title">Перенос моделей на диск / флешку ({{activeTransfers.length}})</div>
+            <div class="model-row" ~for="activeTransfers">
+                <div class="model-main">
+                    <div>
+                        <div class="model-name">{{$for.item.label}}</div>
+                        <div class="model-desc">
+                            <span ~if="$for.item.currentItem">{{$for.item.currentItem}}</span>
+                            <span ~if="$for.item.currentFile"> · {{$for.item.currentFile}}</span>
+                        </div>
+                    </div>
+                    <div class="toolbar">
+                        <span style="font-size:12px;font-weight:600;">{{$for.item.progress || 0}}% · {{$for.item.speedMBs || 0}} МБ/с</span>
+                        <button type="button" class="btn danger" @tap="cancelTransfer($for.item.id)">Отменить</button>
+                    </div>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill" ~style="{width: ($for.item.progress || 0) + '%'}"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Единая панель моделей -->
+        <div class="card">
+            <div class="model-main" style="border-bottom:1px solid var(--border-color, #e2e8f0);padding-bottom:8px;">
+                <div class="section-title" style="border-bottom:none;padding-bottom:0;">
+                    Локальные модели (/MODELS/Local) · установлено: {{localModels.length}}
+                </div>
+                <div class="toolbar">
+                    <button type="button" class="btn" @tap="openTransferDialog('export')" :disabled="!localModels.length && !adapters.length && !datasets.length">
+                        <oda-icon icon="carbon:usb" icon-size="15"></oda-icon>
+                        <span>Выгрузить на диск / флешку</span>
+                    </button>
+                    <button type="button" class="btn" @tap="openTransferDialog('import')">
+                        <oda-icon icon="carbon:download" icon-size="15"></oda-icon>
+                        <span>Загрузить с диска / флешки</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Панель категорий и поиска -->
+            <div class="toolbar" style="justify-content:space-between;">
+                <div class="toolbar">
+                    <button type="button" class="filter-pill" ~for="categoryTabs"
+                        ~class="{'active': hfModality === $for.item.id}"
                         @tap="setModality($for.item.id)">
-                        <oda-icon :icon="$for.item.icon" icon-size="15"></oda-icon>
+                        <oda-icon :icon="$for.item.icon" icon-size="14"></oda-icon>
                         <span>{{$for.item.label}}</span>
                     </button>
                 </div>
-                <div class="toolbar">
-                    <input style="flex:1;min-width:180px;" :value="hfQuery" placeholder="Поиск модели на Hugging Face (например: Qwen3, Whisper, FLUX, Wan2.1, BGE)…" @input="hfQuery = $this.value" @keydown.enter="searchHf()">
-                    <select title="Фильтр по умению модели" @change="setCapability($this.value)">
-                        <option ~for="capabilityOptions" :value="$for.item.id" :selected="hfCapability === $for.item.id">{{$for.item.label}}</option>
-                    </select>
-                    <select title="Совместимость и формат" @change="setHfFilter($this.value)">
-                        <option value="all" :selected="hfFilter === 'all'">Все по памяти</option>
-                        <option value="fit" :selected="hfFilter === 'fit'">Подходящие моей системе</option>
-                        <option value="gguf" :selected="hfFilter === 'gguf'">Формат GGUF</option>
-                    </select>
-                    <button type="button" class="btn primary" @tap="searchHf()">Найти</button>
+                <div class="toolbar" ~if="hfModality !== 'halo' && hfModality !== 'installed'">
+                    <input style="width:220px;" :value="hfQuery" placeholder="Поиск на Hugging Face (Qwen3, Whisper, FLUX)…" @input="hfQuery = $this.value" @keydown.enter="searchHf()">
+                    <button type="button" class="btn" @tap="searchHf()">Найти</button>
+                    <label class="toolbar" style="cursor:pointer;font-size:12px;">
+                        <input type="checkbox" :checked="hfFilter === 'fit'" @change="setHfFilter($event.target.checked ? 'fit' : 'all')">
+                        <span>Только подходящие по памяти</span>
+                    </label>
                 </div>
             </div>
 
-            <!-- Прокручиваемый список карточек моделей -->
-            <div class="cards-scroll">
-                <div class="card clickable" ~for="hfModels"
-                    ~class="{'card-active': selectedRepo?.id === $for.item.id}"
-                    @tap="inspectRepo($for.item.id)">
-                    <div class="model-top">
-                        <div class="model-title-group">
-                            <oda-icon :icon="$for.item.icon || 'ai:ollama'" icon-size="20" style="flex-shrink:0;"></oda-icon>
-                            <span class="model-id">{{$for.item.id}}</span>
-                            <span class="badge mod">{{$for.item.modalityLabel || $for.item.modality}}</span>
-                            <span class="badge optimal" ~if="$for.item.fit === 'optimal'">Подходит (обучение + запуск)</span>
-                            <span class="badge warn" ~if="$for.item.fit === 'inference_only'">Доступен запуск</span>
-                            <span class="badge heavy" ~if="$for.item.fit === 'too_large'">Мало памяти</span>
-                        </div>
-                        <div class="hw-badges">
-                            <span class="badge" ~if="$for.item.ramRequiredGb">Запуск: ~{{$for.item.ramRequiredGb}} ГБ</span>
-                            <span class="badge" ~if="$for.item.trainRamGb && $for.item.capabilities?.includes('lora')">LoRA: ~{{$for.item.trainRamGb}} ГБ</span>
-                            <span class="badge">{{$for.item.format}}</span>
+            <!-- Памятка BIOS и кнопка комплекта Halo при выбранном фильтре Halo -->
+            <div class="bios-box" ~if="hfModality === 'halo'">
+                <div class="model-main">
+                    <div>
+                        <strong>Настройка BIOS и выделения памяти для машинок Halo (AMD Ryzen™ AI Max+ PRO 395/495 · 128–192 ГБ):</strong>
+                        <div style="margin-top:4px;">
+                            • <b>BIOS → UMA Frame Buffer Size (Variable Graphics Memory):</b> на Windows 11 выделите под iGPU <b>128 ГБ</b> (на системах 192 ГБ) или <b>96 ГБ</b> (на системах 128 ГБ); на Linux оставьте <b>512 МБ</b> (память выделяется динамически через GTT).<br>
+                            • <b>BIOS → NPU / IPU:</b> убедитесь, что нейронный сопроцессор Ryzen AI XDNA2 включён (<code>Enabled</code>).<br>
+                            • <b>Файл подкачки Windows 11:</b> рекомендуется фиксированный PageFile <b>128 ГБ</b> на NVMe SSD.
                         </div>
                     </div>
-                    <div class="model-what">{{$for.item.whatItDoes || $for.item.recommendedFor}}</div>
-                    <div class="caps-row" ~if="$for.item.capabilityBadges?.length">
-                        <span class="caps-label">Умеет:</span>
-                        <span class="cap-pill" ~for="$for.item.capabilityBadges" :title="$for.$for.item.desc">{{$for.$for.item.label}}</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="panel-right">
-            <div class="section-title">Паспорт репозитория и загрузка</div>
-            <div class="card" ~if="selectedRepo">
-                <div class="model-top">
-                    <div class="model-title-group">
-                        <oda-icon :icon="selectedRepo.icon || 'ai:ollama'" icon-size="22" style="flex-shrink:0;"></oda-icon>
-                        <span class="model-id">{{selectedRepo.id}}</span>
-                    </div>
-                    <span class="badge mod">{{selectedRepo.modality || 'llm'}}</span>
-                </div>
-                <div class="model-what" ~if="selectedRepo.whatItDoes">{{selectedRepo.whatItDoes}}</div>
-                <div class="caps-row" ~if="selectedRepo.capabilityBadges?.length">
-                    <span class="caps-label">Возможности:</span>
-                    <span class="cap-pill" ~for="selectedRepo.capabilityBadges" :title="$for.item.desc">{{$for.item.label}}</span>
-                </div>
-                <div style="font-size:12px;margin-top:2px;">
-                    Вес файлов: <strong>~{{selectedRepo.totalWeightGb}} ГБ</strong> · Файлов: <strong>{{selectedRepo.files?.length || 0}}</strong>
-                </div>
-                <div style="font-size:11.5px;opacity:0.9;" ~if="selectedRepo.fitLabel">{{selectedRepo.fitLabel}}</div>
-                <div class="field-box" ~if="selectedRepo.quants?.length">
-                    <label>Квантизация / Формат весов:</label>
-                    <select @change="selectedQuant = $this.value">
-                        <option ~for="selectedRepo.quants" :value="$for.item" :selected="$for.item === selectedQuant">{{$for.item}}</option>
-                    </select>
-                </div>
-                <div class="toolbar" style="margin-top:4px;">
-                    <button type="button" class="btn primary" @tap="downloadRepo(selectedRepo.id)">Скачать с Hugging Face в /MODELS/Local</button>
-                    <input style="width:140px;" type="password" :value="hfToken" placeholder="HF Token (опц.)" @change="hfToken = $this.value">
-                </div>
-                <div class="file-list" ~if="selectedRepo.files?.length">
-                    <div class="file-row" ~for="selectedRepo.files">
-                        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{$for.item.name}}</span>
-                        <span style="flex-shrink:0;font-weight:600;">{{$for.item.sizeFormatted || ($for.item.sizeGb + ' ГБ')}}</span>
-                    </div>
+                    <button type="button" class="btn primary" ~if="hasAvailableHalo" @tap="downloadHalogenBundleAll()">
+                        Установить весь комплект Halo (GPU + NPU)
+                    </button>
                 </div>
             </div>
 
-            <div class="section-title">Загрузки ({{downloads.length}})</div>
-            <div class="card" ~for="downloads">
-                <div class="model-top">
-                    <strong>{{$for.item.repoId}}</strong>
-                    <span class="badge purple">{{$for.item.status}} · {{$for.item.progress}}%</span>
-                </div>
-                <div style="font-size:11.5px;">Файл: {{$for.item.currentFile}} · Скорость: {{$for.item.speedMBs}} МБ/с</div>
-                <div class="progress-track">
-                    <div class="progress-fill" ~style="{width: ($for.item.progress || 0) + '%'}"></div>
-                </div>
-                <div style="font-size:11.5px;" ~if="$for.item.modelPath">Узел в дереве: <strong>{{$for.item.modelPath}}</strong></div>
-                <div class="error" ~if="$for.item.error">{{$for.item.error}}</div>
-                <div class="toolbar" ~if="$for.item.status === 'downloading'">
-                    <button type="button" class="btn danger" @tap="cancelDownload($for.item.id)">Отменить</button>
-                </div>
+            <div ~if="!unifiedModels.length" style="opacity:0.75;padding:6px 0;">
+                {{hfModality === 'installed' ? 'Пока не установлено ни одной локальной модели. Переключитесь на «Все» или загрузите с диска / флешки.' : 'Модели по выбранному фильтру не найдены.'}}
             </div>
 
-            <div class="section-title">Установленные модели в /MODELS/Local ({{localModels.length}})</div>
-            <div class="card" ~for="localModels">
-                <div class="model-top">
-                    <strong>{{$for.item.id}}</strong>
-                    <span class="badge">{{$for.item.path}}</span>
-                </div>
-                <div style="font-size:11.5px;">Файлы: {{$for.item.weightFiles?.join(', ') || 'метаданные $ai'}}</div>
-            </div>
-        </div>
-    </div>
+            <!-- Единый список карточек моделей: статус, прогресс + ETA и кнопки прямо в строке модели -->
+            <div class="model-row" ~for="unifiedModels" ~class="{'off': $for.item.state === 'installed' && !$for.item.active}">
+                <div class="model-main">
+                    <div class="model-left">
+                        <span class="dot" ~class="$for.item.dotClass"></span>
+                        <oda-icon :icon="$for.item.icon || 'ai:ollama'" icon-size="20"></oda-icon>
+                        <div style="min-width:0;flex:1;">
+                            <div class="toolbar" style="gap:6px;">
+                                <span class="model-name">{{$for.item.label}}</span>
+                                <span class="status-chip ok" ~if="$for.item.state === 'installed'">
+                                    Установлена<span ~if="$for.item.sizeGb"> · {{$for.item.sizeGb}} ГБ</span>
+                                </span>
+                                <span class="status-chip busy" ~if="$for.item.state === 'downloading'">
+                                    Скачивается · {{$for.item.download?.progress || 0}}%
+                                </span>
+                                <span class="status-chip warn" ~if="$for.item.state === 'paused'">
+                                    На паузе · {{fmtDownloadBytes($for.item.download?.downloadedBytes)}}
+                                </span>
+                                <span class="status-chip err" ~if="$for.item.state === 'failed'">
+                                    Обрыв / Ошибка
+                                </span>
+                            </div>
+                            <div class="model-desc">{{$for.item.desc}}</div>
+                        </div>
+                    </div>
 
-    <!-- ВКЛАДКА 2: ДАТАСЕТЫ WORK -->
-    <div class="workspace" ~if="activeTab === 'dataset'">
-        <div class="panel-left">
-            <div class="sticky-header">
-                <div class="section-title">Сборка обучающего датасета из живых данных WORK (ChatML JSONL)</div>
-                <div class="form-grid">
-                    <div class="field-box">
-                        <label>Имя датасета (.jsonl)</label>
-                        <input :value="datasetName" @input="datasetName = $this.value">
-                    </div>
-                    <div class="field-box">
-                        <label>Организация ($base)</label>
-                        <input :value="datasetBasePath" @input="datasetBasePath = $this.value">
-                    </div>
-                </div>
-                <div class="toolbar" style="gap:14px;">
-                    <label><input type="checkbox" :checked="srcTasks" @change="srcTasks = $this.checked"> Задачи ИИ и Консультанта (*.task)</label>
-                    <label><input type="checkbox" :checked="srcAccounting" @change="srcAccounting = $this.checked"> Операции, проводки и ОСВ (work.db)</label>
-                    <label><input type="checkbox" :checked="srcClasses" @change="srcClasses = $this.checked"> Классы, контракты и навыки (/MODULES)</label>
-                </div>
-                <div class="toolbar">
-                    <button type="button" class="btn primary" @tap="buildDataset()">Собрать датасет WORK</button>
-                </div>
-            </div>
-
-            <div class="cards-scroll">
-                <div class="section-title">Собранные датасеты ({{datasets.length}})</div>
-                <div class="card clickable" ~for="datasets" ~class="{'card-active': selectedDataset?.name === $for.item.name}" @tap="selectedDataset = $for.item">
-                    <div class="model-top">
-                        <strong>{{$for.item.name}}</strong>
-                        <span class="badge purple">Примеров: {{$for.item.totalExamples}} · ~{{$for.item.estimatedTokens}} токенов</span>
-                    </div>
-                    <div style="font-size:11.5px;">
-                        Файл: <code>{{$for.item.filePath}}</code> · Источники: задачи ({{$for.item.bySource?.tasks || 0}}), учёт ({{$for.item.bySource?.accounting || 0}}), классы ({{$for.item.bySource?.classes || 0}})
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="panel-right">
-            <div class="section-title">Предпросмотр обучающих примеров (ShareGPT / ChatML)</div>
-            <div class="card" ~for="selectedDataset?.preview">
-                <div class="model-top">
-                    <strong>{{$for.item.id}}</strong>
-                    <span class="badge">{{$for.item.category}} · {{$for.item.tokens}} tok</span>
-                </div>
-                <div style="font-size:12px;"><strong>User:</strong> {{$for.item.userPrompt}}</div>
-                <div class="mono" style="background:rgba(128,128,128,0.08);padding:6px;border-radius:4px;">{{$for.item.assistantReply}}</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ВКЛАДКА 3: ДООБУЧЕНИЕ (LoRA / SFT / GRPO) -->
-    <div class="workspace" ~if="activeTab === 'train'">
-        <div class="panel-left">
-            <div class="sticky-header">
-                <div class="section-title">Параметры дообучения (адаптированы под доступные ~{{hardware?.usableMemoryGb || 0}} ГБ памяти)</div>
-                <div class="form-grid">
-                    <div class="field-box">
-                        <label>Имя обучаемой модели / LoRA-адаптера</label>
-                        <input :value="trainAdapterName" @input="trainAdapterName = $this.value">
-                    </div>
-                    <div class="field-box">
-                        <label>Базовая модель (рекомендована: {{hardware?.recommendedBaseModel || 'Qwen/Qwen3-14B'}})</label>
-                        <input :value="trainBaseModel" @input="trainBaseModel = $this.value">
-                    </div>
-                    <div class="field-box">
-                        <label>Датасет (.jsonl)</label>
-                        <input :value="trainDatasetName" @input="trainDatasetName = $this.value">
-                    </div>
-                    <div class="field-box">
-                        <label>Метод обучения</label>
-                        <select @change="trainMode = $this.value">
-                            <option value="sft" :selected="trainMode === 'sft'">SFT (Supervised Fine-Tuning на примерах)</option>
-                            <option value="grpo" :selected="trainMode === 'grpo'">GRPO (RL с верификатором учётного ядра WORK)</option>
-                        </select>
-                    </div>
-                    <div class="field-box">
-                        <label>Ранг LoRA (r)</label>
-                        <select @change="trainLoraR = Number($this.value)">
-                            <option value="8" :selected="trainLoraR === 8">r = 8 (компактный)</option>
-                            <option value="16" :selected="trainLoraR === 16">r = 16 (стандарт)</option>
-                            <option value="32" :selected="trainLoraR === 32">r = 32 (глубокая адаптация)</option>
-                            <option value="64" :selected="trainLoraR === 64">r = 64 (максимальный)</option>
-                        </select>
-                    </div>
-                    <div class="field-box">
-                        <label>Длина контекста (max_seq_length)</label>
-                        <select @change="trainMaxSeq = Number($this.value)">
-                            <option value="4096" :selected="trainMaxSeq === 4096">4 096 токенов</option>
-                            <option value="8192" :selected="trainMaxSeq === 8192">8 192 токена</option>
-                            <option value="16384" :selected="trainMaxSeq === 16384">16 384 токена</option>
-                            <option value="32768" :selected="trainMaxSeq === 32768">32 768 токенов</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="toolbar">
-                    <button type="button" class="btn primary" @tap="startTraining()">Запустить дообучение</button>
-                </div>
-            </div>
-
-            <div class="cards-scroll">
-                <div class="section-title">Монитор задач обучения ({{jobs.length}})</div>
-                <div class="card" ~for="jobs">
-                    <div class="model-top">
-                        <strong>{{$for.item.adapterName}} ({{$for.item.mode.toUpperCase()}})</strong>
-                        <span class="badge purple">{{$for.item.status}} · шаг {{$for.item.step}} / {{$for.item.totalSteps}}</span>
-                    </div>
-                    <div style="font-size:12px;">
-                        База: <code>{{$for.item.baseModel}}</code> · Loss: <strong>{{$for.item.loss}}</strong>
-                        <span ~if="$for.item.reward !== null"> · GRPO Reward: <strong>{{$for.item.reward}}</strong></span>
-                        · Память: <strong>{{$for.item.ramUsedGb}} / {{$for.item.usableMemoryGb || hardware?.usableMemoryGb || 0}} ГБ</strong> · Скорость: {{$for.item.tokensPerSec}} tok/s
-                    </div>
-                    <div class="progress-track">
-                        <div class="progress-fill" ~style="{width: Math.round(($for.item.step / ($for.item.totalSteps || 1)) * 100) + '%'}"></div>
-                    </div>
-                    <div style="font-size:12px;" ~if="$for.item.publishedPath">
-                        Опубликована в дереве: <strong>{{$for.item.publishedPath}}</strong>
-                    </div>
-                    <div class="toolbar" ~if="$for.item.status === 'running'">
-                        <button type="button" class="btn danger" @tap="stopTraining($for.item.id)">Остановить</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="panel-right">
-            <div class="section-title">Кривая обучения (Loss) и Верификатор GRPO</div>
-            <div class="chart-box" ~if="activeJob?.history?.length">
-                <div style="font-size:12px;font-weight:600;margin-bottom:4px;">
-                    График падения Loss ({{activeJob.adapterName}}): {{activeJob.history[0]?.loss}} → {{activeJob.loss}}
-                </div>
-                <svg viewBox="0 0 320 110" style="width:100%;height:110px;display:block;">
-                    <polyline fill="none" stroke="#7c3aed" stroke-width="2.5" :points="lossPolyline"></polyline>
-                </svg>
-            </div>
-
-            <div class="section-title">Песочница Верификатора GRPO (Reward Function учётного ядра)</div>
-            <div class="card">
-                <div style="font-size:11.5px;opacity:0.85;">
-                    Проверяет ответ модели через <code>checkSchema</code> и <code>previewEntries</code> в БД организации и начисляет награду <code>reward (0..1)</code>.
-                </div>
-                <textarea rows="5" class="mono" :value="verifySample" @input="verifySample = $this.value"></textarea>
-                <div class="toolbar">
-                    <button type="button" class="btn" @tap="runVerify()">Проверить ответ (GRPO Reward)</button>
-                    <span class="badge purple" ~if="verifyResult">Reward: {{verifyResult.reward}} ({{verifyResult.valid ? 'валидно' : 'ошибка'}})</span>
-                </div>
-                <div ~if="verifyResult?.reasons?.length" style="font-size:11.5px;">
-                    <div ~for="verifyResult.reasons">• {{$for.item}}</div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- ВКЛАДКА 4: ГИБРИДНЫЙ КОНТУР HALOGEN (AMD RYZEN AI 495 PRO 192 GB: GPU + NPU) -->
-    <div class="workspace" ~if="activeTab === 'halogen'">
-        <div class="panel-left">
-            <div class="sticky-header">
-                <div class="section-title">Контур Strix Halo (:8731 · Linux halogen-flash-server / Windows 11 Halowin Bubo · Gufo ROCm 10.0 gfx1151 + NPU)</div>
-                <div class="model-top">
-                    <div class="model-title-group">
-                        <span class="badge optimal" ~if="halogenState?.online">Сервер :8731 активен</span>
-                        <span class="badge purple" ~if="!halogenState?.online">Автономный контур WORK</span>
-                        <strong>{{halogenState?.modeLabel || 'Контур готов'}}</strong>
-                    </div>
                     <div class="toolbar">
-                        <button type="button" class="btn" @tap="refreshHalogen()">Проверить :8731</button>
-                        <button type="button" class="btn primary" ~if="halogenState?.windowsEnv?.isWindows && !halogenState?.windowsEnv?.rocmRuntimePrepared" @tap="prepareWindowsBubo('runtime')">Установить Halowin Bubo (ROCm 10.0 gfx1151)</button>
-                        <button type="button" class="btn primary" @tap="downloadHalogenBundleAll()">Скачать весь пакет (GPU + NPU)</button>
-                        <button type="button" class="btn primary" @tap="startHalogenServer()">Запустить локальный сервер</button>
+                        <!-- Состояние: скачивается прямо сейчас -->
+                        <div class="toolbar" ~if="$for.item.state === 'downloading'">
+                            <span style="font-size:12px;font-weight:600;white-space:nowrap;">
+                                {{$for.item.download?.speedMBs || 0}} МБ/с
+                                <span ~if="$for.item.etaText"> · {{$for.item.etaText}}</span>
+                            </span>
+                            <button type="button" class="btn" @tap="pauseDownload($for.item)">Пауза</button>
+                        </div>
+
+                        <!-- Состояние: пауза / обрыв -->
+                        <div class="toolbar" ~if="$for.item.state === 'paused' || $for.item.state === 'failed'">
+                            <button type="button" class="btn primary" @tap="resumeDownload($for.item)">Докачать</button>
+                            <button type="button" class="btn danger" @tap="discardDownload($for.item)">Сбросить</button>
+                        </div>
+
+                        <!-- Состояние: установлена -->
+                        <div class="toolbar" ~if="$for.item.state === 'installed'">
+                            <label class="toolbar" style="cursor:pointer;font-size:12px;font-weight:600;">
+                                <input type="checkbox" :checked="$for.item.enabled !== false" @change="toggleLocalModel($for.item.path, $event.target.checked)">
+                                <span>Вкл</span>
+                            </label>
+                            <button type="button" class="btn danger" @tap="deleteLocalModel($for.item.id)">Удалить</button>
+                        </div>
+
+                        <!-- Состояние: доступна к установке -->
+                        <div class="toolbar" ~if="$for.item.state === 'available'">
+                            <span class="mem-tag" :title="$for.item.fit === 'too_large' ? 'Требуется больше памяти, чем доступно на этом ПК' : 'Подходит по памяти'">
+                                <span class="dot" ~class="$for.item.fit === 'too_large' ? 'off' : ($for.item.fit === 'optimal' ? 'on' : 'warn')"></span>
+                                <span><span ~if="$for.item.device">{{$for.item.device}} · </span>~{{$for.item.ramGb || 4}} ГБ</span>
+                            </span>
+                            <button type="button" class="btn primary" @tap="installUnifiedModel($for.item)">Установить</button>
+                        </div>
                     </div>
                 </div>
-                <div class="hw-specs" ~if="halogenState?.memoryPlan">
-                    <span class="hw-chip">Пул KV: <strong>{{halogenState?.cache?.pool?.used || 0}} / {{halogenState.memoryPlan.kvPoolPositions}} tok</strong> ({{halogenState.memoryPlan.kvSlots}} слота)</span>
-                    <span class="hw-chip">Веса Flash: <strong>{{halogenState.memoryPlan.flashWeightsGb}} ГБ</strong> + KV <strong>{{halogenState.memoryPlan.deviceSideGb}} ГБ</strong></span>
-                    <span class="hw-chip">FP8 Lookup Table: <strong>{{halogenState.memoryPlan.lookupTableGb}} ГБ</strong> (в ОЗУ)</span>
-                    <span class="hw-chip">NPU Sidecar: <strong>{{halogenState.memoryPlan.npuSidecarGb}} ГБ</strong></span>
-                    <span class="hw-chip">Свободно под WORK: <strong>~{{halogenState.memoryPlan.hostFreeForWorkGb}} ГБ</strong></span>
+
+                <!-- Прогресс-бар, объём, текущий файл и ETA на той же карточке -->
+                <div ~if="$for.item.state === 'downloading' || $for.item.state === 'paused'" style="display:flex;flex-direction:column;gap:4px;margin-top:2px;">
+                    <div class="progress-track">
+                        <div class="progress-fill" ~class="{'paused': $for.item.state === 'paused'}"
+                            ~style="{width: ($for.item.progressPct) + '%'}"></div>
+                    </div>
+                    <div class="model-desc" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                        <span>
+                            Скачано: <b>{{fmtDownloadBytes($for.item.download?.downloadedBytes)}}</b>
+                            <span ~if="$for.item.download?.totalBytes"> из {{fmtDownloadBytes($for.item.download?.totalBytes)}} ({{$for.item.download?.progress || 0}}%)</span>
+                            <span ~if="$for.item.download?.currentFile"> · {{$for.item.download?.currentFile}}</span>
+                        </span>
+                        <span ~if="$for.item.download?.retryAttempt">
+                            Авто-повтор #{{$for.item.download.retryAttempt}}: {{$for.item.download.retryError}}
+                        </span>
+                    </div>
                 </div>
-                <div class="hw-specs" ~if="halogenState?.windowsEnv?.isWindows">
-                    <span class="hw-chip">Движок Windows: <strong>{{halogenState.windowsEnv.buboInstalled ? 'Halowin Bubo v0.1.2 (gufo 0.26.0)' : 'Не установлен'}}</strong></span>
-                    <span class="hw-chip">ROCm 10.0 (gfx1151): <strong>{{halogenState.windowsEnv.rocmRuntimePrepared ? 'Установлен' : 'Требуется установка'}}</strong></span>
-                    <span class="hw-chip">NPU XRT (xrt-smi): <strong>{{halogenState.windowsEnv.npuDriverInstalled ? 'Активен' : 'Не найден'}}</strong></span>
-                    <span class="hw-chip">VC++ Redist: <strong>{{halogenState.windowsEnv.vcRedistInstalled ? 'ОК' : 'Требуется'}}</strong></span>
-                    <span class="hw-chip" ~if="halogenState.windowsEnv.pageFileGb !== null">PageFile: <strong>{{halogenState.windowsEnv.pageFileGb}} ГБ</strong> (рек. 128 ГБ)</span>
+
+                <!-- Текст ошибки на той же карточке при обрыве -->
+                <div class="inline-err" ~if="$for.item.state === 'failed' && $for.item.download?.error">
+                    {{$for.item.download.error}}
+                    <span ~if="$for.item.download?.downloadedBytes"> · Сохранено на диске: {{fmtDownloadBytes($for.item.download.downloadedBytes)}} (доступна докачка)</span>
                 </div>
             </div>
+        </div>
+    </div>
 
-            <div class="cards-scroll">
-                <div class="section-title">Матрица моделей /MODELS/Halogen ({{halogenCatalog.length}})</div>
-                <div class="card" ~for="halogenCatalog">
-                    <div class="model-top">
-                        <div class="model-title-group">
-                            <strong>{{$for.item.nodeName}}</strong>
-                            <span class="badge mod">{{$for.item.model}}</span>
-                            <span class="badge purple">{{$for.item.device}}</span>
-                            <span class="badge optimal" ~if="$for.item.weightsDownloaded">Веса на диске ({{$for.item.downloadedFiles?.length || 1}})</span>
-                            <span class="badge warn" ~if="$for.item.activeDownload">Загрузка {{$for.item.activeDownload.progress}}% ({{$for.item.activeDownload.speedMBs}} МБ/с)</span>
-                        </div>
-                        <div class="toolbar">
-                            <span class="badge">~{{$for.item.ramGb}} ГБ · ctx {{$for.item.maxTokens}}</span>
-                            <button type="button" class="btn" ~if="!$for.item.activeDownload" @tap="downloadHalogenModel($for.item.nodeName)">Скачать</button>
-                        </div>
+    <!-- ВКЛАДКА 2: ДООБУЧЕНИЕ НА ДАННЫХ ОРГАНИЗАЦИИ (2 ШАГА) -->
+    <div ~if="activeTab === 'train'" class="grid-2">
+        <!-- Шаг 1: Сборка данных организации -->
+        <div class="card">
+            <div class="section-title">Шаг 1. Собрать обучающий набор из организации</div>
+            <div class="field">
+                <label>Организация ($base)</label>
+                <input :value="datasetBasePath" placeholder="/ORGANIZATIONS/Моё предприятие" @input="datasetBasePath = $this.value">
+            </div>
+            <div class="field">
+                <label>Имя обучающего набора (.jsonl)</label>
+                <input :value="datasetName" @input="datasetName = $this.value">
+            </div>
+            <div class="vertical" style="gap:6px;margin-top:2px;">
+                <label class="toolbar" style="cursor:pointer;"><input type="checkbox" :checked="srcTasks" @change="srcTasks = $event.target.checked"> <span>Диалоги и решённые задачи ИИ (*.task)</span></label>
+                <label class="toolbar" style="cursor:pointer;"><input type="checkbox" :checked="srcAccounting" @change="srcAccounting = $event.target.checked"> <span>Учётные операции, проводки и ведомости (work.db)</span></label>
+                <label class="toolbar" style="cursor:pointer;"><input type="checkbox" :checked="srcClasses" @change="srcClasses = $event.target.checked"> <span>Структура классов и справочников (/MODULES)</span></label>
+            </div>
+            <div class="toolbar" style="margin-top:4px;">
+                <button type="button" class="btn primary" @tap="buildDataset()">Собрать обучающий набор</button>
+            </div>
+
+            <div class="section-title" ~if="datasets.length" style="margin-top:8px;">Готовые наборы ({{datasets.length}})</div>
+            <div class="model-row" ~for="datasets">
+                <div class="model-main">
+                    <div>
+                        <div class="model-name">{{$for.item.name}}</div>
+                        <div class="model-desc">Примеров: {{$for.item.totalExamples}} · ~{{$for.item.estimatedTokens}} токенов</div>
                     </div>
-                    <div class="progress-track" ~if="$for.item.activeDownload">
-                        <div class="progress-fill" ~style="{width: ($for.item.activeDownload.progress || 0) + '%'}"></div>
-                    </div>
-                    <div class="model-what">{{$for.item.role}}</div>
-                    <div style="font-size:11.5px;opacity:0.85;">Узел WORK: <code>{{$for.item.path}}</code> · Hugging Face: <code>{{$for.item.hfRepo}}</code></div>
+                    <button type="button" class="btn" @tap="trainDatasetName = $for.item.name">Выбрать</button>
                 </div>
             </div>
         </div>
 
-        <div class="panel-right">
-            <div class="section-title" ~if="downloads.length">Очередь загрузки пакета ({{downloads.length}})</div>
-            <div class="card" ~for="downloads">
-                <div class="model-top">
-                    <strong>{{$for.item.repoId}}</strong>
-                    <span class="badge purple">{{$for.item.status}} · {{$for.item.progress}}%</span>
+        <!-- Шаг 2: Запуск дообучения LoRA -->
+        <div class="card">
+            <div class="section-title">Шаг 2. Дообучить модель (LoRA)</div>
+            <div class="field">
+                <label>Название новой обученной модели</label>
+                <input :value="trainAdapterName" @input="trainAdapterName = $this.value">
+            </div>
+            <div class="field">
+                <label>Базовая модель (рекомендована под вашу память: {{hardware?.recommendedBaseModel || 'Qwen/Qwen3-8B'}})</label>
+                <input :value="trainBaseModel" @input="trainBaseModel = $this.value">
+            </div>
+            <div class="field">
+                <label>Обучающий набор (.jsonl)</label>
+                <input :value="trainDatasetName" @input="trainDatasetName = $this.value">
+            </div>
+            <div class="field">
+                <label>Режим обучения</label>
+                <select @change="trainMode = $this.value">
+                    <option value="sft" :selected="trainMode === 'sft'">Обучение на примерах организации (SFT)</option>
+                    <option value="grpo" :selected="trainMode === 'grpo'">Обучение с проверкой учётных проводок (GRPO)</option>
+                </select>
+            </div>
+            <div class="toolbar" style="margin-top:4px;">
+                <button type="button" class="btn primary" @tap="startTraining()">Запустить дообучение</button>
+            </div>
+
+            <div class="section-title" ~if="jobs.length" style="margin-top:8px;">Задачи обучения ({{jobs.length}})</div>
+            <div class="model-row" ~for="jobs">
+                <div class="model-main">
+                    <div>
+                        <div class="model-name">{{$for.item.adapterName}} ({{$for.item.mode?.toUpperCase()}})</div>
+                        <div class="model-desc">
+                            Шаг {{$for.item.step}} / {{$for.item.totalSteps}} · Loss: {{$for.item.loss}}
+                            <span ~if="$for.item.publishedPath"> · Готова: <code>{{$for.item.publishedPath}}</code></span>
+                        </div>
+                    </div>
+                    <button type="button" class="btn danger" ~if="$for.item.status === 'running'" @tap="stopTraining($for.item.id)">Остановить</button>
                 </div>
-                <div style="font-size:11.5px;">Файл: {{$for.item.currentFile}} · Скорость: {{$for.item.speedMBs}} МБ/с · Путь: <code>{{$for.item.modelPath}}</code></div>
                 <div class="progress-track">
-                    <div class="progress-fill" ~style="{width: ($for.item.progress || 0) + '%'}"></div>
-                </div>
-                <div class="error" ~if="$for.item.error">{{$for.item.error}}</div>
-                <div class="toolbar" ~if="$for.item.status === 'downloading'">
-                    <button type="button" class="btn danger" @tap="cancelDownload($for.item.id)">Отменить</button>
-                </div>
-            </div>
-
-            <div class="section-title">Нативный стек Windows 11 (Halowin Bubo / Gufo / Strata) и Linux Container</div>
-            <div class="card" ~if="halogenState?.memoryPlan">
-                <div style="font-size:11.5px;padding:6px 8px;border-radius:4px;background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.35);">
-                    <strong>Важно про WSL2 и BIOS:</strong> {{halogenState.memoryPlan.wslWarning}}<br>
-                    <strong>Настройка памяти:</strong> {{halogenState.memoryPlan.biosRecommendation}}
-                </div>
-                <div style="font-size:12px;font-weight:700;margin-top:6px;">1. Windows 11 Native — Halowin Bubo (AMD ROCm 10.0.0 gfx1151 + Ryzen AI XRT NPU + MTP + Dense Twin):</div>
-                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsPrepareCommand}}
-{{halogenState.memoryPlan.windowsCommand}}</pre>
-                <div style="font-size:12px;font-weight:700;margin-top:6px;">2. Windows 11 — Мультимодальные сервисы Gufo (ASR / TTS / Embeddings / Image / SystemOne):</div>
-                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsGufoServicesCommand}}</pre>
-                <div style="font-size:12px;font-weight:700;margin-top:6px;">3. Windows 11 PowerShell (Администратор) — Фиксированный Page File 128 ГБ (131072 МБ):</div>
-                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.windowsPageFileCommand}}</pre>
-                <div style="font-size:12px;font-weight:700;margin-top:6px;">4. Linux Native (halogen-flash-server ROCm /dev/kfd + NPU /dev/accel/accel0):</div>
-                <pre class="mono" style="background:rgba(128,128,128,0.08);padding:8px;border-radius:4px;margin:2px 0;">{{halogenState.memoryPlan.linuxCommand}}</pre>
-            </div>
-
-            <div class="section-title">Снимки KV-сессий субагентов (X-Halogen-Keep / X-Halogen-From)</div>
-            <div class="card" ~if="!halogenHandles.length">
-                <div style="font-size:12px;opacity:0.8;">Активных снимков KV-сессий пока нет. Они создаются автоматически при работе задачи <code>.task</code> и переиспользуются субагентами.</div>
-            </div>
-            <div class="card" ~for="halogenHandles">
-                <div class="model-top">
-                    <strong>{{$for.item.name}}</strong>
-                    <span class="badge purple">Токенов: {{$for.item.tokens}} · Попаданий: {{$for.item.hits || 0}}</span>
+                    <div class="progress-fill" ~style="{width: Math.round(($for.item.step / ($for.item.totalSteps || 1)) * 100) + '%'}"></div>
                 </div>
             </div>
         </div>
     </div>
     `,
-    activeTab: 'hf',
-    halogenState: null,
-    get halogenCatalog() {
-        return this.halogenState?.catalog || [];
-    },
-    get halogenHandles() {
-        return this.halogenState?.handles || [];
-    },
-    modalityTabs: MODALITY_TABS,
-    capabilityOptions: CAPABILITY_OPTIONS,
+    activeTab: 'models',
     hardware: null,
+    runtime: null,
     localModels: [],
     adapters: [],
     datasets: [],
     downloads: [],
     jobs: [],
+    transfers: [],
+    hfModels: [],
+    halogenCatalog: [],
     hfQuery: '',
     hfModality: 'all',
-    hfCapability: '',
     hfFilter: 'all',
-    hfToken: '',
-    hfModels: [],
-    selectedRepo: null,
-    selectedQuant: 'Q8_0',
-    datasetName: 'work-sft-dataset',
+    datasetName: 'work-org-sft',
     datasetBasePath: '/ORGANIZATIONS/Маслоторг',
     srcTasks: true,
     srcAccounting: true,
     srcClasses: true,
-    selectedDataset: null,
-    trainAdapterName: 'Маслоторг-Ассистент-LoRA',
-    trainBaseModel: '',
-    trainDatasetName: 'work-sft-dataset',
-    trainMode: 'grpo',
+    trainAdapterName: 'work-accountant-lora',
+    trainBaseModel: 'Qwen/Qwen3-8B',
+    trainDatasetName: 'work-org-sft.jsonl',
+    trainMode: 'sft',
     trainLoraR: 16,
     trainMaxSeq: 8192,
-    _defaultsApplied: false,
-    verifySample: JSON.stringify({
-        cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Поступления на расчётный счёт/От покупателя',
-        body: { sum: 50000, purpose: 'Оплата по договору поставки' },
-    }, null, 2),
-    verifyResult: null,
+    notice: '',
     error: '',
     _pollTimer: null,
-    get activeJob() {
-        return (this.jobs || [])[0] || null;
+
+    get categoryTabs() {
+        return [
+            { id: 'all', label: 'Все', icon: 'icons:apps' },
+            { id: 'installed', label: `Установленные (${(this.localModels || []).length})`, icon: 'icons:check' },
+            { id: 'llm', label: 'Чат и Код', icon: 'carbon:chat' },
+            { id: 'vlm', label: 'Зрение и Документы', icon: 'carbon:image-search' },
+            { id: 'audio', label: 'Речь и Голос', icon: 'carbon:microphone' },
+            { id: 'image', label: 'Картинки', icon: 'carbon:paint-brush' },
+            { id: 'embed', label: 'Поиск (RAG)', icon: 'carbon:search-locate' },
+            { id: 'halo', label: 'Комплект Halo (128–192 ГБ)', icon: 'carbon:chip' },
+        ];
     },
-    get lossPolyline() {
-        const hist = this.activeJob?.history || [];
-        if (!hist.length)
+    get activeDownloads() {
+        return (this.downloads || []).filter(d => d.status === 'downloading');
+    },
+    get activeTransfers() {
+        return (this.transfers || []).filter(t => t.status === 'running');
+    },
+    get hasAvailableHalo() {
+        return (this.halogenCatalog || []).some(h =>
+            !h.weightsDownloaded
+            && !this.isRepoInstalled(h.hfRepo, h.nodeName)
+            && !this.getDownloadEntry(h.hfRepo, h.nodeName)
+        );
+    },
+    get unifiedModels() {
+        const mod = String(this.hfModality || 'all');
+        const q = String(this.hfQuery || '').trim().toLowerCase();
+        const haloByNode = new Map();
+        const haloByRepo = new Map();
+        for (const h of this.halogenCatalog || []) {
+            if (h?.nodeName)
+                haloByNode.set(h.nodeName.toLowerCase(), h);
+            if (h?.hfRepo)
+                haloByRepo.set(h.hfRepo.toLowerCase(), h);
+        }
+
+        const list = [];
+        const findEntry = (id, repoId) => {
+            const idLow = String(id || '').toLowerCase();
+            const repoLow = String(repoId || '').toLowerCase();
+            const shortRepo = repoLow ? repoLow.split('/').pop() : '';
+            return list.find(x =>
+                (idLow && (x.id?.toLowerCase() === idLow || x.download?.folderName?.toLowerCase() === idLow))
+                || (repoLow && x.repoId?.toLowerCase() === repoLow)
+                || (shortRepo && x.id?.toLowerCase() === shortRepo)
+            ) || null;
+        };
+
+        // 1. Установленные локальные модели
+        for (const m of this.localModels || []) {
+            const halo = haloByNode.get(String(m.id || '').toLowerCase())
+                || haloByRepo.get(String(m.model || '').toLowerCase());
+            list.push({
+                key: `inst:${m.id}`,
+                id: m.id,
+                repoId: halo?.hfRepo || (String(m.model || '').includes('/') ? m.model : ''),
+                label: m.label || halo?.label || m.id,
+                desc: `Путь: ${m.path}${m.sizeGb ? ` · На диске: ${m.sizeGb} ГБ` : ''}`,
+                icon: m.icon || halo?.icon || 'ai:ollama',
+                modality: m.modality || halo?.modality || 'llm',
+                isHalo: Boolean(halo),
+                state: 'installed',
+                dotClass: m.active ? 'on' : 'off',
+                path: m.path,
+                enabled: m.enabled !== false,
+                active: Boolean(m.active),
+                sizeGb: m.sizeGb || 0,
+                ramGb: m.sizeGb || halo?.ramGb || 4,
+                fit: 'optimal',
+                device: halo?.device || '',
+                download: null,
+                progressPct: 100,
+                etaText: '',
+            });
+        }
+
+        // 2. Активные, приостановленные и упавшие загрузки (в т.ч. .part на диске)
+        for (const d of this.downloads || []) {
+            if (d.status === 'completed' || d.status === 'cancelled')
+                continue;
+            const halo = haloByNode.get(String(d.folderName || '').toLowerCase())
+                || haloByRepo.get(String(d.repoId || '').toLowerCase());
+            const existing = findEntry(d.folderName, d.repoId);
+            const state = d.status === 'downloading' ? 'downloading' : (d.status === 'failed' ? 'failed' : 'paused');
+            const progressPct = d.totalBytes > 0
+                ? Math.min(99, Math.max(0, Number(d.progress) || Math.round((d.downloadedBytes / d.totalBytes) * 100)))
+                : (d.downloadedBytes > 0 ? 15 : 0);
+            const etaText = this.formatEta(d.etaSeconds);
+            if (existing) {
+                if (existing.state !== 'installed') {
+                    existing.state = state;
+                    existing.dotClass = state === 'downloading' ? 'on' : 'warn';
+                    existing.download = d;
+                    existing.progressPct = progressPct;
+                    existing.etaText = etaText;
+                }
+                continue;
+            }
+            list.push({
+                key: `dl:${d.id || d.folderName}`,
+                id: d.folderName || halo?.nodeName || d.repoId,
+                repoId: d.repoId || halo?.hfRepo || '',
+                label: halo?.label || d.label || d.folderName || d.repoId,
+                desc: halo?.role || d.repoId || `Папка загрузки: #downloads/${d.folderName}`,
+                icon: halo?.icon || 'ai:ollama',
+                modality: halo?.modality || d.modality || 'llm',
+                isHalo: Boolean(halo),
+                state,
+                dotClass: state === 'downloading' ? 'on' : 'warn',
+                ramGb: halo?.ramGb || 4,
+                fit: 'optimal',
+                device: halo?.device || '',
+                download: d,
+                progressPct,
+                etaText,
+            });
+        }
+
+        // 3. Каталог Halo
+        for (const h of this.halogenCatalog || []) {
+            if (findEntry(h.nodeName, h.hfRepo))
+                continue;
+            list.push({
+                key: `halo:${h.nodeName}`,
+                id: h.nodeName,
+                repoId: h.hfRepo,
+                label: h.label || h.nodeName,
+                desc: h.role || '',
+                icon: h.icon || 'ai:qwen',
+                modality: h.modality || 'llm',
+                isHalo: true,
+                state: 'available',
+                dotClass: 'off',
+                ramGb: h.ramGb || 4,
+                fit: 'optimal',
+                device: h.device || '',
+                download: null,
+                progressPct: 0,
+                etaText: '',
+            });
+        }
+
+        // 4. Каталог Hugging Face
+        for (const item of this.hfModels || []) {
+            const short = String(item.id || '').split('/').pop();
+            if (findEntry(short, item.id))
+                continue;
+            list.push({
+                key: `hf:${item.id}`,
+                id: short || item.id,
+                repoId: item.id,
+                label: item.id,
+                desc: item.whatItDoes || item.recommendedFor || '',
+                icon: item.icon || 'ai:ollama',
+                modality: item.modality || 'llm',
+                isHalo: false,
+                state: 'available',
+                dotClass: 'off',
+                ramGb: item.ramRequiredGb || 4,
+                fit: item.fit || 'optimal',
+                device: '',
+                download: null,
+                progressPct: 0,
+                etaText: '',
+            });
+        }
+
+        const rank = { downloading: 0, paused: 1, failed: 1, installed: 2, available: 3 };
+        return list
+            .filter(item => {
+                if (mod === 'installed')
+                    return item.state === 'installed';
+                if (mod === 'halo')
+                    return item.isHalo;
+                if (mod !== 'all' && item.modality !== mod)
+                    return false;
+                if (q && mod !== 'halo' && mod !== 'installed') {
+                    const hay = `${item.label} ${item.id} ${item.repoId} ${item.desc}`.toLowerCase();
+                    if (!hay.includes(q))
+                        return false;
+                }
+                if (this.hfFilter === 'fit' && item.state === 'available' && item.fit === 'too_large')
+                    return false;
+                return true;
+            })
+            .sort((a, b) => (rank[a.state] ?? 9) - (rank[b.state] ?? 9));
+    },
+    formatEta(sec) {
+        const s = Number(sec);
+        if (!Number.isFinite(s) || s <= 0)
             return '';
-        const maxLoss = Math.max(...hist.map(h => Number(h.loss) || 0), 2.2);
-        const minLoss = Math.min(...hist.map(h => Number(h.loss) || 0), 0.2);
-        const span = Math.max(0.1, maxLoss - minLoss);
-        return hist.map((h, idx) => {
-            const x = Math.round((idx / Math.max(1, hist.length - 1)) * 304) + 8;
-            const y = Math.round(98 - ((Number(h.loss) - minLoss) / span) * 84);
-            return `${x},${y}`;
-        }).join(' ');
+        if (s < 60)
+            return `~${s} с`;
+        if (s < 3600)
+            return `~${Math.floor(s / 60)} мин ${s % 60} с`;
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        return `~${h} ч ${m} мин`;
+    },
+    fmtDownloadBytes(bytes) {
+        const b = Number(bytes) || 0;
+        if (b <= 0)
+            return '0 МБ';
+        if (b < 1024 * 1024)
+            return `${Math.round(b / 1024)} КБ`;
+        if (b < 1024 ** 3)
+            return `${(b / (1024 * 1024)).toFixed(1)} МБ`;
+        return `${(b / (1024 ** 3)).toFixed(2)} ГБ`;
+    },
+    isRepoInstalled(repoId, nodeName = '') {
+        if (!repoId && !nodeName)
+            return false;
+        const shortName = repoId ? String(repoId).split('/').pop().toLowerCase() : '';
+        const nodeLower = nodeName ? String(nodeName).toLowerCase() : '';
+        const repoLower = repoId ? String(repoId).toLowerCase() : '';
+        return (this.localModels || []).some(m => {
+            const mId = String(m.id || '').toLowerCase();
+            const mModel = String(m.model || '').toLowerCase();
+            return (shortName && mId === shortName)
+                || (nodeLower && mId === nodeLower)
+                || (repoLower && mModel === repoLower);
+        });
+    },
+    getDownloadEntry(repoId, nodeName = '') {
+        if (!repoId && !nodeName)
+            return null;
+        return (this.downloads || []).find(d =>
+            (d.status === 'downloading' || d.status === 'paused' || d.status === 'failed')
+            && ((repoId && d.repoId === repoId) || (nodeName && d.folderName === nodeName))
+        ) || null;
     },
     async attached() {
-        const p = String(this.$item?.path || this.$item?.short || '');
-        if (p === '/MODELS/Halogen' || p.startsWith('/MODELS/Halogen/'))
-            this.activeTab = 'halogen';
-        await this.reloadStatus();
+        await this.reloadAll();
         await this.searchHf();
-        if (this.activeTab === 'halogen')
-            await this.refreshHalogen();
+        this._pollTimer = setInterval(() => {
+            if (this.activeDownloads.length || this.activeTransfers.length || (this.jobs || []).some(j => j.status === 'running')) {
+                this.reloadAll();
+            }
+        }, 1200);
     },
     detached() {
         if (this._pollTimer) {
@@ -898,53 +869,16 @@ export default {
             this._pollTimer = null;
         }
     },
-    _ensurePolling() {
-        const hasActive = (this.downloads || []).some(d => d.status === 'downloading')
-            || (this.jobs || []).some(j => j.status === 'running');
-        if (hasActive && !this._pollTimer) {
-            this._pollTimer = setInterval(() => this.reloadStatus(), 500);
-        }
-        else if (!hasActive && this._pollTimer) {
-            clearInterval(this._pollTimer);
-            this._pollTimer = null;
-        }
-    },
-    async reloadStatus() {
+    async _call(method, params = {}) {
+        this.error = '';
         if (!this.$item)
-            return;
+            return null;
         try {
-            const st = await this.$item.fetch('trainer_status');
-            this.hardware = st?.hardware || null;
-            if (this.hardware && !this._defaultsApplied) {
-                this._defaultsApplied = true;
-                this.trainBaseModel = this.hardware.recommendedBaseModel || 'Qwen/Qwen3-14B';
-                this.trainLoraR = this.hardware.recommendedLoraR || 16;
-                this.trainMaxSeq = this.hardware.recommendedMaxSeq || 8192;
-            }
-            const prevCount = this.localModels?.length || 0;
-            this.localModels = Array.isArray(st?.models) ? st.models : [];
-            if (this.localModels.length !== prevCount)
-                this._invalidateClientModelsTree();
-            this.adapters = Array.isArray(st?.adapters) ? st.adapters : [];
-            this.datasets = Array.isArray(st?.datasets) ? st.datasets : [];
-            this.downloads = Array.isArray(st?.downloads) ? st.downloads : [];
-            this.jobs = Array.isArray(st?.jobs) ? st.jobs : [];
-            if (st?.halogen) {
-                this.halogenState = this.halogenState
-                    ? {
-                        ...this.halogenState,
-                        catalog: st.halogen.catalog,
-                        handles: st.halogen.handles,
-                        windowsEnv: st.halogen.windowsEnv || this.halogenState.windowsEnv,
-                    }
-                    : st.halogen;
-            }
-            if (!this.selectedDataset && this.datasets.length)
-                this.selectedDataset = this.datasets[0];
-            this._ensurePolling();
+            return await this.$item.fetch(method, params);
         }
         catch (e) {
             this.error = String(e?.message || e);
+            return null;
         }
     },
     _invalidateClientModelsTree() {
@@ -953,90 +887,183 @@ export default {
                 const wk = w?.WORK;
                 if (!wk?.items)
                     continue;
-                for (const p of ['/MODELS', '/MODELS/Local', '/MODELS/Halogen']) {
-                    const node = wk.items[p];
-                    if (node?.[w.R]?.cache)
-                        delete node[w.R].cache.items;
-                    node?.reset?.();
+                for (const k of Object.keys(wk.items)) {
+                    if (k === '/MODELS' || k.startsWith('/MODELS/')) {
+                        const node = wk.items[k];
+                        if (node?.[w.R]?.cache)
+                            delete node[w.R].cache.items;
+                        node?.reset?.();
+                    }
                 }
             }
             catch { /* ignore cross-frame */ }
         }
     },
+    async reloadAll() {
+        const prevCount = this.localModels?.length || 0;
+        const st = await this._call('trainer_status');
+        if (!st)
+            return;
+        if (st.hardware) {
+            const firstLoad = !this.hardware;
+            this.hardware = st.hardware;
+            if (firstLoad && st.hardware.recommendedBaseModel) {
+                this.trainBaseModel = st.hardware.recommendedBaseModel;
+                this.trainLoraR = st.hardware.recommendedLoraR || 16;
+                this.trainMaxSeq = st.hardware.recommendedMaxSeq || 8192;
+            }
+        }
+        this.runtime = st.runtime || null;
+        this.localModels = st.models || [];
+        this.adapters = st.adapters || [];
+        this.datasets = st.datasets || [];
+        this.downloads = st.downloads || [];
+        this.jobs = st.jobs || [];
+        this.transfers = st.transfers || [];
+        if (st.halogen?.catalog)
+            this.halogenCatalog = st.halogen.catalog;
+        if (this.localModels.length !== prevCount)
+            this._invalidateClientModelsTree();
+    },
     async setModality(mod) {
         this.hfModality = String(mod || 'all');
-        await this.searchHf();
+        if (this.hfModality !== 'halo' && this.hfModality !== 'installed') {
+            await this.searchHf();
+        }
     },
-    async setCapability(cap) {
-        this.hfCapability = String(cap || '');
-        await this.searchHf();
+    async installUnifiedModel(item) {
+        if (!item)
+            return;
+        if (item.download && (item.state === 'paused' || item.state === 'failed')) {
+            await this.resumeDownload(item);
+            return;
+        }
+        if (item.isHalo)
+            await this.downloadHalogenModel(item.id);
+        else
+            await this.installModelOneClick(item.repoId);
+    },
+    async pauseDownload(item) {
+        const jobId = item?.download?.id || item?.id || item;
+        if (!jobId)
+            return;
+        await this._call('trainer_hf_pause', { jobId });
+        this.notice = `Загрузка «${item?.label || jobId}» поставлена на паузу (скачанное сохранено для докачки).`;
+        await this.reloadAll();
+    },
+    async resumeDownload(item) {
+        const dl = item?.download || item || {};
+        const job = await this._call('trainer_hf_resume', {
+            jobId: dl.id || '',
+            folderName: dl.folderName || item?.id || '',
+            repoId: item?.repoId || dl.repoId || '',
+            quant: (this.hardware?.usableMemoryGb || 12) >= 24 ? 'Q8_0' : 'Q4_K_M',
+        });
+        if (job) {
+            this.notice = `Возобновлена докачка модели «${item?.label || dl.folderName || item?.repoId}»…`;
+            await this.reloadAll();
+        }
+    },
+    async discardDownload(item) {
+        const dl = item?.download || item || {};
+        await this._call('trainer_hf_discard', {
+            jobId: dl.id || '',
+            folderName: dl.folderName || item?.id || '',
+        });
+        this.notice = `Недокачанные файлы «${item?.label || dl.folderName}» удалены.`;
+        await this.reloadAll();
     },
     async setHfFilter(val) {
         this.hfFilter = String(val || 'all');
         await this.searchHf();
     },
     async searchHf() {
-        this.error = '';
-        if (!this.$item)
-            return;
-        try {
-            const res = await this.$item.fetch('trainer_hf_search', {
-                query: this.hfQuery,
-                modality: this.hfModality,
-                capability: this.hfCapability,
-                filter: this.hfFilter,
-                token: this.hfToken,
-            });
-            this.hfModels = Array.isArray(res?.items) ? res.items : [];
-            if (this.hfModels.length && (!this.selectedRepo || !this.hfModels.some(m => m.id === this.selectedRepo.id)))
-                await this.inspectRepo(this.hfModels[0].id);
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
+        const res = await this._call('trainer_hf_search', {
+            query: this.hfQuery,
+            modality: (this.hfModality === 'halo' || this.hfModality === 'installed') ? 'all' : this.hfModality,
+            filter: this.hfFilter,
+        });
+        if (res?.items)
+            this.hfModels = res.items;
     },
-    async inspectRepo(repoId) {
-        this.error = '';
-        if (!this.$item || !repoId)
+    async installModelOneClick(repoId) {
+        if (!repoId)
             return;
-        try {
-            this.selectedRepo = await this.$item.fetch('trainer_hf_inspect', {
-                repoId,
-                token: this.hfToken,
-            });
-            if (this.selectedRepo?.quants?.length)
-                this.selectedQuant = this.selectedRepo.quants[0];
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-    },
-    async downloadRepo(repoId) {
-        this.error = '';
-        if (!this.$item || !repoId)
-            return;
-        try {
-            await this.$item.fetch('trainer_hf_download', {
-                repoId,
-                quant: this.selectedQuant || 'Q8_0',
-                token: this.hfToken,
-            });
-            await this.reloadStatus();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
+        this.notice = '';
+        const quant = (this.hardware?.usableMemoryGb || 12) >= 24 ? 'Q8_0' : 'Q4_K_M';
+        const job = await this._call('trainer_hf_download', {
+            repoId,
+            quant,
+        });
+        if (job) {
+            this.notice = `Начата установка модели «${repoId}»…`;
+            await this.reloadAll();
+            this._invalidateClientModelsTree();
         }
     },
     async cancelDownload(jobId) {
-        if (!this.$item || !jobId)
+        await this._call('trainer_hf_cancel', { jobId });
+        await this.reloadAll();
+    },
+    async cancelTransfer(jobId) {
+        await this._call('trainer_transfer_cancel', { jobId });
+        await this.reloadAll();
+    },
+    async openTransferDialog(mode = 'export') {
+        const mod = await import('/$server/$folder/lib/local-models-transfer/local-models-transfer.js');
+        await mod.openLocalModelsTransferDialog(this.$item, {
+            mode,
+            onComplete: async () => {
+                await this.reloadAll();
+                this._invalidateClientModelsTree();
+            },
+        });
+        await this.reloadAll();
+    },
+    async toggleLocalModel(modelPath, checked) {
+        await this._call('provider_toggle_model', {
+            nodePath: modelPath,
+            enabled: checked,
+        });
+        await this.reloadAll();
+        this._invalidateClientModelsTree();
+    },
+    async deleteLocalModel(modelId) {
+        if (!modelId)
             return;
-        await this.$item.fetch('trainer_hf_cancel', { jobId });
-        await this.reloadStatus();
+        const res = await this._call('trainer_delete_model', { modelId });
+        if (res?.ok) {
+            this.notice = `Модель «${modelId}» и её веса удалены с диска.`;
+            await this.reloadAll();
+            this._invalidateClientModelsTree();
+        }
+    },
+    async releaseMemory() {
+        const res = await this._call('trainer_release_memory');
+        if (res?.ok) {
+            this.runtime = res.runtime || this.runtime;
+            this.notice = 'Оперативная память и видеопамять локального ИИ освобождены.';
+        }
+    },
+    async downloadHalogenModel(nodeName) {
+        if (!nodeName)
+            return;
+        const res = await this._call('halogen_download_bundle', { models: nodeName });
+        if (res) {
+            this.notice = `Начата установка модели «${nodeName}» в /MODELS/Local…`;
+            await this.reloadAll();
+            this._invalidateClientModelsTree();
+        }
+    },
+    async downloadHalogenBundleAll() {
+        const res = await this._call('halogen_download_bundle', {});
+        if (res) {
+            this.notice = `Начата установка комплекта Halo (${res.totalModels} моделей GPU + NPU) в /MODELS/Local…`;
+            await this.reloadAll();
+            this._invalidateClientModelsTree();
+        }
     },
     async buildDataset() {
-        this.error = '';
-        if (!this.$item)
-            return;
         const sources = [];
         if (this.srcTasks)
             sources.push('tasks');
@@ -1044,130 +1071,34 @@ export default {
             sources.push('accounting');
         if (this.srcClasses)
             sources.push('classes');
-        try {
-            const meta = await this.$item.fetch('trainer_dataset_build', {
-                name: this.datasetName,
-                basePath: this.datasetBasePath,
-                sources: sources.join(','),
-            });
-            this.selectedDataset = meta;
-            this.trainDatasetName = meta?.name || this.datasetName;
-            await this.reloadStatus();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
+        const ds = await this._call('trainer_dataset_build', {
+            name: this.datasetName,
+            basePath: this.datasetBasePath,
+            sources: sources.join(','),
+        });
+        if (ds) {
+            this.trainDatasetName = `${ds.name}.jsonl`;
+            this.notice = `Обучающий набор «${ds.name}» собран (${ds.totalExamples} примеров).`;
+            await this.reloadAll();
         }
     },
     async startTraining() {
-        this.error = '';
-        if (!this.$item)
-            return;
-        try {
-            await this.$item.fetch('trainer_start', {
-                adapterName: this.trainAdapterName,
-                baseModel: this.trainBaseModel,
-                datasetName: this.trainDatasetName,
-                basePath: this.datasetBasePath,
-                mode: this.trainMode,
-                loraR: this.trainLoraR,
-                maxSeqLength: this.trainMaxSeq,
-            });
-            await this.reloadStatus();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
+        const job = await this._call('trainer_start', {
+            adapterName: this.trainAdapterName,
+            baseModel: this.trainBaseModel,
+            datasetName: this.trainDatasetName,
+            mode: this.trainMode,
+            loraR: this.trainLoraR,
+            maxSeqLength: this.trainMaxSeq,
+            basePath: this.datasetBasePath,
+        });
+        if (job) {
+            this.notice = `Запущено дообучение модели «${this.trainAdapterName}»…`;
+            await this.reloadAll();
         }
     },
     async stopTraining(jobId) {
-        if (!this.$item || !jobId)
-            return;
-        await this.$item.fetch('trainer_stop', { jobId });
-        await this.reloadStatus();
+        await this._call('trainer_stop', { jobId });
+        await this.reloadAll();
     },
-    async runVerify() {
-        this.error = '';
-        if (!this.$item)
-            return;
-        try {
-            this.verifyResult = await this.$item.fetch('trainer_verify', {
-                basePath: this.datasetBasePath,
-                taskType: 'operation',
-                completion: this.verifySample,
-            });
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-    },
-    async openHalogenTab() {
-        this.activeTab = 'halogen';
-        await this.refreshHalogen();
-    },
-    async refreshHalogen() {
-        if (!this.$item)
-            return;
-        try {
-            this.halogenState = await this.$item.fetch('halogen_status');
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-    },
-    async startHalogenServer() {
-        this.error = '';
-        if (!this.$item)
-            return;
-        try {
-            await this.$item.fetch('halogen_start');
-            await this.refreshHalogen();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-    },
-    async prepareWindowsBubo(step = 'runtime') {
-        this.error = '';
-        if (!this.$item)
-            return;
-        try {
-            const res = await this.$item.fetch('halogen_prepare_windows', { step });
-            if (res?.error)
-                this.error = res.error;
-            await this.refreshHalogen();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-    },
-    async downloadHalogenBundleAll() {
-        this.error = '';
-        if (!this.$item)
-            return;
-        try {
-            await this.$item.fetch('halogen_download_bundle', {
-                token: this.hfToken,
-            });
-            await this.reloadStatus();
-            await this.refreshHalogen();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-    },
-    async downloadHalogenModel(nodeName) {
-        this.error = '';
-        if (!this.$item || !nodeName)
-            return;
-        try {
-            await this.$item.fetch('halogen_download_bundle', {
-                models: nodeName,
-                token: this.hfToken,
-            });
-            await this.reloadStatus();
-            await this.refreshHalogen();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-    },
-};
+}

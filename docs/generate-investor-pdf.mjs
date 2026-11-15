@@ -26,6 +26,10 @@ const variants = {
         html: path.join(__dirname, 'WORK-presentation.html'),
         pdf: path.join(__dirname, 'WORK-presentation.pdf'),
     },
+    kp: {
+        html: path.join(__dirname, 'KP-Gazprom-Shelfproject-WORK.html'),
+        pdf: path.join(__dirname, 'KP-Gazprom-Shelfproject-WORK.pdf'),
+    },
 };
 
 const key = process.argv[2] || 'overview';

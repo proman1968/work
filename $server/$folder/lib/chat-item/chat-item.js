@@ -28,7 +28,7 @@ ODA({is: 'chat-item',
             }
             :host([expanded]){
                 position: fixed;
-                z-index: 2;
+                z-index: 30;
                 border-radius: 0px;
                 top: 0px;
                 left: 0px;
@@ -195,6 +195,14 @@ ODA({is: 'chat-item',
         $attr: true,
         $def: false,
         set(n) {
+            try {
+                this.dispatchEvent(new CustomEvent('chat-item-expanded', {
+                    bubbles: true,
+                    composed: true,
+                    detail: { expanded: Boolean(n), card: this },
+                }));
+            }
+            catch { /* ignore */ }
             if (n) {
                 const root = this.parentElement?.parentElement?.parentElement || this.getRootNode?.()?.host;
                 const allCards = root?.$$ ? root.$$('chat-item') : (this.parentElement?.querySelectorAll?.('chat-item') || []);
@@ -810,6 +818,14 @@ ODA({is: 'chat-item',
             w.item.unlisten('changed', w.fn);
             w.on = false;
         }
+        try {
+            this.dispatchEvent(new CustomEvent('chat-item-expanded', {
+                bubbles: true,
+                composed: true,
+                detail: { expanded: false, card: this },
+            }));
+        }
+        catch { /* ignore */ }
     },
     senderId: {
         $type: String,

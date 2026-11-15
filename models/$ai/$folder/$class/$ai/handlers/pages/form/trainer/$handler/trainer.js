@@ -1,6 +1,347 @@
 /**
- * form/trainer для локальной модели $ai — наследует представление провайдера.
+ * form/trainer для конкретного узла модели $ai — чистая карточка параметров, состояния и проверки модели.
  */
-import trainerProto from '../../../../../$provider/handlers/pages/form/trainer/$handler/trainer.js';
+export default {
+    imports: 'oda//icon',
+    template: /*html*/`
+    <style>
+        :host {
+            @apply --vertical;
+            @apply --flex;
+            overflow-y: auto;
+            background: var(--content-background, #ffffff);
+            color: var(--content-color, #1e293b);
+            font-size: 13px;
+            padding: 16px 20px;
+            gap: 14px;
+            box-sizing: border-box;
+        }
+        .header-card {
+            @apply --horizontal;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--subtle-background, #f8fafc);
+            flex-wrap: wrap;
+        }
+        .header-left {
+            @apply --horizontal;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+        .title {
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .subtitle {
+            font-size: 12px;
+            opacity: 0.75;
+            margin-top: 2px;
+        }
+        .toolbar {
+            @apply --horizontal;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge.active {
+            background: light-dark(#dcfce7, #14532d);
+            color: light-dark(#166534, #bbf7d0);
+            border: 1px solid light-dark(#86efac, #16a34a);
+        }
+        .badge.inactive {
+            background: light-dark(#f1f5f9, #27272a);
+            color: light-dark(#64748b, #a1a1aa);
+            border: 1px solid light-dark(#cbd5e1, #3f3f46);
+        }
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .dot.on { background: #22c55e; }
+        .dot.off { background: #94a3b8; }
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 14px;
+        }
+        .card {
+            @apply --vertical;
+            gap: 10px;
+            padding: 14px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--content-background, #ffffff);
+        }
+        .section-title {
+            font-weight: 700;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            opacity: 0.75;
+            border-bottom: 1px solid var(--border-color, #e2e8f0);
+            padding-bottom: 6px;
+        }
+        .kv-row {
+            @apply --horizontal;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+            padding: 5px 0;
+            border-bottom: 1px solid var(--border-color, #f1f5f9);
+            font-size: 12.5px;
+        }
+        .kv-label {
+            opacity: 0.75;
+        }
+        .kv-val {
+            font-weight: 600;
+            text-align: right;
+        }
+        .pill {
+            font-size: 11px;
+            padding: 2px 7px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--subtle-background, #f8fafc);
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            font-size: 12.5px;
+            font-weight: 600;
+            border-radius: 6px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--subtle-background, #f1f5f9);
+            color: inherit;
+            cursor: pointer;
+        }
+        .btn.primary {
+            background: var(--accent-color, #2563eb);
+            border-color: var(--accent-color, #2563eb);
+            color: #ffffff;
+        }
+        .btn.danger {
+            color: light-dark(#b91c1c, #fca5a5);
+            border-color: light-dark(#fecaca, #7f1d1d);
+        }
+        textarea {
+            padding: 8px 10px;
+            font-size: 13px;
+            font-family: inherit;
+            border: 1px solid var(--border-color, #cbd5e1);
+            border-radius: 6px;
+            background: var(--content-background, #ffffff);
+            color: inherit;
+            resize: vertical;
+        }
+        .reply-box {
+            padding: 10px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color, #cbd5e1);
+            background: var(--subtle-background, #f8fafc);
+            white-space: pre-wrap;
+            line-height: 1.45;
+            font-size: 13px;
+        }
+        .msg {
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12.5px;
+        }
+        .msg.ok {
+            background: light-dark(#dcfce7, #14532d);
+            color: light-dark(#166534, #bbf7d0);
+        }
+        .msg.err {
+            background: light-dark(#fee2e2, #450a0a);
+            color: light-dark(#991b1b, #fecaca);
+        }
+    </style>
 
-export default trainerProto;
+    <div class="header-card" ~if="info">
+        <div class="header-left">
+            <oda-icon :icon="info.icon || 'carbon:machine-learning-model'" icon-size="30"></oda-icon>
+            <div>
+                <div class="title">{{info.label || info.id}}</div>
+                <div class="subtitle">Провайдер: {{providerName}} · Путь: {{info.path}}</div>
+            </div>
+        </div>
+        <div class="toolbar">
+            <span class="badge" ~class="info.aiActive ? 'active' : 'inactive'">
+                <span class="dot" ~class="info.aiActive ? 'on' : 'off'"></span>
+                <span>{{info.aiActive ? 'Активна' : ('Неактивна: ' + (info.aiStatusReason || 'не настроена'))}}</span>
+            </span>
+            <label class="toolbar" style="cursor:pointer;font-weight:600;">
+                <input type="checkbox" :checked="modelEnabled" @change="toggleEnabled($event.target.checked)">
+                <span>Включена</span>
+            </label>
+            <button type="button" class="btn danger" ~if="isLocalModel" @tap="deleteModel()">Удалить с диска</button>
+        </div>
+    </div>
+
+    <div class="msg ok" ~if="notice">{{notice}}</div>
+    <div class="msg err" ~if="error">{{error}}</div>
+
+    <div class="grid-2" ~if="info">
+        <div class="card">
+            <div class="section-title">Параметры модели</div>
+            <div class="kv-row">
+                <span class="kv-label">Идентификатор модели (API):</span>
+                <span class="kv-val"><code>{{info.DATA?.model || info.id}}</code></span>
+            </div>
+            <div class="kv-row">
+                <span class="kv-label">Протокол:</span>
+                <span class="kv-val">{{info.DATA?.protocol || 'openai'}}</span>
+            </div>
+            <div class="kv-row">
+                <span class="kv-label">Размер контекста (maxTokens):</span>
+                <span class="kv-val">{{info.maxTokens || info.DATA?.maxTokens || 32768}} токенов</span>
+            </div>
+            <div class="kv-row">
+                <span class="kv-label">Макс. длина ответа (maxOutput):</span>
+                <span class="kv-val">{{info.maxOutput || info.DATA?.maxOutput || 8192}} токенов</span>
+            </div>
+            <div class="kv-row" ~if="info.DATA?.baseUrl">
+                <span class="kv-label">Адрес API (Base URL):</span>
+                <span class="kv-val" style="word-break:break-all;"><code>{{info.DATA.baseUrl}}</code></span>
+            </div>
+            <div class="kv-row">
+                <span class="kv-label">Возможности:</span>
+                <div class="toolbar" style="justify-content:flex-end;">
+                    <span class="pill" ~for="capabilities">{{$for.item}}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="section-title">Быстрая проверка ответа</div>
+            <textarea rows="3" :value="testPrompt" placeholder="Введите тестовый вопрос к модели…" @input="testPrompt = $this.value"></textarea>
+            <div class="toolbar">
+                <button type="button" class="btn primary" :disabled="testing" @tap="runTestPrompt()">
+                    {{testing ? 'Ожидание ответа…' : 'Отправить запрос'}}
+                </button>
+            </div>
+            <div class="reply-box" ~if="testReply">{{testReply}}</div>
+        </div>
+    </div>
+    `,
+    info: null,
+    modelEnabled: true,
+    testPrompt: 'Привет! Представься коротко в одном предложении.',
+    testReply: '',
+    testing: false,
+    notice: '',
+    error: '',
+    get providerName() {
+        const parts = String(this.info?.path || this.$item?.path || '').split('/').filter(Boolean);
+        return parts[1] || 'MODELS';
+    },
+    get isLocalModel() {
+        return String(this.info?.path || this.$item?.path || '').startsWith('/MODELS/Local/');
+    },
+    get capabilities() {
+        const c = this.info?.capabilities || this.info?.DATA?.capabilities || ['chat', 'stream'];
+        return Array.isArray(c) ? c : String(c).split(/[\s,]+/).filter(Boolean);
+    },
+    async attached() {
+        await this.reload();
+    },
+    async reload() {
+        if (!this.$item)
+            return;
+        try {
+            const inf = await this.$item.fetch('info');
+            this.info = inf;
+            this.modelEnabled = inf?.DATA?.enabled !== false;
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    _refreshTree() {
+        for (const w of [window, window.parent, window.top]) {
+            try {
+                const wk = w?.WORK;
+                if (!wk?.items)
+                    continue;
+                for (const k of Object.keys(wk.items)) {
+                    if (k === '/MODELS' || k.startsWith('/MODELS/')) {
+                        const node = wk.items[k];
+                        if (node?.[w.R]?.cache)
+                            delete node[w.R].cache.items;
+                        node?.reset?.();
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }
+    },
+    async toggleEnabled(checked) {
+        this.error = '';
+        this.notice = '';
+        if (!this.$item)
+            return;
+        try {
+            await this.$item.fetch('provider_toggle_model', {
+                nodePath: this.$item.path,
+                enabled: checked,
+            });
+            await this.reload();
+            this._refreshTree();
+            this.notice = checked ? 'Модель включена.' : 'Модель отключена.';
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async deleteModel() {
+        if (!this.$item || !this.isLocalModel)
+            return;
+        this.error = '';
+        try {
+            await this.$item.fetch('trainer_delete_model', { modelId: this.$item.id });
+            this._refreshTree();
+            this.notice = 'Модель и её веса удалены с диска.';
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async runTestPrompt() {
+        if (!this.$item || !this.testPrompt.trim())
+            return;
+        this.testing = true;
+        this.error = '';
+        this.testReply = '';
+        try {
+            const res = await this.$item.fetch('chat', {
+                messages: [{ role: 'user', content: this.testPrompt.trim() }],
+            });
+            this.testReply = String(res?.content ?? res?.text ?? JSON.stringify(res));
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.testing = false;
+        }
+    },
+}

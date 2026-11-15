@@ -55,6 +55,11 @@ torus/binnet/models/
 **/#datasets/
 **/#adapters/
 
+# Незавершённые загрузки моделей (папка #downloads с .part-файлами может занимать десятки ГБ)
+**/#downloads/
+**/#cache/
+**/#runtime/
+
 !*.js
 
 .vscode/tasks.json

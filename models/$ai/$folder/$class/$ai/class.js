@@ -22,7 +22,7 @@ const REMOTE_BODY_MAX = 32 * 1024 * 1024; // R7 (8.35): бинарный отв�
 
 export default {
     icon: 'carbon:machine-learning-model',
-    form: 'editor',
+    form: 'trainer',
     /** карточка модели для клиента: попадает в info, читается баром и usage-панелью */
     $public: {
         maxTokens: 4096,   // лимит контекста (usage / info)
@@ -175,6 +175,11 @@ export default {
                 temperature: options.temperature ?? 0.7,
                 stream: true,
             };
+            if (ai.protocol === 'yandex' && body.model && !/^(gpt|emb|ds):\/\//i.test(body.model)) {
+                const folderId = await resolveFolderId(ai);
+                if (folderId)
+                    body.model = `gpt://${folderId}/${body.model}`;
+            }
             const cap = Number(options.maxOutput);
             if (Number.isFinite(cap) && cap > 0)
                 body.max_tokens = cap;
@@ -610,8 +615,14 @@ export default {
         const input = params.input ?? params.text ?? params.post ?? '';
         const origin = speechOrigin(params, ai, 'embed');
         const headers = await getAuthHeaders(ai);
+        let finalModel = tag;
+        if (ai.protocol === 'yandex' && finalModel && !/^(gpt|emb):\/\//i.test(finalModel)) {
+            const folderId = await resolveFolderId(ai);
+            if (folderId)
+                finalModel = `emb://${folderId}/${finalModel}`;
+        }
         const body = {
-            model: tag,
+            model: finalModel,
             input: Array.isArray(input) ? input : [String(input)],
             ...(params.dimensions ? { dimensions: Number(params.dimensions) } : {}),
             ...(params.encoding_format ? { encoding_format: String(params.encoding_format) } : {}),
@@ -695,7 +706,10 @@ export default {
 
 function isHalogenModel(ai) {
     const p = String(ai?.path || ai?.short || '');
-    return ai?.protocol === 'halogen' || p.startsWith('/MODELS/Halogen/');
+    const b = String(ai?.baseUrl || ai?.DATA?.baseUrl || '');
+    return ai?.protocol === 'halogen'
+        || p.startsWith('/MODELS/Halogen/')
+        || (p.startsWith('/MODELS/Local/') && b.includes(':8731'));
 }
 
 function speechOrigin(params, ai, who) {
@@ -1487,6 +1501,25 @@ async function getAuthHeaders(ai) {
                 headers['anthropic-beta'] = String(ai.anthropicBeta);
             break;
         }
+        case 'yandex': {
+            let key = '';
+            try {
+                key = await resolveKey(ai, ai.apiKey || 'secret:yandex.json');
+            }
+            catch (e) {
+                if (!process.env.YANDEX_API_KEY)
+                    throw e;
+            }
+            if (!key)
+                key = String(process.env.YANDEX_API_KEY || '').trim();
+            if (!key)
+                throw new Error('Yandex AI: не задан API-ключ — откройте /MODELS/Yandex для настройки ключа или задайте YANDEX_API_KEY');
+            headers['Authorization'] = key.startsWith('t1.') ? ('Bearer ' + key) : ('Api-Key ' + key);
+            const folderId = await resolveFolderId(ai);
+            if (folderId)
+                headers['x-folder-id'] = folderId;
+            break;
+        }
         case 'openai':
         default: {
             const key = await resolveKey(ai, ai.apiKey);
@@ -1495,6 +1528,28 @@ async function getAuthHeaders(ai) {
         }
     }
     return headers;
+}
+
+async function resolveFolderId(ai) {
+    const raw = String(ai?.folderId ?? ai?.DATA?.folderId ?? '').trim();
+    if (raw && !/^secret:/i.test(raw) && !/^env:/i.test(raw))
+        return raw;
+    if (/^env:/i.test(raw))
+        return String(process.env[raw.slice(4).trim()] || '').trim();
+    const filename = /^secret:/i.test(raw) ? raw.slice(7).trim() : 'yandex.json';
+    let cur = ai;
+    for (let i = 0; i < 6 && cur; i++) {
+        if (typeof cur.read_secret === 'function') {
+            try {
+                const data = await cur.read_secret({ filename });
+                if (data?.folderId)
+                    return String(data.folderId).trim();
+            }
+            catch { /* выше по дереву */ }
+        }
+        cur = cur.$parent ?? cur.parent;
+    }
+    return String(process.env.YANDEX_FOLDER_ID || '').trim();
 }
 
 /**

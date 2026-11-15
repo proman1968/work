@@ -7,7 +7,7 @@
 export default {
     icon: 'carbon:api',
     label: 'Провайдер ИИ',
-    form: 'editor',
+    form: 'provider',
     METADATA: {
         STATIC: [{
             id: 'protocol',

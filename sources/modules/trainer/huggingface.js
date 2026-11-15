@@ -1005,9 +1005,73 @@ export default ${JSON.stringify(meta, null, 4)};
     };
 }
 
+const DOWNLOAD_STATE_FILE = 'download-state.json';
+const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function isRetryableDownloadError(err) {
+    if (!err)
+        return false;
+    if (err.httpStatus && RETRYABLE_HTTP_STATUSES.has(err.httpStatus))
+        return true;
+    if (err.httpStatus && err.httpStatus >= 400 && err.httpStatus < 500)
+        return false;
+    const msg = String(err?.message || err);
+    if (/Unexpected URL|Некорректн|отменена/i.test(msg))
+        return false;
+    return err.retryable === true
+        || /ECONNRESET|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|network|fetch failed|terminated|aborted|socket|premature/i.test(msg);
+}
+
+async function writeDownloadStateSafe(stagingDir, job, extra = {}) {
+    try {
+        await fsp.mkdir(stagingDir, { recursive: true });
+        const payload = {
+            repoId: job.repoId,
+            label: job.label,
+            modality: job.modality,
+            capabilities: job.capabilities,
+            revision: job.revision,
+            providerFolder: job.providerFolder,
+            folderName: job.folderName,
+            registerInWork: extra.registerInWork !== false,
+            nodeMeta: extra.nodeMeta || null,
+            files: (job.files || []).map(f => ({ name: f.name, size: Number(f.size) || 0 })),
+            totalBytes: Number(job.totalBytes) || 0,
+            downloadedBytes: Number(job.downloadedBytes) || 0,
+            status: job.status,
+            error: job.error || null,
+            updatedAt: Date.now(),
+        };
+        const tmp = path.join(stagingDir, `${DOWNLOAD_STATE_FILE}.tmp`);
+        await fsp.writeFile(tmp, JSON.stringify(payload, null, 2), 'utf-8');
+        await fsp.rename(tmp, path.join(stagingDir, DOWNLOAD_STATE_FILE));
+    }
+    catch { /* ignore state write error */ }
+}
+
+function waitAbortable(ms, signal) {
+    if (ms <= 0)
+        return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new Error('Загрузка приостановлена пользователем'));
+            return;
+        }
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(new Error('Загрузка приостановлена пользователем'));
+        };
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+
 /**
  * Запустить прямую загрузку модели с Hugging Face в `MODELS/Local/<Имя>/#weights/`
- * с поддержкой докачки (`Range`), отслеживанием прогресса и авто-созданием узла `$ai`.
+ * с поддержкой докачки (`Range`), авто-ретраев при обрывах, паузы без потери скачанного и авто-созданием узла `$ai`.
  */
 export async function startHuggingFaceDownload({
     repoId,
@@ -1021,6 +1085,8 @@ export async function startHuggingFaceDownload({
     nodeMeta = null,
     registerInWork = true,
     waitForCompletion = false,
+    maxRetries = 20,
+    retryBaseDelayMs = 3000,
     fetchImpl = globalThis.fetch,
 } = {}) {
     const cleanId = validateRepoId(repoId);
@@ -1057,9 +1123,44 @@ export async function startHuggingFaceDownload({
 
     await fsp.mkdir(stagingDir, { recursive: true });
 
+    // Убираем старые завершённые/паузовые записи для той же папки из памяти
+    for (const [k, entry] of _downloads.entries()) {
+        if (entry.job.status !== 'downloading' && entry.job.providerFolder === safeProvider && entry.job.folderName === folderName)
+            _downloads.delete(k);
+    }
+
+    const jobFiles = [];
+    for (const f of selected) {
+        const size = Number(f.size) || 0;
+        const stagedFile = path.join(stagingDir, path.basename(f.name));
+        const partFile = stagedFile + '.part';
+        let downloaded = 0;
+        let done = false;
+        try {
+            const stDone = await fsp.stat(stagedFile);
+            if (stDone.isFile() && stDone.size > 0 && (!size || stDone.size === size)) {
+                downloaded = stDone.size;
+                done = true;
+            }
+        }
+        catch { /* ещё не завершён */ }
+        if (!done) {
+            try {
+                const stPart = await fsp.stat(partFile);
+                if (stPart.isFile())
+                    downloaded = stPart.size;
+            }
+            catch { /* .part ещё нет */ }
+        }
+        jobFiles.push({ name: f.name, size: size || (done ? downloaded : 0), downloaded, done });
+    }
+
     const jobId = 'hf_' + crypto.randomUUID().slice(0, 8);
-    const totalBytes = selected.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
+    const totalBytes = jobFiles.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
+    const initialDownloaded = jobFiles.reduce((acc, f) => acc + (Number(f.downloaded) || 0), 0);
+    const initialProgress = totalBytes > 0 ? Math.min(99, Math.round((initialDownloaded / totalBytes) * 100)) : 0;
     const controller = new AbortController();
+    let keepFilesOnAbort = true;
 
     const job = {
         id: jobId,
@@ -1070,87 +1171,177 @@ export async function startHuggingFaceDownload({
         revision: String(revision || 'main'),
         providerFolder: safeProvider,
         folderName,
+        rootDir,
+        stagingDir,
         weightsDir,
         status: 'downloading',
-        files: selected.map(f => ({ name: f.name, size: Number(f.size) || 0, downloaded: 0, done: false })),
-        currentFile: selected[0]?.name || '',
-        downloadedBytes: 0,
+        files: jobFiles,
+        currentFile: (jobFiles.find(f => !f.done) || jobFiles[0])?.name || '',
+        downloadedBytes: initialDownloaded,
         totalBytes,
-        progress: 0,
+        progress: initialProgress,
         speedMBs: 0,
+        etaSeconds: null,
+        retryAttempt: 0,
+        retryError: '',
         startedAt: Date.now(),
         finishedAt: null,
         modelPath: `/MODELS/${safeProvider}/${folderName}`,
         error: null,
     };
-    _downloads.set(jobId, { job, controller });
+    const entryMeta = {
+        job,
+        controller,
+        nodeMeta,
+        registerInWork,
+        setKeepFiles: (v) => { keepFilesOnAbort = Boolean(v); },
+    };
+    _downloads.set(jobId, entryMeta);
+    await writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
 
     const runPromise = (async () => {
         const t0 = Date.now();
+        let sessionDownloadedBytes = 0;
+        const updateMetrics = () => {
+            job.downloadedBytes = job.files.reduce((acc, f) => acc + (Number(f.downloaded) || 0), 0);
+            if (job.totalBytes > 0)
+                job.progress = Math.min(99, Math.round((job.downloadedBytes / job.totalBytes) * 100));
+            const elapsedSec = Math.max(0.2, (Date.now() - t0) / 1000);
+            const bytesPerSec = sessionDownloadedBytes / elapsedSec;
+            job.speedMBs = +(bytesPerSec / (1024 * 1024)).toFixed(2);
+            if (job.totalBytes > 0 && bytesPerSec > 1024) {
+                const remaining = Math.max(0, job.totalBytes - job.downloadedBytes);
+                job.etaSeconds = Math.round(remaining / bytesPerSec);
+            }
+        };
+
         try {
             for (const fileEntry of job.files) {
                 if (controller.signal.aborted)
-                    throw new Error('Загрузка отменена пользователем');
+                    throw new Error('Загрузка приостановлена пользователем');
+                if (fileEntry.done)
+                    continue;
+
                 job.currentFile = fileEntry.name;
                 const stagedFile = path.join(stagingDir, path.basename(fileEntry.name));
                 const partFile = stagedFile + '.part';
-
-                let existingSize = 0;
-                try {
-                    const st = await fsp.stat(partFile);
-                    existingSize = st.size;
-                }
-                catch { /* файла ещё нет */ }
-
                 const encodedPath = fileEntry.name.split('/').map(encodeURIComponent).join('/');
                 const url = `${HF_ORIGIN}/${cleanId}/resolve/${encodeURIComponent(job.revision)}/${encodedPath}`;
-                const headers = hfHeaders(token);
-                if (existingSize > 0)
-                    headers.Range = `bytes=${existingSize}-`;
 
-                const res = await fetchImpl(url, { headers, signal: controller.signal });
-                if (!res.ok && res.status !== 206 && res.status !== 416)
-                    throw new Error(`Ошибка загрузки ${fileEntry.name}: HTTP ${res.status}`);
+                let attempt = 0;
+                while (true) {
+                    if (controller.signal.aborted)
+                        throw new Error('Загрузка приостановлена пользователем');
 
-                const isPartial = res.status === 206;
-                if (!isPartial && res.status !== 416)
-                    existingSize = 0;
-
-                const contentLen = Number(res.headers?.get?.('content-length') || 0);
-                if (!fileEntry.size && contentLen > 0) {
-                    fileEntry.size = existingSize + contentLen;
-                    job.totalBytes = job.files.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
-                }
-
-                fileEntry.downloaded = existingSize;
-
-                if (res.status !== 416 && res.body) {
-                    const flags = isPartial ? 'a' : 'w';
-                    const out = fs.createWriteStream(partFile, { flags });
-                    for await (const chunk of res.body) {
-                        if (controller.signal.aborted) {
-                            out.destroy();
-                            throw new Error('Загрузка отменена пользователем');
-                        }
-                        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-                        if (!out.write(buf))
-                            await new Promise(r => out.once('drain', r));
-                        fileEntry.downloaded += buf.length;
-                        job.downloadedBytes = job.files.reduce((acc, f) => acc + f.downloaded, 0);
-                        if (job.totalBytes > 0)
-                            job.progress = Math.min(99, Math.round((job.downloadedBytes / job.totalBytes) * 100));
-                        const elapsedSec = Math.max(0.1, (Date.now() - t0) / 1000);
-                        job.speedMBs = +((job.downloadedBytes / (1024 * 1024)) / elapsedSec).toFixed(2);
+                    let existingSize = 0;
+                    try {
+                        const st = await fsp.stat(partFile);
+                        if (st.isFile())
+                            existingSize = st.size;
                     }
-                    await new Promise((resolve, reject) => {
-                        out.end();
-                        out.once('finish', resolve);
-                        out.once('error', reject);
-                    });
-                }
+                    catch { /* файла ещё нет */ }
 
-                await fsp.rename(partFile, stagedFile);
-                fileEntry.done = true;
+                    if (fileEntry.size > 0 && existingSize >= fileEntry.size) {
+                        await fsp.rename(partFile, stagedFile);
+                        fileEntry.downloaded = fileEntry.size;
+                        fileEntry.done = true;
+                        updateMetrics();
+                        break;
+                    }
+
+                    try {
+                        const headers = hfHeaders(token);
+                        if (existingSize > 0)
+                            headers.Range = `bytes=${existingSize}-`;
+
+                        const res = await fetchImpl(url, { headers, signal: controller.signal });
+                        if (res.status === 416) {
+                            if (existingSize > 0 && (!fileEntry.size || existingSize >= fileEntry.size)) {
+                                await fsp.rename(partFile, stagedFile);
+                                fileEntry.size = fileEntry.size || existingSize;
+                                fileEntry.downloaded = existingSize;
+                                fileEntry.done = true;
+                                updateMetrics();
+                                break;
+                            }
+                            await fsp.rm(partFile, { force: true }).catch(() => {});
+                            existingSize = 0;
+                            const err416 = new Error(`Сбой Range для ${fileEntry.name}: HTTP 416`);
+                            err416.retryable = true;
+                            throw err416;
+                        }
+                        if (!res.ok && res.status !== 206) {
+                            const errHttp = new Error(`Ошибка загрузки ${fileEntry.name}: HTTP ${res.status}`);
+                            errHttp.httpStatus = res.status;
+                            throw errHttp;
+                        }
+
+                        const isPartial = res.status === 206;
+                        if (!isPartial)
+                            existingSize = 0;
+
+                        const contentLen = Number(res.headers?.get?.('content-length') || 0);
+                        if (!fileEntry.size && contentLen > 0) {
+                            fileEntry.size = existingSize + contentLen;
+                            job.totalBytes = job.files.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
+                        }
+
+                        fileEntry.downloaded = existingSize;
+                        job.retryAttempt = 0;
+                        job.retryError = '';
+                        updateMetrics();
+
+                        if (res.body) {
+                            const flags = isPartial ? 'a' : 'w';
+                            const out = fs.createWriteStream(partFile, { flags });
+                            try {
+                                for await (const chunk of res.body) {
+                                    if (controller.signal.aborted)
+                                        throw new Error('Загрузка приостановлена пользователем');
+                                    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+                                    if (!out.write(buf))
+                                        await new Promise(r => out.once('drain', r));
+                                    fileEntry.downloaded += buf.length;
+                                    sessionDownloadedBytes += buf.length;
+                                    updateMetrics();
+                                }
+                                await new Promise((resolve, reject) => {
+                                    out.end();
+                                    out.once('finish', resolve);
+                                    out.once('error', reject);
+                                });
+                            }
+                            catch (streamErr) {
+                                await new Promise((resolve) => {
+                                    out.once('finish', resolve);
+                                    out.once('error', resolve);
+                                    out.once('close', resolve);
+                                    try { out.end(); } catch { resolve(); }
+                                });
+                                if (!controller.signal.aborted && !streamErr.httpStatus)
+                                    streamErr.retryable = true;
+                                throw streamErr;
+                            }
+                        }
+
+                        await fsp.rename(partFile, stagedFile);
+                        fileEntry.done = true;
+                        updateMetrics();
+                        break;
+                    }
+                    catch (err) {
+                        if (controller.signal.aborted)
+                            throw err;
+                        if (!isRetryableDownloadError(err) || attempt >= maxRetries)
+                            throw err;
+                        attempt++;
+                        job.retryAttempt = attempt;
+                        job.retryError = String(err?.message || err);
+                        await writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
+                        const delay = Math.min(30000, retryBaseDelayMs * attempt);
+                        await waitAbortable(delay, controller.signal);
+                    }
+                }
             }
 
             // Переносим готовые файлы из скрытой папки #downloads в целевую папку модели #weights
@@ -1200,6 +1391,7 @@ export async function startHuggingFaceDownload({
             }
 
             job.progress = 100;
+            job.etaSeconds = 0;
             job.status = 'completed';
             job.finishedAt = Date.now();
             try {
@@ -1211,11 +1403,21 @@ export async function startHuggingFaceDownload({
             catch { /* ignore */ }
         }
         catch (err) {
-            job.status = controller.signal.aborted ? 'cancelled' : 'failed';
-            job.error = String(err?.message || err);
-            job.finishedAt = Date.now();
             if (controller.signal.aborted) {
+                job.status = keepFilesOnAbort ? 'paused' : 'cancelled';
+                job.error = keepFilesOnAbort ? null : String(err?.message || err);
+            }
+            else {
+                job.status = 'failed';
+                job.error = String(err?.message || err);
+            }
+            job.etaSeconds = null;
+            job.finishedAt = Date.now();
+            if (controller.signal.aborted && !keepFilesOnAbort) {
                 await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+            }
+            else {
+                await writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
             }
         }
     })();
@@ -1231,16 +1433,161 @@ export function getHuggingFaceDownload(jobId) {
     return entry ? { ...entry.job } : null;
 }
 
-export function listHuggingFaceDownloads() {
-    return [..._downloads.values()].map(e => ({ ...e.job })).sort((a, b) => b.startedAt - a.startedAt);
+export function listHuggingFaceDownloads(rootDir = process.cwd()) {
+    const inMemory = [..._downloads.values()].map(e => ({ ...e.job }));
+    const seenFolders = new Set(inMemory.map(j => `${j.providerFolder}:${j.folderName}`));
+
+    // Подхватываем недокачанные папки из MODELS/Local/#downloads/* (включая оставшиеся после рестарта)
+    const downloadsRoot = path.join(rootDir, 'MODELS', 'Local', '#downloads');
+    if (fs.existsSync(downloadsRoot)) {
+        try {
+            const entries = fs.readdirSync(downloadsRoot, { withFileTypes: true });
+            for (const e of entries) {
+                if (!e.isDirectory() || e.name.startsWith('.') || e.name.startsWith('_import_') || e.name.startsWith('_tar_import_'))
+                    continue;
+                if (seenFolders.has(`Local:${e.name}`))
+                    continue;
+                const folderDir = path.join(downloadsRoot, e.name);
+                const stateFile = path.join(folderDir, DOWNLOAD_STATE_FILE);
+                let state = {};
+                if (fs.existsSync(stateFile)) {
+                    try { state = JSON.parse(fs.readFileSync(stateFile, 'utf-8')); }
+                    catch { /* ignore */ }
+                }
+                const dirFiles = fs.readdirSync(folderDir, { withFileTypes: true });
+                let diskBytes = 0;
+                const parsedFiles = [];
+                for (const f of dirFiles) {
+                    if (!f.isFile() || f.name === DOWNLOAD_STATE_FILE || f.name.endsWith('.tmp'))
+                        continue;
+                    try {
+                        const st = fs.statSync(path.join(folderDir, f.name));
+                        diskBytes += st.size || 0;
+                        parsedFiles.push({
+                            name: f.name.replace(/\.part$/, ''),
+                            size: st.size || 0,
+                            downloaded: st.size || 0,
+                            done: !f.name.endsWith('.part'),
+                        });
+                    }
+                    catch { /* ignore */ }
+                }
+                if (diskBytes <= 0 && !state.repoId)
+                    continue;
+                const totalBytes = Number(state.totalBytes) || 0;
+                const progress = totalBytes > 0 ? Math.min(99, Math.round((diskBytes / totalBytes) * 100)) : 0;
+                inMemory.push({
+                    id: `disk_${e.name}`,
+                    repoId: state.repoId || '',
+                    label: state.label || e.name,
+                    modality: state.modality || 'llm',
+                    capabilities: state.capabilities || ['chat'],
+                    revision: state.revision || 'main',
+                    providerFolder: 'Local',
+                    folderName: e.name,
+                    status: state.status === 'failed' ? 'failed' : 'paused',
+                    files: Array.isArray(state.files) && state.files.length ? state.files : parsedFiles,
+                    currentFile: parsedFiles[0]?.name || '',
+                    downloadedBytes: diskBytes,
+                    totalBytes,
+                    progress,
+                    speedMBs: 0,
+                    etaSeconds: null,
+                    startedAt: state.updatedAt || Date.now(),
+                    finishedAt: state.updatedAt || Date.now(),
+                    modelPath: `/MODELS/Local/${e.name}`,
+                    error: state.error || null,
+                    nodeMeta: state.nodeMeta || null,
+                    canResume: true,
+                    onDiskOnly: true,
+                });
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    return inMemory.sort((a, b) => (b.startedAt || 0) - (a.startedAt || 0));
 }
 
-export function cancelHuggingFaceDownload(jobId) {
+export function pauseHuggingFaceDownload(jobId) {
     const entry = _downloads.get(String(jobId || ''));
     if (!entry)
         return null;
+    entry.setKeepFiles?.(true);
     entry.controller.abort();
-    entry.job.status = 'cancelled';
+    entry.job.status = 'paused';
+    entry.job.etaSeconds = null;
+    entry.job.finishedAt = Date.now();
+    return { ...entry.job };
+}
+
+export async function discardHuggingFaceDownload({ jobId = '', folderName = '', rootDir = process.cwd() } = {}) {
+    const key = String(jobId || '');
+    const entry = key ? _downloads.get(key) : null;
+    let targetFolder = String(folderName || entry?.job?.folderName || '').replace(/[<>:"/\\|?*]/g, '').trim();
+    if (entry) {
+        entry.setKeepFiles?.(false);
+        if (entry.job.status === 'downloading')
+            entry.controller.abort();
+        entry.job.status = 'cancelled';
+        _downloads.delete(key);
+    }
+    if (!targetFolder && key.startsWith('disk_'))
+        targetFolder = key.slice(5);
+    if (targetFolder) {
+        const stagingDir = path.join(rootDir, 'MODELS', 'Local', '#downloads', targetFolder);
+        await fsp.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+    }
+    return { ok: true, discarded: targetFolder || key };
+}
+
+export async function resumeHuggingFaceDownload({
+    jobId = '',
+    folderName = '',
+    repoId = '',
+    quant = 'Q8_0',
+    token = '',
+    nodeMeta = null,
+    rootDir = process.cwd(),
+    fetchImpl = globalThis.fetch,
+} = {}) {
+    const key = String(jobId || '');
+    const entry = key ? _downloads.get(key) : null;
+    const cleanFolder = String(folderName || entry?.job?.folderName || (key.startsWith('disk_') ? key.slice(5) : '')).trim();
+    let state = {};
+    if (cleanFolder) {
+        const stateFile = path.join(rootDir, 'MODELS', 'Local', '#downloads', cleanFolder, DOWNLOAD_STATE_FILE);
+        if (fs.existsSync(stateFile)) {
+            try { state = JSON.parse(await fsp.readFile(stateFile, 'utf-8')); }
+            catch { /* ignore */ }
+        }
+    }
+    const resolvedRepo = repoId || entry?.job?.repoId || state.repoId;
+    if (!resolvedRepo)
+        throw new Error(`Не удалось определить репозиторий Hugging Face для докачки «${cleanFolder || key}»`);
+
+    return startHuggingFaceDownload({
+        repoId: resolvedRepo,
+        quant,
+        revision: entry?.job?.revision || state.revision || 'main',
+        token,
+        rootDir,
+        providerFolder: entry?.job?.providerFolder || state.providerFolder || 'Local',
+        targetNodeName: cleanFolder,
+        nodeMeta: nodeMeta || entry?.nodeMeta || state.nodeMeta || null,
+        registerInWork: entry?.registerInWork ?? state.registerInWork ?? true,
+        fetchImpl,
+    });
+}
+
+export function cancelHuggingFaceDownload(jobId, { keepFiles = false } = {}) {
+    const entry = _downloads.get(String(jobId || ''));
+    if (!entry)
+        return null;
+    entry.setKeepFiles?.(Boolean(keepFiles));
+    entry.controller.abort();
+    entry.job.status = keepFiles ? 'paused' : 'cancelled';
+    entry.job.etaSeconds = null;
     entry.job.finishedAt = Date.now();
     return { ...entry.job };
 }

@@ -1,7 +1,7 @@
-/** Мета хендлера form/provider (Настройка подключения, API-ключа и моделей провайдера ИИ). */
+/** Мета хендлера form/provider (Модели ИИ и подключение облачного провайдера). */
 export default {
-    icon: 'carbon:api',
-    label: 'Подключение и модели',
+    icon: 'carbon:chip',
+    label: 'Модели ИИ',
     roles: ['BOSS'],
     order: 1,
     allowUse($context) {

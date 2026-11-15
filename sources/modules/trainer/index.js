@@ -13,6 +13,9 @@ import {
     startHuggingFaceDownload,
     getHuggingFaceDownload,
     listHuggingFaceDownloads,
+    pauseHuggingFaceDownload,
+    discardHuggingFaceDownload,
+    resumeHuggingFaceDownload,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
 } from './huggingface.js';
@@ -76,6 +79,21 @@ import {
     addProviderModelsSync,
     toggleAiNodeEnabledSync,
 } from './providers.js';
+import {
+    TRANSFER_MANIFEST_FILE,
+    listStorageRoots,
+    browseDirectory,
+    createDirectory,
+    listTransferableLocalItems,
+    inspectTransferSource,
+    startExportToDisk,
+    startImportFromDisk,
+    prepareTarExport,
+    importTarFromStream,
+    getTransferJob,
+    listTransferJobs,
+    cancelTransferJob,
+} from './transfer.js';
 
 export const halogenFallback = Object.freeze({
     normalizeHalogenTtsPayload,
@@ -142,6 +160,9 @@ export {
     startHuggingFaceDownload,
     getHuggingFaceDownload,
     listHuggingFaceDownloads,
+    pauseHuggingFaceDownload,
+    discardHuggingFaceDownload,
+    resumeHuggingFaceDownload,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
     buildWorkDataset,
@@ -159,7 +180,96 @@ export {
     listTrainingJobs,
     stopTrainingJob,
     publishTrainedAdapter,
+    TRANSFER_MANIFEST_FILE,
+    listStorageRoots,
+    browseDirectory,
+    createDirectory,
+    listTransferableLocalItems,
+    inspectTransferSource,
+    startExportToDisk,
+    startImportFromDisk,
+    prepareTarExport,
+    importTarFromStream,
+    getTransferJob,
+    listTransferJobs,
+    cancelTransferJob,
 };
+
+function mergeTrainerArgs(p = {}) {
+    const body = (p?.post && typeof p.post === 'object' && !Buffer.isBuffer(p.post)) ? p.post : {};
+    return { ...p, ...body };
+}
+
+function parseBoolArg(v, fallback = false) {
+    if (v === undefined || v === null || v === '')
+        return fallback;
+    if (typeof v === 'boolean')
+        return v;
+    return v !== false && v !== 'false' && v !== '0';
+}
+
+function parseIdListArg(v) {
+    if (v === undefined || v === null)
+        return null;
+    if (Array.isArray(v))
+        return v.map(String).filter(Boolean);
+    if (typeof v === 'string') {
+        const s = v.trim();
+        if (!s)
+            return [];
+        if (s.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(s);
+                return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : null;
+            }
+            catch { /* fallback */ }
+        }
+        return s.split(',').map(x => x.trim()).filter(Boolean);
+    }
+    return null;
+}
+
+function stripInventoryFiles(inv) {
+    const cleanModel = m => ({
+        id: m.id,
+        label: m.label,
+        icon: m.icon,
+        modality: m.modality,
+        hfRepo: m.hfRepo,
+        model: m.model,
+        enabled: m.enabled,
+        isAdapterNode: m.isAdapterNode,
+        adapterName: m.adapterName,
+        filesCount: m.filesCount,
+        sizeBytes: m.sizeBytes,
+        sizeGb: m.sizeGb,
+        ...(m.alreadyInstalled !== undefined ? { alreadyInstalled: m.alreadyInstalled } : {}),
+    });
+    const cleanGroup = x => ({
+        id: x.id,
+        label: x.label,
+        baseModel: x.baseModel,
+        mode: x.mode,
+        filesCount: x.filesCount,
+        sizeBytes: x.sizeBytes,
+        sizeGb: x.sizeGb,
+        ...(x.alreadyInstalled !== undefined ? { alreadyInstalled: x.alreadyInstalled } : {}),
+    });
+    return {
+        ...inv,
+        localRoot: undefined,
+        models: (inv.models || []).map(cleanModel),
+        adapters: (inv.adapters || []).map(cleanGroup),
+        datasets: (inv.datasets || []).map(cleanGroup),
+        runtime: inv.runtime ? {
+            present: Boolean(inv.runtime.present),
+            filesCount: inv.runtime.filesCount || 0,
+            sizeBytes: inv.runtime.sizeBytes || 0,
+            sizeGb: inv.runtime.sizeGb || 0,
+            ...(inv.runtime.alreadyInstalled !== undefined ? { alreadyInstalled: inv.runtime.alreadyInstalled } : {}),
+        } : { present: false, filesCount: 0, sizeBytes: 0, sizeGb: 0 },
+    };
+}
 
 /**
  * Методы `trainer_*`, подключаемые к узлам `$class` (в `/MODELS/Local` и локальных `$ai`) и в шлюз `gateway.js`.
@@ -188,6 +298,7 @@ export const TRAINER_METHODS = Object.freeze({
                 datasets,
                 downloads: listHuggingFaceDownloads(),
                 jobs: listTrainingJobs(),
+                transfers: listTransferJobs(),
                 modalities: MODEL_MODALITIES,
                 capabilities: Object.values(MODEL_CAPABILITIES),
                 curated: CURATED_HF_MODELS,
@@ -461,7 +572,63 @@ export const TRAINER_METHODS = Object.freeze({
     trainer_hf_cancel: {
         level: 'admin',
         fn: async function (p = {}) {
-            return cancelHuggingFaceDownload(p.jobId ?? p.id);
+            const args = mergeTrainerArgs(p);
+            return cancelHuggingFaceDownload(args.jobId ?? args.id, {
+                keepFiles: parseBoolArg(args.keepFiles, false),
+            });
+        },
+    },
+    trainer_hf_pause: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            return pauseHuggingFaceDownload(args.jobId ?? args.id);
+        },
+    },
+    trainer_hf_discard: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            return discardHuggingFaceDownload({
+                jobId: args.jobId ?? args.id ?? '',
+                folderName: args.folderName || '',
+            });
+        },
+    },
+    trainer_hf_resume: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            const folderName = args.folderName || '';
+            const haloSpec = HALOGEN_MODELS_CATALOG.find(m =>
+                (folderName && m.nodeName === folderName)
+                || (args.repoId && m.hfRepo === args.repoId)
+            );
+            const job = await resumeHuggingFaceDownload({
+                jobId: args.jobId ?? args.id ?? '',
+                folderName,
+                repoId: args.repoId || haloSpec?.hfRepo || '',
+                quant: args.quant || 'Q8_0',
+                token: args.token || '',
+                nodeMeta: haloSpec ? {
+                    label: haloSpec.label || haloSpec.nodeName,
+                    model: haloSpec.model,
+                    protocol: 'halogen',
+                    icon: haloSpec.icon || 'ai:qwen',
+                    modality: haloSpec.modality,
+                    capabilities: haloSpec.capabilities,
+                    efforts: haloSpec.efforts,
+                    maxTokens: haloSpec.maxTokens,
+                    maxOutput: haloSpec.maxOutput,
+                    baseUrl: haloSpec.baseUrl || HALOGEN_DEFAULT_BASE_URL,
+                } : null,
+            });
+            try {
+                const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                localNode?.reset?.();
+            }
+            catch { /* ignore */ }
+            return job;
         },
     },
     trainer_dataset_build: {
@@ -548,6 +715,126 @@ export const TRAINER_METHODS = Object.freeze({
                 taskType: p.taskType || 'operation',
                 completion: p.completion || '',
             });
+        },
+    },
+    trainer_transfer_roots: {
+        level: 'read',
+        fn: async function () {
+            return { roots: await listStorageRoots() };
+        },
+    },
+    trainer_transfer_browse: {
+        level: 'read',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            return browseDirectory(args.path || args.dir || '');
+        },
+    },
+    trainer_transfer_mkdir: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            return createDirectory(args.parentPath || args.path || '', args.name || '');
+        },
+    },
+    trainer_transfer_inventory: {
+        level: 'read',
+        fn: async function () {
+            const inv = await listTransferableLocalItems();
+            return stripInventoryFiles(inv);
+        },
+    },
+    trainer_transfer_inspect: {
+        level: 'read',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            const info = await inspectTransferSource(args.sourceDir || args.path || '');
+            return stripInventoryFiles(info);
+        },
+    },
+    trainer_transfer_export: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            return startExportToDisk({
+                targetDir: args.targetDir || args.path || '',
+                modelIds: parseIdListArg(args.modelIds),
+                adapterIds: parseIdListArg(args.adapterIds),
+                datasetIds: parseIdListArg(args.datasetIds),
+                includeRuntime: parseBoolArg(args.includeRuntime, true),
+                overwrite: parseBoolArg(args.overwrite, true),
+                waitForCompletion: parseBoolArg(args.wait, false),
+            });
+        },
+    },
+    trainer_transfer_import: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            const job = await startImportFromDisk({
+                sourceDir: args.sourceDir || args.path || '',
+                modelIds: parseIdListArg(args.modelIds),
+                adapterIds: parseIdListArg(args.adapterIds),
+                datasetIds: parseIdListArg(args.datasetIds),
+                includeRuntime: parseBoolArg(args.includeRuntime, true),
+                overwrite: parseBoolArg(args.overwrite, false),
+                waitForCompletion: parseBoolArg(args.wait, false),
+            });
+            try {
+                const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                localNode?.reset?.();
+                const modelsRoot = await globalThis.WORK?.get_item?.('/MODELS');
+                modelsRoot?.reset?.();
+            }
+            catch { /* ignore */ }
+            return job;
+        },
+    },
+    trainer_transfer_status: {
+        level: 'read',
+        fn: async function (p = {}) {
+            if (p.jobId || p.id)
+                return getTransferJob(p.jobId ?? p.id);
+            return { jobs: listTransferJobs() };
+        },
+    },
+    trainer_transfer_cancel: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            return cancelTransferJob(args.jobId ?? args.id);
+        },
+    },
+    trainer_transfer_export_tar: {
+        level: 'read',
+        fn: async function (p = {}) {
+            const res = await prepareTarExport({
+                modelIds: parseIdListArg(p.modelIds),
+                adapterIds: parseIdListArg(p.adapterIds),
+                datasetIds: parseIdListArg(p.datasetIds),
+                includeRuntime: parseBoolArg(p.includeRuntime, false),
+            });
+            p.filename = res.filename;
+            p.contentLength = res.contentLength;
+            return res.stream;
+        },
+    },
+    trainer_transfer_import_tar: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const job = await importTarFromStream({
+                readable: p.stream || (Buffer.isBuffer(p.post) ? (await import('node:stream')).Readable.from(p.post) : null),
+                contentLength: Number(p.contentLength) || 0,
+                overwrite: parseBoolArg(p.overwrite, false),
+            });
+            try {
+                const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                localNode?.reset?.();
+                const modelsRoot = await globalThis.WORK?.get_item?.('/MODELS');
+                modelsRoot?.reset?.();
+            }
+            catch { /* ignore */ }
+            return job;
         },
     },
 });

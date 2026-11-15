@@ -98,8 +98,12 @@ export function isProtectedUserPath(relPath) {
     if (/\.(db|db-wal|db-shm|sqlite|sqlite3)$/i.test(rel))
         return true;
 
-    // 3. Веса локальных моделей ИИ, датасеты и обученные адаптеры LoRA
-    if (rel.includes('/#weights/') || rel.includes('/#datasets/') || rel.includes('/#adapters/'))
+    // 3. Веса локальных моделей ИИ, датасеты и обученные адаптеры LoRA,
+    //    а также промежуточные загрузки, кэш и рантайм (не входят в базовую поставку)
+    if (
+        rel.includes('/#weights/') || rel.includes('/#datasets/') || rel.includes('/#adapters/')
+        || rel.includes('/#downloads/') || rel.includes('/#cache/') || rel.includes('/#runtime/')
+    )
         return true;
     if (/\.(safetensors|gguf|bin|pt|pth|onnx)$/i.test(rel))
         return true;
