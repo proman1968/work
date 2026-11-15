@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>WORK Chrome Bridge</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; width: 280px; margin: 12px; color: #1f2937; font-size: 13px; }
+    .title { font-weight: 700; margin-bottom: 8px; }
+    .box { padding: 8px 10px; border-radius: 6px; background: #f3f4f6; margin-bottom: 10px; }
+    .box.ok { background: #ecfdf5; color: #065f46; }
+    .box.err { background: #fef2f2; color: #991b1b; }
+    .row { display: flex; gap: 6px; }
+    button { flex: 1; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="title">WORK Chrome Bridge</div>
+  <div class="box" id="status">Загрузка…</div>
+  <div class="row">
+    <button id="reconnectBtn">Переподключить</button>
+    <button id="optionsBtn">Настройки</button>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

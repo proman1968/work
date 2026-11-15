@@ -30,9 +30,120 @@ const HISTORY_MAX = 50;
 const SENSITIVE_FILE = /(^|[\\/])(\.env(\..+)?|\.ssh|\.gnupg|\.aws|id_rsa|id_ed25519|.*credentials.*|.*secret.*|.*\.(pem|pfx|p12|key))$/i;
 const APP_NAME_RE = /^[a-zA-Z0-9._-]{1,40}$/;
 
+function assertSafeStringArgs(raw) {
+    const safeArgs = Array.isArray(raw) ? raw.map(a => String(a)).slice(0, 8) : [];
+    for (const a of safeArgs)
+        if (a.includes('\0') || /[;&|`$<>]/.test(a))
+            throw new Error('bridge: недопустимый аргумент программы: ' + a);
+    return safeArgs;
+}
+
+/**
+ * Декларативный реестр операций локального моста.
+ * У каждой операции обязателен булев признак mutates (меняет состояние / активно действует) —
+ * это гарантирует, что ни одна новая операция не обойдёт режим readOnly по забывчивости.
+ */
+export const BRIDGE_OPS = Object.freeze({
+    status: Object.freeze({
+        mutates: false,
+        async run(cfg, _cmd, rootDir) {
+            return {
+                hostname: cfg?.hostname || os.hostname(),
+                platform: cfg?.platform || process.platform,
+                rootDir,
+                readOnly: Boolean(cfg?.readOnly),
+                allowedApps: Array.isArray(cfg?.allowedApps) ? cfg.allowedApps : [],
+            };
+        },
+    }),
+    ls: Object.freeze({
+        mutates: false,
+        async run(_cfg, cmd, rootDir) {
+            const { resolved, rel } = assertBridgePath(rootDir, cmd.path || '.');
+            const entries = await fsp.readdir(resolved, { withFileTypes: true });
+            const items = [];
+            for (const e of entries.slice(0, 200)) {
+                if (SENSITIVE_FILE.test(e.name))
+                    continue;
+                items.push({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' });
+            }
+            return { path: rel, items };
+        },
+    }),
+    read: Object.freeze({
+        mutates: false,
+        async run(_cfg, cmd, rootDir) {
+            const { resolved, rel } = assertBridgePath(rootDir, cmd.path);
+            const st = await fsp.stat(resolved);
+            if (!st.isFile())
+                throw new Error('bridge: это не файл: ' + rel);
+            if (st.size > FILE_READ_MAX)
+                throw new Error('bridge: файл больше лимита (' + st.size + ' > ' + FILE_READ_MAX + ' байт)');
+            const content = await fsp.readFile(resolved, 'utf-8');
+            return { path: rel, size: st.size, content };
+        },
+    }),
+    write: Object.freeze({
+        mutates: true,
+        async run(_cfg, cmd, rootDir) {
+            const { resolved, rel } = assertBridgePath(rootDir, cmd.path);
+            const text = String(cmd.content ?? '');
+            if (Buffer.byteLength(text, 'utf-8') > FILE_WRITE_MAX)
+                throw new Error('bridge: текст больше лимита 1 МБ');
+            await fsp.mkdir(path.dirname(resolved), { recursive: true });
+            await fsp.writeFile(resolved, text, 'utf-8');
+            return { path: rel, bytes: Buffer.byteLength(text, 'utf-8'), written: true };
+        },
+    }),
+    windows: Object.freeze({
+        mutates: false,
+        async run(cfg) {
+            if (typeof cfg?.listWindows === 'function')
+                return { windows: await cfg.listWindows() };
+            return { windows: [{ id: '1', title: 'Рабочий стол (' + os.hostname() + ')', app: 'desktop' }] };
+        },
+    }),
+    focus_window: Object.freeze({
+        mutates: true,
+        async run(cfg, cmd) {
+            const title = String(cmd.title || '').trim();
+            if (!title)
+                throw new Error('bridge: укажи заголовок окна (title)');
+            if (typeof cfg?.focusWindow === 'function')
+                return await cfg.focusWindow(title);
+            return { focused: title };
+        },
+    }),
+    open_app: Object.freeze({
+        mutates: true,
+        async run(cfg, cmd, rootDir) {
+            const app = String(cmd.app || '').trim();
+            if (!APP_NAME_RE.test(app))
+                throw new Error('bridge: недопустимое имя программы «' + app + '»');
+            const allowed = Array.isArray(cfg?.allowedApps) ? cfg.allowedApps : [];
+            if (!allowed.includes(app))
+                throw new Error('bridge: программа «' + app + '» не входит в разрешённый список моста (' + (allowed.join(', ') || 'пусто') + ')');
+            const safeArgs = assertSafeStringArgs(cmd.args);
+            if (typeof cfg?.spawnApp === 'function') {
+                const r = await cfg.spawnApp(app, safeArgs);
+                return { started: app, args: safeArgs, pid: r?.pid || 0 };
+            }
+            const child = spawn(app, safeArgs, { cwd: rootDir, shell: false, detached: true, stdio: 'ignore' });
+            child.unref();
+            return { started: app, args: safeArgs, pid: child.pid || 0 };
+        },
+    }),
+});
+
 /** Изменяющие/активные операции моста (запрещены в режиме readOnly). */
-export const WRITE_OPS = new Set(['write', 'open_app', 'focus_window']);
-export const READ_OPS = new Set(['status', 'ls', 'read', 'windows']);
+export const WRITE_OPS = new Set(Object.entries(BRIDGE_OPS).filter(([, d]) => d.mutates).map(([k]) => k));
+export const READ_OPS = new Set(Object.entries(BRIDGE_OPS).filter(([, d]) => !d.mutates).map(([k]) => k));
+
+/** Проверка: изменяет ли операция состояние (неизвестная операция — fail-closed = true). */
+export function isBridgeMutatingOp(op) {
+    const def = BRIDGE_OPS[String(op || '')];
+    return def ? Boolean(def.mutates) : true;
+}
 
 /** Активные мосты по uid пользователя: uid → BridgeSession. */
 const bridges = new Map();
@@ -75,95 +186,18 @@ export function assertBridgePath(rootDir, relPath) {
 
 /**
  * Выполнить операцию локально на стороне моста (используется и CLI-клиентом моста, и in-process мостом в тестах).
- * Повторно проверяет readOnly, белый список программ и границы папки rootDir.
+ * Повторно проверяет readOnly, белый список программ и границы папки rootDir через реестр BRIDGE_OPS.
  */
 export async function executeLocalBridgeOp(cfg, cmd) {
     const op = String(cmd?.op || '');
+    const def = Object.hasOwn(BRIDGE_OPS, op) ? BRIDGE_OPS[op] : null;
+    if (!def)
+        throw new Error('bridge: неизвестная операция «' + op + '»');
     const readOnly = Boolean(cfg?.readOnly);
-    if (readOnly && WRITE_OPS.has(op))
+    if (readOnly && isBridgeMutatingOp(op))
         throw new Error('bridge: компьютер в режиме «только просмотр» (readOnly) — операция «' + op + '» запрещена');
-
     const rootDir = path.resolve(cfg?.rootDir || process.cwd());
-
-    if (op === 'status') {
-        return {
-            hostname: cfg?.hostname || os.hostname(),
-            platform: cfg?.platform || process.platform,
-            rootDir,
-            readOnly,
-            allowedApps: Array.isArray(cfg?.allowedApps) ? cfg.allowedApps : [],
-        };
-    }
-
-    if (op === 'ls') {
-        const { resolved, rel } = assertBridgePath(rootDir, cmd.path || '.');
-        const entries = await fsp.readdir(resolved, { withFileTypes: true });
-        const items = [];
-        for (const e of entries.slice(0, 200)) {
-            if (SENSITIVE_FILE.test(e.name))
-                continue;
-            items.push({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' });
-        }
-        return { path: rel, items };
-    }
-
-    if (op === 'read') {
-        const { resolved, rel } = assertBridgePath(rootDir, cmd.path);
-        const st = await fsp.stat(resolved);
-        if (!st.isFile())
-            throw new Error('bridge: это не файл: ' + rel);
-        if (st.size > FILE_READ_MAX)
-            throw new Error('bridge: файл больше лимита (' + st.size + ' > ' + FILE_READ_MAX + ' байт)');
-        const content = await fsp.readFile(resolved, 'utf-8');
-        return { path: rel, size: st.size, content };
-    }
-
-    if (op === 'write') {
-        const { resolved, rel } = assertBridgePath(rootDir, cmd.path);
-        const text = String(cmd.content ?? '');
-        if (Buffer.byteLength(text, 'utf-8') > FILE_WRITE_MAX)
-            throw new Error('bridge: текст больше лимита 1 МБ');
-        await fsp.mkdir(path.dirname(resolved), { recursive: true });
-        await fsp.writeFile(resolved, text, 'utf-8');
-        return { path: rel, bytes: Buffer.byteLength(text, 'utf-8'), written: true };
-    }
-
-    if (op === 'windows') {
-        if (typeof cfg?.listWindows === 'function')
-            return { windows: await cfg.listWindows() };
-        return { windows: [{ id: '1', title: 'Рабочий стол (' + os.hostname() + ')', app: 'desktop' }] };
-    }
-
-    if (op === 'focus_window') {
-        const title = String(cmd.title || '').trim();
-        if (!title)
-            throw new Error('bridge: укажи заголовок окна (title)');
-        if (typeof cfg?.focusWindow === 'function')
-            return await cfg.focusWindow(title);
-        return { focused: title };
-    }
-
-    if (op === 'open_app') {
-        const app = String(cmd.app || '').trim();
-        if (!APP_NAME_RE.test(app))
-            throw new Error('bridge: недопустимое имя программы «' + app + '»');
-        const allowed = Array.isArray(cfg?.allowedApps) ? cfg.allowedApps : [];
-        if (!allowed.includes(app))
-            throw new Error('bridge: программа «' + app + '» не входит в разрешённый список моста (' + (allowed.join(', ') || 'пусто') + ')');
-        const safeArgs = Array.isArray(cmd.args) ? cmd.args.map(a => String(a)).slice(0, 8) : [];
-        for (const a of safeArgs)
-            if (a.includes('\0') || /[;&|`$<>]/.test(a))
-                throw new Error('bridge: недопустимый аргумент программы: ' + a);
-        if (typeof cfg?.spawnApp === 'function') {
-            const r = await cfg.spawnApp(app, safeArgs);
-            return { started: app, args: safeArgs, pid: r?.pid || 0 };
-        }
-        const child = spawn(app, safeArgs, { cwd: rootDir, shell: false, detached: true, stdio: 'ignore' });
-        child.unref();
-        return { started: app, args: safeArgs, pid: child.pid || 0 };
-    }
-
-    throw new Error('bridge: неизвестная операция «' + op + '»');
+    return def.run(cfg, cmd, rootDir);
 }
 
 /**
@@ -242,7 +276,7 @@ export async function dispatchBridgeCommand(uid, cmd) {
         throw new Error('На вашем компьютере не запущен агент-«мост» WORK (или связь потеряна). Запустите scripts/work-desktop-bridge.mjs.');
     const op = String(cmd?.op || '');
     const target = String(cmd?.path || cmd?.app || cmd?.title || op);
-    if (s.readOnly && WRITE_OPS.has(op)) {
+    if (s.readOnly && isBridgeMutatingOp(op)) {
         recordLog(s, { action: op, target, readOnly: true, outcome: 'denied_readonly' });
         throw new Error('Компьютер в режиме «только просмотр» (readOnly): действие «' + op + '» запрещено.');
     }

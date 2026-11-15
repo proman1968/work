@@ -50,6 +50,13 @@ function notifyUserOnline(session) {
 }
 
 export function onWebSocketConnect(ws, request) {
+    // Настоящий Chrome пользователя через расширение MV3: авторизуется токеном wmcp. (без cookies)
+    if (String(request?.url || '').split('?')[0] === '/~chrome') {
+        import('../modules/bridge/chrome.js')
+            .then(m => m.handleChromeSocket(ws, request))
+            .catch(() => { try { ws.close(4500, 'Chrome-мост недоступен'); } catch (e) { log.debug('ws.chrome', e); /* уже */ } });
+        return;
+    }
     // F24: чужой origin — не подключаемся вовсе (ни подписки, ни экран компьютера)
     if (!sameOrigin(request)) {
         try { ws.close(4403, 'чужой origin'); } catch (e) { log.debug('ws.origin', e); /* уже закрыт */ }

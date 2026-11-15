@@ -42,12 +42,16 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
                 <span>{{state.label}}</span>
                 <oda-icon ~if="state.icon" :icon="state.icon"></oda-icon>
             </button>
-            <div ~if="isLogin && state?.name === 'ok' && !showCode" vertical style="gap: 8px; width: 100%;">
-                <button center horizontal flex @tap.stop.prevent="mcp_token" title="Доступ к WORK для внешних ИИ-клиентов (OpenCode, Claude Code…) по MCP">
-                    <span>Токен для MCP</span>
+            <div ~if="isLogin && state?.name === 'ok' && !showCode" vertical style="gap: 8px; width: 100%; border-top: 1px solid rgba(128,128,128,.3); padding-top: 12px; margin-top: 4px;">
+                <div style="font-size: medium; font-weight: 600; text-align: center;">Подключения</div>
+                <button center horizontal flex @tap.stop.prevent="mcp_token" title="Один токен для внешних ИИ-клиентов (MCP) и расширения WORK Chrome Bridge">
+                    <span>Токен для подключения</span>
                 </button>
+                <div style="font-size: small; text-align: center; opacity: 0.75; line-height: 1.35;">
+                    Этот же токен вместе с адресом WORK вводится в расширении <b>WORK Chrome Bridge</b> и MCP-клиентах.
+                </div>
                 <button center horizontal flex @tap.stop.prevent="mcp_list" title="Список токенов: срок жизни, последнее использование, отзыв по одному">
-                    <span>Токены MCP…</span>
+                    <span>Список токенов…</span>
                 </button>
                 <div ~if="mcpList" vertical style="gap: 8px; width: 100%;">
                     <div ~if="!mcpList.length" style="font-size: small; text-align: center;">токенов нет</div>
@@ -58,7 +62,7 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
                     </div>
                 </div>
                 <button center horizontal flex @tap.stop.prevent="mcp_revoke">
-                    <span>Отозвать токены MCP</span>
+                    <span>Отозвать все токены</span>
                 </button>
             </div>
     </div>
@@ -229,15 +233,33 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
     get workSecure() {
         return ODA.LocalStorage.create('work-secure');
     },
-    /** Токен внешнего ИИ-клиента (modules/mcp): выпускается вошедшим пользователем, показывается один раз. */
+    /** Токен подключения (MCP и WORK Chrome Bridge): выпускается вошедшим пользователем, показывается один раз. */
     async mcp_token() {
         try {
-            await WORK.showConfirm('Выпустить токен для внешнего ИИ-клиента (OpenCode, Claude Code…)? Он даёт доступ к WORK с вашими правами и покажется один раз.');
+            await WORK.showConfirm('Выпустить персональный токен для подключения (WORK Chrome Bridge, OpenCode, Claude Code…)? Он даёт доступ к WORK с вашими правами и покажется один раз.');
         }
         catch { return; }
         try {
-            const r = await WORK.fetch('/', 'mcp_token_create', {}, { label: 'MCP-клиент' });
-            prompt('Токен MCP — скопируйте, повторно он не показывается.\nАдрес сервера: ' + location.origin + '/mcp', r.token);
+            const r = await WORK.fetch('/', 'mcp_token_create', {}, { label: 'Подключение (MCP / Chrome)' });
+            if (this.mcpList)
+                this.mcpList = await WORK.fetch('/', 'mcp_token_list', {}, {});
+            if (typeof WORK.showModal === 'function') {
+                const dlg = ODA.createComponent('user-token', {
+                    token: r.token,
+                    origin: location.origin,
+                });
+                try {
+                    await WORK.showModal(dlg, {
+                        TITLE: { label: 'Токен подключения' },
+                        allowClose: true,
+                        BUTTONS: [],
+                    });
+                }
+                catch { /* закрыли окно */ }
+            }
+            else {
+                prompt('Токен подключения — скопируйте, повторно он не показывается.\nАдрес сервера: ' + location.origin + '\nАдрес MCP: ' + location.origin + '/mcp', r.token);
+            }
         }
         catch (e) {
             this.text = e.message;
@@ -245,11 +267,13 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
     },
     async mcp_revoke() {
         try {
-            await WORK.showConfirm('Отозвать все токены MCP? Подключённые внешние клиенты перестанут работать.');
+            await WORK.showConfirm('Отозвать все токены подключения? Подключённые внешние клиенты и Chrome Bridge перестанут работать.');
         }
         catch { return; }
         try {
             const r = await WORK.fetch('/', 'mcp_token_revoke', {}, { all: true });
+            if (this.mcpList)
+                this.mcpList = await WORK.fetch('/', 'mcp_token_list', {}, {});
             this.text = 'Токенов отозвано: ' + (r?.revoked ?? 0);
         }
         catch (e) {

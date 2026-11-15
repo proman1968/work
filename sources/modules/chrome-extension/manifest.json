@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "WORK Chrome Bridge",
+  "version": "0.1.0",
+  "description": "Подключает ваш Chrome к агенту WORK через защищённый локальный канал с режимом «только просмотр» и подтверждением действий.",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "WORK Chrome Bridge"
+  }
+}

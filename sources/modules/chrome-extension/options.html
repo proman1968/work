@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>WORK Chrome Bridge — Настройки</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 520px; margin: 32px auto; padding: 0 16px; color: #1f2937; }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    p.hint, .subhint { color: #4b5563; font-size: 13px; line-height: 1.45; }
+    .subhint { font-size: 12px; margin-top: 6px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 14px 0 6px; }
+    input { width: 100%; box-sizing: border-box; padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; }
+    .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+    button { padding: 8px 14px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; }
+    button.primary { background: #1d4ed8; color: #fff; border-color: #1d4ed8; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status { margin-top: 16px; padding: 10px 12px; border-radius: 6px; background: #f3f4f6; font-size: 13px; line-height: 1.4; }
+    .status.ok { background: #ecfdf5; color: #065f46; }
+    .status.err { background: #fef2f2; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <h1>WORK Chrome Bridge</h1>
+  <p class="hint">
+    Подключает ваш Chrome к агенту WORK по локальному каналу.
+    При подключении всегда включается режим «только просмотр» (readOnly).
+  </p>
+
+  <label for="serverUrl">Адрес сервера WORK</label>
+  <input id="serverUrl" type="url" placeholder="http://localhost:8001">
+
+  <label for="token">Персональный токен (wmcp.… или готовая строка из профиля)</label>
+  <input id="token" type="password" placeholder="wmcp.UID.secret">
+  <div class="subhint">
+    Где взять: откройте WORK → ваш аватар внизу левой панели → <b>Подключения</b> → <b>Токен для подключения</b>
+    (это тот же персональный токен <code>wmcp.…</code>, что используется и для MCP).
+  </div>
+
+  <div class="row">
+    <button class="primary" id="saveBtn">Сохранить и подключить</button>
+    <button id="openWorkBtn">Открыть WORK</button>
+    <button id="clearBtn">Сбросить токен</button>
+  </div>
+
+  <div class="status" id="statusBox">Загрузка…</div>
+  <script src="options.js"></script>
+</body>
+</html>
