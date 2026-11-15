@@ -405,7 +405,7 @@ export default {
             </div>
 
             <!-- Панель настроек источника (зеркало), потоков и точечного прокси (только для загрузок моделей) -->
-            <div class="bios-box" ~if="networkOpen">
+            <div id="networkPanel" class="bios-box" ~if="networkOpen">
                 <div class="model-main" style="margin-bottom:8px;">
                     <strong>Сеть и ускорение скачивания моделей (только для загрузок ИИ)</strong>
                     <span style="font-size:12px;opacity:0.75;">Многопоточная Range-докачка и точечный прокси не затрагивают остальной WORK</span>
@@ -579,7 +579,7 @@ export default {
                 <!-- Подсказка при стабильно низкой скорости (< 2 МБ/с) -->
                 <div class="inline-warn" ~if="$for.item.state === 'downloading' && $for.item.download?.lowSpeedWarning">
                     <span>{{lowSpeedHint($for.item.download)}}</span>
-                    <button type="button" class="btn" @tap="networkOpen = true">Настроить сеть</button>
+                    <button type="button" class="btn" @tap="openNetworkPanel()">Настроить сеть</button>
                 </div>
 
                 <!-- Текст ошибки на той же карточке при обрыве -->
@@ -1081,6 +1081,21 @@ export default {
         this.networkOpen = !this.networkOpen;
         if (this.networkOpen && this.network && !this.hasNetworkChanges)
             this._applyNetworkState(this.network);
+        if (this.networkOpen)
+            this._focusNetworkPanel();
+    },
+    openNetworkPanel() {
+        this.networkOpen = true;
+        if (this.network && !this.hasNetworkChanges)
+            this._applyNetworkState(this.network);
+        this._focusNetworkPanel();
+    },
+    _focusNetworkPanel() {
+        this.async(() => {
+            const panel = this.__shadowRoot__?.getElementById?.('networkPanel') || this.shadowRoot?.getElementById?.('networkPanel');
+            panel?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+            panel?.querySelector?.('select, input')?.focus?.();
+        }, 50);
     },
     onNetworkPresetChange(val) {
         this.netPreset = String(val || 'official');
