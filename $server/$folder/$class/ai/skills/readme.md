@@ -35,6 +35,9 @@ requires: system          # необязательно: system | sandbox — в�
 | [`meeting-minutes`](meeting-minutes.md) | протокол встречи, решения и поручения участникам |
 | [`email-mailbox`](email-mailbox.md) | разбор почтового ящика точки, черновики ответов |
 | [`org-structure`](org-structure.md) | развернуть оргструктуру: подразделения, роли, контракты |
+| [`data-modeling`](data-modeling.md) | классы данных и формы: `$catalog`, `$struct`, `$virtual`, `types`, `METADATA.LAYOUT` |
+| [`accounting-design`](accounting-design.md) | учётная модель: `$register`, `$account`, `ANALYTICS`, `$operation`, `POSTINGS` |
+| [`schema-migration`](schema-migration.md) | безопасная перестройка и миграция классов, ссылок и `work.db` |
 | [`onboarding`](onboarding.md) | вывести сотрудника на работу: роли, приветственное поручение |
 | [`request-access`](request-access.md) | не хватает прав: выяснить причину и запросить доступ у ответственного |
 | [`scheduled-report`](scheduled-report.md) | повторяющаяся или отложенная работа агента по расписанию |

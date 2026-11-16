@@ -8,7 +8,7 @@
  */
 import { log } from './log.js';
 import { runLoop, pickAllowedEffort } from './loop.js';
-import { workTools, accountingTools, contextConeOf } from './tools/work.js';
+import { workTools, accountingTools, classTools, contextConeOf } from './tools/work.js';
 import { webTools, serviceTools, mcpTools } from './tools/services.js';
 import { metaTools, listing, MAX_DEPTH } from './tools/meta.js';
 import { connectTools } from './tools/connect.js';
@@ -310,7 +310,8 @@ WORK — система управления деятельностью, где 
 - Задачи из 3+ шагов — веди план todo_write; широкое исследование — поручай субагенту (task).
 - Уровень рассуждений (effort: off | low | medium | high) выбирай сам по сложности задачи: для себя — задавай effort в todo_write при составлении или обновлении плана; для субагентов — передавай effort в task и agent_start (off/low — быстрый поиск, выборка и чтение; medium — анализ данных, сверка учёта, написание кода; high — сложная архитектура и отладка).
 - Для независимой долгой работы используй agent_start: он создаёт отдельную продолжимую .task и сразу возвращает путь. Проверяй agent_status, отправляй уточнения agent_message, останавливай agent_stop. Такой агент сохраняет роль родителя и переживает перезапуск; не выдавай запуск за завершённую работу.
-- Правка существующего файла — edit (точечно), новый текстовый/кодовый файл — write, офисный документ (.pptx презентация, .docx документ Word, .xlsx таблица Excel) — create_office_file или export_presentation (для презентаций предпочтительно создавай нативный .pptx через create_office_file или export_presentation path=«...pptx» — в WORK встроен собственный редактор презентаций, документов и таблиц), новый класс или подразделение — create_class (всегда подбирай подходящую по смыслу иконку icon!), рабочее место (должность) в подразделении — assign (параметры place и label, запись в #security.ROLES подразделения, а НЕ дочерний класс $structure!), прочие операции — schema → call.
+- Правка существующего файла — edit (точечно), новый текстовый/кодовый файл — write, офисный документ (.pptx презентация, .docx документ Word, .xlsx таблица Excel) — create_office_file или export_presentation (для презентаций предпочтительно создавай нативный .pptx через create_office_file или export_presentation path=«...pptx» — в WORK встроен собственный редактор презентаций, документов и таблиц), новый класс или подразделение — create_class (всегда подбирай подходящую по смыслу иконку icon!), правка метаданных/полей/проводок/LAYOUT существующего класса — update_class (не редактируй class.js сырым текстом без нужды), аудит дерева/наследования/влияния на БД — inspect_class_tree, перенос/удаление класса — move_class / delete_class, рабочее место (должность) в подразделении — assign (параметры place и label, запись в #security.ROLES подразделения, а НЕ дочерний класс $structure!), прочие операции — schema → call.
+- При создании или перестройке структуры классов и оргструктуры оркестрируй профильных субагентов: для разведки и проверки последствий/целостности — schema-validator (readonly), для оргструктуры и рабочих мест ($base, $structure, ROLES, LINKS, BOSS) — org-architect, для прикладной модели данных, счетов, операций и форм (METADATA.FIELDS/POSTINGS/LAYOUT, $catalog, $struct, $virtual, $account, $operation) — builder, после чего делай контрольную проверку через schema-validator.
 - Большой текст/HTML не отправляй целиком в один write: создай файл коротким write, затем добавляй части через append (несколько тысяч символов за вызов). Путь бери из результата write; после каждой части проверь итоговый файл.
 - Файлы-результаты для общей ленты отмечай инструментом publish (snapshot из результата записи); промежуточные версии и черновики не публикуй — в чате останется только карточка задачи с выбранным.
 - Меняя код/конфигурацию системы ($server, sources, oda, MODELS, SERVICES, *.js), объясни зачем — человек подтвердит.
@@ -425,7 +426,7 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
          * restrict — ограничение call родителя, пережившее перезапуск (body.callRestrict дочерней задачи, R3/8.31).
          */
         async makeTools(def, depth = 0, parent = null, restrict = null) {
-            let all = [...workTools, ...accountingTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...pluginTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
+            let all = [...workTools, ...accountingTools, ...classTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...pluginTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);

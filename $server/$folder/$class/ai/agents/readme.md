@@ -39,7 +39,9 @@ maxTurns: 40               # необязательно
 | [`analyst`](analyst.md) | отчёты и сводки по объектам, лентам и документам; таблицы xlsx/csv |
 | [`secretary`](secretary.md) | входящие, поручения с получателями и сроками, контроль исполнения |
 | [`auditor`](auditor.md) | аудит доступа и журнала безопасности — только чтение и рекомендации |
-| [`builder`](builder.md) | прикладная модель: типы, поля объектов, роли и зоны, контракты readme |
+| [`builder`](builder.md) | прикладная модель данных, учёта и форм: `$catalog`, `$struct`, `$virtual`, `$account`, `$operation`, `FIELDS`, `POSTINGS`, `LAYOUT`, `readme` |
+| [`org-architect`](org-architect.md) | оргструктура и доступ: `$base`, `$structure`, рабочие места `ROLES`, `LINKS`, `BOSS`, зоны ролей |
+| [`schema-validator`](schema-validator.md) | аудит целостности структуры, 3-осевого наследования, связей и влияния на `work.db` (только чтение) |
 | [`developer`](developer.md) | разработка кода: поиск, правки (apply_patch), git, проверки, диагностика — work (ADMIN) и песочница |
 | [`it-admin`](it-admin.md) | сервер WORK и его локальная сеть: здоровье, службы, устройства (только ADMIN) |
 | [`integrator-1c`](integrator-1c.md) | чтение 1С по OData, выгрузка и сверка с объектами WORK |

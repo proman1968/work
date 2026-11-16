@@ -884,6 +884,7 @@ export default {
             autoRegister: !!s?.autoRegister,
             numerator: s?.numerator || null,
             POSTINGS: Array.isArray(s?.postings) ? s.postings : [],
+            LAYOUT: s?.layout || null,
             FIELDS: editorFields,
             columns: fields,
         };
@@ -907,6 +908,7 @@ export default {
             autoRegister: built.autoRegister,
             numerator: built.numerator,
             POSTINGS: built.POSTINGS,
+            LAYOUT: built.LAYOUT,
             FIELDS: built.FIELDS,
         };
     },

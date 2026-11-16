@@ -231,9 +231,21 @@ function writeSavedLayout(key, spec, layer = 'ROOT') {
     catch { /* ignore */ }
 }
 
-function buildLayerLayoutItems(baseFields, layoutKey, layer = 'ROOT') {
+function defaultLayerLayout(defaultLayout, layer = 'ROOT') {
+    if (!defaultLayout)
+        return null;
+    if (Array.isArray(defaultLayout))
+        return layer === 'ROOT' && defaultLayout.length ? { items: defaultLayout } : null;
+    if (typeof defaultLayout === 'object') {
+        const items = defaultLayout[layer];
+        return Array.isArray(items) && items.length ? { items } : null;
+    }
+    return null;
+}
+
+function buildLayerLayoutItems(baseFields, layoutKey, layer = 'ROOT', defaultLayout = null) {
     const byId = new Map((baseFields || []).map(f => [f.id, f]));
-    const saved = readSavedLayout(layoutKey, layer);
+    const saved = readSavedLayout(layoutKey, layer) || defaultLayerLayout(defaultLayout, layer);
     const out = [];
     const usedIds = new Set();
 
@@ -678,7 +690,8 @@ ODA({is: 'oda-editor-form',
     },
     getLayerItems(baseFields, layer = 'ROOT') {
         void this.layoutVersion;
-        return buildLayerLayoutItems(baseFields || [], this.effectiveLayoutKey, layer);
+        const defaultLayout = this.metadata?.LAYOUT || this.metadata?.layout || this.metadata?.METADATA?.LAYOUT || null;
+        return buildLayerLayoutItems(baseFields || [], this.effectiveLayoutKey, layer, defaultLayout);
     },
     get layoutItems() {
         return this.getLayerItems(this.fields || [], 'ROOT');

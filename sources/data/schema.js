@@ -270,6 +270,40 @@ function normalizeField(db, f, basePath = '', seenStructs = new Set()) {
 
 const cache = new WeakMap();
 
+/** Нормализовать LAYOUT: массив → { ROOT: [...] }, объект слоёв → { [layer]: [...] }. */
+function normalizeLayout(raw) {
+    if (!raw)
+        return null;
+    const normList = (arr) => (Array.isArray(arr) ? arr : [])
+        .filter(x => x && typeof x === 'object' && x.id)
+        .map(x => {
+            const item = { id: String(x.id) };
+            if (x.kind && ['field', 'header', 'divider', 'spacer'].includes(String(x.kind)))
+                item.kind = String(x.kind);
+            if (x.label !== undefined && x.label !== null && String(x.label) !== '')
+                item.label = String(x.label);
+            if (Number.isFinite(Number(x.span)))
+                item.span = Math.max(2, Math.min(12, Math.round(Number(x.span))));
+            if (x.hidden === true)
+                item.hidden = true;
+            return item;
+        });
+    if (Array.isArray(raw)) {
+        const list = normList(raw);
+        return list.length ? { ROOT: list } : null;
+    }
+    if (typeof raw === 'object') {
+        const out = {};
+        for (const [layer, arr] of Object.entries(raw)) {
+            const list = normList(arr);
+            if (list.length)
+                out[String(layer)] = list;
+        }
+        return Object.keys(out).length ? out : null;
+    }
+    return null;
+}
+
 /**
  * Схема класса по трёхосевому наследованию: Types → Ancestor → Parent → Сам класс.
  * @param {import('node:sqlite').DatabaseSync} db
@@ -277,7 +311,7 @@ const cache = new WeakMap();
  * @param {Set<string>} [seenStructs] защита от циклов вложенных структур
  * @returns {{cid, path, type, family, label, leaf, ancestor: string|null, types: string[],
  *            fields: object[], postings: object[], overlay: object[], autoRegister: boolean,
- *            source: object|null, static: object[]} | null}
+ *            source: object|null, layout: object|null, static: object[]} | null}
  */
 export function classSchema(db, ref, seenStructs = new Set()) {
     const cls = getClass(db, ref);
@@ -343,7 +377,7 @@ export function classSchema(db, ref, seenStructs = new Set()) {
 
     const NUM_FIELD_CANDIDATES = ['num', 'doc_number', 'order_number', 'number', 'doc_num'];
     let fields = [], postings = [], overlay = [], staticFields = [];
-    let autoRegister = false, source = null, norms = null, numerator = null;
+    let autoRegister = false, source = null, norms = null, numerator = null, layout = null;
     for (const { layer, inherited } of sequence) {
         const own = layer.own || {};
         const meta = own.METADATA || {};
@@ -358,6 +392,15 @@ export function classSchema(db, ref, seenStructs = new Set()) {
             source = { ...(source || {}), ...clone(own.SOURCE) };
         if (own.NORMS !== undefined)
             norms = clone(own.NORMS);
+        const rawLayout = own.LAYOUT ?? meta.LAYOUT;
+        if (rawLayout === false) {
+            layout = null;
+        }
+        else {
+            const normLay = normalizeLayout(rawLayout);
+            if (normLay)
+                layout = { ...(layout || {}), ...normLay };
+        }
         const rawNum = own.NUMERATOR ?? meta.NUMERATOR;
         if (rawNum === false)
             numerator = { enabled: false };
@@ -440,6 +483,7 @@ export function classSchema(db, ref, seenStructs = new Set()) {
         numerator: resolvedNumerator,
         source,
         norms,
+        layout,
         static: staticFields,
     };
     byDb.map.set(cls.cid, schema);
@@ -505,6 +549,26 @@ export function checkSchema(db, ref) {
     };
     checkFields(s.fields, '');
     checkFields(s.overlay, 'overlay.');
+
+    if (s.layout && typeof s.layout === 'object') {
+        const rootFieldIds = new Set(s.fields.map(f => f.id));
+        rootFieldIds.add('time');
+        for (const [layerName, items] of Object.entries(s.layout)) {
+            if (!Array.isArray(items))
+                continue;
+            let allowedIds = layerName === 'ROOT' ? rootFieldIds : null;
+            if (!allowedIds) {
+                const sub = s.fields.find(f => f.id === layerName && (f.type === 'struct' || f.type === 'table'));
+                if (sub)
+                    allowedIds = new Set((sub.fields || []).map(x => x.id));
+            }
+            for (const item of items) {
+                const kind = item.kind || 'field';
+                if (kind === 'field' && allowedIds && !allowedIds.has(item.id))
+                    errors.push(`${at}: LAYOUT[${layerName}] ссылается на неизвестное поле «${item.id}»`);
+            }
+        }
+    }
 
     if (s.family === 'operation' && s.leaf)
         for (const rule of s.postings)
