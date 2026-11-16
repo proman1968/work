@@ -12,6 +12,9 @@ import http from 'node:http';
 import net from 'node:net';
 import crypto from 'node:crypto';
 
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+
 import {
     DEFAULT_HF_ORIGIN,
     HF_MIRROR_ORIGIN,
@@ -26,6 +29,9 @@ import {
     createNetworkFetch,
     downloadFileMultipart,
     probeTrainerNetwork,
+    makeIdleChunkReader,
+    guardBody,
+    discardBody,
 } from '../sources/modules/trainer/downloader.js';
 import {
     startHuggingFaceDownload,
@@ -33,8 +39,13 @@ import {
     listHuggingFaceDownloads,
     pauseHuggingFaceDownload,
     restartActiveHuggingFaceDownloads,
+    resumeInterruptedDownloads,
     TRAINER_METHODS,
 } from '../sources/modules/trainer/index.js';
+import {
+    installProcessGuards,
+    isTransientNetworkError,
+} from '../sources/host/process-guard.js';
 
 function sha256(buf) {
     return crypto.createHash('sha256').update(buf).digest('hex');
@@ -702,6 +713,230 @@ describe('trainer-downloader: многопоточная загрузка, пр�
         finally {
             if (job)
                 pauseHuggingFaceDownload(job.id);
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('makeIdleChunkReader.close() на упавшем потоке (terminated) не даёт unhandledRejection', async () => {
+        const rejections = [];
+        const onRej = (reason) => rejections.push(reason);
+        process.on('unhandledRejection', onRej);
+        try {
+            let ctrl;
+            const cause = Object.assign(new Error('Response body length does not match content-length header'), {
+                code: 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
+                http2ErrorCode: 2,
+            });
+            const body = new ReadableStream({
+                start(c) {
+                    ctrl = c;
+                    c.enqueue(new Uint8Array([1, 2, 3, 4]));
+                },
+            });
+            const reader = makeIdleChunkReader(body, 5000);
+            const first = await reader.next();
+            assert.equal(first.done, false);
+
+            ctrl.error(new TypeError('terminated', { cause }));
+            await assert.rejects(() => reader.next(), /terminated/);
+            reader.close();
+
+            await new Promise(r => setTimeout(r, 40));
+            assert.equal(rejections.length, 0, 'close() обязан гасить reject от iterator.return()/body.cancel()');
+        }
+        finally {
+            process.off('unhandledRejection', onRej);
+        }
+    });
+
+    it('downloadFileMultipart переживает UND_ERR_RES_CONTENT_LENGTH_MISMATCH / terminated и докачивает файл без unhandledRejection', async () => {
+        const tmp = makeTempDir();
+        const payload = crypto.randomBytes(128 * 1024);
+        const staged = path.join(tmp, 'weights.hgn');
+        const rejections = [];
+        const onRej = (reason) => rejections.push(reason);
+        process.on('unhandledRejection', onRej);
+
+        let attempts = 0;
+        const fetchImpl = async (_url, opts = {}) => {
+            attempts++;
+            const m = String(opts.headers?.Range || '').match(/^bytes=(\d+)-(\d*)$/);
+            const start = m ? Number(m[1]) : 0;
+            const end = m && m[2] ? Math.min(payload.length - 1, Number(m[2])) : payload.length - 1;
+            const slice = payload.subarray(start, end + 1);
+
+            if (attempts === 1) {
+                let sentFirst = false;
+                const body = new ReadableStream({
+                    pull(controller) {
+                        if (!sentFirst) {
+                            sentFirst = true;
+                            controller.enqueue(slice.subarray(0, Math.min(16384, slice.length)));
+                            return;
+                        }
+                        const cause = Object.assign(new Error('Response body length does not match content-length header'), {
+                            code: 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
+                            http2ErrorCode: 2,
+                        });
+                        controller.error(new TypeError('terminated', { cause }));
+                    },
+                });
+                return {
+                    ok: true,
+                    status: 206,
+                    headers: new Map([
+                        ['content-range', `bytes ${start}-${end}/${payload.length}`],
+                        ['content-length', String(slice.length)],
+                    ]),
+                    body,
+                };
+            }
+
+            return {
+                ok: true,
+                status: 206,
+                headers: new Map([
+                    ['content-range', `bytes ${start}-${end}/${payload.length}`],
+                    ['content-length', String(slice.length)],
+                ]),
+                body: ReadableStream.from([slice]),
+            };
+        };
+
+        try {
+            const res = await downloadFileMultipart({
+                url: 'https://huggingface.co/test/model/resolve/main/weights.hgn',
+                stagedFile: staged,
+                expectedSize: payload.length,
+                threads: 4,
+                minMultipartBytes: 32 * 1024,
+                retryBaseDelayMs: 20,
+                fetchImpl,
+            });
+            await new Promise(r => setTimeout(r, 40));
+            assert.equal(rejections.length, 0, 'обрыв потока не должен рождать unhandledRejection');
+            assert.equal(res.size, payload.length);
+            assert.ok(attempts >= 2, 'после terminated должен пройти повтор с того же места');
+            assert.equal(sha256(await fsp.readFile(staged)), sha256(payload));
+        }
+        finally {
+            process.off('unhandledRejection', onRej);
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('guardBody и discardBody не дают uncaughtException на брошенном Node-потоке с ошибкой', async () => {
+        const r = new Readable({ read() {} });
+        guardBody(r);
+        r.destroy(new TypeError('terminated'));
+        await discardBody(r);
+        assert.ok(r.destroyed);
+    });
+
+    it('process-guard распознаёт сетевые ошибки undici и ловит unhandledRejection/uncaughtException в лог', () => {
+        const tmp = makeTempDir();
+        const logFile = path.join(tmp, 'server-errors.log');
+        const mockProc = new EventEmitter();
+        const seen = [];
+        const uninstall = installProcessGuards({
+            rootDir: tmp,
+            logFile,
+            target: mockProc,
+            onError: (info) => seen.push(info),
+        });
+        try {
+            const cause = Object.assign(new Error('Response body length does not match content-length header'), {
+                code: 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
+                http2ErrorCode: 2,
+            });
+            const netErr = new TypeError('terminated', { cause });
+            assert.equal(isTransientNetworkError(netErr), true);
+            assert.equal(isTransientNetworkError(new Error('Обычная логическая ошибка')), false);
+
+            mockProc.emit('unhandledRejection', netErr);
+            mockProc.emit('uncaughtException', new Error('неизвестный сбой'));
+
+            assert.equal(seen.length, 2);
+            assert.equal(seen[0].kind, 'unhandledRejection');
+            assert.equal(seen[0].transient, true);
+            assert.equal(seen[1].kind, 'uncaughtException');
+            assert.equal(seen[1].transient, false);
+
+            const logText = fs.readFileSync(logFile, 'utf-8');
+            assert.match(logText, /UND_ERR_RES_CONTENT_LENGTH_MISMATCH/);
+            assert.match(logText, /неизвестный сбой/);
+        }
+        finally {
+            uninstall();
+            fs.rmSync(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('resumeInterruptedDownloads подхватывает загрузки со статусом downloading и не трогает paused', async () => {
+        const tmp = makeTempDir();
+        const makeState = async (folder, status, repoId) => {
+            const dir = path.join(tmp, 'MODELS', 'Local', folder, '$ai', '#weights');
+            await fsp.mkdir(dir, { recursive: true });
+            await fsp.writeFile(path.join(dir, 'download-state.json'), JSON.stringify({
+                repoId,
+                folderName: folder,
+                providerFolder: 'Local',
+                status,
+                files: [{ name: 'weights.gguf', size: 1024, downloaded: 256, done: false, ranges: [[0, 256]] }],
+            }));
+        };
+        const payload = crypto.randomBytes(1024);
+        const fetchImpl = async (url, opts = {}) => {
+            const u = String(url);
+            if (u.includes('/api/models/')) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        id: 'Test/Interrupted',
+                        siblings: [{ rfilename: 'weights.gguf', size: payload.length }],
+                    }),
+                };
+            }
+            const m = String(opts.headers?.Range || '').match(/^bytes=(\d+)-(\d*)$/);
+            const start = m ? Number(m[1]) : 0;
+            const slice = payload.subarray(start);
+            return {
+                ok: true,
+                status: start > 0 ? 206 : 200,
+                headers: new Map([
+                    ['content-range', `bytes ${start}-${payload.length - 1}/${payload.length}`],
+                    ['content-length', String(slice.length)],
+                ]),
+                body: ReadableStream.from([slice]),
+            };
+        };
+
+        try {
+            await makeState('InterruptedModel', 'downloading', 'Test/Interrupted');
+            await makeState('PausedModel', 'paused', 'Test/Paused');
+
+            const partFile = path.join(tmp, 'MODELS', 'Local', 'InterruptedModel', '$ai', '#weights', 'weights.gguf.part');
+            await fsp.writeFile(partFile, payload.subarray(0, 256));
+
+            const resumed = await resumeInterruptedDownloads({ rootDir: tmp, fetchImpl });
+            assert.equal(resumed.length, 1);
+            assert.equal(resumed[0].folderName, 'InterruptedModel');
+
+            // Дожидаемся завершения фоновой докачки
+            const deadline = Date.now() + 5000;
+            let done = false;
+            while (Date.now() < deadline) {
+                const snap = listHuggingFaceDownloads(tmp).find(d => d.folderName === 'InterruptedModel');
+                if (snap?.status === 'completed') {
+                    done = true;
+                    break;
+                }
+                await new Promise(r => setTimeout(r, 30));
+            }
+            assert.equal(done, true, 'прерванная загрузка должна докачаться до completed');
+        }
+        finally {
             fs.rmSync(tmp, { recursive: true, force: true });
         }
     });

@@ -1,3 +1,7 @@
+import { installProcessGuards } from './host/process-guard.js';
+if (!process.env.WORK_TEST)
+    installProcessGuards();
+
 import './reactor.js';
 globalThis.ODA ??= function (prototype) {};
 import webPush from 'web-push';
@@ -29,6 +33,18 @@ await WORK.children;
 if (process.env.WORK_RECOVER !== '0') {
     const { recoverTasks } = await import('./modules/agent/recovery.js');
     recoverTasks().catch(e => console.warn('[agent recovery]', e.message));
+}
+
+// Загрузки моделей ИИ, оборванные внезапным падением/рестартом (status === 'downloading'), продолжаем с того же байта;
+// паузы, поставленные пользователем, не трогаем. WORK_RESUME_DOWNLOADS=0 — отключить.
+if (process.env.WORK_RESUME_DOWNLOADS !== '0' && !process.env.WORK_TEST) {
+    import('./modules/trainer/huggingface.js')
+        .then(m => m.resumeInterruptedDownloads())
+        .then(list => {
+            if (Array.isArray(list) && list.length)
+                console.log('[trainer] авто-возобновлены прерванные загрузки:', list.map(j => j.folderName).join(', '));
+        })
+        .catch(e => console.warn('[trainer resume]', e?.message || e));
 }
 
 // прогрев дерева классов в фоне: первый вход не платит холодную сборку; WORK_PREWARM=0 — выключить

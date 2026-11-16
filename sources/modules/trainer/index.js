@@ -18,6 +18,7 @@ import {
     discardHuggingFaceDownload,
     resumeHuggingFaceDownload,
     restartActiveHuggingFaceDownloads,
+    resumeInterruptedDownloads,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
 } from './huggingface.js';
@@ -184,6 +185,7 @@ export {
     discardHuggingFaceDownload,
     resumeHuggingFaceDownload,
     restartActiveHuggingFaceDownloads,
+    resumeInterruptedDownloads,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
     buildWorkDataset,

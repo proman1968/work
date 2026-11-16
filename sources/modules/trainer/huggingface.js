@@ -1051,11 +1051,18 @@ function isRetryableDownloadError(err) {
         return true;
     if (err.httpStatus && err.httpStatus >= 400 && err.httpStatus < 500)
         return false;
-    const msg = String(err?.message || err);
+    const msg = [
+        err?.message,
+        err?.code,
+        err?.name,
+        err?.cause?.message,
+        err?.cause?.code,
+        err?.cause?.name,
+    ].filter(Boolean).join(' ') || String(err);
     if (/Unexpected URL|Некорректн|отменена/i.test(msg))
         return false;
     return err.retryable === true
-        || /ECONNRESET|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|network|fetch failed|terminated|aborted|socket|premature/i.test(msg);
+        || /ECONNRESET|ETIMEDOUT|EPIPE|EAI_AGAIN|ENOTFOUND|UND_ERR_|ERR_HTTP2_|ResponseContentLengthMismatch|content[- ]length|length does not match|network|fetch failed|terminated|aborted|socket|premature/i.test(msg);
 }
 
 async function writeDownloadStateSafe(stagingDir, job, extra = {}) {
@@ -1787,9 +1794,13 @@ export async function resumeHuggingFaceDownload({
     if (!resolvedRepo)
         throw new Error(`Не удалось определить репозиторий Hugging Face для докачки «${cleanFolder || key}»`);
 
+    const stateFileNames = Array.isArray(state.files) && state.files.length
+        ? state.files.map(f => f?.name).filter(Boolean)
+        : null;
+
     return startHuggingFaceDownload({
         repoId: resolvedRepo,
-        files: files ?? entry?.files ?? null,
+        files: files ?? entry?.files ?? stateFileNames ?? null,
         quant: quant || entry?.quant || 'Q8_0',
         revision: entry?.job?.revision || state.revision || 'main',
         token,
@@ -1836,6 +1847,58 @@ export async function restartActiveHuggingFaceDownloads({ rootDir = '' } = {}) {
         restarted.push(resumed);
     }
     return restarted;
+}
+
+/**
+ * На старте сервера автоматически подхватить загрузки, которые находились в статусе
+ * `downloading` на момент аварийного завершения предыдущего процесса.
+ * Паузы, поставленные пользователем (`paused`), не трогает.
+ */
+export async function resumeInterruptedDownloads({
+    rootDir = process.cwd(),
+    fetchImpl = globalThis.fetch,
+} = {}) {
+    migrateLocalModelsLayoutSync(rootDir);
+    const localRoot = localRootDir(rootDir);
+    if (!fs.existsSync(localRoot))
+        return [];
+
+    const resumed = [];
+    let entries = [];
+    try {
+        entries = fs.readdirSync(localRoot, { withFileTypes: true });
+    }
+    catch {
+        return [];
+    }
+
+    for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith('$') || e.name.startsWith('#') || e.name === 'models')
+            continue;
+        const weightsDir = getModelWeightsDir(rootDir, e.name, 'Local');
+        const stateFile = path.join(weightsDir, DOWNLOAD_STATE_FILE);
+        if (!fs.existsSync(stateFile))
+            continue;
+        let state = null;
+        try {
+            state = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
+        }
+        catch { continue; }
+        if (state?.status !== 'downloading' || !state?.repoId)
+            continue;
+        try {
+            const job = await resumeHuggingFaceDownload({
+                folderName: e.name,
+                rootDir,
+                fetchImpl,
+            });
+            resumed.push(job);
+        }
+        catch (err) {
+            console.warn(`[trainer] не удалось авто-возобновить загрузку «${e.name}»:`, err?.message || err);
+        }
+    }
+    return resumed;
 }
 
 export function cancelHuggingFaceDownload(jobId, { keepFiles = false } = {}) {

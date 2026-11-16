@@ -336,6 +336,43 @@ export function saveTrainerNetworkSettings(patch = {}, rootDir = process.cwd()) 
 
 // ── Прокси-транспорт (HTTP CONNECT + SOCKS5/SOCKS5h без внешних пакетов) ────
 
+const NOOP = () => {};
+const _guardedBodies = new WeakSet();
+
+/**
+ * Повесить страхующий обработчик `'error'` на поток тела ответа (`Readable` или
+ * web `ReadableStream`), чтобы фоновый обрыв соединения (например `UND_ERR_RES_CONTENT_LENGTH_MISMATCH`)
+ * никогда не превращался в неперехваченный `uncaughtException` EventEmitter'а.
+ */
+export function guardBody(body) {
+    if (!body || typeof body !== 'object')
+        return body;
+    if (_guardedBodies.has(body))
+        return body;
+    _guardedBodies.add(body);
+    try { body.on?.('error', NOOP); } catch { /* ignore */ }
+    try { body.addEventListener?.('error', NOOP); } catch { /* ignore */ }
+    return body;
+}
+
+/**
+ * Безопасно закрыть и отменить неиспользованное/прерванное тело ответа,
+ * гарантированно подавляя асинхронные отказы `cancel()`/`return()` на уже упавшем потоке.
+ */
+export async function discardBody(res) {
+    const body = res?.body ?? res;
+    if (!body || typeof body !== 'object')
+        return;
+    guardBody(body);
+    try {
+        const p = body.cancel?.();
+        if (p && typeof p.then === 'function')
+            await p.catch(NOOP);
+    }
+    catch { /* ignore */ }
+    try { body.destroy?.(); } catch { /* ignore */ }
+}
+
 function makeAbortError(msg = 'Запрос отменён') {
     const err = new Error(msg);
     err.name = 'AbortError';
@@ -390,15 +427,17 @@ async function fetchWithIdleTimeout(netFetch, url, options = {}, idleTimeoutMs =
  * Чтение тела ответа с таймаутом простоя: если очередной чанк не пришёл за
  * `idleTimeoutMs`, чтение прерывается ошибкой `makeStallError`.
  */
-function makeIdleChunkReader(body, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
+export function makeIdleChunkReader(body, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
+    guardBody(body);
     const iterator = body[Symbol.asyncIterator]();
+    let closed = false;
     const next = async () => {
         let timer = null;
         const timeoutPromise = new Promise((_, reject) => {
             timer = setTimeout(() => reject(makeStallError(idleTimeoutMs)), idleTimeoutMs);
         });
         const chunkPromise = iterator.next();
-        chunkPromise.catch(() => { /* обработаем ниже или при закрытии */ });
+        chunkPromise.catch(NOOP);
         try {
             return await Promise.race([chunkPromise, timeoutPromise]);
         }
@@ -408,8 +447,25 @@ function makeIdleChunkReader(body, idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS) {
         }
     };
     const close = () => {
-        try { iterator.return?.(); } catch { /* ignore */ }
-        try { body.cancel?.(); } catch { /* ignore */ }
+        if (closed)
+            return;
+        closed = true;
+        // На уже упавшем потоке iterator.return() и body.cancel() возвращают отклонённый
+        // промис (например TypeError: terminated) — обязаны гасить их через .catch(),
+        // иначе Node завершает процесс по unhandledRejection.
+        try {
+            const ret = iterator.return?.();
+            if (ret && typeof ret.then === 'function')
+                ret.catch(NOOP);
+        }
+        catch { /* ignore */ }
+        try {
+            const can = body.cancel?.();
+            if (can && typeof can.then === 'function')
+                can.catch(NOOP);
+        }
+        catch { /* ignore */ }
+        try { body.destroy?.(); } catch { /* ignore */ }
     };
     return { next, close };
 }
@@ -833,6 +889,7 @@ function wrapNodeResponse(res, url, signal) {
         signal.addEventListener('abort', cancelBody, { once: true });
     res.body = res;
     res.cancel = cancelBody;
+    guardBody(res);
 
     const readAll = async () => {
         const chunks = [];
@@ -884,6 +941,8 @@ export function createNetworkFetch({
                 ? await singleProxiedRequest(currentUrl, { ...options, method, headers: currentHeaders, signal }, proxyParsed)
                 : await fetchImpl(currentUrl, { ...options, method, headers: currentHeaders, redirect: 'manual' });
 
+            guardBody(res?.body);
+
             if (![301, 302, 303, 307, 308].includes(res?.status))
                 return res;
 
@@ -892,8 +951,7 @@ export function createNetworkFetch({
                 return res;
 
             // Закрываем тело редирект-ответа, чтобы не текли сокеты
-            try { await res.body?.cancel?.(); } catch { /* ignore */ }
-            try { res.body?.destroy?.(); } catch { /* ignore */ }
+            await discardBody(res);
 
             const prevOrigin = new URL(currentUrl).origin;
             const nextUrl = new URL(loc, currentUrl).toString();
@@ -1132,8 +1190,10 @@ export async function downloadFileMultipart({
         try {
             const reqHeaders = { ...headers, Range: `bytes=${probeRange.start}-${probeRange.end - 1}` };
             probeRes = await netFetch(url, { headers: reqHeaders, signal });
+            guardBody(probeRes?.body);
 
             if (probeRes.status === 416) {
+                await discardBody(probeRes);
                 if (totalSize > 0 && sumRangesBytes(completed) >= totalSize) {
                     await fsp.rename(partFile, stagedFile);
                     return { size: totalSize, ranges: [[0, totalSize]], rangeSupported: true, multipart: true };
@@ -1148,6 +1208,7 @@ export async function downloadFileMultipart({
                 throw e416;
             }
             if (!probeRes.ok && probeRes.status !== 206) {
+                await discardBody(probeRes);
                 const errHttp = new Error(`Ошибка загрузки ${path.basename(stagedFile)}: HTTP ${probeRes.status}`);
                 errHttp.httpStatus = probeRes.status;
                 throw errHttp;
@@ -1193,8 +1254,7 @@ export async function downloadFileMultipart({
         totalSize = cr.total;
     if (!totalSize) {
         // Неизвестный totalSize с 206 — безопасно докачать в 1 поток
-        try { await probeRes.body?.cancel?.(); } catch { /* ignore */ }
-        try { probeRes.body?.destroy?.(); } catch { /* ignore */ }
+        await discardBody(probeRes);
         return downloadSingleStream({
             url,
             stagedFile,
@@ -1285,9 +1345,8 @@ export async function downloadFileMultipart({
                         break;
                 }
             }
-            catch (err) {
+            finally {
                 reader.close();
-                throw err;
             }
         }
         activeCursors.delete(workerId);
@@ -1303,10 +1362,20 @@ export async function downloadFileMultipart({
         let pendingRes = initialRes;
 
         while (cur < end) {
-            if (signal?.aborted)
+            if (signal?.aborted) {
+                if (pendingRes) {
+                    await discardBody(pendingRes);
+                    pendingRes = null;
+                }
                 throw makeAbortError('Загрузка приостановлена пользователем');
-            if (firstFatalErr)
+            }
+            if (firstFatalErr) {
+                if (pendingRes) {
+                    await discardBody(pendingRes);
+                    pendingRes = null;
+                }
                 return;
+            }
 
             try {
                 const res = pendingRes || await netFetch(url, {
@@ -1314,22 +1383,21 @@ export async function downloadFileMultipart({
                     signal,
                 });
                 pendingRes = null;
+                guardBody(res?.body);
 
                 if (res.status === 429) {
                     const err429 = new Error(`Слишком много запросов (HTTP 429), уменьшаем потоки`);
                     err429.httpStatus = 429;
                     err429.retryable = true;
                     concurrencyLimit = Math.max(1, Math.floor(concurrencyLimit / 2));
-                    try { await res.body?.cancel?.(); } catch { /* ignore */ }
-                    try { res.body?.destroy?.(); } catch { /* ignore */ }
+                    await discardBody(res);
                     throw err429;
                 }
 
                 if (res.status !== 206 && res.status !== 200) {
                     const errHttp = new Error(`Ошибка сегмента ${path.basename(stagedFile)}: HTTP ${res.status}`);
                     errHttp.httpStatus = res.status;
-                    try { await res.body?.cancel?.(); } catch { /* ignore */ }
-                    try { res.body?.destroy?.(); } catch { /* ignore */ }
+                    await discardBody(res);
                     throw errHttp;
                 }
 
@@ -1448,7 +1516,9 @@ async function downloadSingleStream({
                 reqHeaders.Range = `bytes=${curSize}-`;
 
             const res = await netFetch(url, { headers: reqHeaders, signal });
+            guardBody(res?.body);
             if (res.status === 416) {
+                await discardBody(res);
                 if (curSize > 0 && (!totalSize || curSize >= totalSize)) {
                     await fsp.rename(partFile, stagedFile);
                     const sz = totalSize || curSize;
@@ -1463,6 +1533,7 @@ async function downloadSingleStream({
                 throw e416;
             }
             if (!res.ok && res.status !== 206) {
+                await discardBody(res);
                 const errHttp = new Error(`Ошибка загрузки ${path.basename(stagedFile)}: HTTP ${res.status}`);
                 errHttp.httpStatus = res.status;
                 throw errHttp;
@@ -1563,9 +1634,8 @@ async function consumeSingleResponseToFile({
                     emit(buf.length);
                 }
             }
-            catch (readErr) {
+            finally {
                 reader.close();
-                throw readErr;
             }
             await new Promise((resolve, reject) => {
                 out.end();
@@ -1670,6 +1740,9 @@ export async function probeTrainerNetwork({
                     discoveredRepo = probeRepoId;
                 }
             }
+            else {
+                await discardBody(apiRes);
+            }
         }
         catch { /* для кастомного зеркала без /api/models попробуем прямую пробу файла */ }
 
@@ -1684,6 +1757,7 @@ export async function probeTrainerNetwork({
         const tDl0 = Date.now();
         const res = await netFetch(fileUrl, { headers: dlHeaders, signal: controller.signal });
         if (!res.ok && res.status !== 206) {
+            await discardBody(res);
             throw new Error(`Источник вернул HTTP ${res.status}${apiStatus ? ` (API: ${apiStatus})` : ''}`);
         }
 
@@ -1691,14 +1765,19 @@ export async function probeTrainerNetwork({
         let bytes = 0;
         const limitBytes = Math.max(65536, Number(probeBytes) || 2 * 1024 * 1024);
         if (res.body) {
-            for await (const raw of res.body) {
-                const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-                bytes += buf.length;
-                if (bytes >= limitBytes) {
-                    try { await res.body?.cancel?.(); } catch { /* ignore */ }
-                    try { res.body?.destroy?.(); } catch { /* ignore */ }
-                    break;
+            guardBody(res.body);
+            try {
+                for await (const raw of res.body) {
+                    const buf = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+                    bytes += buf.length;
+                    if (bytes >= limitBytes) {
+                        await discardBody(res);
+                        break;
+                    }
                 }
+            }
+            finally {
+                await discardBody(res);
             }
         }
         else if (typeof res.arrayBuffer === 'function') {
