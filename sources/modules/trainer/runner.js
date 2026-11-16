@@ -103,6 +103,81 @@ export function computeAdaptiveDefaults(usableMemoryGb) {
     };
 }
 
+function parseRegMemoryBytes(regType, rawValue) {
+    const val = String(rawValue || '').trim();
+    if (!val)
+        return 0;
+    try {
+        if (/REG_QWORD|REG_DWORD/i.test(regType)) {
+            return Number(BigInt(val));
+        }
+        if (/REG_BINARY/i.test(regType)) {
+            const hex = val.replace(/[^0-9a-f]/gi, '');
+            if (hex.length >= 16) {
+                const buf = Buffer.from(hex.slice(0, 16), 'hex');
+                return Number(buf.readBigUInt64LE(0));
+            }
+            if (hex.length >= 8) {
+                const buf = Buffer.from(hex.slice(0, 8), 'hex');
+                return buf.readUInt32LE(0);
+            }
+        }
+    }
+    catch { /* ignore */ }
+    return 0;
+}
+
+function parseWindowsVideoRegistry(output) {
+    const byKey = new Map();
+    let cur = null;
+    for (const rawLine of String(output || '').split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line)
+            continue;
+        if (/^HKEY_/i.test(line)) {
+            const key = line.toLowerCase();
+            cur = byKey.get(key) || { name: '', qwBytes: 0, dwBytes: 0 };
+            byKey.set(key, cur);
+            continue;
+        }
+        if (!cur)
+            continue;
+        const mDesc = line.match(/^DriverDesc\s+REG_SZ\s+(.+)$/i);
+        if (mDesc) {
+            cur.name = mDesc[1].trim();
+            continue;
+        }
+        const mQw = line.match(/^HardwareInformation\.qwMemorySize\s+(REG_\w+)\s+(.+)$/i);
+        if (mQw) {
+            cur.qwBytes = parseRegMemoryBytes(mQw[1], mQw[2]);
+            continue;
+        }
+        const mDw = line.match(/^HardwareInformation\.MemorySize\s+(REG_\w+)\s+(.+)$/i);
+        if (mDw) {
+            cur.dwBytes = parseRegMemoryBytes(mDw[1], mDw[2]);
+        }
+    }
+
+    let bestName = '';
+    let maxBytes = 0;
+    for (const a of byKey.values()) {
+        if (/Basic Display|Virtual|Indirect/i.test(a.name))
+            continue;
+        const bytes = a.qwBytes || a.dwBytes || 0;
+        if (bytes > maxBytes) {
+            maxBytes = bytes;
+            bestName = a.name || bestName;
+        }
+        else if (!bestName && a.name) {
+            bestName = a.name;
+        }
+    }
+    return {
+        gpuName: bestName,
+        vramGb: maxBytes > 0 ? +(maxBytes / (1024 ** 3)).toFixed(1) : 0,
+    };
+}
+
 /**
  * Определить реальный аппаратный профиль текущей машины (CPU, RAM, GPU/VRAM/UMA, Python + Unsloth, llama-server)
  * и адаптировать все бюджеты памяти и рекомендации под фактическое железо.
@@ -126,19 +201,17 @@ export async function detectHardware({ force = false } = {}) {
     const platform = os.platform();
     const arch = os.arch();
 
-    const winPsScript = [
-        '$pm = (Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue | Measure-Object Capacity -Sum).Sum',
-        '$gpu = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "Basic Display|Virtual" } | Select-Object -First 1 Name',
-        '$qw = (Get-ItemProperty -Path "Registry::HKEY_LOCAL_MACHINE\\SYSTEM\\ControlSet001\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0*" -Name "HardwareInformation.qwMemorySize" -ErrorAction SilentlyContinue | Measure-Object "HardwareInformation.qwMemorySize" -Maximum).Maximum',
-        '[PSCustomObject]@{phys=$pm;gpu=$gpu.Name;vram=$qw} | ConvertTo-Json -Compress',
-    ].join('\n');
+    const winVideoRegKey = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}';
 
-    // Параллельно опрашиваем видеокарту (NVIDIA / AMD ROCm / Windows WMI+DXGI) и окружение Python / llama-server
-    const [nvidiaProbe, rocmProbe, winProbe, pyProbe, llamaProbe] = await Promise.all([
+    // Параллельно опрашиваем видеокарту (NVIDIA / AMD ROCm / нативный reg query на Windows за ~50 мс) и Python / llama-server
+    const [nvidiaProbe, rocmProbe, winRegDesc, winRegMem, pyProbe, llamaProbe] = await Promise.all([
         probeCommand('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits']),
         probeCommand('rocm-smi', ['--showproductname', '--showmeminfo', 'vram', '--json']),
         platform === 'win32'
-            ? probeCommand('powershell', ['-NoProfile', '-EncodedCommand', Buffer.from(winPsScript, 'utf16le').toString('base64')], 4500)
+            ? probeCommand('reg', ['query', winVideoRegKey, '/s', '/v', 'DriverDesc'], 2500)
+            : Promise.resolve({ ok: false, output: '' }),
+        platform === 'win32'
+            ? probeCommand('reg', ['query', winVideoRegKey, '/s', '/v', 'HardwareInformation.*MemorySize'], 2500)
             : Promise.resolve({ ok: false, output: '' }),
         probeCommand('python', ['-c', 'import json, torch; import unsloth; print(json.dumps({"torch": torch.__version__, "cuda": torch.cuda.is_available(), "hip": getattr(torch.version, "hip", None)}))']),
         probeCommand('llama-server', ['--version']),
@@ -146,22 +219,15 @@ export async function detectHardware({ force = false } = {}) {
 
     let gpuName = '';
     let vramGb = 0;
-    let physicalRamGb = osTotalRamGb;
+    const physicalRamGb = osTotalRamGb;
     let memoryType = 'System RAM / UMA';
 
-    if (winProbe.ok && winProbe.output) {
-        try {
-            const w = JSON.parse(winProbe.output.split(/\r?\n/).pop() || '{}');
-            const physB = Number(w.phys) || 0;
-            if (physB > 0)
-                physicalRamGb = Math.max(osTotalRamGb, +(physB / (1024 ** 3)).toFixed(1));
-            const vramB = Number(w.vram) || 0;
-            if (vramB > 0)
-                vramGb = +(vramB / (1024 ** 3)).toFixed(1);
-            if (w.gpu && typeof w.gpu === 'string')
-                gpuName = w.gpu.trim();
-        }
-        catch { /* ignore */ }
+    if (winRegDesc.ok || winRegMem.ok) {
+        const parsed = parseWindowsVideoRegistry(`${winRegDesc.output || ''}\n${winRegMem.output || ''}`);
+        if (parsed.gpuName)
+            gpuName = parsed.gpuName;
+        if (parsed.vramGb > 0)
+            vramGb = parsed.vramGb;
     }
 
     if (nvidiaProbe.ok && nvidiaProbe.output) {
@@ -365,7 +431,9 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
 
         if (hasRealWeightBinary || isAdapterNode || hasBuboExternal) {
             const enabled = meta.enabled !== false;
-            const incompatible = !hasBuboExternal && wInsp.incompatibleOnPlatform;
+            const isHalogenLinuxRepo = platform === 'win32' && /^peonist-ai\/halogen-/i.test(String(meta.hfRepo || ''));
+            const incompatible = !hasBuboExternal && (wInsp.incompatibleOnPlatform || (isHalogenLinuxRepo && !wInsp.hasGguf && !wInsp.hasBuboManifest));
+            const incompatibleReason = wInsp.incompatibleReason || (incompatible ? 'Веса формата Linux (.hgn/.hnpw) несовместимы с Windows. Удалите их и установите Windows-версию.' : '');
             models.push({
                 id: e.name,
                 label: meta.label || e.name,
@@ -378,7 +446,7 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
                 enabled,
                 active: enabled && (hasRealWeightBinary || isAdapterNode || hasBuboExternal) && !incompatible,
                 incompatibleOnPlatform: incompatible,
-                incompatibleReason: incompatible ? wInsp.incompatibleReason : '',
+                incompatibleReason: incompatible ? incompatibleReason : '',
                 weightFormat: hasBuboExternal ? 'bubo' : wInsp.weightFormat,
                 path: `/MODELS/Local/${e.name}`,
                 hasClass: fs.existsSync(aiClassFile),
@@ -664,3 +732,5 @@ export async function publishTrainedAdapter(jobId, {
     job.publishedPath = res.modelPath;
     return res;
 }
+
+export { parseWindowsVideoRegistry };

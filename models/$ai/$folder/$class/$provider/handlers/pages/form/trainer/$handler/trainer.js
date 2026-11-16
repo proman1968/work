@@ -1306,7 +1306,8 @@ export default {
             return;
         const res = await this._call('halogen_download_bundle', { models: nodeName });
         if (res) {
-            this.notice = `Начата установка модели «${nodeName}» в /MODELS/Local…`;
+            const warn = Array.isArray(res.warnings) && res.warnings.length ? ` (${res.warnings.join(' ')})` : '';
+            this.notice = `Начата установка модели «${nodeName}» в /MODELS/Local…${warn}`;
             await this.reloadAll();
             this._invalidateClientModelsTree();
         }
@@ -1314,7 +1315,8 @@ export default {
     async downloadHalogenBundleAll() {
         const res = await this._call('halogen_download_bundle', {});
         if (res) {
-            this.notice = `Начата установка комплекта Halo (${res.totalModels} моделей GPU + NPU) в /MODELS/Local…`;
+            const warn = Array.isArray(res.warnings) && res.warnings.length ? ` (${res.warnings.join(' ')})` : '';
+            this.notice = `Начата установка комплекта Halo (${res.totalModels} моделей) в /MODELS/Local…${warn}`;
             await this.reloadAll();
             this._invalidateClientModelsTree();
         }

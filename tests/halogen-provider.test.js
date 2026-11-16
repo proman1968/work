@@ -727,15 +727,35 @@ describe('Единый локальный контур /MODELS/Local для ма
         }
     });
 
-    it('8. Разделение форматов по ОС: на Windows скрыты Linux-only .hgn/.hnpw, selectFilesToDownload для Linux не берёт устаревшие w4b/ht43, а startHuggingFaceDownload на Windows блокирует .hgn', async () => {
+    it('8. Разделение форматов по ОС: на Windows в комплекте Halo 8 совместимых моделей (Bubo + 7 .safetensors), парсер реестра видит 128 ГБ UMA, а preflight не блокирует загрузку', async () => {
         const winCatalog = getHalogenCatalogForPlatform('win32');
-        assert.equal(winCatalog.length, 1);
+        assert.equal(winCatalog.length, 8, 'на Windows в комплекте Halo все 8 ролей: 1 Bubo + 7 совместимых .safetensors');
         assert.equal(winCatalog[0].nodeName, 'Qwen3.8-Flash-Next');
         assert.equal(winCatalog[0].hfRepo, 'unsloth/Qwen3.8-Flash-Next-GGUF');
         assert.equal(winCatalog[0].runtimeType, 'bubo');
+        assert.ok(winCatalog.slice(1).every(m => m.runtimeType === 'local' && !/^peonist-ai\/halogen-/i.test(m.hfRepo)));
 
         const linuxCatalog = getHalogenCatalogForPlatform('linux');
         assert.equal(linuxCatalog.length, 8);
+
+        // Проверка парсинга реестра Windows для AMD Radeon 8065S (128 ГБ REG_QWORD / REG_BINARY)
+        const { parseWindowsVideoRegistry } = await import('../sources/modules/trainer/runner.js');
+        const regQwordSample = [
+            'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000',
+            '    DriverDesc    REG_SZ    AMD Radeon(TM) 8065S Graphics',
+            '    HardwareInformation.qwMemorySize    REG_QWORD    0x2000000000',
+        ].join('\n');
+        const parsedQw = parseWindowsVideoRegistry(regQwordSample);
+        assert.equal(parsedQw.gpuName, 'AMD Radeon(TM) 8065S Graphics');
+        assert.equal(parsedQw.vramGb, 128);
+
+        const regBinSample = [
+            'HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0000',
+            '    DriverDesc    REG_SZ    AMD Radeon(TM) 8065S Graphics',
+            '    HardwareInformation.qwMemorySize    REG_BINARY    0000000020000000',
+        ].join('\n');
+        const parsedBin = parseWindowsVideoRegistry(regBinSample);
+        assert.equal(parsedBin.vramGb, 128);
 
         // На Windows в curated-поиске не должно быть peonist-ai/halogen-qwen3.8-flash-next
         const winSearch = await searchHuggingFaceModels({
@@ -785,14 +805,14 @@ describe('Единый локальный контур /MODELS/Local для ма
             /не поддерживаются на Windows/i
         );
 
-        // Preflight на машине с недостаточной памятью (<96 ГБ) отклоняет скачивание 180B до старта
+        // Preflight при 64 ГБ памяти возвращает предупреждение, но НЕ блокирует загрузку (ok: true)
         const preflightLowMem = checkWindowsHalogenPreflight({
             requiredDiskGb: 1,
             minTotalMemoryGb: 96,
             totalMemoryGb: 64,
         });
-        assert.equal(preflightLowMem.ok, false);
-        assert.match(preflightLowMem.errors[0], /Недостаточно общей памяти/);
+        assert.equal(preflightLowMem.ok, true);
+        assert.ok(preflightLowMem.warnings.some(w => /64 ГБ общей памяти/.test(w)));
     });
 
     it('9. Честная диагностика при .hgn на Windows, отсутствие заглушки про .safetensors и автозапуск движка ensureHalogenBackendRunning', async () => {

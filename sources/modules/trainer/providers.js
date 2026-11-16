@@ -908,6 +908,15 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
             path.resolve(rootDir, adapterRel),
         ], platform);
 
+        const isHalogenLinuxRepo = /^peonist-ai\/halogen-/i.test(String(data.hfRepo || ''));
+        if (platform === 'win32' && isHalogenLinuxRepo && !(isFlashNext && hasBuboGlobal) && !check.info?.hasGguf && !check.info?.hasBuboManifest) {
+            return {
+                active: false,
+                reason: check.info?.incompatibleReason || 'Веса формата Linux (.hgn/.hnpw) несовместимы с Windows',
+                incompatibleOnPlatform: true,
+                configuredKey: false,
+            };
+        }
         if (check.ready || (isFlashNext && hasBuboGlobal)) {
             return { active: true, reason: 'Активна (веса модели на диске)', configuredKey: true };
         }

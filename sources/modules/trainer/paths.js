@@ -142,7 +142,7 @@ export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
             weightFormat = 'other';
 
         const isWin = platform === 'win32';
-        const incompatibleOnPlatform = isWin && (hasHgn || hasHnpw) && !hasGguf && !hasBuboManifest && !hasSafetensors;
+        const incompatibleOnPlatform = isWin && (hasHgn || hasHnpw) && !hasGguf && !hasBuboManifest;
         const incompatibleReason = incompatibleOnPlatform
             ? 'Скачаны веса формата Linux (.hgn/.hnpw), несовместимые с Windows. Удалите их и установите Windows-версию (GGUF / .safetensors).'
             : '';

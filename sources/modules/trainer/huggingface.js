@@ -29,7 +29,6 @@ import {
     migrateLocalModelsLayoutSync,
     hasReadyWeightFilesSync,
     LINUX_ONLY_HALOGEN_EXT_RE,
-    getFreeDiskSpaceGb,
 } from './paths.js';
 
 const HF_ORIGIN = DEFAULT_HF_ORIGIN;
@@ -73,6 +72,22 @@ export const MODEL_CAPABILITIES = Object.freeze({
  */
 export const CURATED_HF_MODELS = Object.freeze([
     // --- ТЕКСТ И КОД (LLM / АГЕНТЫ) ---
+    {
+        id: 'Qwen/Qwen3-0.6B',
+        author: 'Qwen',
+        modelName: 'Qwen3-0.6B (Сверхлёгкий маршрутизатор)',
+        modality: 'llm',
+        format: 'safetensors',
+        paramsB: 0.6,
+        ramRequiredGb: 1.0,
+        trainRamGb: 2.2,
+        capabilities: ['chat', 'classify', 'decide'],
+        whatItDoes: 'Мгновенная классификация запросов, маршрутизация и быстрые короткие ответы на CPU/GPU',
+        recommendedFor: 'Работает на любом ПК (<1 ГБ памяти)',
+        tags: ['qwen3', '0.6b', 'safetensors', 'fast'],
+        downloads: 190000,
+        likes: 720,
+    },
     {
         id: 'Qwen/Qwen3-4B',
         author: 'Qwen',
@@ -1256,15 +1271,6 @@ export async function startHuggingFaceDownload({
     const hasCrossPlatformWeights = selected.some(f => /\.(gguf|safetensors)$/i.test(f.name));
     if (platform === 'win32' && hasLinuxOnlyWeights && !hasCrossPlatformWeights) {
         throw new Error(`В репозитории ${cleanId} найдены только веса Linux (.hgn/.hnpw), несовместимые с Windows.`);
-    }
-
-    const totalExpectedBytes = selected.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
-    if (totalExpectedBytes > 512 * 1024 * 1024) {
-        const freeGb = getFreeDiskSpaceGb(rootDir);
-        const needGb = +(totalExpectedBytes / (1024 ** 3)).toFixed(1);
-        if (freeGb !== null && freeGb < needGb + 1) {
-            throw new Error(`Недостаточно свободного места на диске для загрузки ${cleanId}: свободно ${freeGb} ГБ, требуется не менее ${needGb} ГБ.`);
-        }
     }
 
     const folderName = targetNodeName

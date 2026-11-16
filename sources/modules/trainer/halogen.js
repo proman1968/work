@@ -224,22 +224,159 @@ export const HALOGEN_MODELS_CATALOG = Object.freeze([
 ]);
 
 /**
+ * 7 Windows-совместимых моделей-компаньонов (.safetensors) для комплекта Halo на Windows 11,
+ * заменяющих Linux-only `.hnpw` модели и работающих на встроенном движке WORK.
+ */
+export const HALOGEN_WINDOWS_COMPANIONS = Object.freeze([
+    {
+        nodeName: 'Qwen3-4B',
+        label: 'Qwen3-4B (Быстрая LLM / Сжатие)',
+        icon: 'ai:qwen',
+        path: '/MODELS/Local/Qwen3-4B',
+        baseUrl: '',
+        model: 'Qwen/Qwen3-4B',
+        hfRepo: 'Qwen/Qwen3-4B',
+        protocol: 'local',
+        runtimeType: 'local',
+        device: 'Встроенный движок WORK (.safetensors)',
+        modality: 'llm',
+        maxTokens: 32768,
+        maxOutput: 8192,
+        ramGb: 3.5,
+        capabilities: ['chat', 'stream', 'tools', 'functions', 'thinking', 'lora'],
+        role: 'Быстрая модель для сжатия контекста (compactModel), сводок и локальных агентов без вымывания кэша основной 180B модели',
+    },
+    {
+        nodeName: 'Qwen3-ASR-1.7B',
+        label: 'Qwen3-ASR 1.7B (Распознавание речи)',
+        icon: 'carbon:microphone',
+        path: '/MODELS/Local/Qwen3-ASR-1.7B',
+        baseUrl: '',
+        model: 'Qwen/Qwen3-ASR-1.7B',
+        hfRepo: 'Qwen/Qwen3-ASR-1.7B',
+        protocol: 'local',
+        runtimeType: 'local',
+        device: 'Встроенный движок WORK (.safetensors)',
+        modality: 'audio',
+        maxTokens: 4096,
+        maxOutput: 2048,
+        ramGb: 2.0,
+        capabilities: ['stt', 'asr', 'lora'],
+        role: 'Потоковое распознавание русской и английской речи для голосового режима (sttModel)',
+    },
+    {
+        nodeName: 'Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+        label: 'Qwen3-TTS 1.7B VoiceDesign (Голос)',
+        icon: 'carbon:volume-up',
+        path: '/MODELS/Local/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+        baseUrl: '',
+        model: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+        hfRepo: 'Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign',
+        protocol: 'local',
+        runtimeType: 'local',
+        device: 'Встроенный движок WORK (.safetensors)',
+        modality: 'audio',
+        maxTokens: 4096,
+        maxOutput: 2048,
+        ramGb: 2.3,
+        capabilities: ['tts', 'voice', 'lora'],
+        role: 'Синтез живой русской и английской речи для озвучивания ответов агентов (ttsModel)',
+    },
+    {
+        nodeName: 'Z-Image-Turbo',
+        label: 'Z-Image-Turbo 6B (Картинки)',
+        icon: 'ai:stablediffusion',
+        path: '/MODELS/Local/Z-Image-Turbo',
+        baseUrl: '',
+        model: 'Tongyi-MAI/Z-Image-Turbo',
+        hfRepo: 'Tongyi-MAI/Z-Image-Turbo',
+        protocol: 'local',
+        runtimeType: 'local',
+        device: 'Встроенный движок WORK (.safetensors)',
+        modality: 'image',
+        maxTokens: 4096,
+        maxOutput: 1024,
+        ramGb: 7.5,
+        capabilities: ['image', 'text-to-image', 'lora'],
+        role: 'Генерация иллюстраций, фото товаров для Номенклатуры и слайдов презентаций (imageModel)',
+    },
+    {
+        nodeName: 'bge-m3',
+        label: 'BGE-M3 (Эмбеддинги RAG)',
+        icon: 'carbon:search-locate',
+        path: '/MODELS/Local/bge-m3',
+        baseUrl: '',
+        model: 'BAAI/bge-m3',
+        hfRepo: 'BAAI/bge-m3',
+        protocol: 'local',
+        runtimeType: 'local',
+        device: 'Встроенный движок WORK (.safetensors)',
+        modality: 'embed',
+        maxTokens: 8192,
+        maxOutput: 1024,
+        ramGb: 1.4,
+        capabilities: ['embeddings', 'rag'],
+        role: 'Мультиязычные векторные эмбеддинги для семантического поиска RAG по документам и БД WORK',
+    },
+    {
+        nodeName: 'bge-reranker-v2-m3',
+        label: 'BGE-Reranker-v2-M3 (Реранкер RAG)',
+        icon: 'carbon:filter',
+        path: '/MODELS/Local/bge-reranker-v2-m3',
+        baseUrl: '',
+        model: 'BAAI/bge-reranker-v2-m3',
+        hfRepo: 'BAAI/bge-reranker-v2-m3',
+        protocol: 'local',
+        runtimeType: 'local',
+        device: 'Встроенный движок WORK (.safetensors)',
+        modality: 'embed',
+        maxTokens: 8192,
+        maxOutput: 1024,
+        ramGb: 1.4,
+        capabilities: ['rerank', 'rag'],
+        role: 'Точное переранжирование найденных документов и объектов БД для RAG-контекста',
+    },
+    {
+        nodeName: 'Qwen3-0.6B',
+        label: 'Qwen3-0.6B (Быстрый классификатор)',
+        icon: 'carbon:decision-tree',
+        path: '/MODELS/Local/Qwen3-0.6B',
+        baseUrl: '',
+        model: 'Qwen/Qwen3-0.6B',
+        hfRepo: 'Qwen/Qwen3-0.6B',
+        protocol: 'local',
+        runtimeType: 'local',
+        device: 'Встроенный движок WORK (.safetensors)',
+        modality: 'llm',
+        maxTokens: 32768,
+        maxOutput: 2048,
+        ramGb: 1.0,
+        capabilities: ['chat', 'stream', 'decide', 'classify'],
+        role: 'Мгновенный локальный классификатор, маршрутизатор и короткие системные проверки',
+    },
+]);
+
+/**
  * Вернуть каталог моделей Halo, совместимый с указанной ОС (`win32` или `linux`).
- * На Windows не возвращаем Linux-only модели `.hnpw`, а для `Qwen3.8-Flash-Next` указываем GGUF/Bubo-стек.
+ * На Windows: 1 основная GPU-модель `Qwen3.8-Flash-Next` через Halowin Bubo (GGUF) + 7 совместимых `.safetensors` моделей.
+ * На Linux: 1 `.hgn` + 7 `.hnpw` для контейнера `halogen-flash-server`.
  */
 export function getHalogenCatalogForPlatform(platform = os.platform()) {
-    const isWin = platform === 'win32';
+    if (platform === 'win32') {
+        const flashSpec = HALOGEN_MODELS_CATALOG.find(m => m.nodeName === 'Qwen3.8-Flash-Next');
+        const winFlash = flashSpec ? [{
+            ...flashSpec,
+            hfRepo: flashSpec.windowsBuboRepo || flashSpec.hfRepo,
+            ramGb: flashSpec.windowsRamGb || flashSpec.ramGb,
+            role: flashSpec.windowsRole || flashSpec.role,
+            protocol: 'halogen',
+            runtimeType: 'bubo',
+        }] : [];
+        return [...winFlash, ...HALOGEN_WINDOWS_COMPANIONS.map(m => ({ ...m }))];
+    }
     return HALOGEN_MODELS_CATALOG
         .filter(spec => !Array.isArray(spec.platforms) || spec.platforms.includes(platform))
-        .map(spec => isWin
-            ? {
-                ...spec,
-                hfRepo: spec.windowsBuboRepo || spec.hfRepo,
-                ramGb: spec.windowsRamGb || spec.ramGb,
-                role: spec.windowsRole || spec.role,
-                runtimeType: 'bubo',
-            }
-            : { ...spec, runtimeType: 'halogen-linux' });
+        .map(spec => ({ ...spec, protocol: 'halogen', runtimeType: 'halogen-linux' }));
 }
 
 /** Допустимые пресетные голоса `qwen3-tts-*-customvoice` в Halogen NPU. */
@@ -870,11 +1007,13 @@ export function checkWindowsHalogenPreflight({
     const warnings = [];
     const errors = [];
 
+    // По требованию пользователя загрузка не блокируется из-за памяти или свободного места (может качаться на перенос/флешку),
+    // а все замечания возвращаются как предупреждения.
     if (freeDiskGb !== null && requiredDiskGb > 0 && freeDiskGb < requiredDiskGb) {
-        errors.push(`Недостаточно свободного места на диске: доступно ${freeDiskGb} ГБ, требуется не менее ${requiredDiskGb} ГБ.`);
+        warnings.push(`На текущем диске свободно ${freeDiskGb} ГБ (для полной 180B модели требуется ~${requiredDiskGb} ГБ).`);
     }
     if (totalMemoryGb !== null && minTotalMemoryGb > 0 && totalMemoryGb < minTotalMemoryGb) {
-        errors.push(`Недостаточно общей памяти (RAM + UMA): обнаружено ${totalMemoryGb} ГБ, для 180B модели требуется не менее ${minTotalMemoryGb} ГБ (рекомендуется 128–192 ГБ). Используйте компактную модель (например, Qwen3-30B-A3B или Qwen3-14B).`);
+        warnings.push(`Обнаружено ${totalMemoryGb} ГБ общей памяти (RAM + UMA); для запуска 180B модели на этой машине рекомендуется 128–192 ГБ.`);
     }
     if (winEnv.pageFileOk === false) {
         warnings.push(`Файл подкачки pagefile.sys равен ${winEnv.pageFileGb} ГБ; для стабильной работы 180B модели на Windows рекомендуется фиксированный PageFile 128 ГБ (131072 МБ).`);
@@ -884,7 +1023,7 @@ export function checkWindowsHalogenPreflight({
     }
 
     return {
-        ok: errors.length === 0,
+        ok: true,
         freeDiskGb,
         requiredDiskGb,
         totalMemoryGb,
@@ -942,10 +1081,10 @@ export async function prepareWindowsBuboRuntime({
     };
 
     try {
-        if ((step === 'model' || step === 'all') && spawnImpl === spawn) {
+        if (step === 'model' || step === 'all') {
             const freeGb = getFreeDiskSpaceGb(rootDir);
             if (freeGb !== null && freeGb < 118) {
-                throw new Error(`Недостаточно свободного места на диске для установки Qwen3.8-Flash-Next (Bubo GGUF): свободно ${freeGb} ГБ, требуется ~120 ГБ.`);
+                appendLog(`Предупреждение: на диске свободно ${freeGb} ГБ (рекомендуется ~120 ГБ для модели).`);
             }
         }
 
@@ -1747,59 +1886,102 @@ export async function downloadHalogenBundle({
             throw new Error('Выбранная модель предназначена только для Linux (формат .hnpw/.hgn) и не поддерживается на Windows. Используйте совместимые Windows-модели из каталога.');
         }
 
-        const preflight = checkWindowsHalogenPreflight({
-            rootDir,
-            requiredDiskGb: 120,
-            minTotalMemoryGb: 96,
-            totalMemoryGb,
-        });
-        if (!preflight.ok) {
-            throw new Error(preflight.errors.join(' '));
-        }
+        const hasBuboTarget = targets.some(m => m.runtimeType === 'bubo');
+        const preflight = hasBuboTarget
+            ? checkWindowsHalogenPreflight({
+                rootDir,
+                requiredDiskGb: 120,
+                minTotalMemoryGb: 96,
+                totalMemoryGb,
+            })
+            : { ok: true, warnings: [], errors: [] };
 
-        if (_windowsPrepareState.status === 'running') {
-            return {
-                totalModels: targets.length,
-                startedCount: 0,
-                alreadyActiveCount: 1,
-                mode: 'bubo-windows',
-                preflight,
-                jobs: [{
-                    id: 'bubo_prepare',
-                    folderName: 'Qwen3.8-Flash-Next',
-                    status: 'downloading',
-                    progress: _windowsPrepareState.progress,
-                }],
-            };
-        }
+        const existingDownloads = listHuggingFaceDownloads(rootDir);
+        const jobs = [];
+        let startedCount = 0;
+        let alreadyActiveCount = 0;
 
-        const runPrep = prepareWindowsBuboRuntime({
-            rootDir,
-            step: 'all',
-            modelSet: 'original',
-            fetchImpl,
-        });
-        if (waitForCompletion) {
-            const res = await runPrep;
-            if (!res.ok)
-                throw new Error(res.error || 'Не удалось подготовить Halowin Bubo');
-        }
-        else {
-            runPrep.catch(() => {});
+        for (const spec of targets) {
+            if (spec.runtimeType === 'bubo') {
+                if (_windowsPrepareState.status === 'running') {
+                    alreadyActiveCount++;
+                    jobs.push({
+                        id: 'bubo_prepare',
+                        folderName: spec.nodeName,
+                        status: 'downloading',
+                        progress: _windowsPrepareState.progress,
+                    });
+                }
+                else {
+                    const runPrep = prepareWindowsBuboRuntime({
+                        rootDir,
+                        step: 'all',
+                        modelSet: 'original',
+                        fetchImpl,
+                    });
+                    if (waitForCompletion) {
+                        const res = await runPrep;
+                        if (!res.ok)
+                            throw new Error(res.error || 'Не удалось подготовить Halowin Bubo');
+                    }
+                    else {
+                        runPrep.catch(() => {});
+                    }
+                    startedCount++;
+                    jobs.push({
+                        id: 'bubo_prepare',
+                        folderName: spec.nodeName,
+                        status: _windowsPrepareState.status === 'completed' ? 'completed' : 'downloading',
+                        progress: _windowsPrepareState.progress,
+                    });
+                }
+                continue;
+            }
+
+            const running = existingDownloads.find(d =>
+                d.status === 'downloading'
+                && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
+            );
+            if (running) {
+                alreadyActiveCount++;
+                jobs.push(running);
+                continue;
+            }
+            const job = await startHuggingFaceDownload({
+                repoId: spec.hfRepo,
+                providerFolder: 'Local',
+                targetNodeName: spec.nodeName,
+                platform,
+                nodeMeta: {
+                    label: spec.label || spec.nodeName,
+                    model: spec.model || spec.hfRepo,
+                    protocol: spec.protocol || 'local',
+                    icon: spec.icon || 'ai:qwen',
+                    modality: spec.modality,
+                    capabilities: spec.capabilities,
+                    efforts: spec.efforts,
+                    maxTokens: spec.maxTokens,
+                    maxOutput: spec.maxOutput,
+                    baseUrl: spec.baseUrl || '',
+                },
+                rootDir,
+                token,
+                registerInWork: true,
+                waitForCompletion,
+                fetchImpl,
+            });
+            startedCount++;
+            jobs.push(job);
         }
 
         return {
             totalModels: targets.length,
-            startedCount: 1,
-            alreadyActiveCount: 0,
-            mode: 'bubo-windows',
+            startedCount,
+            alreadyActiveCount,
+            mode: hasBuboTarget ? 'bubo-windows' : 'local-windows',
+            warnings: preflight.warnings || [],
             preflight,
-            jobs: [{
-                id: 'bubo_prepare',
-                folderName: 'Qwen3.8-Flash-Next',
-                status: _windowsPrepareState.status === 'completed' ? 'completed' : 'downloading',
-                progress: _windowsPrepareState.progress,
-            }],
+            jobs,
         };
     }
 
