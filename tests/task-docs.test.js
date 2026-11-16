@@ -3,7 +3,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { taskFiles, computerUse, realPathOfSnapshot } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
+import { collectDocs, taskFiles, computerUse, realPathOfSnapshot } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
 
 const snap = (path, day, ts, uid = 'U1') => {
     const parts = path.split('/');
@@ -114,5 +114,17 @@ describe('computerUse: вкладка «Монитор» нужна и посл�
         assert.equal(c.screens[1].label, 'экран');
         assert.equal(c.commands.length, 3);
         assert.match(c.commands.at(-1).target, /echo привет/);
+    });
+});
+
+describe('collectDocs: результаты без шума реплик', () => {
+    it('collectDocs не превращает длинные ответы/вопросы ассистента в текстовые результаты', () => {
+        const longReply = 'Отлично, давай разберём идею:\n\n- Вопрос 1: аудитория и формат\n- Вопрос 2: финансовые показатели\n- Вопрос 3: ключевые клиенты и сроки реализации проекта';
+        const items = [
+            { id: 'u1', type: 'user', time: 10, content: 'сделай презентацию' },
+            { id: 'a1', type: 'assistant', time: 20, durationMs: 500, finish: 'stop', content: longReply, tools: [] },
+        ];
+        const docs = collectDocs(items, []);
+        assert.equal(docs.some(d => String(d.key).startsWith('answer:')), false);
     });
 });

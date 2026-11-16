@@ -127,7 +127,7 @@ await test('«Результаты» — последняя вкладка; пр
     finally { shell.remove(); WORK.get_item = realGetItem; }
 });
 
-await test('«Файлы»: клик переключает и вкладка НЕ сбрасывается; плитки всех файлов; открыть файл и вернуться', async () => {
+await test('«Файлы»: клик переключает и вкладка НЕ сбрасывается; плоский список; клик по файлу открывает его штатно без углубления', async () => {
     const shell = await mountShell(body());
     try {
         const dock = shell.$('microchat-dock');
@@ -137,16 +137,62 @@ await test('«Файлы»: клик переключает и вкладка Н
         const files = await waitFor(() => inDock(shell, 'microchat-files'), 'вкладка файлов');
         await waitFor(() => files.$$('div.tile').length === 3, 'три плитки');
         assert(files.$$('div.tile chat-item').length === 3, 'плитки — карточки chat-item');
-        files.open(shell.files[1]);
-        await waitFor(() => shell.dockFile === shell.files[1].key && files.$('.back'), 'файл открыт, кнопка «← Файлы»');
-        eq(shell.dockTab, 'files');
-        files.close();
-        await waitFor(() => files.$$('div.tile').length === 3, 'вернулись к списку');
-        // повторный клик по вкладке при открытом файле — к списку
-        files.open(shell.files[0]);
-        await waitFor(() => files.$('.back'), 'файл');
-        dock.select('files');
-        await waitFor(() => !files.$('.back'), 'повторный клик — список');
+
+        const opened = [];
+        const prevExec = window.execute;
+        window.execute = async (item) => opened.push(item.path);
+        try {
+            files.open(shell.files[1]);
+            await waitFor(() => opened.length === 1, 'файл открыт штатно через execute');
+            eq(opened[0], shell.files[1].real, 'открылась конечная версия файла');
+            assert(!files.$('.back'), 'углубления с кнопкой «← Файлы» больше нет');
+            eq(files.$$('div.tile').length, 3, 'список файлов остался открытым');
+        }
+        finally {
+            window.execute = prevExec;
+        }
+
+        // Несуществующий путь в openWorkPath показывает toast и НЕ открывает новую вкладку браузера
+        const prevGetItem = WORK.get_item;
+        const prevOpen = window.open;
+        let windowOpened = false;
+        window.open = () => { windowOpened = true; };
+        WORK.get_item = async () => null;
+        try {
+            await shell.openWorkPath('/ORGANIZATIONS/НетТакого/файл.pptx');
+            eq(windowOpened, false, 'не открывает пустую вкладку для несуществующего пути');
+            assert(String(shell.toastText || '').includes('не найден'), 'показывает toast об ошибке');
+        }
+        finally {
+            WORK.get_item = prevGetItem;
+            window.open = prevOpen;
+        }
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
+await test('«Результаты»: длинные ответы ассистента без publish не создают вкладку; .pptx показывает конечную версию карточкой с кнопкой', async () => {
+    const longAnswer = 'Отлично, данные собраны:\n\n- Выручка: 2 млн ₽\n- Маржа: 50%\n- Клиенты: МЕЧЕЛ, Ростелеком, ПГ Новик, RFID центр';
+    const d = {
+        name: 'Презентация', status: 'idle', created: Date.now() - 10000, results: [],
+        items: [
+            { id: 'u1', type: 'user', time: 1, content: 'сделай презентацию' },
+            { id: 'a1', type: 'assistant', time: 2, durationMs: 100, finish: 'stop', content: longAnswer, tools: [] },
+        ],
+    };
+    const shell = await mountShell(d);
+    try {
+        eq(tabIds(shell).includes('results'), false, 'без publish вкладки «Результаты» нет');
+        const pptxPath = '/BASE/USER/task/2026-11-16/.1.U1.task/pptx/презентация.pptx';
+        const pptxSnap = snap(pptxPath, 5);
+        d.results = [{ snapshot: pptxSnap, title: 'Инвестиционная презентация', time: Date.now() }];
+        shell.$item.dispatchEvent(new CustomEvent('changed'));
+        await waitFor(() => shell.dockTab === 'results', 'переключились на Результаты');
+        const resView = await waitFor(() => inDock(shell, 'microchat-results'), 'microchat-results');
+        const docView = await waitFor(() => resView.$('microchat-doc'), 'microchat-doc');
+        eq(docView.realPath, pptxPath, 'в Результатах — конечная живая версия файла');
+        const card = await waitFor(() => docView.$('.file-card'), 'карточка офисного файла без белого экрана');
+        assert(card.textContent.includes('Инвестиционная презентация'), 'название результата в карточке');
     }
     finally { shell.remove(); WORK.get_item = realGetItem; }
 });

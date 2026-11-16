@@ -74,7 +74,11 @@ function formatResults(results) {
     const list = Array.isArray(results) ? results : [];
     if (!list.length)
         return 'результаты не отмечены';
-    return list.map((r, i) => (i + 1) + '. ' + (r.title || r.snapshot) + '\n   ' + r.snapshot).join('\n');
+    return list.map((r, i) => {
+        const snap = String(r.snapshot || '');
+        const real = snap.replace(/\/\.([^/]+)\/history\/\d{4}-\d{2}-\d{2}\/[^/]+$/, '/$1');
+        return (i + 1) + '. ' + (r.title || real) + '\n   путь: ' + real + (real !== snap ? '\n   снимок: ' + snap : '');
+    }).join('\n');
 }
 
 /** Продолжимый ребёнок доступен только из своей родительской задачи под тем же пользователем. */

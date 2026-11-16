@@ -228,14 +228,13 @@ ODA({ is: 'microchat-dock',
     `,
     get shell() { return findShell(this); },
     get docs() { return this.shell?.docs || []; },
-    /** Опубликованные результаты (из shell.results / data.results) и отчёты субагентов. */
+    /** Опубликованные результаты (из shell.results / data.results). */
     get results() { return this.shell?.results || this.shell?.data?.results || []; },
-    get reports() { return this.docs.filter(d => d.kind === 'text'); },
     /** Вкладка живёт в шелле (dockTab): openDoc и новые файлы переключают её оттуда. */
     get tab() { return this.shell?.dockTab || 'context'; },
     /** Компьютер использовался в задаче — «Монитор» есть и после его удаления (скриншоты и команды остаются в ленте). */
     get hasComputer() { return !!this.shell?.computer?.used; },
-    get hasResults() { return this.results.length + this.reports.length > 0; },
+    get hasResults() { return this.results.length > 0; },
     get fileCount() { return this.shell?.files?.length || 0; },
     get tabs() {
         const list = [{ id: 'context', label: 'Контекст', icon: 'carbon:chart-pie', title: 'Статистика сессии' }];
@@ -244,7 +243,7 @@ ODA({ is: 'microchat-dock',
         if (this.fileCount)
             list.push({ id: 'files', label: 'Файлы', icon: 'carbon:folder', title: 'Файлы задачи: ваши вложения и созданное агентом', count: this.fileCount });
         if (this.hasResults)
-            list.push({ id: 'results', label: 'Результаты', icon: 'carbon:report', title: 'Результаты работы', count: this.results.length + this.reports.length });
+            list.push({ id: 'results', label: 'Результаты', icon: 'carbon:report', title: 'Результаты работы', count: this.results.length });
         return list;
     },
     select(key) { this.shell?.selectTab(key); },
@@ -461,26 +460,29 @@ ODA({ is: 'microchat-results',
     pickedKey: '',
     pickedAt: 0,
     get shell() { return findShell(this); },
-    /** Опубликованные результаты (shell.results / data.results) и отчёты субагентов (стабилизированные без моргания). */
+    /** Опубликованные результаты (shell.results / data.results, стабилизированные без моргания). */
     get items() {
         const shell = this.shell;
-        const mapped = shell?.results || (shell?.data?.results || []).map(r => ({
-            key: 'result:' + r.snapshot,
-            kind: 'file',
-            path: r.snapshot,
-            title: r.title || snapshotName(r.snapshot),
-            time: r.time,
-            published: true,
-        }));
-        const reports = (shell?.docs || []).filter(d => d.kind === 'text');
-        const next = [...mapped, ...reports];
+        const mapped = shell?.results || (shell?.data?.results || []).filter(r => r?.snapshot).map(r => {
+            const real = cleanWorkFilePath(r.snapshot) || r.snapshot;
+            return {
+                key: 'result:' + r.snapshot,
+                kind: 'file',
+                path: real,
+                snapshot: r.snapshot,
+                title: r.title || snapshotName(r.snapshot),
+                time: r.time,
+                published: true,
+            };
+        });
+        const next = [...mapped];
         const prev = this._itemsList;
         if (Array.isArray(prev) && prev.length === next.length && prev.every((d, i) => d === next[i]))
             return prev;
         this._itemsList = next;
         return next;
     },
-    /** Выбор: последний сделанный человеком; запрос шелла (новый отчёт, ссылка из ответа) новее — он главнее; иначе — самый новый результат. */
+    /** Выбор: последний сделанный человеком; запрос шелла (новый результат) новее — он главнее; иначе — самый новый результат. */
     get selectedKey() {
         const fromShell = this.shell?.resultKey;
         return this.pickedAt >= (this.shell?.resultKeyAt || 0) ? this.pickedKey : fromShell;
@@ -500,7 +502,7 @@ ODA({ is: 'microchat-results',
         const cache = this._docs ??= new Map();
         const key = item.key + '|' + item.path;
         if (!cache.has(key))
-            cache.set(key, { kind: 'file', path: item.path, title: item.title, time: item.time, published: true });
+            cache.set(key, { kind: 'file', path: item.path, snapshot: item.snapshot, title: item.title, time: item.time, published: true });
         return cache.get(key);
     },
     go(i) {
@@ -528,18 +530,13 @@ ODA({ is: 'microchat-files',
             .tile chat-item { pointer-events: none; width: 100%; }
             .meta { @apply --horizontal; @apply --muted; align-items: center; gap: 4px; font-size: x-small; padding: 0 4px 2px; }
             .meta .pub { color: var(--accent-color); font-weight: 600; }
-            .view { @apply --vertical; flex: 1; min-height: 0; overflow: hidden; }
-            .back-bar { @apply --horizontal-center; @apply --light; @apply --border-bottom; gap: 8px; padding: 3px 8px; box-sizing: border-box; }
-            .back { @apply --content; @apply --border; cursor: pointer; padding: 3px 10px; color: inherit; font-size: small; border-radius: 0; flex-shrink: 0; }
-            .back:hover { @apply --hover; }
-            .back-bar .file-title { font-size: small; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
             .empty { @apply --muted; text-align: center; padding: 40px 20px; }
         </style>
-        <div class="list" ~if="!cur">
+        <div class="list">
             <div class="empty" ~if="!items.length">Файлов пока нет</div>
             <div class="head" ~if="items.length">Файлы задачи · {{items.length}}</div>
             <div class="grid">
-                <div class="tile" ~for="items" tabindex="0" role="button" :title="'Открыть ' + $for.item.title" @tap="open($for.item)" @keydown="tileKey($event, $for.item)">
+                <div class="tile" ~for="items" tabindex="0" role="button" :title="'Открыть ' + ($for.item.real || $for.item.title)" @tap="open($for.item)" @keydown="tileKey($event, $for.item)">
                     <chat-item visible history compact :$file="itemOf($for.item)"></chat-item>
                     <div class="meta">
                         <oda-icon :icon="$for.item.source === 'user' ? 'carbon:user' : 'carbon:bot'" :icon-size="12"></oda-icon>
@@ -549,33 +546,13 @@ ODA({ is: 'microchat-files',
                 </div>
             </div>
         </div>
-        <div class="view" ~if="cur">
-            <div class="back-bar" no-flex>
-                <button class="back" @tap="close" title="К списку файлов">← Файлы</button>
-                <span class="file-title" flex :title="cur.title || cur.real">{{cur.title}}</span>
-            </div>
-            <microchat-doc flex :doc="curDoc"></microchat-doc>
-        </div>
     `,
     fmtTime,
     get shell() { return findShell(this); },
     get items() { return this.shell?.files || []; },
-    get cur() { return this.items.find(f => f.key === this.shell?.dockFile) || null; },
-    /** Один и тот же объект, пока версия файла не изменилась: microchat-doc перезагружает текст при каждой смене doc. */
-    get curDoc() {
-        const f = this.cur;
-        if (!f)
-            return null;
-        const cache = this._docs ??= new Map();
-        const key = f.key + '|' + f.path;
-        if (!cache.has(key))
-            cache.set(key, { kind: 'file', path: f.path, title: f.title, time: f.time, published: !!f.published });
-        return cache.get(key);
-    },
     /** Карточка файла — тот же chat-item, что в ленте чата (превью, иконка, имя). Обещание кэшируется, иначе плитка перезагружалась бы на каждой перерисовке. */
-    itemOf(f) { return fileItemOf(f.path); },
-    open(f) { this.shell?.openFile(f.key); },
-    close() { this.shell?.closeFile(); },
+    itemOf(f) { return fileItemOf(f.real || f.path); },
+    open(f) { this.shell?.openWorkPath(f.real || f.path, f.path); },
     tileKey(e, f) {
         if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
@@ -597,15 +574,35 @@ ODA({ is: 'microchat-doc',
             .md { padding: 14px 20px; user-select: text; line-height: 1.6; }
             pre { margin: 0; padding: 12px 16px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: text; }
             .empty { @apply --muted; padding: 24px; text-align: center; }
+            .file-card { @apply --vertical; align-items: center; justify-content: center; gap: 12px; padding: 32px 20px; text-align: center; flex: 1; }
+            .file-card .name { font-size: 15px; font-weight: 600; word-break: break-word; max-width: 100%; }
+            .file-card .path { @apply --muted; font-family: var(--font-mono); font-size: x-small; word-break: break-all; max-width: 100%; }
+            .file-card .actions { @apply --horizontal; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; }
+            .file-card oda-button { @apply --border; border-radius: var(--radius-m); padding: 6px 14px; font-size: small; }
         </style>
         <div class="body" flex vertical>
             <iframe flex ~if="isPage" :src="url"></iframe>
-            <oda-office-editor flex ~if="isOffice && officeReady" :$item="officeItem"></oda-office-editor>
+            <div class="file-card" ~if="isOffice">
+                <oda-icon :icon="officeIcon" :icon-size="40"></oda-icon>
+                <div class="name">{{doc?.title || fileName()}}</div>
+                <div class="path" :title="realPath || path">{{realPath || path}}</div>
+                <div class="actions">
+                    <oda-button icon="carbon:launch" :icon-size="16" label="Открыть в редакторе" @tap="openForm"></oda-button>
+                    <oda-button icon="carbon:download" :icon-size="16" label="Скачать" @tap="download"></oda-button>
+                </div>
+            </div>
             <div class="img" flex ~if="isImage"><img :src="url"></div>
             <video flex controls preload="metadata" ~if="isVideo" :src="url"></video>
             <div class="md" ~if="isMarkdown && text"><oda-markdown-viewer vertical :value="md"></oda-markdown-viewer></div>
             <pre ~if="!isPage && !isOffice && !isImage && !isVideo && !isMarkdown && !isBinary && text">{{text}}</pre>
-            <div class="empty" ~if="isBinary">Двоичный файл — скачайте или откройте в приложении</div>
+            <div class="file-card" ~if="isBinary">
+                <oda-icon icon="carbon:document" :icon-size="40"></oda-icon>
+                <div class="name">{{doc?.title || fileName()}}</div>
+                <div class="path" :title="realPath || path">{{realPath || path}}</div>
+                <div class="actions">
+                    <oda-button icon="carbon:download" :icon-size="16" label="Скачать" @tap="download"></oda-button>
+                </div>
+            </div>
             <div class="empty" ~if="!isPage && !isOffice && !isImage && !isVideo && !isBinary && !text">{{loading ? 'Загрузка…' : 'Нет содержимого'}}</div>
         </div>
     `,
@@ -621,9 +618,7 @@ ODA({ is: 'microchat-doc',
             this.fileText = '';
             this.bust = Date.now();
             this.saved = '';
-            if (this.isOffice)
-                this.ensureOfficeEditor();
-            else
+            if (!this.isOffice)
                 this.loadText();
         },
     },
@@ -631,24 +626,12 @@ ODA({ is: 'microchat-doc',
     loading: false,
     bust: 0,
     saved: '',
-    officeReady: false,
-    async ensureOfficeEditor() {
-        if (!customElements.get('oda-office-editor')) {
-            try {
-                await import('/$server/$folder/$file/$office/handlers/pages/form/file/$handler/file.js');
-            }
-            catch (e) {
-                console.warn('[microchat-doc] office import:', e);
-            }
-        }
-        this.officeReady = !!customElements.get('oda-office-editor');
-    },
     get isFile() { return this.doc?.kind === 'file'; },
     get path() { return this.isFile ? this.doc.path : ''; },
     get realPath() { return this.isFile ? (cleanWorkFilePath(this.path) || this.path) : ''; },
     get ext() { return this.isFile ? (extOf(this.realPath) || extOf(this.path)) : 'md'; },
     get isOffice() { return OFFICE.includes(this.ext); },
-    get officeItem() { return this.isOffice && this.realPath ? fileItemOf(this.realPath) : null; },
+    get officeIcon() { return extIcon(this.realPath || this.path); },
     get isBinary() { return BINARY.includes(this.ext); },
     get isImage() { return IMAGE.includes(this.ext); },
     get isPage() { return PAGE.includes(this.ext); },
@@ -667,7 +650,7 @@ ODA({ is: 'microchat-doc',
     get md() { return linkifyWork(this.text, this.doc?.artifacts || new Map()); },
     get subtitle() {
         if (this.isFile)
-            return ['Снимок файла', this.doc?.published ? 'показан в общей ленте' : '', fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
+            return ['Конечная версия', this.doc?.published ? 'показана в общей ленте' : '', fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
         return [this.doc?.subtitle, fmtTime(this.doc?.time)].filter(Boolean).join(' · ');
     },
     async loadText() {
@@ -675,7 +658,9 @@ ODA({ is: 'microchat-doc',
             return;
         this.loading = true;
         try {
-            const item = await WORK.get_item(this.path);
+            let item = await WORK.get_item(this.path);
+            if ((!item || Array.isArray(item)) && this.doc?.snapshot && this.doc.snapshot !== this.path)
+                item = await WORK.get_item(this.doc.snapshot);
             const raw = await item?.load?.();
             this.fileText = typeof raw === 'string' ? raw : (raw == null ? '' : JSON.stringify(raw, null, 2));
         }
@@ -688,9 +673,7 @@ ODA({ is: 'microchat-doc',
     },
     reload() {
         this.bust = Date.now();
-        if (this.isOffice)
-            this.$?.('oda-office-editor')?.loadOfficeItem?.(this.officeItem);
-        else
+        if (!this.isOffice)
             this.loadText();
     },
     copy() { copyText(this.text); },
@@ -701,7 +684,7 @@ ODA({ is: 'microchat-doc',
     download() {
         if (this.isFile && (this.isImage || this.isPage || this.isVideo || this.isOffice || !this.text)) {
             const a = document.createElement('a');
-            a.href = fileUrl(this.path);
+            a.href = fileUrl(this.realPath || this.path);
             a.download = this.fileName();
             a.click();
             return;
@@ -724,21 +707,21 @@ ODA({ is: 'microchat-doc',
         if (!this.isFile)
             return;
         const targetPath = this.realPath || this.path;
+        const shell = findShell(this);
+        if (shell?.openWorkPath) {
+            await shell.openWorkPath(targetPath, this.doc?.snapshot || this.path);
+            return;
+        }
         const exec = window.top?.execute || window.execute;
-        if (typeof exec === 'function') {
-            let item = await WORK.get_item(targetPath);
+        let item = await WORK.get_item(targetPath).catch(() => null);
+        if (Array.isArray(item))
+            item = item.at(-1) || null;
+        if (!item && this.doc?.snapshot && this.doc.snapshot !== targetPath) {
+            item = await WORK.get_item(this.doc.snapshot).catch(() => null);
             if (Array.isArray(item))
                 item = item.at(-1) || null;
-            if (!item && targetPath !== this.path) {
-                item = await WORK.get_item(this.path);
-                if (Array.isArray(item))
-                    item = item.at(-1) || null;
-            }
-            if (item) {
-                await exec(item);
-                return;
-            }
         }
-        window.open(workHref(targetPath), '_blank');
+        if (item && typeof exec === 'function')
+            await exec(item);
     },
 });

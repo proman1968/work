@@ -12,7 +12,7 @@ import './ui/dock.js';
 import './ui/voice-ui.js';
 import { VoiceController } from './ui/voice.js';
 import { collectDocs, computeStats, stableDocs, activityOf, taskFiles, computerUse, realPathOfSnapshot } from './ui/docs.js';
-import { pathOfWorkHref, workHref, extOf } from './ui/util.js';
+import { pathOfWorkHref, workHref } from './ui/util.js';
 
 /**
  * Клик по WORK-ссылке в markdown (событие md-link от oda-markdown-viewer):
@@ -86,14 +86,12 @@ export default {
     pinned: true,
     groupOpen: {},
     dockOpen: { $def: false, $save: true },
-    /** Вкладка дока: context | monitor | results | files. Открытый на вкладке «Файлы» файл — dockFile (ключ из files), результат — resultKey. */
+    /** Вкладка дока: context | monitor | results | files. Выбранный результат — resultKey. */
     dockTab: { $def: 'context' },
-    dockFile: '',
     resultKey: '',
     resultKeyAt: 0,
     dockWidth: { $def: 520, $save: true },
     freshDocs: 0,
-    extraFiles: [],
     /** Голосовой режим включён; полосы кнопки в шапке задачи подключаются к голосу при смене. */
     voiceOn: {
         $def: false,
@@ -123,13 +121,11 @@ export default {
             this.streams = {};
             this.optimistic = null;
             this.status = 'idle';
-            this.extraFiles = [];
             this._docKeys = undefined;
             this._docsList = undefined;
             this._filesList = undefined;
             this._resultsList = undefined;
             this.dockTab = 'context';
-            this.dockFile = '';
             this.resultKey = '';
         }
         this._bound = n || null;
@@ -325,25 +321,25 @@ export default {
     },
     /** Стабилизированный список опубликованных результатов (data.results) без пересоздания объектов при _reload. */
     get results() {
-        const list = (this.data?.results || []).filter(r => r?.snapshot).map(r => ({
-            key: 'result:' + r.snapshot,
-            kind: 'file',
-            path: r.snapshot,
-            snapshot: r.snapshot,
-            title: r.title || (r.snapshot ? String(r.snapshot).split('/').pop() : 'Результат'),
-            time: r.time,
-            published: true,
-        }));
+        const list = (this.data?.results || []).filter(r => r?.snapshot).map(r => {
+            const real = realPathOfSnapshot(r.snapshot) || r.snapshot;
+            return {
+                key: 'result:' + r.snapshot,
+                kind: 'file',
+                path: real,
+                snapshot: r.snapshot,
+                title: r.title || (real ? String(real).split('/').pop() : 'Результат'),
+                time: r.time,
+                published: true,
+            };
+        });
         const { docs } = stableDocs(this._resultsList, list);
         this._resultsList = docs;
         return docs;
     },
-    /** Все файлы задачи: вложения человека, созданное агентом, опубликованное (+ открытые по ссылке из ответа). */
+    /** Все файлы задачи: вложения человека, созданное агентом, опубликованное. */
     get files() {
         const list = taskFiles(this.items, this.data?.results || []);
-        for (const x of this.extraFiles)
-            if (!list.some(f => f.real === x.real))
-                list.push(x);
         const { docs } = stableDocs(this._filesList, list);
         this._filesList = docs;
         return docs;
@@ -487,30 +483,28 @@ export default {
         })();
     },
     /**
-     * Новый результат, отчёт или файл во время работы:
-     * - если размещён результат (publish / data.results или отчёт субагента) — сразу открываем правую панель
+     * Новый результат (publish / data.results) или файл во время работы:
+     * - если размещён результат (publish / data.results) — сразу открываем правую панель
      *   и переключаемся на вкладку «Результаты»;
-     * - если создан обычный файл: при открытом доке показываем его, при закрытом — индикатор на кольце.
+     * - если создан обычный файл: при открытом доке показываем список файлов, при закрытом — индикатор на кольце.
      */
     _noticeDocs(before) {
         const resultKeys = (this.data?.results || []).filter(r => r?.snapshot).map(r => 'result:' + r.snapshot);
-        const reportKeys = this.docs.filter(d => d.kind === 'text').map(d => d.key);
-        const allResultKeys = [...resultKeys, ...reportKeys];
         const fileKeys = this.files.map(f => f.key);
-        const keys = [...allResultKeys, ...fileKeys];
+        const keys = [...resultKeys, ...fileKeys];
         this._docKeys = keys;
         if (!before) {
-            if (allResultKeys.length) {
+            if (resultKeys.length) {
                 this.dockOpen = true;
                 this.dockTab = 'results';
-                this.resultKey = allResultKeys.at(-1);
+                this.resultKey = resultKeys.at(-1);
                 this.resultKeyAt = Date.now();
                 this.freshDocs = 0;
             }
             return;
         }
         const added = keys.filter(k => !before.includes(k));
-        const newResultKeys = added.filter(k => k.startsWith('result:') || k.startsWith('agent:') || k.startsWith('answer:'));
+        const newResultKeys = added.filter(k => k.startsWith('result:'));
         const files = added.map(k => this.files.find(f => f.key === k)).filter(f => f && f.source !== 'user');
         if (!newResultKeys.length && !files.length)
             return;
@@ -526,10 +520,8 @@ export default {
             this.freshDocs += files.length;
             return;
         }
-        if (files.length && ['context', 'files'].includes(this.dockTab)) {
+        if (files.length && ['context', 'files'].includes(this.dockTab))
             this.dockTab = 'files';
-            this.dockFile = files.at(-1).key;
-        }
         else
             this.freshDocs += files.length;
     },
@@ -641,47 +633,29 @@ export default {
         if (this.dockOpen)
             this.freshDocs = 0;
     },
-    /** Выбор вкладки; повторный клик по «Файлы» (когда файл открыт) возвращает к списку. */
+    /** Выбор вкладки в правой панели доков. */
     selectTab(key) {
         const tab = ['context', 'monitor', 'results', 'files'].includes(key) ? key : 'context';
-        if (tab === 'files' && this.dockTab === 'files')
-            this.dockFile = '';
         this.dockTab = tab;
         if (this.dockOpen)
             this.freshDocs = 0;
     },
     /**
-     * Открыть док: файл по пути (снимок или живой путь — в списке или нет) → вкладка «Файлы» на этом файле;
-     * отчёт (key agent:…) → вкладка «Результаты».
+     * Открыть док: опубликованный результат (key result:…) → вкладка «Результаты»;
+     * любой файл → штатное открытие в форме WORK (work-form / execute).
      */
     openDoc(doc = {}) {
-        if (String(doc.key || '').startsWith('agent:')) {
+        if (String(doc.key || '').startsWith('result:')) {
             this.resultKey = doc.key;
             this.resultKeyAt = Date.now();
             this.dockTab = 'results';
+            this.dockOpen = true;
+            this.freshDocs = 0;
+            return;
         }
-        else {
-            const path = doc.path || '';
-            const real = realPathOfSnapshot(path);
-            let file = this.files.find(f => f.key === doc.key || (path && (f.real === real || f.path === path)));
-            if (!file && path) {
-                file = { key: 'f:' + real, real, path, title: real.split('/').pop(), ext: extOf(real), icon: 'carbon:document', time: Date.now(), source: 'link' };
-                this.extraFiles = [...this.extraFiles, file];
-            }
-            if (!file)
-                return;
-            this.dockFile = file.key;
-            this.dockTab = 'files';
-        }
-        this.dockOpen = true;
-        this.freshDocs = 0;
-    },    /** Файл на вкладке «Файлы»: открыть / вернуться к списку. */
-    openFile(key) {
-        this.dockFile = key || '';
-        this.dockTab = 'files';
-    },
-    closeFile() {
-        this.dockFile = '';
+        const path = doc.real || doc.path || '';
+        if (path)
+            this.openWorkPath(path, doc.snapshot || doc.path);
     },
     /** Сохранить текстовый док файлом в класс задачи → путь. */
     async saveDoc(name, text) {
@@ -697,28 +671,40 @@ export default {
             return '';
         }
     },
-    /** Путь WORK: всегда открывает элемент (включая файлы и документы) в стандартном представлении формы. */
-    async openWorkPath(path) {
+    /** Путь WORK: всегда открывает существующий элемент (включая файлы и документы) в стандартном представлении формы; при отсутствии показывает toast вместо битой вкладки. */
+    async openWorkPath(path, fallbackPath = '') {
         const raw = String(path || '').trim();
         if (!raw)
             return;
         const targetPath = realPathOfSnapshot(raw) || raw;
+        const candidates = [targetPath];
+        for (const alt of [raw, String(fallbackPath || '').trim()]) {
+            if (alt && !candidates.includes(alt))
+                candidates.push(alt);
+        }
+        let item = null;
+        for (const p of candidates) {
+            try {
+                let found = await WORK.get_item(p);
+                if (Array.isArray(found))
+                    found = found.at(-1) || null;
+                if (found) {
+                    item = found;
+                    break;
+                }
+            }
+            catch { /* пробуем следующий вариант */ }
+        }
+        if (!item) {
+            this.toast('Файл или элемент не найден: ' + targetPath);
+            return;
+        }
         const exec = window.top?.execute || window.execute;
         if (typeof exec === 'function') {
-            let item = await WORK.get_item(targetPath);
-            if (Array.isArray(item))
-                item = item.at(-1) || null;
-            if (!item && targetPath !== raw) {
-                item = await WORK.get_item(raw);
-                if (Array.isArray(item))
-                    item = item.at(-1) || null;
-            }
-            if (item) {
-                await exec(item);
-                return;
-            }
+            await exec(item);
+            return;
         }
-        window.open(workHref(targetPath), '_blank');
+        window.open(workHref(item.path || targetPath), '_blank');
     },
     closeView() {
         this.fire('close-view');

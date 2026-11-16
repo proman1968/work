@@ -180,7 +180,7 @@ export const write = {
             await trackWrite(ctx, real, log, pre);
             const req = absPath(args.path, ctx);
             return (before == null ? 'создан ' : 'перезаписан ') + real + ' (' + String(args.content).length + ' символов)'
-                + (real !== req ? '; запрошено ' + req + ' — дальше используй фактический путь ' + real : '');
+                + (real !== req ? ' (помещён в папку задачи — в ссылках и дальнейших вызовах используй только этот путь)' : '');
         },
     };
 

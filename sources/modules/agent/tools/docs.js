@@ -387,7 +387,7 @@ export function slidesToPptxData(slides, { title: deckTitle, date } = {}) {
 }
 export function savedNote(requested, real) {
     return real && real !== requested
-        ? 'сохранено ' + real + ' (запрошено ' + requested + '; дальше используй фактический путь ' + real + ')'
+        ? 'сохранено ' + real + ' (помещено в папку задачи — в ссылках и дальнейших вызовах используй только этот путь)'
         : 'сохранено ' + (real || requested);
 }
 

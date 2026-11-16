@@ -3016,3 +3016,14 @@ describe('управление компьютером пользователя: 
         }
     });
 });
+
+describe('savedNote: рабочие ссылки без повторения ложного пути', () => {
+    it('не повторяет несуществующий запрошенный путь при переносе файла в папку задачи', async () => {
+        const { savedNote } = await import('../sources/modules/agent/tools/docs.js');
+        const req = '/ORGANIZATIONS/Бизнес Интер Софт/Инвестиционная презентация.pptx';
+        const real = '/ORGANIZATIONS/Бизнес Интер Софт/$base/task/2026-11-16/.1794.U1.task/pptx/Инвестиционная презентация.pptx';
+        const note = savedNote(req, real);
+        assert.ok(note.includes(real), 'должен содержать фактический путь');
+        assert.equal(note.includes(req), false, 'не должен повторять несуществующий запрошенный путь');
+    });
+});
