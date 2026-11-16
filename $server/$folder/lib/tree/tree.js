@@ -745,7 +745,8 @@ ODA({is: 'oda-tree-node',
         if (!it || isLinkNode(it) || ('isPlace' in Object(it) && it.isPlace))
             return false;
         const t = it.type;
-        return t === '$base' || t === '$structure';
+        // $server (корень WORK) — тоже наследник $structure: на нём тоже показываем BOSS.
+        return t === '$base' || t === '$structure' || t === '$server';
     },
     get isModule() {
         const it = this.$item;

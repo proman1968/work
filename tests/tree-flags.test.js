@@ -68,6 +68,13 @@ describe('флаги строки дерева', () => {
         assert.deepEqual(list.find(i => i.id === 'WITH').roleIds.USER, [USER1, USER2], 'в списке @items');
     });
 
+    it('корень WORK ($server — тоже наследник $structure) отдаёт для строки дерева BOSS и hasSecurity', async () => {
+        const root = await WORK.get_item('/');
+        const info = await root.info({});
+        assert.deepEqual(info.roleIds.BOSS, [ADMIN], 'BOSS корня виден в данных строки');
+        assert.equal(info.hasSecurity, true, 'ветка назначений #security есть у корня');
+    });
+
     it('info deep: у вложенных hasItems совпадает с реальными items, у корня — по своему списку', async () => {
         const root = await WORK.get_item('/');
         const res = await root.info({ deep: 2 });

@@ -565,7 +565,10 @@ export const classSecurityMethods = {
             || POLICY.isAgentControlPath(target, this.path);
         if (this.id === uid && params.session?.principal?.kind !== 'node' && !protectedTarget)
             return true;
-        if (globalThis.WORK && await this._isWorkBoss(params))
+        // Руководитель корня WORK проходит и по системным путям ($server, sources, oda),
+        // но только когда он действует от своего имени: принудительный role=USER проверяем ниже.
+        if ((!params.role || params.role === this.constructor.ROLES.BOSS)
+            && globalThis.WORK && await this._isWorkBoss(params))
             return true;
         if (this._isSystemItem(item))
             return false;
@@ -643,10 +646,14 @@ export const classSecurityMethods = {
         return result;
     },
 
-    /** Проверка BOSS на корневом WORK. */
+    /**
+     * Проверка BOSS на корневом WORK (в том числе на самом корне: это $server,
+     * который тоже наследует $structure). Рекурсии нет — roles() читает #security
+     * напрямую и не вызывает canWrite/assertAccess/_isWorkBoss.
+     */
     async _isWorkBoss(params = {}) {
         if (!globalThis.WORK) return false;
-        return globalThis.WORK !== this && await globalThis.WORK.roles?.(params).then(r => r.includes(this.constructor.ROLES.BOSS));
+        return globalThis.WORK.roles?.(params).then(r => r.includes(this.constructor.ROLES.BOSS));
     },
 
     /** @deprecated алиас _isWorkBoss */

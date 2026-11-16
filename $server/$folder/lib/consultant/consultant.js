@@ -715,7 +715,7 @@ ODA({
                 prompt: `Покажи схему операции «${lbl}» (${ctx.path}), её проводки и последние зарегистрированные документы.`,
             };
         }
-        if (t === '$structure' || t === '$base') {
+        if (t === '$structure' || t === '$base' || t === '$server') {
             return {
                 icon: 'icons:supervisor-account',
                 label: `Проверить роли BOSS, рабочие места и ленту «${lbl}»`,

@@ -34,12 +34,12 @@ const as = (uid, role) => ({ session: { uid }, role });
 before(async () => {
     prevCwd = process.cwd();
     tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-access-'));
-    write('$server/class.js', `export default { label: 'WORK-ACCESS' }`);
+    write('$server/class.js', `export default { label: 'WORK-ACCESS', '#security': { BOSS: ['w1'] } }`);
     write('$server/$folder/class.js', `export default {}`);
     write('$server/$folder/$class/class.js', `export default {}`);
     write('$server/$folder/$file/class.js', `export default {}`);
     write('$server/$folder/$file/$md/class.js', `export default {}`);
-    for (const u of ['a1', 'b1', 'u1', 'u2', 'c1'])
+    for (const u of ['a1', 'b1', 'w1', 'u1', 'u2', 'c1'])
         write(`USERS/${u}/$user/class.js`, `export default { label: '${u}' }`);
     write('ORG/$class/class.js', `export default { label: 'ORG', '#security': { BOSS: ['b1'], USER: ['u2'] } }`);
     write('ORG/$class/BOSS/plan.md', '# План руководителя');
@@ -139,6 +139,27 @@ describe('ядро: canSee / canWrite по модели', () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         assert.deepEqual(await dept.roles(as('u2')), []);
         assert.equal(await dept.canSee(await dept.meta_folder.get_item('readme.md'), as('u2')), false);
+    });
+
+    it('BOSS корня WORK (он же $structure) пишет в системные пути своей точки, USER — нет', async () => {
+        // Корень WORK — это $server, наследник $structure, поэтому BOSS корня обязан проходить
+        // туда, куда пишется .task промпта с корня (/$server/task), и системные пути /$server.
+        const L = FS.$class.ACCESS_LEVEL;
+        const task = await WORK.meta_folder._get_next_item('task', FS.$folder);
+        assert.deepEqual(await WORK.roles(as('w1')), ['BOSS'], 'w1 назначен BOSS корня в $server/class.js');
+        assert.equal(await WORK.canWrite(task, as('w1', 'BOSS')), true, 'BOSS корня пишет в /$server/task');
+        await WORK.assertAccess({ ...as('w1', 'BOSS'), filename: 'prompt.task' }, L.WRITE, task);
+        await WORK.assertAccess(as('w1', 'BOSS'), L.WRITE, WORK);
+        assert.equal(await WORK.canWrite(task, as('u1', 'USER')), false, 'USER не пишет в системные метаданные корня');
+        await assert.rejects(
+            WORK.assertAccess({ ...as('u1', 'USER'), filename: 'prompt.task' }, L.WRITE, task),
+            /Доступ запрещён/,
+        );
+        await assert.rejects(
+            WORK.assertAccess({ ...as('w1', 'USER'), filename: 'prompt.task' }, L.WRITE, task),
+            /Доступ запрещён/,
+            'принудительный role=USER не обходит ограничения системных путей',
+        );
     });
 
     it('work_zone через шлюз: возвращает единое хранилище точки, рабочие файлы доступны на запись, а системные метаданные защищены от не-админов', async () => {
