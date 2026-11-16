@@ -473,6 +473,13 @@ export async function deleteLocalModel({ rootDir = process.cwd(), modelId } = {}
     if (fs.existsSync(targetDir)) {
         await fsp.rm(targetDir, { recursive: true, force: true });
     }
+    if (cleanId === 'Qwen3.8-Flash-Next') {
+        for (const sub of ['qwen38-flash-next-base-ud-q4-k-xl-v1', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1']) {
+            const buboDir = path.join(localRoot, 'models', sub);
+            if (fs.existsSync(buboDir))
+                await fsp.rm(buboDir, { recursive: true, force: true }).catch(() => {});
+        }
+    }
     return { ok: true, deletedId: cleanId, deletedPath: `/MODELS/Local/${cleanId}` };
 }
 

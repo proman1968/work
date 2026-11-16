@@ -882,7 +882,7 @@ export default {
             if (findEntry(h.nodeName, h.hfRepo))
                 continue;
             const dl = h.activeDownload || null;
-            const state = dl?.status === 'downloading' ? 'downloading' : 'available';
+            const state = dl?.status === 'downloading' ? 'downloading' : (dl?.status === 'failed' ? 'failed' : 'available');
             const progressPct = dl ? Math.min(99, Math.max(1, Number(dl.progress) || 5)) : 0;
             list.push({
                 key: `halo:${h.nodeName}`,

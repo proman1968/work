@@ -65,6 +65,9 @@ import {
     computeHalogenMemoryPlan,
     inspectWindowsHalogenEnvironment,
     prepareWindowsBuboRuntime,
+    finalizeWindowsBuboModel,
+    BUBO_ORIGINAL_MODEL_DIR_REL,
+    BUBO_ORIGINAL_MODEL_FILES,
     probeHalogenServer,
     startHalogenBackend,
     stopHalogenBackend,
@@ -173,6 +176,9 @@ export {
     computeHalogenMemoryPlan,
     inspectWindowsHalogenEnvironment,
     prepareWindowsBuboRuntime,
+    finalizeWindowsBuboModel,
+    BUBO_ORIGINAL_MODEL_DIR_REL,
+    BUBO_ORIGINAL_MODEL_FILES,
     probeHalogenServer,
     startHalogenBackend,
     stopHalogenBackend,
@@ -762,27 +768,35 @@ export const TRAINER_METHODS = Object.freeze({
         fn: async function (p = {}) {
             const args = mergeTrainerArgs(p);
             const folderName = args.folderName || '';
-            const haloSpec = HALOGEN_MODELS_CATALOG.find(m =>
+            const platformCatalog = getHalogenCatalogForPlatform(os.platform());
+            const haloSpec = platformCatalog.find(m =>
                 (folderName && m.nodeName === folderName)
                 || (args.repoId && m.hfRepo === args.repoId)
             );
+            const isWinBubo = os.platform() === 'win32' && (haloSpec?.runtimeType === 'bubo' || folderName === 'Qwen3.8-Flash-Next');
             const job = await resumeHuggingFaceDownload({
                 jobId: args.jobId ?? args.id ?? '',
                 folderName,
-                repoId: args.repoId || haloSpec?.hfRepo || '',
+                repoId: isWinBubo ? (haloSpec?.windowsBuboRepo || 'unsloth/Qwen3.8-Flash-Next-GGUF') : (args.repoId || haloSpec?.hfRepo || ''),
+                ...(isWinBubo ? {
+                    customFiles: BUBO_ORIGINAL_MODEL_FILES,
+                    customFilesDir: BUBO_ORIGINAL_MODEL_DIR_REL,
+                    onComplete: ({ rootDir: rd }) => finalizeWindowsBuboModel({ rootDir: rd }),
+                } : {}),
                 quant: args.quant || 'Q8_0',
                 token: args.token || '',
                 nodeMeta: haloSpec ? {
                     label: haloSpec.label || haloSpec.nodeName,
                     model: haloSpec.model,
-                    protocol: 'halogen',
+                    protocol: haloSpec.protocol || 'local',
                     icon: haloSpec.icon || 'ai:qwen',
                     modality: haloSpec.modality,
                     capabilities: haloSpec.capabilities,
                     efforts: haloSpec.efforts,
                     maxTokens: haloSpec.maxTokens,
                     maxOutput: haloSpec.maxOutput,
-                    baseUrl: haloSpec.baseUrl || HALOGEN_DEFAULT_BASE_URL,
+                    baseUrl: haloSpec.baseUrl ?? '',
+                    ...(isWinBubo ? { primaryFile: 'bubo-package.json' } : {}),
                 } : null,
             });
             try {

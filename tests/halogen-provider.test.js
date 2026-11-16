@@ -881,4 +881,49 @@ describe('Единый локальный контур /MODELS/Local для ма
             await fsp.rm(tmpRoot, { recursive: true, force: true });
         }
     });
+
+    it('10. Windows Qwen3.8-Flash-Next: штатный многопоточный загрузчик качает 8 файлов Bubo с подпапками (mtp/mmproj/twin/draft_head) и вызывает onComplete', async () => {
+        const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-bubo-dl-'));
+        try {
+            const { startHuggingFaceDownload, BUBO_ORIGINAL_MODEL_FILES, BUBO_ORIGINAL_MODEL_DIR_REL } = await import('../sources/modules/trainer/index.js');
+            const customMock = BUBO_ORIGINAL_MODEL_FILES.slice(0, 2).map((f, idx) => ({
+                ...f,
+                destRelPath: idx === 0 ? 'shard1.gguf' : 'mtp/mtp-test.gguf',
+                url: `https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/main/${idx === 0 ? 'shard1.gguf' : 'mtp-test.gguf'}`,
+                size: 16,
+            }));
+
+            let finalized = false;
+            const mockFetch = async () => {
+                const payload = Buffer.from('0123456789ABCDEF');
+                return {
+                    ok: true,
+                    status: 200,
+                    headers: new Map([['content-length', String(payload.length)]]),
+                    body: (async function* () { yield payload; })(),
+                };
+            };
+
+            const job = await startHuggingFaceDownload({
+                repoId: 'unsloth/Qwen3.8-Flash-Next-GGUF',
+                customFiles: customMock,
+                customFilesDir: BUBO_ORIGINAL_MODEL_DIR_REL,
+                onComplete: async () => { finalized = true; },
+                rootDir: tmpRoot,
+                platform: 'win32',
+                targetNodeName: 'Qwen3.8-Flash-Next',
+                waitForCompletion: true,
+                fetchImpl: mockFetch,
+            });
+
+            assert.equal(job.status, 'completed');
+            assert.equal(job.progress, 100);
+            assert.equal(finalized, true, 'после скачивания файлов вызвана финализация Bubo');
+            assert.ok(fs.existsSync(path.join(tmpRoot, BUBO_ORIGINAL_MODEL_DIR_REL, 'shard1.gguf')));
+            assert.ok(fs.existsSync(path.join(tmpRoot, BUBO_ORIGINAL_MODEL_DIR_REL, 'mtp', 'mtp-test.gguf')));
+        }
+        finally {
+            await fsp.rm(tmpRoot, { recursive: true, force: true });
+        }
+    });
 });

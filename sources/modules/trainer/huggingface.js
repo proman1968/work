@@ -1141,8 +1141,12 @@ async function writeDownloadStateSafe(stagingDir, job, extra = {}) {
             threads: Number(job.threads) || 1,
             registerInWork: extra.registerInWork !== false,
             nodeMeta: extra.nodeMeta || null,
+            customFilesDir: extra.customFilesDir || '',
+            buboFinalize: Boolean(extra.buboFinalize),
             files: (job.files || []).map(f => ({
                 name: f.name,
+                ...(f.url ? { url: f.url } : {}),
+                ...(f.destRelPath ? { destRelPath: f.destRelPath } : {}),
                 size: Number(f.size) || 0,
                 downloaded: Number(f.downloaded) || 0,
                 done: Boolean(f.done),
@@ -1210,6 +1214,9 @@ export function computeDownloadEta({ remainingBytes = 0, avgBytesPerSec = 0, sho
 export async function startHuggingFaceDownload({
     repoId,
     files = null,
+    customFiles = null,
+    customFilesDir = '',
+    onComplete = null,
     quant = 'Q8_0',
     revision = 'main',
     token = '',
@@ -1255,15 +1262,28 @@ export async function startHuggingFaceDownload({
     const effToken = token || netCfg.token || '';
     const netFetch = createNetworkFetch({ proxyUrl: effProxy, fetchImpl });
 
-    const repoMeta = await inspectHuggingFaceRepo(cleanId, {
-        revision,
-        token: effToken,
-        rootDir,
-        endpointUrl: effEndpoint,
-        proxyUrl: effProxy,
-        fetchImpl,
-    });
-    const selected = selectFilesToDownload(repoMeta, { files, quant });
+    let repoMeta = { modality: nodeMeta?.modality || 'llm', capabilities: nodeMeta?.capabilities || ['chat'], files: [] };
+    let selected = [];
+    if (Array.isArray(customFiles) && customFiles.length) {
+        selected = customFiles.map(cf => ({
+            name: String(cf.name || ''),
+            url: String(cf.url || ''),
+            destRelPath: String(cf.destRelPath || path.basename(cf.name || '')),
+            size: Number(cf.size) || 0,
+            kind: /\.gguf$/i.test(cf.name || '') ? 'gguf' : 'safetensors',
+        }));
+    }
+    else {
+        repoMeta = await inspectHuggingFaceRepo(cleanId, {
+            revision,
+            token: effToken,
+            rootDir,
+            endpointUrl: effEndpoint,
+            proxyUrl: effProxy,
+            fetchImpl,
+        });
+        selected = selectFilesToDownload(repoMeta, { files, quant });
+    }
     if (!selected.length)
         throw new Error(`В репозитории ${cleanId} не найдено подходящих файлов весов (.gguf / .safetensors)`);
 
@@ -1282,6 +1302,8 @@ export async function startHuggingFaceDownload({
     const modelDir = getModelDir(rootDir, folderName, safeProvider);
     const weightsDir = getModelWeightsDir(rootDir, folderName, safeProvider);
     const stagingDir = weightsDir;
+    const filesRootDir = customFilesDir ? path.resolve(rootDir, customFilesDir) : stagingDir;
+    const customFilesDirRel = customFilesDir ? path.relative(rootDir, filesRootDir).replace(/\\/g, '/') : '';
     const primary = selected.find(f => f.name.endsWith('.gguf'))?.name
         || selected.find(f => f.name.endsWith('.safetensors') || f.name.endsWith('.hgn') || f.name.endsWith('.hnpw'))?.name
         || selected[0]?.name || '';
@@ -1290,6 +1312,8 @@ export async function startHuggingFaceDownload({
         || `${cleanId.split('/')[1] || cleanId}${quant && primary.endsWith('.gguf') ? ' (' + quant + ')' : ''}`;
 
     await fsp.mkdir(weightsDir, { recursive: true });
+    if (filesRootDir !== stagingDir)
+        await fsp.mkdir(filesRootDir, { recursive: true });
 
     // Если осталась недокачанная старая папка в #downloads/<folderName>, аккуратно перенесём её в $ai/#weights
     const legacyStaging = path.join(rootDir, 'MODELS', safeProvider, '#downloads', folderName);
@@ -1335,7 +1359,8 @@ export async function startHuggingFaceDownload({
     const jobFiles = [];
     for (const f of selected) {
         const size = Number(f.size) || 0;
-        const stagedFile = path.join(stagingDir, path.basename(f.name));
+        const destRelPath = f.destRelPath || path.basename(f.name);
+        const stagedFile = path.join(filesRootDir, destRelPath);
         const partFile = stagedFile + '.part';
         let downloaded = 0;
         let done = false;
@@ -1367,7 +1392,15 @@ export async function startHuggingFaceDownload({
             }
             catch { /* .part ещё нет */ }
         }
-        jobFiles.push({ name: f.name, size: size || (done ? downloaded : 0), downloaded, done, ranges });
+        jobFiles.push({
+            name: f.name,
+            ...(f.url ? { url: f.url } : {}),
+            ...(f.destRelPath ? { destRelPath: f.destRelPath } : {}),
+            size: size || (done ? downloaded : 0),
+            downloaded,
+            done,
+            ranges,
+        });
     }
 
     const jobId = 'hf_' + crypto.randomUUID().slice(0, 8);
@@ -1397,6 +1430,8 @@ export async function startHuggingFaceDownload({
         rootDir,
         stagingDir,
         weightsDir,
+        filesRootDir,
+        customFilesDir: customFilesDirRel,
         endpointUrl: effEndpoint,
         sourceLabel: describeSourceLabel(effEndpoint),
         threads: effThreads,
@@ -1428,12 +1463,15 @@ export async function startHuggingFaceDownload({
         registerInWork,
         quant,
         files,
+        customFiles: Array.isArray(customFiles) && customFiles.length ? customFiles : null,
+        customFilesDir: customFilesDirRel,
+        onComplete,
         fetchImpl,
         runPromise: null,
         setKeepFiles: (v) => { keepFilesOnAbort = Boolean(v); },
     };
     _downloads.set(jobId, entryMeta);
-    await writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork });
+    await writeDownloadStateSafe(stagingDir, job, { nodeMeta, registerInWork, customFilesDir: customFilesDirRel, buboFinalize: Boolean(onComplete) });
 
     const runPromise = (async () => {
         const t0 = Date.now();
@@ -1449,7 +1487,7 @@ export async function startHuggingFaceDownload({
             stateWriteChain = stateWriteChain.then(() => {
                 if (downloadFinished)
                     return;
-                return writeDownloadStateSafe(weightsDir, job, { nodeMeta, registerInWork });
+                return writeDownloadStateSafe(weightsDir, job, { nodeMeta, registerInWork, customFilesDir: customFilesDirRel, buboFinalize: Boolean(onComplete) });
             }).catch(() => {});
         };
 
@@ -1517,10 +1555,18 @@ export async function startHuggingFaceDownload({
                 if (controller.signal.aborted)
                     throw new Error('Загрузка приостановлена пользователем');
                 job.currentFile = fileEntry.name;
-                const stagedFile = path.join(stagingDir, path.basename(fileEntry.name));
+                const destRelPath = fileEntry.destRelPath || path.basename(fileEntry.name);
+                const stagedFile = path.join(filesRootDir, destRelPath);
+                await fsp.mkdir(path.dirname(stagedFile), { recursive: true });
                 const partFile = stagedFile + '.part';
-                const encodedPath = fileEntry.name.split('/').map(encodeURIComponent).join('/');
-                const url = `${effEndpoint}/${cleanId}/resolve/${encodeURIComponent(job.revision)}/${encodedPath}`;
+                let url;
+                if (fileEntry.url) {
+                    url = String(fileEntry.url).replace(/^https:\/\/huggingface\.co(?=\/)/i, effEndpoint);
+                }
+                else {
+                    const encodedPath = fileEntry.name.split('/').map(encodeURIComponent).join('/');
+                    url = `${effEndpoint}/${cleanId}/resolve/${encodeURIComponent(job.revision)}/${encodedPath}`;
+                }
                 const headers = hfHeaders(effToken, url, effEndpoint);
 
                 const res = await downloadFileMultipart({
@@ -1613,9 +1659,14 @@ export async function startHuggingFaceDownload({
                     maxTokens: nodeMeta?.maxTokens,
                     maxOutput: nodeMeta?.maxOutput,
                     baseUrl: nodeMeta?.baseUrl,
-                    weightsDir,
-                    primaryFile: path.basename(primary),
+                    weightsDir: filesRootDir,
+                    primaryFile: nodeMeta?.primaryFile || path.basename(primary),
                 });
+            }
+
+            if (typeof onComplete === 'function') {
+                job.currentFile = 'Настройка встроенного движка…';
+                await onComplete({ job, weightsDir, filesRootDir, rootDir });
             }
 
             job.progress = 100;
@@ -1745,6 +1796,11 @@ export function listHuggingFaceDownloads(rootDir = process.cwd()) {
                     }
                     catch { /* ignore */ }
                 }
+                if (diskBytes <= 0 && Array.isArray(state.files)) {
+                    for (const sf of state.files) {
+                        diskBytes += Number(sf?.downloaded) || 0;
+                    }
+                }
                 if (diskBytes <= 0 && !state.repoId)
                     continue;
                 const totalBytes = Number(state.totalBytes) || 0;
@@ -1797,7 +1853,12 @@ export function pauseHuggingFaceDownload(jobId) {
     entry.job.status = 'paused';
     entry.job.etaSeconds = null;
     entry.job.finishedAt = Date.now();
-    writeDownloadStateSafe(entry.job.stagingDir, entry.job, { nodeMeta: entry.nodeMeta, registerInWork: entry.registerInWork });
+    writeDownloadStateSafe(entry.job.stagingDir, entry.job, {
+        nodeMeta: entry.nodeMeta,
+        registerInWork: entry.registerInWork,
+        customFilesDir: entry.customFilesDir || '',
+        buboFinalize: Boolean(entry.onComplete),
+    });
     return { ...entry.job };
 }
 
@@ -1816,6 +1877,18 @@ export async function discardHuggingFaceDownload({ jobId = '', folderName = '', 
         targetFolder = key.slice(5);
     if (targetFolder) {
         const weightsDir = getModelWeightsDir(rootDir, targetFolder, 'Local');
+        let customDirAbs = entry?.customFilesDir ? path.resolve(rootDir, entry.customFilesDir) : '';
+        if (!customDirAbs && fs.existsSync(path.join(weightsDir, DOWNLOAD_STATE_FILE))) {
+            try {
+                const st = JSON.parse(await fsp.readFile(path.join(weightsDir, DOWNLOAD_STATE_FILE), 'utf-8'));
+                if (st?.customFilesDir)
+                    customDirAbs = path.resolve(rootDir, st.customFilesDir);
+            }
+            catch { /* ignore */ }
+        }
+        if (customDirAbs && fs.existsSync(customDirAbs)) {
+            await fsp.rm(customDirAbs, { recursive: true, force: true }).catch(() => {});
+        }
         if (fs.existsSync(weightsDir)) {
             await fsp.rm(path.join(weightsDir, DOWNLOAD_STATE_FILE), { force: true }).catch(() => {});
             const files = await fsp.readdir(weightsDir).catch(() => []);
@@ -1837,6 +1910,9 @@ export async function resumeHuggingFaceDownload({
     folderName = '',
     repoId = '',
     files = null,
+    customFiles = null,
+    customFilesDir = '',
+    onComplete = null,
     quant = 'Q8_0',
     token = '',
     nodeMeta = null,
@@ -1865,6 +1941,9 @@ export async function resumeHuggingFaceDownload({
     if (!resolvedRepo)
         throw new Error(`Не удалось определить репозиторий Hugging Face для докачки «${cleanFolder || key}»`);
 
+    const stateHasCustomUrls = Array.isArray(state.files) && state.files.some(f => f?.url || f?.destRelPath);
+    const resolvedCustomFiles = customFiles ?? entry?.customFiles ?? (stateHasCustomUrls ? state.files : null);
+    const resolvedCustomDir = customFilesDir || entry?.customFilesDir || state.customFilesDir || '';
     const stateFileNames = Array.isArray(state.files) && state.files.length
         ? state.files.map(f => f?.name).filter(Boolean)
         : null;
@@ -1872,6 +1951,9 @@ export async function resumeHuggingFaceDownload({
     return startHuggingFaceDownload({
         repoId: resolvedRepo,
         files: files ?? entry?.files ?? stateFileNames ?? null,
+        customFiles: resolvedCustomFiles,
+        customFilesDir: resolvedCustomDir,
+        onComplete: onComplete || entry?.onComplete || null,
         quant: quant || entry?.quant || 'Q8_0',
         revision: entry?.job?.revision || state.revision || 'main',
         token,
@@ -1904,6 +1986,9 @@ export async function restartActiveHuggingFaceDownloads({ rootDir = '' } = {}) {
             folderName: entry.job.folderName,
             repoId: entry.job.repoId,
             files: entry.files ?? null,
+            customFiles: entry.customFiles ?? null,
+            customFilesDir: entry.customFilesDir || '',
+            onComplete: entry.onComplete || null,
             quant: entry.quant || 'Q8_0',
             nodeMeta: entry.nodeMeta || null,
             rootDir: entry.job.rootDir || process.cwd(),
