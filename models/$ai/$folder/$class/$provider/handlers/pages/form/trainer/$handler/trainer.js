@@ -505,8 +505,11 @@ export default {
                         <div style="min-width:0;flex:1;">
                             <div class="toolbar" style="gap:6px;">
                                 <span class="model-name">{{$for.item.label}}</span>
-                                <span class="status-chip ok" ~if="$for.item.state === 'installed'">
+                                <span class="status-chip ok" ~if="$for.item.state === 'installed' && !$for.item.incompatibleOnPlatform">
                                     Установлена<span ~if="$for.item.sizeGb"> · {{$for.item.sizeGb}} ГБ</span>
+                                </span>
+                                <span class="status-chip err" ~if="$for.item.state === 'installed' && $for.item.incompatibleOnPlatform">
+                                    Несовместима с ОС<span ~if="$for.item.sizeGb"> · {{$for.item.sizeGb}} ГБ</span>
                                 </span>
                                 <span class="status-chip busy" ~if="$for.item.state === 'downloading'">
                                     Скачивается · {{$for.item.download?.progress || 0}}%
@@ -542,11 +545,11 @@ export default {
 
                         <!-- Состояние: установлена -->
                         <div class="toolbar" ~if="$for.item.state === 'installed'">
-                            <label class="toolbar" style="cursor:pointer;font-size:12px;font-weight:600;">
+                            <label class="toolbar" style="cursor:pointer;font-size:12px;font-weight:600;" ~if="!$for.item.incompatibleOnPlatform">
                                 <input type="checkbox" :checked="$for.item.enabled !== false" @change="toggleLocalModel($for.item.path, $event.target.checked)">
                                 <span>Вкл</span>
                             </label>
-                            <button type="button" class="btn danger" @tap="deleteLocalModel($for.item.id)">Удалить</button>
+                            <button type="button" class="btn danger" @tap="deleteLocalModel($for.item.id)">{{$for.item.incompatibleOnPlatform ? 'Удалить несовместимые' : 'Удалить'}}</button>
                         </div>
 
                         <!-- Состояние: доступна к установке -->
@@ -584,7 +587,10 @@ export default {
                     <button type="button" class="btn" @tap="openNetworkPanel()">Настроить сеть</button>
                 </div>
 
-                <!-- Текст ошибки на той же карточке при обрыве -->
+                <!-- Текст ошибки на той же карточке при обрыве или несовместимости с ОС -->
+                <div class="inline-err" ~if="$for.item.incompatibleOnPlatform && $for.item.incompatibleReason">
+                    {{$for.item.incompatibleReason}}
+                </div>
                 <div class="inline-err" ~if="$for.item.state === 'failed' && $for.item.download?.error">
                     {{$for.item.download.error}}
                     <span ~if="$for.item.download?.downloadedBytes"> · Сохранено на диске: {{fmtDownloadBytes($for.item.download.downloadedBytes)}} (доступна докачка)</span>
@@ -712,6 +718,7 @@ export default {
     netClearProxy: false,
     netClearToken: false,
     netBusy: false,
+    halogenPrepareState: null,
     _pollTimer: null,
 
     get hasNetworkChanges() {
@@ -801,6 +808,7 @@ export default {
         for (const m of this.localModels || []) {
             const halo = haloByNode.get(String(m.id || '').toLowerCase())
                 || haloByRepo.get(String(m.model || '').toLowerCase());
+            const incompatible = Boolean(m.incompatibleOnPlatform);
             list.push({
                 key: `inst:${m.id}`,
                 id: m.id,
@@ -811,10 +819,12 @@ export default {
                 modality: m.modality || halo?.modality || 'llm',
                 isHalo: Boolean(halo),
                 state: 'installed',
-                dotClass: m.active ? 'on' : 'off',
+                dotClass: incompatible ? 'warn' : (m.active ? 'on' : 'off'),
                 path: m.path,
                 enabled: m.enabled !== false,
-                active: Boolean(m.active),
+                active: Boolean(m.active) && !incompatible,
+                incompatibleOnPlatform: incompatible,
+                incompatibleReason: m.incompatibleReason || '',
                 sizeGb: m.sizeGb || 0,
                 ramGb: m.sizeGb || halo?.ramGb || 4,
                 fit: 'optimal',
@@ -871,6 +881,9 @@ export default {
         for (const h of this.halogenCatalog || []) {
             if (findEntry(h.nodeName, h.hfRepo))
                 continue;
+            const dl = h.activeDownload || null;
+            const state = dl?.status === 'downloading' ? 'downloading' : 'available';
+            const progressPct = dl ? Math.min(99, Math.max(1, Number(dl.progress) || 5)) : 0;
             list.push({
                 key: `halo:${h.nodeName}`,
                 id: h.nodeName,
@@ -880,13 +893,13 @@ export default {
                 icon: h.icon || 'ai:qwen',
                 modality: h.modality || 'llm',
                 isHalo: true,
-                state: 'available',
-                dotClass: 'off',
+                state,
+                dotClass: state === 'downloading' ? 'on' : 'off',
                 ramGb: h.ramGb || 4,
                 fit: 'optimal',
                 device: h.device || '',
-                download: null,
-                progressPct: 0,
+                download: dl,
+                progressPct,
                 etaText: '',
             });
         }
@@ -900,11 +913,13 @@ export default {
                 key: `hf:${item.id}`,
                 id: short || item.id,
                 repoId: item.id,
-                label: item.id,
+                label: item.modelName || item.id,
                 desc: item.whatItDoes || item.recommendedFor || '',
                 icon: item.icon || 'ai:ollama',
                 modality: item.modality || 'llm',
-                isHalo: false,
+                isHalo: Boolean(item.buboPackage),
+                buboPackage: Boolean(item.buboPackage),
+                haloNodeName: item.haloNodeName || '',
                 state: 'available',
                 dotClass: 'off',
                 ramGb: item.ramRequiredGb || 4,
@@ -984,7 +999,12 @@ export default {
         await this.reloadAll();
         await this.searchHf();
         this._pollTimer = setInterval(() => {
-            if (this.activeDownloads.length || this.activeTransfers.length || (this.jobs || []).some(j => j.status === 'running')) {
+            if (
+                this.activeDownloads.length
+                || this.activeTransfers.length
+                || this.halogenPrepareState?.status === 'running'
+                || (this.jobs || []).some(j => j.status === 'running')
+            ) {
                 this.reloadAll();
             }
         }, 1200);
@@ -1054,6 +1074,7 @@ export default {
         }
         if (st.halogen?.catalog)
             this.halogenCatalog = st.halogen.catalog;
+        this.halogenPrepareState = st.halogen?.windowsEnv?.prepareState || null;
         if (this.localModels.length !== prevCount)
             this._invalidateClientModelsTree();
     },
@@ -1171,7 +1192,9 @@ export default {
             await this.resumeDownload(item);
             return;
         }
-        if (item.isHalo)
+        if (item.buboPackage || item.haloNodeName)
+            await this.downloadHalogenModel(item.haloNodeName || 'Qwen3.8-Flash-Next');
+        else if (item.isHalo)
             await this.downloadHalogenModel(item.id);
         else
             await this.installModelOneClick(item.repoId);

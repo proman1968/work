@@ -1,6 +1,9 @@
 /**
  * Публичный API подсистемы локальных моделей Hugging Face и встроенного дообучения Unsloth (`trainer_*`).
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import {
     CURATED_HF_MODELS,
     MODEL_MODALITIES,
@@ -52,6 +55,8 @@ import {
     BUBO_WINDOWS_RELEASE,
     HALOGEN_MODELS_CATALOG,
     HALOGEN_TTS_VOICES,
+    getHalogenCatalogForPlatform,
+    checkWindowsHalogenPreflight,
     recordHalogenSessionHandle,
     listHalogenSessionHandles,
     releaseHalogenSessionHandle,
@@ -62,6 +67,7 @@ import {
     probeHalogenServer,
     startHalogenBackend,
     stopHalogenBackend,
+    ensureHalogenBackendRunning,
     synthesizeFallbackWav,
     computeFallbackEmbeddings,
     computeFallbackRerank,
@@ -108,6 +114,11 @@ import {
     listTransferJobs,
     cancelTransferJob,
 } from './transfer.js';
+import {
+    inspectWeightsDirectorySync,
+    modelWeightsDir,
+    LINUX_ONLY_HALOGEN_EXT_RE,
+} from './paths.js';
 
 export const halogenFallback = Object.freeze({
     normalizeHalogenTtsPayload,
@@ -151,6 +162,8 @@ export {
     BUBO_WINDOWS_RELEASE,
     HALOGEN_MODELS_CATALOG,
     HALOGEN_TTS_VOICES,
+    getHalogenCatalogForPlatform,
+    checkWindowsHalogenPreflight,
     recordHalogenSessionHandle,
     listHalogenSessionHandles,
     releaseHalogenSessionHandle,
@@ -161,6 +174,7 @@ export {
     probeHalogenServer,
     startHalogenBackend,
     stopHalogenBackend,
+    ensureHalogenBackendRunning,
     synthesizeFallbackWav,
     computeFallbackEmbeddings,
     computeFallbackRerank,
@@ -310,9 +324,16 @@ export const TRAINER_METHODS = Object.freeze({
                 totalRamGb: hardware?.totalRamGb >= 120 ? hardware.totalRamGb : 192,
                 platform: hardware?.platform,
             });
+            const platform = hardware?.platform || os.platform();
+            const probe = await probeHalogenServer(HALOGEN_DEFAULT_BASE_URL).catch(() => null);
             const runtime = getLocalEngineStatus({
                 totalRamGb: hardware?.totalRamGb,
+                halogenOnline: Boolean(probe?.online),
             });
+            const curatedCompatible = CURATED_HF_MODELS.filter(m =>
+                (!Array.isArray(m.platforms) || !m.platforms.length || m.platforms.includes(platform))
+                && !(platform === 'win32' && (m.format === 'hgn' || m.format === 'hnpw'))
+            );
             return {
                 hardware,
                 runtime,
@@ -325,14 +346,127 @@ export const TRAINER_METHODS = Object.freeze({
                 network: sanitizeTrainerNetworkForClient(loadTrainerNetworkSettings()),
                 modalities: MODEL_MODALITIES,
                 capabilities: Object.values(MODEL_CAPABILITIES),
-                curated: CURATED_HF_MODELS,
+                curated: curatedCompatible,
                 halogen: {
+                    online: Boolean(probe?.online),
+                    mode: probe?.mode || '',
+                    modeLabel: probe?.modeLabel || '',
                     memoryPlan: halogenPlan,
-                    catalog: inspectHalogenCatalogWithStatus(),
+                    catalog: inspectHalogenCatalogWithStatus(process.cwd(), { platform }),
                     handles: listHalogenSessionHandles(),
-                    windowsEnv: inspectWindowsHalogenEnvironment(),
+                    windowsEnv: probe?.windowsEnv || inspectWindowsHalogenEnvironment(),
                 },
             };
+        },
+    },
+    trainer_model_info: {
+        level: 'read',
+        fn: async function () {
+            await this?.init;
+            const d = this?.DATA || {};
+            const itemPath = String(this?.path || this?.short || '');
+            const parts = itemPath.split('/').filter(Boolean);
+            const providerId = parts[1] || 'MODELS';
+            const isLocal = providerId === 'Local' || d.protocol === 'local' || d.protocol === 'halogen';
+            const act = evaluateAiNodeActivitySync(this);
+
+            let weightInfo = null;
+            let halogenProbe = null;
+            let sizeGb = 0;
+            let needsRuntime = false;
+
+            if (isLocal) {
+                const wDirRel = d.weightsDir || path.join('MODELS', 'Local', this?.id || '', '$ai', '#weights');
+                const wDirAbs = path.resolve(process.cwd(), wDirRel);
+                weightInfo = inspectWeightsDirectorySync(wDirAbs, os.platform());
+                if (weightInfo.exists) {
+                    let bytes = 0;
+                    for (const f of weightInfo.files) {
+                        try {
+                            bytes += fs.statSync(path.join(wDirAbs, f)).size || 0;
+                        }
+                        catch { /* ignore */ }
+                    }
+                    sizeGb = +(bytes / (1024 ** 3)).toFixed(2);
+                }
+                if (d.protocol === 'halogen' || weightInfo?.hasGguf || weightInfo?.hasBuboManifest) {
+                    halogenProbe = await probeHalogenServer(d.baseUrl || HALOGEN_DEFAULT_BASE_URL).catch(() => null);
+                    const winEnv = halogenProbe?.windowsEnv || inspectWindowsHalogenEnvironment();
+                    if (os.platform() === 'win32' && !halogenProbe?.online && !winEnv.buboInstalled && !winEnv.gufoInstalled) {
+                        needsRuntime = true;
+                    }
+                }
+            }
+
+            return {
+                id: this?.id || '',
+                label: d.label || this?.label || this?.id || '',
+                icon: d.icon || this?.icon || 'carbon:machine-learning-model',
+                path: itemPath,
+                providerName: providerId,
+                isLocal,
+                protocol: d.protocol || (isLocal ? 'local' : 'openai'),
+                model: d.model || this?.id || '',
+                baseUrl: d.baseUrl || '',
+                modality: d.modality || 'llm',
+                maxTokens: Number(d.maxTokens || d.$public?.maxTokens) || 32768,
+                maxOutput: Number(d.maxOutput || d.$public?.maxOutput) || 8192,
+                capabilities: Array.isArray(d.capabilities) ? d.capabilities : (d.$public?.capabilities || ['chat', 'stream']),
+                efforts: Array.isArray(d.efforts) ? d.efforts : [],
+                weightsDir: d.weightsDir || '',
+                primaryFile: d.primaryFile || '',
+                enabled: d.enabled !== false,
+                aiActive: act.active,
+                aiStatusReason: act.reason,
+                weightFormat: weightInfo?.weightFormat || '',
+                incompatibleOnPlatform: Boolean(act.incompatibleOnPlatform || weightInfo?.incompatibleOnPlatform),
+                incompatibleReason: act.incompatibleOnPlatform ? act.reason : (weightInfo?.incompatibleReason || ''),
+                sizeGb,
+                needsRuntime,
+                halogenOnline: Boolean(halogenProbe?.online),
+                halogenMode: halogenProbe?.mode || '',
+                halogenModeLabel: halogenProbe?.modeLabel || '',
+                windowsEnv: halogenProbe?.windowsEnv || null,
+            };
+        },
+    },
+    trainer_delete_incompatible: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            await this?.init;
+            const modelId = p.modelId || p.id || this?.id || '';
+            const cleanId = String(modelId).replace(/^\/?MODELS\/Local\//i, '').replace(/[<>:"/\\|?*]/g, '').trim();
+            if (!cleanId)
+                throw new Error('Не указана модель');
+            const wDir = modelWeightsDir(process.cwd(), cleanId, 'Local');
+            const info = inspectWeightsDirectorySync(wDir, os.platform());
+            if (info.exists && !info.hasGguf && !info.hasSafetensors && !info.hasBuboManifest) {
+                const res = await deleteLocalModel({ modelId: cleanId });
+                try {
+                    const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                    localNode?.reset?.();
+                    const modelsRoot = await globalThis.WORK?.get_item?.('/MODELS');
+                    modelsRoot?.reset?.();
+                }
+                catch { /* ignore */ }
+                return { ...res, mode: 'deleted_model' };
+            }
+            let removedCount = 0;
+            if (fs.existsSync(wDir)) {
+                for (const f of fs.readdirSync(wDir)) {
+                    if (LINUX_ONLY_HALOGEN_EXT_RE.test(f) || (LINUX_ONLY_HALOGEN_EXT_RE.test(f.replace(/\.part$/i, '')))) {
+                        fs.rmSync(path.join(wDir, f), { force: true });
+                        removedCount++;
+                    }
+                }
+            }
+            try {
+                this?.reset?.();
+                const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                localNode?.reset?.();
+            }
+            catch { /* ignore */ }
+            return { ok: true, removedCount, mode: 'removed_files' };
         },
     },
     trainer_delete_model: {
@@ -395,10 +529,12 @@ export const TRAINER_METHODS = Object.freeze({
     halogen_download_bundle: {
         level: 'admin',
         fn: async function (p = {}) {
+            const hw = await detectHardware().catch(() => null);
             const res = await downloadHalogenBundle({
                 models: p.models || p.nodeName || p.model || null,
                 token: p.token || '',
                 waitForCompletion: p.wait === true || p.wait === 'true',
+                totalMemoryGb: hw?.totalRamGb ?? null,
             });
             try {
                 const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');

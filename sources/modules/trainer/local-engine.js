@@ -15,7 +15,8 @@ import { dataStore } from '../../data/api.js';
 import { classesOfType } from '../../data/classes.js';
 import { classSchema } from '../../data/schema.js';
 import { trialBalance } from '../../data/reports.js';
-import { recordHalogenSessionHandle, stopHalogenBackend } from './halogen.js';
+import { ensureHalogenBackendRunning, recordHalogenSessionHandle, stopHalogenBackend } from './halogen.js';
+import { inspectWeightsDirectorySync } from './paths.js';
 
 const money = v => Number(v || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -100,12 +101,6 @@ function resolveWeightsDir(ai, rootDir = process.cwd()) {
     const legacy = path.resolve(rootDir, `MODELS/Local/${modelId}/#weights`);
     if (fs.existsSync(legacy))
         return legacy;
-    const isHalogen = ai?.protocol === 'halogen' || String(ai?.path || ai?.short || '').startsWith('/MODELS/Halogen/');
-    if (isHalogen) {
-        const fallback06 = path.resolve(rootDir, 'MODELS/Local/Qwen3-0.6B/$ai/#weights');
-        if (fs.existsSync(fallback06))
-            return fallback06;
-    }
     return primary;
 }
 
@@ -399,27 +394,29 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         return;
     }
 
-    const sessionRes = recordHalogenSessionHandle({
-        keep: options?.halogenKeep || options?.sessionKeep,
-        from: options?.halogenFrom || options?.sessionFrom,
-        messages,
-        tokens: 24,
-    });
+    const wInsp = inspectWeightsDirectorySync(weightsDir);
+    if (wInsp.incompatibleOnPlatform) {
+        throw new Error(wInsp.incompatibleReason);
+    }
 
-    // Запасной ответ, если у модели ещё не скачаны файлы .safetensors
-    const fallbackText = grounding || 'Локальная модель зарегистрирована, но файлы весов (.safetensors) ещё не загружены.';
-    yield fallbackText;
-    yield {
-        type: 'usage',
-        prompt_tokens: 24,
-        completion_tokens: 24,
-        total_tokens: 48,
-        cached_tokens: sessionRes.cachedTokens ? Math.min(24, sessionRes.cachedTokens) : 0,
-        ...(sessionRes.fromStatus ? { halogen_from: sessionRes.fromStatus } : {}),
-    };
-    yield {
-        type: 'finish',
-        reason: 'stop',
-        done: true,
-    };
+    if (wInsp.hasGguf || wInsp.hasBuboManifest || ai?.protocol === 'halogen' || ai?.DATA?.protocol === 'halogen') {
+        const backend = await ensureHalogenBackendRunning({
+            baseUrl: ai?.baseUrl || ai?.DATA?.baseUrl,
+            ai,
+        });
+        if (!backend.ready) {
+            throw new Error(backend.reason || 'Сервер локального ИИ (:8731) не запущен.');
+        }
+        throw new Error('Встроенный движок :8731 запущен — повторите запрос для подключения по HTTP.');
+    }
+
+    if (wInsp.pendingDownload) {
+        throw new Error('Загрузка весов модели ещё не завершена (проверьте вкладку «Модели» в /MODELS/Local).');
+    }
+
+    if (wInsp.hasSafetensors && !wInsp.hasConfig) {
+        throw new Error('В папке весов модели отсутствует config.json или tokenizer.json.');
+    }
+
+    throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights (откройте /MODELS/Local для установки).');
 }

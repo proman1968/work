@@ -44,10 +44,14 @@
 **/#tmp/
 **/*.safetensors
 **/*.gguf
+**/*.hgn
+**/*.hnpw
+**/*.part
 **/*.bin
 **/*.pt
 **/*.pth
 **/*.onnx
+model_start.json
 sources/modules/*/.venv/
 
 # 4. Локальные базы данных, индексы, логи, организации и сессии пользователей

@@ -174,6 +174,16 @@ export default {
             background: light-dark(#fee2e2, #450a0a);
             color: light-dark(#991b1b, #fecaca);
         }
+        .msg.warn {
+            background: light-dark(#fef3c7, #451a03);
+            color: light-dark(#92400e, #fde68a);
+            border: 1px solid light-dark(#fde68a, #92400e);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
     </style>
 
     <div class="header-card" ~if="info">
@@ -197,6 +207,24 @@ export default {
         </div>
     </div>
 
+    <div class="msg warn" ~if="info?.incompatibleOnPlatform">
+        <span>
+            <b>Несовместимые файлы весов ({{info.sizeGb || 0}} ГБ):</b> {{info.incompatibleReason || 'Веса предназначены для другой ОС.'}}
+        </span>
+        <button type="button" class="btn danger" :disabled="busyAction" @tap="deleteIncompatible()">
+            {{busyAction ? 'Удаление…' : 'Удалить несовместимые файлы'}}
+        </button>
+    </div>
+
+    <div class="msg warn" ~if="info?.needsRuntime && !info?.incompatibleOnPlatform">
+        <span>
+            <b>Движок Halowin Bubo не установлен:</b> веса модели готовы, но для запуска на Windows 11 требуется встроенный рантайм Bubo (ROCm 10.0 gfx1151).
+        </span>
+        <button type="button" class="btn primary" :disabled="busyAction" @tap="installWindowsRuntime()">
+            {{busyAction ? 'Установка…' : 'Установить встроенный движок'}}
+        </button>
+    </div>
+
     <div class="msg ok" ~if="notice">{{notice}}</div>
     <div class="msg err" ~if="error">{{error}}</div>
 
@@ -205,11 +233,19 @@ export default {
             <div class="section-title">Параметры модели</div>
             <div class="kv-row">
                 <span class="kv-label">Идентификатор модели (API):</span>
-                <span class="kv-val"><code>{{info.DATA?.model || info.id}}</code></span>
+                <span class="kv-val"><code>{{resolvedModelId}}</code></span>
             </div>
             <div class="kv-row">
                 <span class="kv-label">Протокол:</span>
-                <span class="kv-val">{{info.DATA?.protocol || 'openai'}}</span>
+                <span class="kv-val">{{resolvedProtocol}}</span>
+            </div>
+            <div class="kv-row" ~if="info.weightFormat">
+                <span class="kv-label">Формат весов:</span>
+                <span class="kv-val"><code>{{info.weightFormat}}</code><span ~if="info.sizeGb"> ({{info.sizeGb}} ГБ)</span></span>
+            </div>
+            <div class="kv-row" ~if="resolvedProtocol === 'halogen'">
+                <span class="kv-label">Встроенный сервер (:8731):</span>
+                <span class="kv-val">{{info.halogenOnline ? (info.halogenModeLabel || 'Запущен') : 'Автозапуск по первому запросу'}}</span>
             </div>
             <div class="kv-row">
                 <span class="kv-label">Размер контекста (maxTokens):</span>
@@ -219,9 +255,9 @@ export default {
                 <span class="kv-label">Макс. длина ответа (maxOutput):</span>
                 <span class="kv-val">{{info.maxOutput || info.DATA?.maxOutput || 8192}} токенов</span>
             </div>
-            <div class="kv-row" ~if="info.DATA?.baseUrl">
+            <div class="kv-row" ~if="resolvedBaseUrl">
                 <span class="kv-label">Адрес API (Base URL):</span>
-                <span class="kv-val" style="word-break:break-all;"><code>{{info.DATA.baseUrl}}</code></span>
+                <span class="kv-val" style="word-break:break-all;"><code>{{resolvedBaseUrl}}</code></span>
             </div>
             <div class="kv-row">
                 <span class="kv-label">Возможности:</span>
@@ -248,6 +284,7 @@ export default {
     testPrompt: 'Привет! Представься коротко в одном предложении.',
     testReply: '',
     testing: false,
+    busyAction: false,
     notice: '',
     error: '',
     get providerName() {
@@ -256,6 +293,15 @@ export default {
     },
     get isLocalModel() {
         return String(this.info?.path || this.$item?.path || '').startsWith('/MODELS/Local/');
+    },
+    get resolvedModelId() {
+        return this.info?.model || this.info?.DATA?.model || this.info?.id || '';
+    },
+    get resolvedProtocol() {
+        return this.info?.protocol || this.info?.DATA?.protocol || (this.isLocalModel ? 'local' : 'openai');
+    },
+    get resolvedBaseUrl() {
+        return this.info?.baseUrl || this.info?.DATA?.baseUrl || '';
     },
     get capabilities() {
         const c = this.info?.capabilities || this.info?.DATA?.capabilities || ['chat', 'stream'];
@@ -268,12 +314,63 @@ export default {
         if (!this.$item)
             return;
         try {
-            const inf = await this.$item.fetch('info');
+            let inf = null;
+            try {
+                inf = await this.$item.fetch('trainer_model_info');
+            }
+            catch {
+                inf = await this.$item.fetch('info');
+            }
             this.info = inf;
-            this.modelEnabled = inf?.DATA?.enabled !== false;
+            this.modelEnabled = inf?.enabled !== false && inf?.DATA?.enabled !== false;
         }
         catch (e) {
             this.error = String(e?.message || e);
+        }
+    },
+    async deleteIncompatible() {
+        if (!this.$item || !this.isLocalModel)
+            return;
+        this.busyAction = true;
+        this.error = '';
+        this.notice = '';
+        try {
+            const res = await this.$item.fetch('trainer_delete_incompatible', { modelId: this.$item.id });
+            this._refreshTree();
+            await this.reload().catch(() => {});
+            this.notice = res?.mode === 'deleted_model'
+                ? 'Несовместимая модель и её файлы удалены с диска. Откройте /MODELS/Local для установки Windows-версии.'
+                : 'Несовместимые файлы (.hgn/.hnpw) удалены с диска.';
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.busyAction = false;
+        }
+    },
+    async installWindowsRuntime() {
+        if (!this.$item)
+            return;
+        this.busyAction = true;
+        this.error = '';
+        this.notice = '';
+        try {
+            const res = await this.$item.fetch('halogen_prepare_windows', { step: 'runtime' });
+            if (res?.ok) {
+                await this.reload();
+                this._refreshTree();
+                this.notice = 'Встроенный движок Halowin Bubo (ROCm 10.0.0 gfx1151) установлен и готов к запуску.';
+            }
+            else {
+                this.error = res?.error || 'Не удалось установить Halowin Bubo.';
+            }
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.busyAction = false;
         }
     },
     _refreshTree() {

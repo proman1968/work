@@ -9,11 +9,14 @@ import path from 'node:path';
 import {
     HALOGEN_MODELS_CATALOG,
     BUBO_WINDOWS_RELEASE,
+    getHalogenCatalogForPlatform,
+    checkWindowsHalogenPreflight,
     computeHalogenMemoryPlan,
     inspectWindowsHalogenEnvironment,
     prepareWindowsBuboRuntime,
     startHalogenBackend,
     stopHalogenBackend,
+    ensureHalogenBackendRunning,
     probeHalogenServer,
     normalizeHalogenTtsPayload,
     recordHalogenSessionHandle,
@@ -22,7 +25,13 @@ import {
     ensureHalogenModelNodes,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
+    searchHuggingFaceModels,
+    startHuggingFaceDownload,
+    evaluateAiNodeActivitySync,
+    localStreamChat,
 } from '../sources/modules/trainer/index.js';
+import { selectFilesToDownload } from '../sources/modules/trainer/huggingface.js';
+import { listLocalModelsAndAdapters } from '../sources/modules/trainer/runner.js';
 
 describe('Единый локальный контур /MODELS/Local для машинок Halo (AMD Ryzen AI Max+ PRO 495 · 192 ГБ RAM: Linux + Windows 11 + WORK Fallback)', () => {
     let WORK;
@@ -608,14 +617,15 @@ describe('Единый локальный контур /MODELS/Local для ма
 
             const bundleRes = await downloadHalogenBundle({
                 rootDir: tmpRoot,
+                platform: 'linux',
                 waitForCompletion: true,
                 fetchImpl: mockFetch,
             });
-            assert.equal(bundleRes.totalModels, 8, 'в пакет входят все 8 моделей (1 GPU + 7 NPU)');
+            assert.equal(bundleRes.totalModels, 8, 'в пакет Linux входят все 8 моделей (1 GPU + 7 NPU)');
             assert.equal(bundleRes.startedCount, 8, 'запущены и завершены все 8 задач скачивания');
             assert.ok(bundleRes.jobs.every(j => j.status === 'completed' && j.progress === 100));
 
-            const statusCatalog = inspectHalogenCatalogWithStatus(tmpRoot);
+            const statusCatalog = inspectHalogenCatalogWithStatus(tmpRoot, { platform: 'linux' });
             assert.equal(statusCatalog.length, 8);
             for (const item of statusCatalog) {
                 assert.equal(item.weightsDownloaded, true, `веса модели ${item.nodeName} скачаны в ${item.weightsDir}`);
@@ -713,6 +723,141 @@ describe('Единый локальный контур /MODELS/Local для ма
             stopHalogenBackend();
         }
         finally {
+            await fsp.rm(tmpRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('8. Разделение форматов по ОС: на Windows скрыты Linux-only .hgn/.hnpw, selectFilesToDownload для Linux не берёт устаревшие w4b/ht43, а startHuggingFaceDownload на Windows блокирует .hgn', async () => {
+        const winCatalog = getHalogenCatalogForPlatform('win32');
+        assert.equal(winCatalog.length, 1);
+        assert.equal(winCatalog[0].nodeName, 'Qwen3.8-Flash-Next');
+        assert.equal(winCatalog[0].hfRepo, 'unsloth/Qwen3.8-Flash-Next-GGUF');
+        assert.equal(winCatalog[0].runtimeType, 'bubo');
+
+        const linuxCatalog = getHalogenCatalogForPlatform('linux');
+        assert.equal(linuxCatalog.length, 8);
+
+        // На Windows в curated-поиске не должно быть peonist-ai/halogen-qwen3.8-flash-next
+        const winSearch = await searchHuggingFaceModels({
+            platform: 'win32',
+            usableMemoryGb: 150,
+            fetchImpl: null,
+        });
+        assert.ok(!winSearch.items.some(i => i.id === 'peonist-ai/halogen-qwen3.8-flash-next'));
+        assert.ok(winSearch.items.some(i => i.id === 'unsloth/Qwen3.8-Flash-Next-GGUF'));
+
+        const linuxSearch = await searchHuggingFaceModels({
+            platform: 'linux',
+            usableMemoryGb: 150,
+            fetchImpl: null,
+        });
+        assert.ok(linuxSearch.items.some(i => i.id === 'peonist-ai/halogen-qwen3.8-flash-next'));
+
+        // selectFilesToDownload для Linux .hgn берёт только v2 + ngram + drafter-r2 + vision + tokenizer (без w4b и ht43)
+        const selectedLinuxHgn = selectFilesToDownload({
+            files: [
+                { name: 'qwen38-flash-next-w4b.hgn', kind: 'safetensors', size: 124e9 },
+                { name: 'qwen38-flash-next-w4b.overlay.hgn', kind: 'safetensors', size: 2.5e9 },
+                { name: 'qwen38-flash-next-ht43.hgn', kind: 'safetensors', size: 57e9 },
+                { name: 'qwen38-flash-next-mtp.hgn', kind: 'safetensors', size: 1.5e9 },
+                { name: 'qwen38-flash-next-v2.hgn', kind: 'safetensors', size: 66e9 },
+                { name: 'qwen38-flash-next-ngram.hgn', kind: 'safetensors', size: 51e9 },
+                { name: 'qwen38-flash-next-drafter-r2.hgn', kind: 'safetensors', size: 1.5e9 },
+                { name: 'qwen38-flash-next-vision.hgn', kind: 'safetensors', size: 0.9e9 },
+                { name: 'tokenizer.json', kind: 'config', size: 12e6 },
+            ],
+        });
+        const names = selectedLinuxHgn.map(f => f.name);
+        assert.ok(names.includes('qwen38-flash-next-v2.hgn'));
+        assert.ok(names.includes('qwen38-flash-next-ngram.hgn'));
+        assert.ok(names.includes('qwen38-flash-next-drafter-r2.hgn'));
+        assert.ok(names.includes('qwen38-flash-next-vision.hgn'));
+        assert.ok(names.includes('tokenizer.json'));
+        assert.ok(!names.includes('qwen38-flash-next-w4b.hgn'));
+        assert.ok(!names.includes('qwen38-flash-next-ht43.hgn'));
+
+        // На Windows попытка скачать peonist-ai/halogen-qwen3.8-flash-next или .hgn сразу отклоняется
+        await assert.rejects(
+            () => startHuggingFaceDownload({
+                repoId: 'peonist-ai/halogen-qwen3.8-flash-next',
+                platform: 'win32',
+            }),
+            /не поддерживаются на Windows/i
+        );
+
+        // Preflight на машине с недостаточной памятью (<96 ГБ) отклоняет скачивание 180B до старта
+        const preflightLowMem = checkWindowsHalogenPreflight({
+            requiredDiskGb: 1,
+            minTotalMemoryGb: 96,
+            totalMemoryGb: 64,
+        });
+        assert.equal(preflightLowMem.ok, false);
+        assert.match(preflightLowMem.errors[0], /Недостаточно общей памяти/);
+    });
+
+    it('9. Честная диагностика при .hgn на Windows, отсутствие заглушки про .safetensors и автозапуск движка ensureHalogenBackendRunning', async () => {
+        const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-halogen-diag-'));
+        const origCwd = process.cwd();
+        try {
+            const wDir = path.join(tmpRoot, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '$ai', '#weights');
+            await fsp.mkdir(wDir, { recursive: true });
+            await fsp.writeFile(path.join(wDir, 'qwen38-flash-next-v2.hgn'), Buffer.from('FAKE_HGN_BYTES'));
+            await fsp.writeFile(path.join(wDir, 'tokenizer.json'), '{}');
+            await fsp.writeFile(
+                path.join(tmpRoot, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '$ai', 'class.js'),
+                'export default {"label":"Qwen3.8-Flash-Next (180B MoE)","protocol":"halogen","model":"halogen-qwen3.8-flash-next","baseUrl":"http://127.0.0.1:59995/v1/chat/completions"};'
+            );
+
+            if (os.platform() === 'win32') {
+                // На Windows .hgn не должен помечаться активным
+                const act = evaluateAiNodeActivitySync({
+                    id: 'Qwen3.8-Flash-Next',
+                    type: '$ai',
+                    path: '/MODELS/Local/Qwen3.8-Flash-Next',
+                    DATA: { protocol: 'halogen' },
+                }, tmpRoot);
+                assert.equal(act.active, false);
+                assert.equal(act.incompatibleOnPlatform, true);
+
+                const inv = await listLocalModelsAndAdapters(tmpRoot);
+                const item = inv.models.find(m => m.id === 'Qwen3.8-Flash-Next');
+                assert.ok(item);
+                assert.equal(item.incompatibleOnPlatform, true);
+                assert.equal(item.active, false);
+
+                // localStreamChat честно объясняет про .hgn, а не выводит ложную заглушку про .safetensors
+                await assert.rejects(async () => {
+                    for await (const _ of localStreamChat({
+                        id: 'Qwen3.8-Flash-Next',
+                        protocol: 'halogen',
+                        baseUrl: 'http://127.0.0.1:59995/v1/chat/completions',
+                        weightsDir: wDir,
+                    }, { messages: [{ role: 'user', content: 'Привет' }] })) {
+                        // noop
+                    }
+                }, /формата Linux \(\.hgn\/\.hnpw\)/i);
+
+                const backendCheck = await ensureHalogenBackendRunning({
+                    rootDir: tmpRoot,
+                    baseUrl: 'http://127.0.0.1:59995/v1/chat/completions',
+                    ai: { id: 'Qwen3.8-Flash-Next', weightsDir: wDir },
+                    platform: 'win32',
+                });
+                assert.equal(backendCheck.ready, false);
+                assert.equal(backendCheck.code, 'INCOMPATIBLE_FORMAT');
+            }
+
+            // Проверка автоподъёма ensureHalogenBackendRunning на живой mock-сервер
+            const readyCheck = await ensureHalogenBackendRunning({
+                rootDir: tmpRoot,
+                baseUrl: `http://127.0.0.1:${mockPort}/v1/chat/completions`,
+                ai: { id: 'Qwen3.8-Flash-Next' },
+            });
+            assert.equal(readyCheck.ready, true);
+            assert.equal(readyCheck.alreadyRunning, true);
+        }
+        finally {
+            process.chdir(origCwd);
             await fsp.rm(tmpRoot, { recursive: true, force: true });
         }
     });

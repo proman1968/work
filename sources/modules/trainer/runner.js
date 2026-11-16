@@ -16,6 +16,8 @@ import {
     modelWeightsDir,
     modelClassFile,
     migrateLocalModelsLayoutSync,
+    inspectWeightsDirectorySync,
+    getFreeDiskSpaceGb,
     WEIGHT_FILE_EXT_RE,
 } from './paths.js';
 
@@ -106,14 +108,15 @@ export function computeAdaptiveDefaults(usableMemoryGb) {
  * и адаптировать все бюджеты памяти и рекомендации под фактическое железо.
  */
 export async function detectHardware({ force = false } = {}) {
-    const totalRamGb = +(os.totalmem() / (1024 ** 3)).toFixed(1);
+    const osTotalRamGb = +(os.totalmem() / (1024 ** 3)).toFixed(1);
     const freeRamGb = +(os.freemem() / (1024 ** 3)).toFixed(1);
+    const freeDiskGb = getFreeDiskSpaceGb(process.cwd());
 
     if (_hwCache && !force) {
         return {
             ..._hwCache,
-            totalRamGb,
             freeRamGb,
+            freeDiskGb,
         };
     }
 
@@ -123,17 +126,43 @@ export async function detectHardware({ force = false } = {}) {
     const platform = os.platform();
     const arch = os.arch();
 
-    // Параллельно опрашиваем видеокарту (NVIDIA / AMD ROCm) и окружение Python / llama-server
-    const [nvidiaProbe, rocmProbe, pyProbe, llamaProbe] = await Promise.all([
+    const winPsScript = [
+        '$pm = (Get-CimInstance Win32_PhysicalMemory -ErrorAction SilentlyContinue | Measure-Object Capacity -Sum).Sum',
+        '$gpu = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "Basic Display|Virtual" } | Select-Object -First 1 Name',
+        '$qw = (Get-ItemProperty -Path "Registry::HKEY_LOCAL_MACHINE\\SYSTEM\\ControlSet001\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0*" -Name "HardwareInformation.qwMemorySize" -ErrorAction SilentlyContinue | Measure-Object "HardwareInformation.qwMemorySize" -Maximum).Maximum',
+        '[PSCustomObject]@{phys=$pm;gpu=$gpu.Name;vram=$qw} | ConvertTo-Json -Compress',
+    ].join('\n');
+
+    // Параллельно опрашиваем видеокарту (NVIDIA / AMD ROCm / Windows WMI+DXGI) и окружение Python / llama-server
+    const [nvidiaProbe, rocmProbe, winProbe, pyProbe, llamaProbe] = await Promise.all([
         probeCommand('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits']),
         probeCommand('rocm-smi', ['--showproductname', '--showmeminfo', 'vram', '--json']),
+        platform === 'win32'
+            ? probeCommand('powershell', ['-NoProfile', '-EncodedCommand', Buffer.from(winPsScript, 'utf16le').toString('base64')], 4500)
+            : Promise.resolve({ ok: false, output: '' }),
         probeCommand('python', ['-c', 'import json, torch; import unsloth; print(json.dumps({"torch": torch.__version__, "cuda": torch.cuda.is_available(), "hip": getattr(torch.version, "hip", None)}))']),
         probeCommand('llama-server', ['--version']),
     ]);
 
     let gpuName = '';
     let vramGb = 0;
+    let physicalRamGb = osTotalRamGb;
     let memoryType = 'System RAM / UMA';
+
+    if (winProbe.ok && winProbe.output) {
+        try {
+            const w = JSON.parse(winProbe.output.split(/\r?\n/).pop() || '{}');
+            const physB = Number(w.phys) || 0;
+            if (physB > 0)
+                physicalRamGb = Math.max(osTotalRamGb, +(physB / (1024 ** 3)).toFixed(1));
+            const vramB = Number(w.vram) || 0;
+            if (vramB > 0)
+                vramGb = +(vramB / (1024 ** 3)).toFixed(1);
+            if (w.gpu && typeof w.gpu === 'string')
+                gpuName = w.gpu.trim();
+        }
+        catch { /* ignore */ }
+    }
 
     if (nvidiaProbe.ok && nvidiaProbe.output) {
         const firstLine = nvidiaProbe.output.split(/\r?\n/)[0] || '';
@@ -161,16 +190,29 @@ export async function detectHardware({ force = false } = {}) {
         catch { /* ignore */ }
     }
 
-    const isUnifiedApu = /Ryzen AI|Strix|Radeon|Apple M/i.test(cpuModel) || (!vramGb && /AMD|Apple/i.test(cpuModel));
+    const isUnifiedApu = /Ryzen AI|Strix|Radeon|Apple M/i.test(cpuModel)
+        || /Radeon\(TM\) 80[56]0S|Radeon 80[56]0S/i.test(gpuName)
+        || (!vramGb && /AMD|Apple/i.test(cpuModel));
     if (!gpuName) {
         gpuName = isUnifiedApu ? `${cpuModel} (Unified iGPU/UMA)` : 'CPU / Интегрированная память';
     }
+    else if (isUnifiedApu && vramGb > 0) {
+        memoryType = `Unified Memory / UMA (${vramGb} ГБ iGPU + ${osTotalRamGb} ГБ ОС)`;
+    }
+
+    // На системах с единой памятью (Strix Halo UMA / Apple Silicon) физическая RAM (например 192 ГБ)
+    // делится в BIOS между ОС (напр. 64 ГБ) и UMA GPU (напр. 128 ГБ). Учитываем полный физический пул!
+    const totalRamGb = isUnifiedApu
+        ? Math.max(osTotalRamGb, physicalRamGb, vramGb > 8 && osTotalRamGb + vramGb <= 256 ? +(osTotalRamGb + vramGb).toFixed(1) : osTotalRamGb)
+        : Math.max(osTotalRamGb, physicalRamGb);
 
     // Доступный бюджет памяти:
-    // - если есть дискретная GPU с большой VRAM и не APU — можем использовать VRAM (или гибридно до 75% системной ОЗУ для GGUF);
-    // - на системах с единой памятью (UMA) или CPU под модели безопасно выделяется ~78% от общего объёма ОЗУ.
+    // - если есть дискретная GPU с большой VRAM и не APU — можем использовать VRAM (или гибридно до 78% системной ОЗУ);
+    // - на системах с единой памятью (UMA) под модели безопасно выделяется ~78% от полного физического объёма ОЗУ (или весь UMA пул).
     const ramBudgetGb = +(totalRamGb * 0.78).toFixed(1);
-    const usableMemoryGb = vramGb > ramBudgetGb ? vramGb : ramBudgetGb;
+    const usableMemoryGb = isUnifiedApu
+        ? Math.max(ramBudgetGb, +(vramGb * 0.92).toFixed(1))
+        : (vramGb > ramBudgetGb ? vramGb : ramBudgetGb);
 
     let unslothInstalled = false;
     let torchInfo = null;
@@ -190,7 +232,10 @@ export async function detectHardware({ force = false } = {}) {
         platform,
         arch,
         totalRamGb,
+        osTotalRamGb,
+        physicalRamGb,
         freeRamGb,
+        freeDiskGb,
         gpuName,
         vramGb,
         memoryType,
@@ -264,8 +309,9 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
         return { models, adapters };
 
     const entries = await fsp.readdir(localRoot, { withFileTypes: true });
+    const platform = os.platform();
     for (const e of entries) {
-        if (!e.isDirectory() || e.name.startsWith('$') || e.name.startsWith('#'))
+        if (!e.isDirectory() || e.name.startsWith('$') || e.name.startsWith('#') || e.name === 'models')
             continue;
 
         const isDownloading = activeDownloads.some(
@@ -273,26 +319,12 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
         );
         const aiClassFile = modelClassFile(rootDir, e.name, 'Local');
         const weightsDir = modelWeightsDir(rootDir, e.name, 'Local');
-        let weightFiles = [];
-        let hasRealWeightBinary = false;
-        let hasPendingDownload = false;
+        const wInsp = inspectWeightsDirectorySync(weightsDir, platform);
+        const weightFiles = wInsp.files || [];
+        const hasRealWeightBinary = wInsp.hasReadyWeights;
+        const hasPendingDownload = wInsp.pendingDownload;
         let sizeBytes = 0;
-        if (fs.existsSync(weightsDir)) {
-            const wf = await fsp.readdir(weightsDir).catch(() => []);
-            const hasParts = wf.some(f => f.endsWith('.part'));
-            let pendingState = false;
-            if (wf.includes('download-state.json')) {
-                try {
-                    const st = JSON.parse(await fsp.readFile(path.join(weightsDir, 'download-state.json'), 'utf-8'));
-                    pendingState = st?.status !== 'completed';
-                }
-                catch {
-                    pendingState = true;
-                }
-            }
-            hasPendingDownload = hasParts || pendingState;
-            weightFiles = wf.filter(f => !f.endsWith('.part') && f !== 'hf-manifest.json' && f !== 'download-state.json' && !f.endsWith('.tmp'));
-            hasRealWeightBinary = weightFiles.some(f => WEIGHT_FILE_EXT_RE.test(f));
+        if (wInsp.exists) {
             for (const f of weightFiles) {
                 try {
                     const st = await fsp.stat(path.join(weightsDir, f));
@@ -312,9 +344,13 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
         }
 
         const isAdapterNode = Boolean(meta.adapterPath);
+        const hasBuboExternal = e.name === 'Qwen3.8-Flash-Next' && (
+            fs.existsSync(path.join(localRoot, 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'))
+            || fs.existsSync(path.join(localRoot, 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'))
+        );
 
         // Если папка модели пустая (ни готовых весов, ни незавершённой загрузки, ни адаптера) — убираем мусор
-        if (!isDownloading && !hasPendingDownload && !hasRealWeightBinary && !isAdapterNode) {
+        if (!isDownloading && !hasPendingDownload && !hasRealWeightBinary && !isAdapterNode && !hasBuboExternal) {
             try {
                 await fsp.rm(path.join(localRoot, e.name), { recursive: true, force: true });
             }
@@ -327,18 +363,23 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
             continue;
         }
 
-        if (hasRealWeightBinary || isAdapterNode) {
+        if (hasRealWeightBinary || isAdapterNode || hasBuboExternal) {
             const enabled = meta.enabled !== false;
+            const incompatible = !hasBuboExternal && wInsp.incompatibleOnPlatform;
             models.push({
                 id: e.name,
                 label: meta.label || e.name,
                 icon: meta.icon || 'ai:ollama',
                 modality: meta.modality || 'llm',
                 model: meta.model || meta.hfRepo || e.name,
+                protocol: meta.protocol || 'local',
                 capabilities: Array.isArray(meta.capabilities) ? meta.capabilities : ['chat', 'stream'],
                 maxTokens: meta.maxTokens || 16384,
                 enabled,
-                active: enabled && (hasRealWeightBinary || isAdapterNode),
+                active: enabled && (hasRealWeightBinary || isAdapterNode || hasBuboExternal) && !incompatible,
+                incompatibleOnPlatform: incompatible,
+                incompatibleReason: incompatible ? wInsp.incompatibleReason : '',
+                weightFormat: hasBuboExternal ? 'bubo' : wInsp.weightFormat,
                 path: `/MODELS/Local/${e.name}`,
                 hasClass: fs.existsSync(aiClassFile),
                 weightFiles,

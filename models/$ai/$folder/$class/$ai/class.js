@@ -226,7 +226,7 @@ export default {
         const url = new URL(isAnthropic ? anthropicUrl(ai.baseUrl) : ai.baseUrl);
         const transport = transportFor(url);
 
-        const res = await new Promise((resolve, reject) => {
+        const doRequest = () => new Promise((resolve, reject) => {
             const req = transport.request({
                 hostname: url.hostname,
                 port: url.port || (url.protocol === 'http:' ? 80 : 443),
@@ -269,8 +269,8 @@ export default {
                 resolve(res);
             });
             req.on('error', (err) => {
-                if ((isLocalNode || isHalogenNode) && typeof WORK?.localStreamChat === 'function' && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
-                    resolve({ __localFallback: true });
+                if ((isLocalNode || isHalogenNode) && /ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(String(err?.code || err?.message || ''))) {
+                    resolve({ __localFallback: true, err });
                     return;
                 }
                 reject(err);
@@ -291,6 +291,20 @@ export default {
             req.write(JSON.stringify(body));
             req.end();
         });
+
+        let res = await doRequest();
+        if (res?.__localFallback && typeof WORK?.ensureHalogenBackendRunning === 'function') {
+            const backend = await WORK.ensureHalogenBackendRunning({ baseUrl: ai.baseUrl, ai });
+            if (backend?.ready) {
+                res = await doRequest();
+            }
+            else if (backend?.code === 'INCOMPATIBLE_FORMAT') {
+                throw new Error(backend.reason);
+            }
+            else if (typeof WORK?.localStreamChat !== 'function') {
+                throw new Error(backend?.reason || 'Встроенный локальный движок ИИ не запущен.');
+            }
+        }
 
         if (res?.__localFallback && typeof WORK?.localStreamChat === 'function') {
             yield* WORK.localStreamChat(ai, body, options);

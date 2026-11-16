@@ -106,7 +106,7 @@ export function isProtectedUserPath(relPath) {
         || rel.includes('/#tmp/')
     )
         return true;
-    if (/\.(safetensors|gguf|bin|pt|pth|onnx)$/i.test(rel))
+    if (/\.(safetensors|gguf|hgn|hnpw|part|bin|pt|pth|onnx)$/i.test(rel))
         return true;
 
     // 4. Профили зарегистрированных пользователей (кроме системной метапапки USERS/$users)

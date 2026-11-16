@@ -11,9 +11,11 @@
  *   лежит строго внутри её метапапки `MODELS/Local/<Модель>/$ai/#weights/`.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 export const WEIGHT_FILE_EXT_RE = /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i;
+export const LINUX_ONLY_HALOGEN_EXT_RE = /\.(hgn|hnpw)$/i;
 
 export function localRootDir(rootDir = process.cwd()) {
     return path.join(rootDir, 'MODELS', 'Local');
@@ -71,6 +73,123 @@ export function hasReadyWeightFilesSync(dirPath) {
     catch {
         return false;
     }
+}
+
+/**
+ * Детально проинспектировать директорию весов модели: формат, готовность и совместимость с текущей ОС.
+ */
+export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
+    const empty = {
+        exists: false,
+        pendingDownload: false,
+        hasReadyWeights: false,
+        weightFormat: '',
+        files: [],
+        hasSafetensors: false,
+        hasGguf: false,
+        hasBuboManifest: false,
+        hasHgn: false,
+        hasHnpw: false,
+        hasConfig: false,
+        hasTokenizer: false,
+        incompatibleOnPlatform: false,
+        incompatibleReason: '',
+    };
+    if (!dirPath || !fs.existsSync(dirPath))
+        return empty;
+    try {
+        const raw = fs.readdirSync(dirPath);
+        const hasParts = raw.some(f => f.endsWith('.part'));
+        let pendingState = false;
+        if (raw.includes('download-state.json')) {
+            try {
+                const st = JSON.parse(fs.readFileSync(path.join(dirPath, 'download-state.json'), 'utf-8'));
+                pendingState = st?.status !== 'completed';
+            }
+            catch {
+                pendingState = true;
+            }
+        }
+        const files = raw.filter(f =>
+            !f.endsWith('.part')
+            && !f.endsWith('.tmp')
+            && f !== 'hf-manifest.json'
+            && f !== 'download-state.json'
+        );
+        const hasSafetensors = files.some(f => f.toLowerCase().endsWith('.safetensors'));
+        const hasGguf = files.some(f => f.toLowerCase().endsWith('.gguf'));
+        const hasBuboManifest = files.includes('bubo-package.json');
+        const hasHgn = files.some(f => f.toLowerCase().endsWith('.hgn'));
+        const hasHnpw = files.some(f => f.toLowerCase().endsWith('.hnpw'));
+        const hasOther = files.some(f => /\.(bin|onnx|pt|pth)$/i.test(f));
+        const hasConfig = files.includes('config.json');
+        const hasTokenizer = files.includes('tokenizer.json');
+        const pendingDownload = hasParts || pendingState;
+        const hasReadyWeights = !pendingDownload && (hasSafetensors || hasGguf || hasBuboManifest || hasHgn || hasHnpw || hasOther);
+
+        let weightFormat = '';
+        if (hasBuboManifest)
+            weightFormat = 'bubo';
+        else if (hasGguf)
+            weightFormat = 'gguf';
+        else if (hasSafetensors)
+            weightFormat = 'safetensors';
+        else if (hasHgn)
+            weightFormat = 'hgn';
+        else if (hasHnpw)
+            weightFormat = 'hnpw';
+        else if (hasOther)
+            weightFormat = 'other';
+
+        const isWin = platform === 'win32';
+        const incompatibleOnPlatform = isWin && (hasHgn || hasHnpw) && !hasGguf && !hasBuboManifest && !hasSafetensors;
+        const incompatibleReason = incompatibleOnPlatform
+            ? 'Скачаны веса формата Linux (.hgn/.hnpw), несовместимые с Windows. Удалите их и установите Windows-версию (GGUF / .safetensors).'
+            : '';
+
+        return {
+            exists: true,
+            pendingDownload,
+            hasReadyWeights,
+            weightFormat,
+            files,
+            hasSafetensors,
+            hasGguf,
+            hasBuboManifest,
+            hasHgn,
+            hasHnpw,
+            hasConfig,
+            hasTokenizer,
+            incompatibleOnPlatform,
+            incompatibleReason,
+        };
+    }
+    catch {
+        return empty;
+    }
+}
+
+/**
+ * Узнать объём свободного места (в ГБ) на диске, содержащем `targetPath`.
+ */
+export function getFreeDiskSpaceGb(targetPath = process.cwd()) {
+    try {
+        let probe = path.resolve(targetPath);
+        while (!fs.existsSync(probe)) {
+            const parent = path.dirname(probe);
+            if (!parent || parent === probe)
+                break;
+            probe = parent;
+        }
+        if (typeof fs.statfsSync === 'function' && fs.existsSync(probe)) {
+            const st = fs.statfsSync(probe);
+            const freeBytes = Number(st.bavail || st.bfree || 0) * Number(st.bsize || 0);
+            if (freeBytes > 0)
+                return +(freeBytes / (1024 ** 3)).toFixed(1);
+        }
+    }
+    catch { /* ignore */ }
+    return null;
 }
 
 /**

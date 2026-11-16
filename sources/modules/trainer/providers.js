@@ -8,7 +8,9 @@
  *    и быстрое добавление моделей в 1 клик.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { inspectWeightsDirectorySync } from './paths.js';
 
 export const AI_PROVIDER_PRESETS = Object.freeze([
     {
@@ -778,32 +780,29 @@ export function scaffoldProviderOnDiskSync({
     };
 }
 
-function hasWeightFilesInDirSync(dir) {
-    if (!dir || !fs.existsSync(dir))
-        return false;
-    try {
-        const entries = fs.readdirSync(dir);
-        if (entries.includes('download-state.json')) {
-            try {
-                const st = JSON.parse(fs.readFileSync(path.join(dir, 'download-state.json'), 'utf-8'));
-                if (st?.status !== 'completed')
-                    return false;
-            }
-            catch {
-                return false;
-            }
+function hasCompatibleWeightFilesInDirSync(dir, platform = os.platform()) {
+    const info = inspectWeightsDirectorySync(dir, platform);
+    return Boolean(info.hasReadyWeights && !info.incompatibleOnPlatform);
+}
+
+function inspectDirCandidatesSync(dirs = [], platform = os.platform()) {
+    let incompatibleFound = null;
+    for (const dir of dirs) {
+        if (!dir)
+            continue;
+        const info = inspectWeightsDirectorySync(dir, platform);
+        if (info.hasReadyWeights && !info.incompatibleOnPlatform) {
+            return { ready: true, incompatible: false, info };
         }
-        return entries.some(f =>
-            !f.endsWith('.part')
-            && !f.endsWith('.tmp')
-            && f !== 'hf-manifest.json'
-            && f !== 'download-state.json'
-            && /\.(safetensors|gguf|bin|onnx|pt|pth|hgn|hnpw|json)$/i.test(f)
-        );
+        if (info.incompatibleOnPlatform && !incompatibleFound) {
+            incompatibleFound = info;
+        }
     }
-    catch {
-        return false;
-    }
+    return {
+        ready: false,
+        incompatible: Boolean(incompatibleFound),
+        info: incompatibleFound,
+    };
 }
 
 function readSecretJsonSync(rootDir, relFolder, filename) {
@@ -865,6 +864,11 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
 
     // 1. Локальный провайдер /MODELS/Local и его модели
     if (providerId === 'Local' || data.protocol === 'local' || data.protocol === 'halogen') {
+        const platform = os.platform();
+        const buboManifest1 = path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json');
+        const buboManifest2 = path.join(rootDir, 'MODELS', 'Local', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json');
+        const hasBuboGlobal = fs.existsSync(buboManifest1) || fs.existsSync(buboManifest2);
+
         if (type === '$provider') {
             const localDir = path.join(rootDir, 'MODELS', 'Local');
             let installedCount = 0;
@@ -874,9 +878,9 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
                         if (!entry.isDirectory() || entry.name.startsWith('$') || entry.name.startsWith('#') || entry.name === 'models')
                             continue;
                         if (
-                            hasWeightFilesInDirSync(path.join(localDir, entry.name, '$ai', '#weights'))
-                            || hasWeightFilesInDirSync(path.join(localDir, entry.name, '#weights'))
-                            || hasWeightFilesInDirSync(path.join(localDir, entry.name, '#adapters'))
+                            hasCompatibleWeightFilesInDirSync(path.join(localDir, entry.name, '$ai', '#weights'), platform)
+                            || hasCompatibleWeightFilesInDirSync(path.join(localDir, entry.name, '#weights'), platform)
+                            || hasCompatibleWeightFilesInDirSync(path.join(localDir, entry.name, '#adapters'), platform)
                         ) {
                             installedCount++;
                         }
@@ -884,11 +888,10 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
                 }
             }
             catch { /* ignore */ }
-            const buboManifest1 = path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json');
-            if (installedCount > 0 || fs.existsSync(buboManifest1)) {
+            if (installedCount > 0 || hasBuboGlobal) {
                 return { active: true, reason: `Активен (моделей: ${installedCount || 1})`, configuredKey: true };
             }
-            return { active: false, reason: 'Нет скачанных локальных моделей (откройте для установки)', configuredKey: false };
+            return { active: false, reason: 'Нет совместимых скачанных локальных моделей (откройте для установки)', configuredKey: false };
         }
 
         // Дочерняя модель в /MODELS/Local/<Model>
@@ -896,13 +899,25 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
         const canonicalWeightsRel = path.join('MODELS', 'Local', modelName, '$ai', '#weights');
         const legacyWeightsRel = path.join('MODELS', 'Local', modelName, '#weights');
         const adapterRel = data.adapterPath || path.join('MODELS', 'Local', '$provider', '#adapters', modelName);
-        const hasWeights = hasWeightFilesInDirSync(path.resolve(rootDir, data.weightsDir || canonicalWeightsRel))
-            || hasWeightFilesInDirSync(path.resolve(rootDir, canonicalWeightsRel))
-            || hasWeightFilesInDirSync(path.resolve(rootDir, legacyWeightsRel))
-            || hasWeightFilesInDirSync(path.resolve(rootDir, adapterRel))
-            || fs.existsSync(path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'));
-        if (hasWeights) {
+        const isFlashNext = modelName === 'Qwen3.8-Flash-Next';
+
+        const check = inspectDirCandidatesSync([
+            data.weightsDir ? path.resolve(rootDir, data.weightsDir) : '',
+            path.resolve(rootDir, canonicalWeightsRel),
+            path.resolve(rootDir, legacyWeightsRel),
+            path.resolve(rootDir, adapterRel),
+        ], platform);
+
+        if (check.ready || (isFlashNext && hasBuboGlobal)) {
             return { active: true, reason: 'Активна (веса модели на диске)', configuredKey: true };
+        }
+        if (check.incompatible) {
+            return {
+                active: false,
+                reason: check.info?.incompatibleReason || 'Веса формата Linux (.hgn/.hnpw) несовместимы с Windows',
+                incompatibleOnPlatform: true,
+                configuredKey: false,
+            };
         }
         return { active: false, reason: 'Веса модели не скачаны в $ai/#weights', configuredKey: false };
     }

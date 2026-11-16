@@ -8,6 +8,7 @@
  */
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import {
@@ -27,6 +28,8 @@ import {
     modelWeightsDir as getModelWeightsDir,
     migrateLocalModelsLayoutSync,
     hasReadyWeightFilesSync,
+    LINUX_ONLY_HALOGEN_EXT_RE,
+    getFreeDiskSpaceGb,
 } from './paths.js';
 
 const HF_ORIGIN = DEFAULT_HF_ORIGIN;
@@ -185,18 +188,38 @@ export const CURATED_HF_MODELS = Object.freeze([
     {
         id: 'peonist-ai/halogen-qwen3.8-flash-next',
         author: 'peonist-ai',
-        modelName: 'Qwen3.8-Flash-Next (Halogen Strix Halo / Ryzen AI 495 Pro)',
+        modelName: 'Qwen3.8-Flash-Next (Halogen Linux ROCm)',
         modality: 'llm',
-        format: 'safetensors',
+        format: 'hgn',
+        platforms: ['linux'],
         paramsB: 180,
-        ramRequiredGb: 89.0,
+        ramRequiredGb: 112.0,
         trainRamGb: 138.0,
         capabilities: ['chat', 'tools', 'thinking', 'coding', 'vision'],
-        whatItDoes: 'Флагманская модель 180B MoE (4.16 bpw + FP8 lookup table) для AMD Ryzen AI Max+ PRO 495 192 GB: 73–94 tok/s decode, 1800 tok/s prefill, первый токен в длинной сессии за 1.6 с',
-        recommendedFor: 'Оптимально для ПАК WORK на AMD Ryzen AI 495 Pro 192 ГБ RAM (/MODELS/Halogen)',
+        whatItDoes: 'Флагманская модель 180B MoE (4.16 bpw + FP8 lookup table) для Linux Strix Halo (halogen-flash-server): 73–94 tok/s decode, 1800 tok/s prefill',
+        recommendedFor: 'Только для Linux ПАК WORK на AMD Ryzen AI 495 Pro 192 ГБ RAM',
         tags: ['qwen3', 'qwen3.8', 'halogen', 'strix-halo', 'ryzen-ai', 'gfx1151', 'moe', 'tool-calling', 'vision'],
         downloads: 128000,
         likes: 1890,
+    },
+    {
+        id: 'unsloth/Qwen3.8-Flash-Next-GGUF',
+        author: 'unsloth',
+        modelName: 'Qwen3.8-Flash-Next (180B MoE · Windows Halowin Bubo)',
+        modality: 'llm',
+        format: 'gguf',
+        platforms: ['win32'],
+        buboPackage: true,
+        haloNodeName: 'Qwen3.8-Flash-Next',
+        paramsB: 180,
+        ramRequiredGb: 116.6,
+        trainRamGb: 150.0,
+        capabilities: ['chat', 'tools', 'thinking', 'coding', 'vision'],
+        whatItDoes: 'Флагманская модель 180B MoE (UD-Q4_K_XL + MTP + Dense Twin + Vision) для Windows 11 Strix Halo через встроенный движок Halowin Bubo (ROCm 10.0 gfx1151)',
+        recommendedFor: 'Оптимально для Windows 11 на AMD Ryzen AI Max+ PRO 495 (128–192 ГБ)',
+        tags: ['qwen3', 'qwen3.8', 'gguf', 'bubo', 'strix-halo', 'ryzen-ai', 'gfx1151', 'moe', 'tool-calling', 'vision'],
+        downloads: 142000,
+        likes: 1950,
     },
     {
         id: 'Qwen/Qwen3-235B-A22B-GGUF',
@@ -704,6 +727,7 @@ export async function searchHuggingFaceModels({
     limit = 25,
     token = '',
     usableMemoryGb = 24,
+    platform = os.platform(),
     rootDir = process.cwd(),
     endpointUrl,
     proxyUrl,
@@ -716,6 +740,10 @@ export async function searchHuggingFaceModels({
     const fLower = String(filter || '').trim().toLowerCase();
 
     const curatedMatches = CURATED_HF_MODELS.filter(m => {
+        if (Array.isArray(m.platforms) && m.platforms.length && !m.platforms.includes(platform))
+            return false;
+        if (platform === 'win32' && (m.format === 'hgn' || m.format === 'hnpw' || /^peonist-ai\/halogen-/i.test(m.id)))
+            return false;
         if (modLower && modLower !== 'all' && m.modality !== modLower)
             return false;
         if (capLower && capLower !== 'all' && !(m.capabilities || []).includes(capLower))
@@ -778,8 +806,10 @@ export async function searchHuggingFaceModels({
             const id = String(row.id || row.modelId || '').trim();
             if (!id || seen.has(id))
                 continue;
-            seen.add(id);
             const tags = Array.isArray(row.tags) ? row.tags : [];
+            if (platform === 'win32' && (/^peonist-ai\/halogen-/i.test(id) || tags.includes('halogen') || tags.includes('halogen-flash')))
+                continue;
+            seen.add(id);
             const isGguf = tags.includes('gguf') || /gguf/i.test(id);
             const format = isGguf ? 'gguf' : 'safetensors';
             const est = estimateModelMemoryFromId(id, format);
@@ -962,6 +992,21 @@ export function selectFilesToDownload(repoMeta, { files = null, quant = '' } = {
             return byQuant;
         const q4 = ggufs.filter(f => f.quant === 'Q4_K_M' || /Q4_K_M/i.test(f.name));
         return q4.length ? q4 : [ggufs[0]];
+    }
+    // Для репозиториев Halogen (.hgn) не качаем устаревшие дублирующие чекпоинты (w4b, ht43, mtp) —
+    // выбираем только актуальный v2 + ngram + drafter-r2 + vision + конфиги/токенизатор (~112 ГБ вместо 308 ГБ).
+    const hgnFiles = all.filter(f => f.name.toLowerCase().endsWith('.hgn'));
+    if (hgnFiles.length) {
+        const hasV2 = hgnFiles.some(f => /v2\.hgn$/i.test(f.name));
+        if (hasV2) {
+            return all.filter(f => {
+                const low = f.name.toLowerCase();
+                if (low.endsWith('.hgn')) {
+                    return /-(v2|ngram|drafter-r2|vision)\.hgn$/i.test(low);
+                }
+                return f.kind === 'config' || low.includes('tokenizer') || low === 'vocab.json' || low === 'merges.txt' || low.endsWith('.jinja');
+            });
+        }
     }
     return all.filter(f => f.kind === 'config' || f.kind === 'safetensors');
 }
@@ -1153,6 +1198,7 @@ export async function startHuggingFaceDownload({
     quant = 'Q8_0',
     revision = 'main',
     token = '',
+    platform = os.platform(),
     rootDir = process.cwd(),
     providerFolder = 'Local',
     targetNodeName = '',
@@ -1170,6 +1216,10 @@ export async function startHuggingFaceDownload({
 } = {}) {
     const cleanId = validateRepoId(repoId);
     const safeProvider = String(providerFolder || 'Local').replace(/[<>:"/\\|?*]/g, '-');
+
+    if (platform === 'win32' && /^peonist-ai\/halogen-/i.test(cleanId)) {
+        throw new Error(`Репозиторий ${cleanId} содержит веса формата Linux (.hgn/.hnpw), которые не поддерживаются на Windows. Для Windows используйте нативный стек Halowin Bubo (GGUF) или .safetensors.`);
+    }
 
     // Если эта модель уже скачивается прямо сейчас — возвращаем активную задачу без дублирования
     for (const entry of _downloads.values()) {
@@ -1201,6 +1251,21 @@ export async function startHuggingFaceDownload({
     const selected = selectFilesToDownload(repoMeta, { files, quant });
     if (!selected.length)
         throw new Error(`В репозитории ${cleanId} не найдено подходящих файлов весов (.gguf / .safetensors)`);
+
+    const hasLinuxOnlyWeights = selected.some(f => LINUX_ONLY_HALOGEN_EXT_RE.test(f.name));
+    const hasCrossPlatformWeights = selected.some(f => /\.(gguf|safetensors)$/i.test(f.name));
+    if (platform === 'win32' && hasLinuxOnlyWeights && !hasCrossPlatformWeights) {
+        throw new Error(`В репозитории ${cleanId} найдены только веса Linux (.hgn/.hnpw), несовместимые с Windows.`);
+    }
+
+    const totalExpectedBytes = selected.reduce((acc, f) => acc + (Number(f.size) || 0), 0);
+    if (totalExpectedBytes > 512 * 1024 * 1024) {
+        const freeGb = getFreeDiskSpaceGb(rootDir);
+        const needGb = +(totalExpectedBytes / (1024 ** 3)).toFixed(1);
+        if (freeGb !== null && freeGb < needGb + 1) {
+            throw new Error(`Недостаточно свободного места на диске для загрузки ${cleanId}: свободно ${freeGb} ГБ, требуется не менее ${needGb} ГБ.`);
+        }
+    }
 
     const folderName = targetNodeName
         ? String(targetNodeName).replace(/[<>:"/\\|?*]/g, '-')
@@ -1886,6 +1951,15 @@ export async function resumeInterruptedDownloads({
         catch { continue; }
         if (state?.status !== 'downloading' || !state?.repoId)
             continue;
+        if (os.platform() === 'win32' && /^peonist-ai\/halogen-/i.test(String(state.repoId))) {
+            try {
+                state.status = 'failed';
+                state.error = 'Веса формата Linux (.hgn/.hnpw) не поддерживаются на Windows. Сбросьте эту загрузку и установите Windows-версию (Halowin Bubo GGUF).';
+                fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf-8');
+            }
+            catch { /* ignore */ }
+            continue;
+        }
         try {
             const job = await resumeHuggingFaceDownload({
                 folderName: e.name,
