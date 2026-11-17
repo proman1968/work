@@ -321,4 +321,29 @@ describe('F28: память не отдана провайдеру — пото�
         assert.equal(seenOpts.headers['Content-Length'], Buffer.byteLength(seenPayload, 'utf-8'));
         assert.ok(seenOpts.headers['Content-Length'] > seenPayload.length, 'Content-Length должен считаться в байтах UTF-8');
     });
+
+    it('streamChat при пустом post ({}) берёт messages из params', async () => {
+        let seenBody = null;
+        async function* fakeRes() {
+            yield Buffer.from(sseLine({ choices: [{ delta: { content: 'Ок' } }] }) + 'data: [DONE]\n');
+        }
+        globalThis.WORK = {
+            http: {
+                request(_opts, cb) {
+                    queueMicrotask(() => cb(Object.assign(fakeRes(), { statusCode: 200 })));
+                    return { on() {}, setTimeout() {}, destroy() {}, write(b) { seenBody = JSON.parse(b); }, end() {} };
+                },
+            },
+        };
+        const halogenAi = {
+            protocol: 'halogen',
+            baseUrl: 'http://127.0.0.1:8731/v1/chat/completions',
+            model: 'halogen-qwen3.8-flash-next',
+        };
+        let out = '';
+        for await (const t of aiDef.streamChat.call(halogenAi, { messages: [{ role: 'user', content: 'Тест' }] }, {}))
+            if (typeof t === 'string') out += t;
+        assert.equal(out, 'Ок');
+        assert.deepEqual(seenBody.messages, [{ role: 'user', content: 'Тест' }]);
+    });
 });

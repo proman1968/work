@@ -429,10 +429,12 @@ export default {
         this.error = '';
         this.testReply = '';
         try {
-            const res = await this.$item.fetch('chat', {
+            const res = await this.$item.fetch('chat', {}, {
                 messages: [{ role: 'user', content: this.testPrompt.trim() }],
             });
-            this.testReply = String(res?.content ?? res?.text ?? JSON.stringify(res));
+            this.testReply = typeof res === 'string'
+                ? res
+                : String(res?.content ?? res?.text ?? JSON.stringify(res));
         }
         catch (e) {
             this.error = String(e?.message || e);

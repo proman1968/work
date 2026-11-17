@@ -133,6 +133,24 @@ describe('execItemMethod', () => {
         assert.equal(result.post, body);
         assert.equal(result.paramsPost, body);
     });
+
+    it('passes POST body as second argument to lifted $method.execute(params, post)', async () => {
+        class TestFolder extends withStubMethods(CORE.$folder) {}
+        const folder = new TestFolder({ id: 'model' });
+        folder.path = '/MODELS/Local/Qwen3.8-Flash-Next';
+        folder.__handlers = {
+            chat: {
+                async execute(p, post) {
+                    return { hasCtx: p.$context === folder, post };
+                },
+            },
+        };
+        await folder._liftMethods();
+        const post = { messages: [{ role: 'user', content: 'Привет!' }] };
+        const result = await execItemMethod(folder, 'chat', { post }, { method: 'POST' });
+        assert.equal(result.hasCtx, true);
+        assert.deepEqual(result.post, post);
+    });
 });
 
 describe('$file.extOverlay', () => {

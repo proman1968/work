@@ -152,7 +152,9 @@ export default {
     streamChat(params = {}, post) {
         const ai = params.$ai || this;
         return (async function* () {
-        const options = typeof post === 'string' ? JSON.parse(post) : (post || params);
+        const options = typeof post === 'string'
+            ? JSON.parse(post)
+            : (post && typeof post === 'object' && Object.keys(post).length ? post : params);
         const isGigachat = ai.protocol === 'gigachat';
         // Нативные инструменты: options.tools (OpenAI-формат) — решает вызывающий;
         // legacy options.functions — только при ai.functionCalling === true.

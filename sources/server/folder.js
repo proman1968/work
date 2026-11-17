@@ -1249,11 +1249,11 @@ export class $folder extends $item{
                 continue;
             Object.defineProperty(this, id, {
                 value: {
-                    [id]: function (params = {}) {
+                    [id]: function (params = {}, post) {
                         handler.$context = this;
                         if (params && typeof params === 'object')
                             params.$context = this;
-                        return handler.execute(params);
+                        return handler.execute(params, post);
                     },
                 }[id],
                 writable: true,

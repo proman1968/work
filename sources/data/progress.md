@@ -1,6 +1,9 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [12:46, 17.11] Передача `post` в поднятые `$method` и POST-тело в тесте модели `form/trainer` (`sources/server/folder.js`, `MODELS/$ai/$folder/$class/$ai/{class.js,handlers/pages/form/trainer/$handler/trainer.js}`, `tests/{exec-item-method,ai-stream}.test.js`, `odant-work@1.0.36`):
+  - **Устранена ошибка `400 missing_messages` (`'messages' must be a non-empty array`) при «Быстрой проверке ответа»:** в `trainer.js` (`runTestPrompt`) тело `{ messages }` теперь передаётся 3-м аргументом (`this.$item.fetch('chat', {}, { messages })`) как POST-тело, а в `folder.js` (`_liftMethods`) второй аргумент `post` пробрасывается в `handler.execute(params, post)` вместо отбрасывания.
+  - **Защита `streamChat` от пустого `post = {}`:** при пустом `post` берутся `params`, чтобы `options.messages` не терялись.
 - [12:25, 17.11] Передача явного `Content-Length` в `streamChat` для совместимости с `bubo.exe` / Halogen (`MODELS/$ai/$folder/$class/$ai/class.js`, `tests/ai-stream.test.js`, `odant-work@1.0.35`):
   - **Устранена ошибка `400 malformed request` при обращении к локальному серверу `:8731`:** в `streamChat` (`doRequest`) тело POST-запроса отправлялось через `req.write(...)` без заголовка `Content-Length`, из-за чего Node.js использовал `Transfer-Encoding: chunked`, который `bubo.exe` (`gufo 0.26.0`) отвергал с `400 invalid_request_error / malformed request`. Теперь `Content-Length` вычисляется явно через `Buffer.byteLength(payload)`.
 - [11:15, 17.11] Исправление запуска нативного движка `bubo.exe` без `bubo-package.json`, перехват `stderr` и таймаут холодного старта (`sources/modules/trainer/halogen.js`, `MODELS/$ai/$folder/$class/$ai/class.js`, `tests/halogen-provider.test.js`, `odant-work@1.0.34`):
