@@ -295,4 +295,30 @@ describe('F28: память не отдана провайдеру — пото�
             /GigaChat auth: ответ превысил 16 МБ/,
             'гигантский auth-ответ скопирован в память');
     });
+
+    it('streamChat передаёт точный Content-Length в байтах UTF-8 (без chunked POST для bubo.exe/halogen)', async () => {
+        let seenOpts = null;
+        let seenPayload = '';
+        async function* fakeRes() {
+            yield Buffer.from(sseLine({ choices: [{ delta: { content: 'Привет!' } }] }) + 'data: [DONE]\n');
+        }
+        globalThis.WORK = {
+            http: {
+                request(opts, cb) {
+                    seenOpts = opts;
+                    queueMicrotask(() => cb(Object.assign(fakeRes(), { statusCode: 200 })));
+                    return { on() {}, setTimeout() {}, destroy() {}, write(b) { seenPayload += String(b); }, end() {} };
+                },
+            },
+        };
+        const halogenAi = {
+            protocol: 'halogen',
+            baseUrl: 'http://127.0.0.1:8731/v1/chat/completions',
+            model: 'halogen-qwen3.8-flash-next',
+        };
+        const res = await collect(halogenAi, { messages: [{ role: 'user', content: 'Привет! Представься коротко.' }] });
+        assert.equal(res.out, 'Привет!');
+        assert.equal(seenOpts.headers['Content-Length'], Buffer.byteLength(seenPayload, 'utf-8'));
+        assert.ok(seenOpts.headers['Content-Length'] > seenPayload.length, 'Content-Length должен считаться в байтах UTF-8');
+    });
 });

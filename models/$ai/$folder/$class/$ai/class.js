@@ -225,6 +225,9 @@ export default {
             headers['X-Halogen-Guard'] = typeof options.halogenGuard === 'string' ? options.halogenGuard : 'watch';
         const url = new URL(isAnthropic ? anthropicUrl(ai.baseUrl) : ai.baseUrl);
         const transport = transportFor(url);
+        // Явный Content-Length (без Transfer-Encoding: chunked) — нативные локальные серверы вроде bubo.exe отклоняют chunked POST с 400 malformed request
+        const payload = JSON.stringify(body);
+        const reqHeaders = { ...headers, 'Content-Length': Buffer.byteLength(payload) };
 
         const doRequest = () => new Promise((resolve, reject) => {
             const req = transport.request({
@@ -233,7 +236,7 @@ export default {
                 path: url.pathname + url.search,
                 method: 'POST',
                 agent: WORK.tls_agent?.(ai),
-                headers,
+                headers: reqHeaders,
             }, (res) => {
                 if (res.statusCode < 200 || res.statusCode >= 300) {
                     // F28: тело ошибки — с потолком (чужой сервер не решает, сколько мы держим в памяти)
@@ -288,7 +291,7 @@ export default {
                 else
                     signal.addEventListener?.('abort', () => req.destroy(new Error('aborted')), { once: true });
             }
-            req.write(JSON.stringify(body));
+            req.write(payload);
             req.end();
         });
 
