@@ -719,6 +719,7 @@ describe('Единый локальный контур /MODELS/Local для ма
                 port: 59996,
                 profile: 'subagents',
                 spawnImpl: mockSpawn,
+                capabilities: { flags: [] },
             });
             assert.equal(startRes.started, true);
             assert.equal(startRes.mode, 'bubo-windows');
@@ -753,6 +754,7 @@ describe('Единый локальный контур /MODELS/Local для ма
                 port: 59996,
                 profile: 'subagents',
                 spawnImpl: mockSpawn,
+                capabilities: { flags: [] },
             });
             assert.equal(startWithManifest.started, true);
             assert.ok(spawnedCmds[0].args.includes('--manifest'));

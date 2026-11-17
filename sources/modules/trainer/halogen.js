@@ -480,6 +480,7 @@ const BACKEND_LOG_TAIL_CHARS = 8192;
 let _managedProc = null;
 let _managedInfo = null;
 let _lastManagedExit = null;
+let _lastSpeculationFallback = null;
 
 function appendLogTail(prev, chunk) {
     const text = prev + (Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk || ''));
@@ -489,8 +490,9 @@ function appendLogTail(prev, chunk) {
 function attachManagedBackendProcess(proc, meta = {}) {
     _managedProc = proc;
     _lastManagedExit = null;
+    const { onEarlyExit, ...info } = meta || {};
     const state = {
-        ...meta,
+        ...info,
         pid: proc?.pid,
         startedAt: Date.now(),
         stdout: '',
@@ -519,9 +521,17 @@ function attachManagedBackendProcess(proc, meta = {}) {
             errorMessage: state.errorMessage,
             exitedAt: Date.now(),
         };
+        const earlyExit = Date.now() - state.startedAt < 30000 && code !== 0;
         if (_managedProc === proc) {
             _managedProc = null;
             _managedInfo = null;
+        }
+        // Движок мог не принять новый флаг спекуляции — отдаём управление повторному запуску без него.
+        if (earlyExit && typeof onEarlyExit === 'function') {
+            setTimeout(() => {
+                try { onEarlyExit(code); }
+                catch { /* ignore */ }
+            }, 250);
         }
     });
     return state;
@@ -1100,6 +1110,8 @@ export async function probeHalogenServer(baseUrl = HALOGEN_DEFAULT_BASE_URL, { f
                 ? handlesRaw
                 : listHalogenSessionHandles(),
         managedProcess: _managedInfo,
+        speculation: _managedInfo?.speculation || null,
+        speculationFallback: _lastSpeculationFallback,
         windowsEnv: inspectWindowsHalogenEnvironment({ rootDir }),
     };
 }
@@ -1402,6 +1414,328 @@ export async function prepareWindowsBuboRuntime({
 }
 
 /**
+ * Настройки движка Halowin Bubo по умолчанию: спекулятивное декодирование (MTP + Draft Head),
+ * Prompt Lookup (n-граммы), профиль KV-сессий и NPU-prefill.
+ */
+export const DEFAULT_ENGINE_SETTINGS = Object.freeze({
+    speculation: 'auto',
+    draftMax: 8,
+    promptLookup: 'auto',
+    profile: 'subagents',
+    npuPrefill: true,
+});
+
+const ENGINE_STATE_MODES = ['auto', 'on', 'off'];
+
+function clampInt(value, min, max, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n))
+        return fallback;
+    return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/** Файл настроек движка (`MODELS/Local/$provider/#runtime/engine.json`). */
+export function engineSettingsFile(rootDir = process.cwd()) {
+    return path.join(localRuntimeDir(rootDir), 'engine.json');
+}
+
+/** Прочитать сохранённые настройки движка (с валидацией значений). */
+export function readEngineSettings(rootDir = process.cwd()) {
+    let saved = {};
+    try {
+        saved = JSON.parse(fs.readFileSync(engineSettingsFile(rootDir), 'utf8')) || {};
+    }
+    catch { saved = {}; }
+    const mode = v => ENGINE_STATE_MODES.includes(String(v || '')) ? String(v) : '';
+    return {
+        speculation: mode(saved.speculation) || DEFAULT_ENGINE_SETTINGS.speculation,
+        promptLookup: mode(saved.promptLookup) || DEFAULT_ENGINE_SETTINGS.promptLookup,
+        draftMax: clampInt(saved.draftMax, 1, 32, DEFAULT_ENGINE_SETTINGS.draftMax),
+        profile: typeof saved.profile === 'string' && saved.profile ? saved.profile : DEFAULT_ENGINE_SETTINGS.profile,
+        npuPrefill: saved.npuPrefill !== false,
+        updatedAt: Number(saved.updatedAt) || 0,
+    };
+}
+
+/** Сохранить настройки движка (частичное обновление). */
+export function writeEngineSettings(rootDir = process.cwd(), patch = {}) {
+    const current = readEngineSettings(rootDir);
+    const merged = {
+        ...current,
+        ...(patch && typeof patch === 'object' ? patch : {}),
+        updatedAt: Date.now(),
+    };
+    fs.mkdirSync(localRuntimeDir(rootDir), { recursive: true });
+    fs.writeFileSync(engineSettingsFile(rootDir), JSON.stringify(merged, null, 2), 'utf8');
+    return readEngineSettings(rootDir);
+}
+
+/** Разобрать список поддерживаемых флагов CLI из текста `--help` движка. */
+export function parseEngineHelpFlags(text) {
+    const out = new Set();
+    for (const m of String(text || '').matchAll(/(?:^|[\s,;|[(=])(--[a-z][a-z0-9-]{1,40})/gi))
+        out.add(m[1].toLowerCase());
+    return [...out];
+}
+
+function engineCapabilitiesFile(rootDir = process.cwd()) {
+    return path.join(localCacheDir(rootDir), 'engine-capabilities.json');
+}
+
+/** Прочитать закэшированные возможности движка (без запуска процесса). */
+export function readEngineCapabilitiesSync(rootDir = process.cwd(), exePath = '') {
+    try {
+        const raw = JSON.parse(fs.readFileSync(engineCapabilitiesFile(rootDir), 'utf8'));
+        if (Array.isArray(raw?.flags) && (!exePath || raw.exePath === exePath))
+            return raw;
+    }
+    catch { /* нет кэша */ }
+    return null;
+}
+
+function captureProcessOutput(cmd, args, spawnImpl, timeoutMs) {
+    return new Promise(resolve => {
+        let text = '';
+        let done = false;
+        const finish = () => {
+            if (!done) {
+                done = true;
+                resolve(text);
+            }
+        };
+        try {
+            const proc = spawnImpl(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+            const timer = setTimeout(() => {
+                try { proc?.kill?.(); } catch { /* ignore */ }
+                finish();
+            }, timeoutMs);
+            proc?.stdout?.on?.('data', d => { text += String(d); if (text.length > 40000) text = text.slice(-40000); });
+            proc?.stderr?.on?.('data', d => { text += String(d); if (text.length > 40000) text = text.slice(-40000); });
+            proc?.on?.('error', () => { clearTimeout(timer); finish(); });
+            proc?.on?.('close', () => { clearTimeout(timer); finish(); });
+        }
+        catch {
+            finish();
+        }
+    });
+}
+
+/**
+ * Определить возможности `bubo.exe serve llm` по его же `--help` (с кэшем на 7 дней):
+ * поддерживает ли движок `--speculative`, `--draft-max`/`--draft-min`/`--draft-p-min`
+ * и динамический Prompt Lookup (`--lookup-cache-dynamic`).
+ */
+export async function inspectEngineCapabilities({
+    rootDir = process.cwd(),
+    exePath = '',
+    spawnImpl = spawn,
+    timeoutMs = 9000,
+    maxAgeMs = 7 * 24 * 60 * 60 * 1000,
+    force = false,
+} = {}) {
+    if (!exePath)
+        return null;
+    const cached = readEngineCapabilitiesSync(rootDir, exePath);
+    if (!force && cached && Date.now() - Number(cached.checkedAt || 0) < maxAgeMs)
+        return { ...cached, cached: true };
+
+    let helpText = '';
+    for (const args of [['serve', 'llm', '--help'], ['--help'], ['serve', '--help']]) {
+        helpText = await captureProcessOutput(exePath, args, spawnImpl, timeoutMs);
+        if (parseEngineHelpFlags(helpText).length)
+            break;
+    }
+    const flags = parseEngineHelpFlags(helpText);
+    const result = {
+        exePath,
+        flags,
+        known: flags.length > 0,
+        speculative: flags.includes('--speculative'),
+        draftMaxFlag: flags.includes('--draft-max'),
+        draftMinFlag: flags.includes('--draft-min'),
+        draftPMinFlag: flags.includes('--draft-p-min'),
+        lookupFlag: flags.includes('--lookup-cache-dynamic')
+            ? '--lookup-cache-dynamic'
+            : (flags.includes('--lookup-cache') ? '--lookup-cache' : ''),
+        checkedAt: Date.now(),
+        helpText: helpText.slice(-4000),
+    };
+    try {
+        fs.mkdirSync(path.dirname(engineCapabilitiesFile(rootDir)), { recursive: true });
+        fs.writeFileSync(engineCapabilitiesFile(rootDir), JSON.stringify(result, null, 2), 'utf8');
+    }
+    catch { /* кэш не критичен */ }
+    return { ...result, cached: false };
+}
+
+/**
+ * Собрать аргументы движка для спекулятивного декодирования (чистая функция — без побочных эффектов).
+ *  - `mtp`-предсказатель + `Dense twin` + `Q4_K Draft Head` передаются как веса;
+ *  - если движок объявляет `--speculative`, добавляется явный режим `mtp` (это и включает спекуляцию);
+ *  - при режиме `on` дополнительно передаются параметры черновика (`--draft-max` и порог);
+ *  - `promptLookup` включает n-граммный кэш подсказок там, где движок это поддерживает.
+ */
+export function resolveSpeculationPlan({
+    settings = {},
+    capabilities = null,
+    sidecars = {},
+    hasManifest = false,
+    lookupPath = '',
+} = {}) {
+    const cfg = { ...DEFAULT_ENGINE_SETTINGS, ...(settings || {}) };
+    const flags = new Set((capabilities?.flags || []).map(f => String(f).toLowerCase()));
+    const capsKnown = flags.size > 0;
+    const mtp = Boolean(sidecars?.mtpModel);
+    const twin = Boolean(sidecars?.twinModel);
+    const draftHead = Boolean(sidecars?.draftHeadModel);
+    const args = [];
+    const reasons = [];
+    let enabled = false;
+
+    if (cfg.speculation === 'off') {
+        reasons.push('Спекулятивное декодирование выключено в настройках движка — веса MTP/Twin/Draft Head не подключаются.');
+    }
+    else if (!mtp) {
+        reasons.push('Файл MTP-предсказателя (mtp-*.gguf) не найден в $ai/#weights — спекуляция недоступна.');
+    }
+    else {
+        args.push('--mtp-model', sidecars.mtpModel);
+        if (twin)
+            args.push('--twin-model', sidecars.twinModel);
+        if (draftHead)
+            args.push('--draft-head-model', sidecars.draftHeadModel);
+        if (flags.has('--speculative')) {
+            args.push('--speculative', 'mtp');
+            enabled = true;
+            reasons.push('Движок объявляет --speculative: передан режим «mtp».');
+        }
+        else if (capsKnown) {
+            reasons.push('Движок не объявляет --speculative: спекуляция включается самим флагом --mtp-model (поведение по умолчанию движка).');
+        }
+        else {
+            reasons.push('Возможности движка неизвестны (--help недоступен): дополнительные флаги спекуляции не передавались, работает режим по умолчанию.');
+        }
+        if (enabled) {
+            if (cfg.speculation === 'on' && flags.has('--draft-max'))
+                args.push('--draft-max', String(clampInt(cfg.draftMax, 1, 32, DEFAULT_ENGINE_SETTINGS.draftMax)));
+            if (cfg.speculation === 'on' && flags.has('--draft-min'))
+                args.push('--draft-min', '0');
+            if (cfg.speculation === 'on' && flags.has('--draft-p-min'))
+                args.push('--draft-p-min', '0.6');
+        }
+    }
+
+    let promptLookup = false;
+    if (cfg.promptLookup !== 'off' && cfg.speculation !== 'off' && !hasManifest && capabilities?.lookupFlag && lookupPath) {
+        args.push(capabilities.lookupFlag, lookupPath);
+        promptLookup = true;
+        reasons.push('Prompt Lookup (n-граммы) включён: ' + capabilities.lookupFlag + '.');
+    }
+    else if (cfg.promptLookup === 'on' && !capabilities?.lookupFlag) {
+        reasons.push('Prompt Lookup запрошен, но движок не объявляет поддерживаемого флага кэша подсказок.');
+    }
+
+    const mode = cfg.speculation === 'off'
+        ? 'off'
+        : (!mtp ? 'unavailable' : (enabled ? 'explicit' : 'weights-only'));
+    const parts = [
+        enabled ? 'MTP включён (--speculative mtp)' : (mtp && mode !== 'off' ? 'MTP передан весами' : 'MTP выключен'),
+        promptLookup ? 'Prompt Lookup вкл.' : 'Prompt Lookup выкл.',
+        cfg.speculation === 'on' && enabled ? `draft-max ${cfg.draftMax}` : '',
+    ].filter(Boolean);
+
+    return {
+        mode,
+        enabled,
+        promptLookup,
+        sidecars: {
+            mtp: Boolean(mtp),
+            twin: Boolean(twin),
+            draftHead: Boolean(draftHead),
+        },
+        capabilitiesKnown: capsKnown,
+        args,
+        reasons,
+        summary: parts.join(' · '),
+        settings: { ...cfg },
+    };
+}
+
+/**
+ * Полное описание контура спекулятивного декодирования для UI: сохранённые настройки,
+ * найденные веса (MTP / Dense twin / Draft head / Vision mmproj), возможности движка и итоговые флаги.
+ */
+export async function describeEngineSetup({
+    rootDir = process.cwd(),
+    settings = null,
+    capabilities = undefined,
+    forceCapabilities = false,
+} = {}) {
+    const winEnv = inspectWindowsHalogenEnvironment({ rootDir });
+    const gguf = findLocalGgufModel(rootDir);
+    const weightsDir = gguf ? path.dirname(gguf) : modelWeightsDir(rootDir, 'Qwen3.8-Flash-Next', 'Local');
+    const sidecars = resolveBuboModelFiles(weightsDir);
+    const hasManifest = Boolean(gguf && fs.existsSync(path.join(path.dirname(gguf), 'bubo-package.json')));
+    const cfg = { ...readEngineSettings(rootDir), ...(settings || {}) };
+    const exePath = winEnv.buboExePath || winEnv.gufoExePath || '';
+    // Возможности читаем из кэша (быстро); принудительный опрос --help — только по кнопке «Обновить диагностику»
+    // и при самом запуске движка (`startHalogenBackend`), чтобы карточка открывалась мгновенно.
+    const caps = capabilities !== undefined
+        ? capabilities
+        : (readEngineCapabilitiesSync(rootDir, exePath)
+            || (forceCapabilities ? await inspectEngineCapabilities({ rootDir, exePath, force: true }) : null));
+    const plan = resolveSpeculationPlan({
+        settings: cfg,
+        capabilities: caps,
+        sidecars,
+        hasManifest,
+        lookupPath: path.join(localCacheDir(rootDir), 'lookup.bin'),
+    });
+    const describeFile = p => {
+        if (!p)
+            return null;
+        let sizeGb = 0;
+        try { sizeGb = +((fs.statSync(p).size || 0) / (1024 ** 3)).toFixed(2); }
+        catch { /* ignore */ }
+        return { path: p, name: path.basename(p), sizeGb };
+    };
+    return {
+        settings: cfg,
+        weightsDir,
+        mainModel: describeFile(gguf),
+        sidecars: {
+            mtp: describeFile(sidecars?.mtpModel),
+            twin: describeFile(sidecars?.twinModel),
+            draftHead: describeFile(sidecars?.draftHeadModel),
+            mmproj: describeFile(sidecars?.mmprojModel),
+        },
+        plan,
+        hasManifest,
+        capabilities: caps ? {
+            known: Boolean(caps.known),
+            speculative: Boolean(caps.speculative),
+            draftMax: Boolean(caps.draftMaxFlag),
+            lookupFlag: caps.lookupFlag || '',
+            cached: Boolean(caps.cached),
+            checkedAt: caps.checkedAt || 0,
+            flags: caps.flags || [],
+        } : null,
+        engine: {
+            installed: Boolean(winEnv.buboInstalled || winEnv.gufoInstalled),
+            runtime: winEnv.buboInstalled ? 'bubo.exe' : (winEnv.gufoInstalled ? 'gufo.exe' : ''),
+            exePath,
+        },
+        running: _managedInfo ? {
+            runtime: _managedInfo.runtime,
+            profile: _managedInfo.profile || '',
+            speculation: _managedInfo.speculation || null,
+            startedAt: _managedInfo.startedAt,
+        } : null,
+        fallback: _lastSpeculationFallback,
+    };
+}
+
+/**
  * Запустить локальный сервер на порту 8731:
  *  - На Windows 11: приоритетный запуск нативного `bubo.exe serve llm` (Halowin Bubo / Gufo ROCm 10.0 `gfx1151` + XRT NPU)
  *    или `gufo.exe serve` / `strata.exe`.
@@ -1411,9 +1745,13 @@ export async function startHalogenBackend({
     rootDir = process.cwd(),
     port = HALOGEN_DEFAULT_PORT,
     modelPath = '',
-    profile = 'subagents',
-    npuPrefill = true,
+    profile = '',
+    npuPrefill = null,
     spawnImpl = spawn,
+    settings = null,
+    capabilities = undefined,
+    retryWithoutSpeculation = true,
+    _speculationRetry = false,
 } = {}) {
     const probe = await probeHalogenServer(`http://127.0.0.1:${port}/v1/chat/completions`, { rootDir });
     if (probe.online) {
@@ -1450,23 +1788,37 @@ export async function startHalogenBackend({
     const manifestCandidate = ggufPath ? path.join(path.dirname(ggufPath), 'bubo-package.json') : '';
     const hasBuboManifest = Boolean(manifestCandidate && fs.existsSync(manifestCandidate));
 
+    // Настройки спекулятивного декодирования (MTP + Draft Head + Prompt Lookup) из #runtime/engine.json
+    const engineSettings = { ...readEngineSettings(rootDir), ...(settings || {}) };
+    const activeProfile = profile || engineSettings.profile || 'subagents';
+    const prefillEnabled = npuPrefill === null ? engineSettings.npuPrefill !== false : Boolean(npuPrefill);
+
     // 1. Приоритет №1 на Windows: нативный движок Halowin Bubo (`bubo.exe serve llm` на ROCm 10.0.0 gfx1151 + Ryzen AI NPU)
     if (winEnv.buboInstalled && ggufPath && fs.existsSync(ggufPath)) {
         try {
+            // Возможности движка (--speculative, --draft-max, --lookup-cache-dynamic) определяются один раз по `--help`
+            const caps = capabilities !== undefined
+                ? capabilities
+                : await inspectEngineCapabilities({ rootDir, exePath: winEnv.buboExePath, spawnImpl });
+            const plan = resolveSpeculationPlan({
+                settings: engineSettings,
+                capabilities: caps,
+                sidecars: resolvedSidecars || {},
+                hasManifest: hasBuboManifest,
+                lookupPath: path.join(cacheDir, 'lookup.bin'),
+            });
             const args = [
                 'serve', 'llm',
                 '--host', '127.0.0.1',
                 '--port', String(port),
                 '--model', ggufPath,
                 ...(hasBuboManifest ? ['--manifest', manifestCandidate, '--cache-disk', path.join(cacheDir, 'disk')] : []),
-                ...(resolvedSidecars?.mtpModel ? ['--mtp-model', resolvedSidecars.mtpModel] : []),
                 ...(resolvedSidecars?.mmprojModel ? ['--mmproj', resolvedSidecars.mmprojModel] : []),
-                ...(resolvedSidecars?.twinModel ? ['--twin-model', resolvedSidecars.twinModel] : []),
-                ...(resolvedSidecars?.draftHeadModel ? ['--draft-head-model', resolvedSidecars.draftHeadModel] : []),
+                ...plan.args,
                 '--served-model-name', 'halogen-qwen3.8-flash-next',
-                '--profile', profile || 'subagents',
+                '--profile', activeProfile,
             ];
-            if (npuPrefill && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent && profile !== 'exact' && profile !== 'stock') {
+            if (prefillEnabled && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent && activeProfile !== 'exact' && activeProfile !== 'stock') {
                 args.push('--npu-prefill', 'on');
             }
             const env = {
@@ -1485,7 +1837,32 @@ export async function startHalogenBackend({
                 port,
                 modelPath: ggufPath,
                 runtime: 'bubo',
-                npuPrefill: Boolean(npuPrefill && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent),
+                npuPrefill: Boolean(prefillEnabled && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent),
+                profile: activeProfile,
+                args,
+                speculation: plan,
+                onEarlyExit: retryWithoutSpeculation && !_speculationRetry && plan.args.length
+                    ? async (code) => {
+                        _lastSpeculationFallback = {
+                            at: Date.now(),
+                            reason: `движок завершился с кодом ${code} сразу после запуска со флагами спекуляции`,
+                            args: plan.args,
+                        };
+                        try {
+                            await startHalogenBackend({
+                                rootDir,
+                                port,
+                                modelPath: ggufPath,
+                                profile: activeProfile,
+                                npuPrefill,
+                                spawnImpl,
+                                settings: { ...engineSettings, speculation: 'off', promptLookup: 'off' },
+                                _speculationRetry: true,
+                            });
+                        }
+                        catch { /* останется автономный контур */ }
+                    }
+                    : null,
             });
             return {
                 started: true,
@@ -1495,6 +1872,11 @@ export async function startHalogenBackend({
                 port,
                 modelPath: ggufPath,
                 windowsEnv: winEnv,
+                speculation: {
+                    ...plan,
+                    appliedArgs: plan.args,
+                },
+                capabilities: caps ? { known: caps.known, flags: caps.flags, cached: Boolean(caps.cached) } : null,
             };
         }
         catch { /* try next runtime */ }
@@ -1503,6 +1885,7 @@ export async function startHalogenBackend({
     // 2. Приоритет №2 на Windows: нативный Gufo (`gufo.exe serve --port 8731 llm`)
     if (winEnv.gufoInstalled && ggufPath && fs.existsSync(ggufPath)) {
         try {
+            const gufoSpeculation = engineSettings.speculation !== 'off' && Boolean(resolvedSidecars?.mtpModel);
             const args = [
                 'serve',
                 '--host', '127.0.0.1',
@@ -1510,7 +1893,8 @@ export async function startHalogenBackend({
                 'llm',
                 '--model', ggufPath,
                 '--served-model-name', 'halogen-qwen3.8-flash-next',
-                '--speculative', 'mtp',
+                ...(gufoSpeculation ? ['--speculative', 'mtp'] : []),
+                ...(gufoSpeculation && resolvedSidecars?.mmprojModel ? ['--mmproj', resolvedSidecars.mmprojModel] : []),
             ];
             const proc = spawnImpl(winEnv.gufoExePath, args, {
                 cwd: path.dirname(winEnv.gufoExePath),
@@ -1523,6 +1907,13 @@ export async function startHalogenBackend({
                 port,
                 modelPath: ggufPath,
                 runtime: 'gufo',
+                args,
+                speculation: {
+                    mode: gufoSpeculation ? 'explicit' : 'off',
+                    enabled: gufoSpeculation,
+                    summary: gufoSpeculation ? 'MTP включён (--speculative mtp)' : 'MTP выключен',
+                    args: gufoSpeculation ? ['--speculative', 'mtp'] : [],
+                },
             });
             return {
                 started: true,
@@ -1595,6 +1986,7 @@ export function stopHalogenBackend() {
     _managedProc = null;
     _managedInfo = null;
     _lastManagedExit = null;
+    _lastSpeculationFallback = null;
     return { stopped: true };
 }
 

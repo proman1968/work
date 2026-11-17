@@ -82,6 +82,13 @@ import {
     ensureHalogenModelNodes,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
+    describeEngineSetup,
+    readEngineSettings,
+    writeEngineSettings,
+    inspectEngineCapabilities,
+    resolveSpeculationPlan,
+    parseEngineHelpFlags,
+    DEFAULT_ENGINE_SETTINGS,
 } from './halogen.js';
 import {
     AI_PROVIDER_PRESETS,
@@ -197,6 +204,13 @@ export {
     ensureHalogenModelNodes,
     inspectHalogenCatalogWithStatus,
     downloadHalogenBundle,
+    describeEngineSetup,
+    readEngineSettings,
+    writeEngineSettings,
+    inspectEngineCapabilities,
+    resolveSpeculationPlan,
+    parseEngineHelpFlags,
+    DEFAULT_ENGINE_SETTINGS,
     CURATED_HF_MODELS,
     MODEL_MODALITIES,
     MODEL_CAPABILITIES,
@@ -468,6 +482,30 @@ async function runSingleModelSmokeTest(ai, p = {}) {
     }
 }
 
+/**
+ * Привести значение из UI/HTTP (true, 1, '1', 'true') к булеву.
+ */
+const isTruthy = v => v === true || v === 1 || v === '1' || v === 'true' || v === 'yes';
+
+/**
+ * Остановить движок и дождаться освобождения порта, после чего запустить его с новыми настройками
+ * (иначе `startHalogenBackend` увидит ещё живой сервер и вернёт `alreadyRunning`).
+ */
+async function restartHalogenEngine(settings = null, params = {}) {
+    stopHalogenBackend();
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+        const probe = await probeHalogenServer().catch(() => ({ online: false }));
+        if (!probe?.online)
+            break;
+        await new Promise(resolve => setTimeout(resolve, 250));
+    }
+    return startHalogenBackend({
+        ...(settings ? { settings } : {}),
+        ...params,
+    });
+}
+
 export const TRAINER_METHODS = Object.freeze({
     trainer_status: {
         level: 'read',
@@ -596,6 +634,9 @@ export const TRAINER_METHODS = Object.freeze({
                 halogenOnline: Boolean(halogenProbe?.online),
                 halogenMode: halogenProbe?.mode || '',
                 halogenModeLabel: halogenProbe?.modeLabel || '',
+                speculation: halogenProbe?.speculation || null,
+                speculationFallback: halogenProbe?.speculationFallback || null,
+                engineSettings: (d.protocol === 'halogen' || weightInfo?.hasGguf) ? readEngineSettings(process.cwd()) : null,
                 windowsEnv: halogenProbe?.windowsEnv || null,
             };
         },
@@ -828,7 +869,48 @@ export const TRAINER_METHODS = Object.freeze({
             return startHalogenBackend({
                 port: Number(p.port) || HALOGEN_DEFAULT_PORT,
                 modelPath: p.modelPath || '',
+                ...(p.profile ? { profile: String(p.profile) } : {}),
+                ...(p.npuPrefill === undefined ? {} : { npuPrefill: isTruthy(p.npuPrefill) }),
+                ...(p.settings && typeof p.settings === 'object' ? { settings: p.settings } : {}),
             });
+        },
+    },
+    /** Текущие настройки движка и готовность спекулятивного декодирования (MTP + Draft Head). */
+    halogen_engine_config: {
+        level: 'read',
+        fn: async function (p = {}) {
+            return describeEngineSetup({ forceCapabilities: isTruthy(p.refresh) });
+        },
+    },
+    /** Сохранить настройки спекуляции и (по желанию) перезапустить движок с ними. */
+    halogen_save_engine_config: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const saved = writeEngineSettings(process.cwd(), {
+                ...(p.speculation ? { speculation: p.speculation } : {}),
+                ...(p.promptLookup ? { promptLookup: p.promptLookup } : {}),
+                ...(p.draftMax !== undefined ? { draftMax: p.draftMax } : {}),
+                ...(p.profile ? { profile: p.profile } : {}),
+                ...(p.npuPrefill === undefined ? {} : { npuPrefill: isTruthy(p.npuPrefill) }),
+            });
+            const wantsRestart = isTruthy(p.restart);
+            if (wantsRestart)
+                await restartHalogenEngine(saved).catch(() => null);
+            return {
+                ...(await describeEngineSetup({ settings: saved, forceCapabilities: isTruthy(p.refresh) })),
+                saved,
+                restarted: wantsRestart,
+            };
+        },
+    },
+    /** Перезапустить встроенный движок с текущими настройками. */
+    halogen_restart: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const started = await restartHalogenEngine(null, {
+                ...(p.profile ? { profile: String(p.profile) } : {}),
+            });
+            return { ...started, restarted: true };
         },
     },
     halogen_stop: {

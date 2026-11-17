@@ -309,9 +309,64 @@ export default {
             <img ~if="testImageUrl" :src="testImageUrl" style="max-width:100%;max-height:360px;object-fit:contain;border-radius:6px;border:1px solid var(--border-color, #cbd5e1);">
         </div>
     </div>
+
+    <div class="card" ~if="resolvedProtocol === 'halogen' && engineConfig" style="margin-top:8px;">
+        <div class="section-title">Спекулятивное декодирование (MTP + Draft Head)</div>
+        <div class="kv-row">
+            <span class="kv-label">Веса спекуляции:</span>
+            <span class="kv-val">{{engineSidecarLine}}</span>
+        </div>
+        <div class="kv-row">
+            <span class="kv-label">Режим:</span>
+            <select :value="engineMode" @change="engineMode = $this.value">
+                <option value="auto">Авто (рекомендуется) — включить, если поддерживает движок</option>
+                <option value="on">Включено — с настройкой глубины черновика</option>
+                <option value="off">Выключено — только основная модель</option>
+            </select>
+        </div>
+        <div class="kv-row">
+            <span class="kv-label">Глубина черновика (draft-max):</span>
+            <input type="number" min="1" max="32" step="1" style="width:90px;" :value="engineDraftMax" @change="engineDraftMax = Number($this.value) || 8">
+        </div>
+        <div class="kv-row">
+            <span class="kv-label">Prompt Lookup (n-граммы):</span>
+            <label class="toolbar" style="cursor:pointer;">
+                <input type="checkbox" :checked="engineLookup" @change="engineLookup = $event.target.checked">
+                <span>Использовать кэш подсказок</span>
+            </label>
+        </div>
+        <div class="toolbar">
+            <button type="button" class="btn primary" :disabled="savingEngine" @tap="saveEngineConfig()">
+                {{savingEngine ? 'Применяю…' : 'Сохранить и перезапустить движок'}}
+            </button>
+            <button type="button" class="btn" :disabled="savingEngine" @tap="refreshEngineConfig()">Обновить диагностику</button>
+        </div>
+        <div class="msg" ~if="engineConfig.plan">
+            <b>Параметры запуска:</b> <code>{{engineArgsLine}}</code>
+            <div style="font-size:12px;opacity:0.8;margin-top:4px;">{{engineReasonsLine}}</div>
+        </div>
+        <div class="msg ok" ~if="engineConfig.running">
+            <b>Движок запущен:</b> {{engineRunLine}}
+        </div>
+        <div class="msg warn" ~if="engineConfig.fallback">
+            <b>Флаги спекуляции не приняты движком.</b> {{engineConfig.fallback.reason}} Работает режим без спекуляции.
+        </div>
+        <div class="msg warn" ~if="engineConfig.capabilities && !engineConfig.capabilities.known">
+            Возможности движка ещё не проверены. При первом запуске WORK сам прочитает <code>--help</code> и включит спекуляцию,
+            если движок её поддерживает; нажмите «Обновить диагностику», чтобы увидеть итоговые флаги заранее.
+        </div>
+        <div class="msg warn" ~if="!engineConfig.capabilities">
+            Движок Halowin Bubo не установлен — сначала нажмите «Установить встроенный движок».
+        </div>
+    </div>
     `,
     info: null,
     modelEnabled: true,
+    engineConfig: null,
+    engineMode: 'auto',
+    engineDraftMax: 8,
+    engineLookup: true,
+    savingEngine: false,
     testPrompt: 'Привет! Представься коротко в одном предложении.',
     testTtsText: 'Привет! Локальный синтез речи платформы WORK работает.',
     testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
@@ -401,8 +456,82 @@ export default {
         const c = this.info?.capabilities || this.info?.DATA?.capabilities || ['chat', 'stream'];
         return Array.isArray(c) ? c : String(c).split(/[\s,]+/).filter(Boolean);
     },
+    get engineSidecarLine() {
+        const s = this.engineConfig?.sidecars || {};
+        const part = (label, key) => s[key] ? `${label}: ✓ ${s[key].sizeGb} ГБ` : `${label}: —`;
+        return [part('MTP-предсказатель', 'mtp'), part('Draft Head', 'draftHead'), part('Dense twin', 'twin')].join(' · ');
+    },
+    get engineArgsLine() {
+        const args = this.engineConfig?.plan?.args || [];
+        return args.length ? args.join(' ') : 'штатный запуск (без дополнительных флагов)';
+    },
+    get engineReasonsLine() {
+        return (this.engineConfig?.plan?.reasons || []).join(' ');
+    },
+    get engineRunLine() {
+        const run = this.engineConfig?.running;
+        if (!run)
+            return '';
+        const summary = run.speculation?.summary || 'без спекуляции';
+        const profile = run.profile ? ` · профиль ${run.profile}` : '';
+        return `${summary}${profile}`;
+    },
     async attached() {
         await this.reload();
+        await this.loadEngineConfig().catch(() => {});
+    },
+    async loadEngineConfig(refresh = false) {
+        if (!this.$item || this.resolvedProtocol !== 'halogen') {
+            this.engineConfig = null;
+            return;
+        }
+        try {
+            const cfg = await this.$item.fetch('halogen_engine_config', refresh ? { refresh: 1 } : {});
+            this.engineConfig = cfg || null;
+            if (cfg?.settings) {
+                this.engineMode = cfg.settings.speculation || 'auto';
+                this.engineDraftMax = Number(cfg.settings.draftMax) || 8;
+                this.engineLookup = cfg.settings.promptLookup !== 'off';
+            }
+        }
+        catch {
+            this.engineConfig = null;
+        }
+    },
+    async refreshEngineConfig() {
+        this.notice = '';
+        await this.loadEngineConfig(true);
+    },
+    async saveEngineConfig() {
+        if (!this.$item || this.resolvedProtocol !== 'halogen')
+            return;
+        this.savingEngine = true;
+        this.error = '';
+        this.notice = '';
+        try {
+            const res = await this.$item.fetch('halogen_save_engine_config', {}, {
+                speculation: this.engineMode,
+                promptLookup: this.engineLookup ? 'auto' : 'off',
+                draftMax: Number(this.engineDraftMax) || 8,
+                restart: 1,
+                refresh: 1,
+            });
+            this.engineConfig = res || this.engineConfig;
+            if (res?.settings) {
+                this.engineMode = res.settings.speculation || 'auto';
+                this.engineDraftMax = Number(res.settings.draftMax) || 8;
+                this.engineLookup = res.settings.promptLookup !== 'off';
+            }
+            this.notice = 'Настройки спекулятивного декодирования сохранены, движок перезапущен. '
+                + (res?.plan?.summary || '');
+            await this.reload().catch(() => {});
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.savingEngine = false;
+        }
     },
     async reload() {
         if (!this.$item)
