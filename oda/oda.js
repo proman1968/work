@@ -151,8 +151,10 @@ Node:{
                     const reentering = Reactor._collectorTarget === target && Reactor._collectorKey === p;
                     const owner = pdpOwner(reentering ? target.host : target, p);
                     if (!owner) return undefined;
-                    if (owner[R])
-                        return Reactor.get(owner, p);
+                    if (owner[R]) {
+                        const value = Reactor.get(owner, p);
+                        return typeof value === 'function' ? value.bind(owner) : value;
+                    }
                     const value = owner[p];
                     return typeof value === 'function' ? value.bind(owner) : value;
                 },

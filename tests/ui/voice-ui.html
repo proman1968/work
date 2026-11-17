@@ -353,6 +353,63 @@ await test('модули формы задачи, чата и Консульта
     assert(typeof cons.toggleVoice === 'function' && typeof cons.sendVoiceText === 'function', 'живой диалог в Консультанте');
 });
 
+await test('work-prompt-bar: список моделей открывается вверх от кнопки модели и выбирает модель кликом', async () => {
+    await import('/$server/$folder/lib/prompt-bar/prompt-bar.js');
+    await ODA.waitReg('work-prompt-bar');
+    const bar = document.createElement('work-prompt-bar');
+    bar.ai = true;
+    bar.style.cssText = 'position: fixed; bottom: 16px; left: 16px; width: 320px;';
+    document.body.appendChild(bar);
+    try {
+        await waitFor(() => bar.$('#model-pill'), 'кнопка модели');
+        const pill = bar.$('#model-pill');
+        const events = [];
+        bar.addEventListener('model-changed', e => events.push(e.detail?.value));
+
+        pill.click();
+        await waitFor(() => document.querySelector('item-popover[visible]'), 'открылся попап выбора модели');
+        const pop = document.querySelector('item-popover[visible]');
+        const tree = pop.querySelector('item-tree');
+        assert(tree, 'внутри попапа есть item-tree');
+
+        const findChatNode = (root) => {
+            const walk = (r) => {
+                for (const el of r?.querySelectorAll?.('item-node') || []) {
+                    if (el.$item?.type === '$ai')
+                        return el;
+                }
+                for (const child of r?.querySelectorAll?.('*') || []) {
+                    const sr = child.__shadowRoot__ || child.shadowRoot;
+                    const hit = sr && walk(sr);
+                    if (hit)
+                        return hit;
+                }
+                return null;
+            };
+            return walk(root.__shadowRoot__ || root.shadowRoot);
+        };
+        await waitFor(() => findChatNode(tree), 'отрисована хотя бы одна модель $ai');
+        await tick(6);
+
+        const popRect = pop.getBoundingClientRect();
+        const pillRect = pill.getBoundingClientRect();
+        assert(popRect.height > 40, 'высота списка > 40px: ' + popRect.height);
+        assert(popRect.top >= 0, 'список не вылез за верх экрана: ' + popRect.top);
+        assert(popRect.bottom <= pillRect.top + 4, `список должен открываться вверх над кнопкой модели (pop.bottom=${popRect.bottom}, pill.top=${pillRect.top})`);
+
+        const node = findChatNode(tree);
+        const targetPath = node.$item.path;
+        node.click();
+        await waitFor(() => !document.querySelector('item-popover'), 'попап закрылся после выбора модели');
+        eq(bar.model, targetPath, 'выбранная модель записалась в bar.model');
+        assert(events.includes(targetPath), 'событие model-changed с выбранной моделью');
+    }
+    finally {
+        document.querySelectorAll('item-popover').forEach(p => p.remove());
+        bar.remove();
+    }
+});
+
 window.__done = true;
 </script>
 </body>

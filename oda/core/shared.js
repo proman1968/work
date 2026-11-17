@@ -12,7 +12,7 @@ export function componentCounter() {
 componentCounter.counter = 0;
 
 export function setAttribute(name, value) {
-    if (typeof value !== 'object') {
+    if (typeof value !== 'object' && typeof value !== 'function') {
         try {
             if (value || value === 0) {
                 this.setAttribute(name, value === true ? '' : value);

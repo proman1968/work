@@ -24,8 +24,7 @@ ODA({
                 @apply --vertical;
                 {{left < 0 ? '' : 'left:' + left + 'px;'}}
                 {{top < 0 ? '' : 'top:' + top + 'px;'}}
-                bottom: 0;
-                right: 0;
+                {{position ? 'bottom: auto; right: auto;' : 'bottom: 0; right: 0;'}}
                 @apply --content;
             }
             :host([visible]) {
@@ -108,6 +107,8 @@ ODA({
     /** modal | dialog | dropdown | menu */
     popoverType: '',
     position: undefined,
+    /** '' | 'top' | 'bottom' — предпочтительное направление раскрытия относительно якоря */
+    placement: '',
     visible: {
         $def: false,
         $attr: true
@@ -145,7 +146,7 @@ ODA({
         if (n)
             this.appendChild(n);
     },
-    layout() {
+    layout(finalize = false) {
         const pos = this.position;
         if (!pos)
             return;
@@ -154,15 +155,26 @@ ODA({
             const r = pos.getBoundingClientRect();
             left = r.left;
             width = r.width;
-            const below = window.innerHeight - r.bottom;
-            // не влезает под якорем и сверху места больше — открыться над ним, не поверх
-            if (this.offsetHeight > below && r.top > below) {
-                top = Math.max(0, r.top - this.offsetHeight);
-                height = r.top;
+            const below = Math.max(0, window.innerHeight - r.bottom);
+            const above = Math.max(0, r.top);
+            const maxAvail = Math.max(above, below);
+            let openUp;
+            if (this.placement === 'top') {
+                openUp = above >= 80 || above >= below;
+            }
+            else if (this.placement === 'bottom') {
+                openUp = false;
+            }
+            else {
+                openUp = this.offsetHeight > below && above > below;
+            }
+            if (openUp) {
+                height = above;
+                top = Math.max(0, r.top - Math.min(this.offsetHeight, above));
             }
             else {
                 top = r.bottom;
-                height = below;
+                height = (this.placement === 'bottom' || finalize || this.visible || above <= below) ? below : maxAvail;
             }
         }
         else if (typeof pos.clientX === 'number') {
@@ -198,6 +210,7 @@ ODA({
             return;
         clearTimeout(this._visibleTimer);
         clearTimeout(this._safetyTimer);
+        this.layout(true);
         this.visible = true;
         this.style.maxWidth = this.getBoundingClientRect().width + 'px';
     },

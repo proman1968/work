@@ -229,6 +229,31 @@ await test('$keyBindings и кавычки в текстовой интерпо�
     el.remove();
 });
 
+await test('$pdp: $public-функция предка (execute) вызывается с this === владелец', async () => {
+    await ODA({ is: 't-pdp-leaf', template: `<button id="leaf">x</button>` });
+    await ODA({
+        is: 't-pdp-owner',
+        template: `<t-pdp-leaf id="leaf"></t-pdp-leaf>`,
+        $public: { execute: null },
+    });
+    let seenThis = null;
+    let seenArg = null;
+    const owner = ODA.createElement('t-pdp-owner', {
+        execute(arg) {
+            seenThis = this;
+            seenArg = arg;
+        },
+    });
+    document.body.appendChild(owner);
+    await tick(80);
+    const leaf = owner.$('#leaf');
+    assert(leaf, 'потомок смонтирован');
+    leaf.$pdp.execute('ok');
+    eq(seenThis, owner, 'this должен быть владельцем execute, а не $pdp потомка');
+    eq(seenArg, 'ok');
+    owner.remove();
+});
+
 window.__done = true;
 </script>
 </body>

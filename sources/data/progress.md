@@ -1,6 +1,9 @@
 # Прогресс: sources/data
 
 ## Последние изменения
+- [13:35, 17.11] Исправление выбора модели в `work-prompt-bar` и раскрытия выпадающих списков вверх над якорем (`oda/core/shared.js`, `oda/oda.js`, `oda/components/containers/popover/popover.js`, `$server/$folder/lib/prompt-bar/prompt-bar.js`, `tests/ui/{oda-core,voice-ui}.html`, `odant-work@1.0.37`):
+  - **Выбор модели кликом по узлу дерева (`oda/core/shared.js`, `oda/oda.js`):** в `setAttribute` исключена сериализация функций (`typeof value !== 'function'`) в наблюдаемые HTML-атрибуты (иначе `$public`-функция `execute` у `item-tree` перезаписывалась строкой через `attributeChangedCallback`), а в `$pdp.get` для `owner[R]` функции из `Reactor.get` привязываются к `owner`.
+  - **Позиционирование списка вверх над контролом (`popover.js`, `prompt-bar.js`):** в `selectModel` якорный элемент `#model-pill` сохраняется до `await WORK.get_item('/MODELS')`, в `oda-popover` добавлена поддержка `placement: 'top'` и сброс `bottom: auto; right: auto` при заданном `position`, а выбор модели/режима/получателей/действий `+` из нижней панели ввода открывается вверх над кнопкой.
 - [12:46, 17.11] Передача `post` в поднятые `$method` и POST-тело в тесте модели `form/trainer` (`sources/server/folder.js`, `MODELS/$ai/$folder/$class/$ai/{class.js,handlers/pages/form/trainer/$handler/trainer.js}`, `tests/{exec-item-method,ai-stream}.test.js`, `odant-work@1.0.36`):
   - **Устранена ошибка `400 missing_messages` (`'messages' must be a non-empty array`) при «Быстрой проверке ответа»:** в `trainer.js` (`runTestPrompt`) тело `{ messages }` теперь передаётся 3-м аргументом (`this.$item.fetch('chat', {}, { messages })`) как POST-тело, а в `folder.js` (`_liftMethods`) второй аргумент `post` пробрасывается в `handler.execute(params, post)` вместо отбрасывания.
   - **Защита `streamChat` от пустого `post = {}`:** при пустом `post` берутся `params`, чтобы `options.messages` не терялись.

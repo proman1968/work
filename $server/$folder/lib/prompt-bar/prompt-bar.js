@@ -422,7 +422,7 @@ ODA({ is: 'work-prompt-bar',
                 </button>
                 <item-user ~for="receivers" border no-flex :$item="$for.item" :icon-size="22" title="Снять получателя" @tap.stop="toggleReceiver($for.item)"></item-user>
                 <div flex></div>
-                <button class="pill" ~if="ai" :title="modelTitle" @pointerdown.stop="selectModel($event)">
+                <button class="pill" id="model-pill" ~if="ai" :title="modelTitle" @tap.stop="selectModel($event)">
                     <oda-icon :icon="modelIcon" :icon-size="16"></oda-icon><span>{{modelName}}</span><oda-icon icon="carbon:chevron-down" :icon-size="12"></oda-icon>
                 </button>
                 <span class="timer" ~if="recording">⏺ {{timer}}</span>
@@ -822,9 +822,10 @@ ODA({ is: 'work-prompt-bar',
         this.fire('send');
     },
     async _menu(e, options, value) {
+        const anchor = e?.currentTarget || (e?.nodeType === 1 ? e : null) || e?.target || this;
         const el = ODA.createComponent('work-prompt-menu', { options, value });
         try {
-            return await WORK.showDropdown(el, {}, e.currentTarget || e.target);
+            return await WORK.showDropdown(el, { placement: 'top' }, anchor);
         }
         catch (err) {
             if (err instanceof WORK.CancelError)
@@ -892,7 +893,7 @@ ODA({ is: 'work-prompt-bar',
             },
         });
         try {
-            await WORK.showDropdown(el, { TITLE: { label: 'Получатели подразделения' } }, anchor);
+            await WORK.showDropdown(el, { TITLE: { label: 'Получатели подразделения' }, placement: 'top' }, anchor);
         }
         catch (err) {
             if (!(err instanceof WORK.CancelError))
@@ -926,6 +927,7 @@ ODA({ is: 'work-prompt-bar',
         this.focusInput();
     },
     async selectModel(e) {
+        const anchor = e?.currentTarget || (e?.nodeType === 1 ? e : null) || e?.target?.closest?.('button.pill') || this.$('#model-pill') || this;
         const modelsRoot = await WORK.get_item('/MODELS');
         try {
             if (modelsRoot?.[R]?.cache)
@@ -940,12 +942,12 @@ ODA({ is: 'work-prompt-bar',
             execute(item) {
                 if (!isChatModel(item))
                     return;
-                this.parentElement.close(item);
+                (this.parentElement?.close ? this.parentElement : tree.parentElement)?.close?.(item);
             },
         });
         let item;
         try {
-            item = await WORK.showDropdown(tree, { TITLE: { label: 'Модель' } }, e.currentTarget || e);
+            item = await WORK.showDropdown(tree, { TITLE: { label: 'Модель' }, placement: 'top' }, anchor);
         }
         catch (err) {
             if (err instanceof WORK.CancelError)
