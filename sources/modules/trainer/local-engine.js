@@ -133,31 +133,109 @@ async function getTokenizer(weightsDir) {
     return tok;
 }
 
-function resolvePythonCommand(rootDir = process.cwd()) {
-    const candidates = os.platform() === 'win32'
-        ? [
-            path.resolve(rootDir, '.venv/Scripts/python.exe'),
-            path.resolve(rootDir, 'venv/Scripts/python.exe'),
-            path.resolve(rootDir, 'MODELS/Local/.venv/Scripts/python.exe'),
-        ]
-        : [
-            path.resolve(rootDir, '.venv/bin/python'),
-            path.resolve(rootDir, 'venv/bin/python'),
-            path.resolve(rootDir, 'MODELS/Local/.venv/bin/python'),
-        ];
-    for (const c of candidates) {
-        if (fs.existsSync(c))
-            return c;
-    }
-    return 'python';
+function venvPythonCandidates(rootDir = process.cwd()) {
+    const rel = os.platform() === 'win32'
+        ? ['.venv/Scripts/python.exe', 'venv/Scripts/python.exe', 'MODELS/Local/.venv/Scripts/python.exe']
+        : ['.venv/bin/python', 'venv/bin/python', 'MODELS/Local/.venv/bin/python'];
+    return rel.map(r => path.resolve(rootDir, r));
 }
 
-function ensureInferWorker() {
+/** Известные расположения python.exe вне PATH (установщики Python пишут сюда). */
+function knownPythonPaths() {
+    if (os.platform() !== 'win32')
+        return [];
+    const out = [];
+    const bases = [process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs'), 'C:\\Program Files', 'C:\\Program Files (x86)']
+        .filter(Boolean);
+    for (const base of bases) {
+        try {
+            for (const dir of fs.readdirSync(base)) {
+                if (/^Python/i.test(dir) && fs.existsSync(path.join(base, dir, 'python.exe')))
+                    out.push(path.join(base, dir, 'python.exe'));
+            }
+        }
+        catch { /* нет папки */ }
+    }
+    try {
+        for (const dir of fs.readdirSync('C:\\')) {
+            if (/^Python\d+/i.test(dir) && fs.existsSync(path.join('C:\\', dir, 'python.exe')))
+                out.push(path.join('C:\\', dir, 'python.exe'));
+        }
+    }
+    catch { /* нет диска C:\ */ }
+    return out;
+}
+
+/** Пробный запуск кандидата: заглушка Microsoft Store (код 9009) и отсутствующие команды отсеиваются. */
+function probePython(cmd, extraArgs = []) {
+    return new Promise(resolve => {
+        let done = false;
+        const finish = ok => {
+            if (!done) {
+                done = true;
+                resolve(ok);
+            }
+        };
+        try {
+            const p = spawn(cmd, [...extraArgs, '--version'], { windowsHide: true, stdio: 'ignore' });
+            const t = setTimeout(() => {
+                p.kill();
+                finish(false);
+            }, 7000);
+            p.on('error', () => {
+                clearTimeout(t);
+                finish(false);
+            });
+            p.on('close', code => {
+                clearTimeout(t);
+                finish(code === 0);
+            });
+        }
+        catch {
+            finish(false);
+        }
+    });
+}
+
+let _pythonCmd = null;
+let _pythonResolving = null;
+
+/**
+ * Найти рабочий интерпретатор Python: .venv проекта → команды из PATH (с пробным запуском,
+ * чтобы отсеять заглушку WindowsApps, завершающуюся с кодом 9009) → известные папки установки.
+ * @returns {Promise<{ cmd: string, args: string[] }>}
+ */
+function resolvePythonCommandAsync(rootDir = process.cwd()) {
+    if (_pythonCmd)
+        return Promise.resolve(_pythonCmd);
+    _pythonResolving ??= (async () => {
+        for (const v of venvPythonCandidates(rootDir)) {
+            if (fs.existsSync(v)) {
+                _pythonCmd = { cmd: v, args: [] };
+                return _pythonCmd;
+            }
+        }
+        const candidates = ['python', 'python3', 'py', ...knownPythonPaths()];
+        for (const c of candidates) {
+            const args = c === 'py' ? ['-3'] : [];
+            if (await probePython(c, args)) {
+                _pythonCmd = { cmd: c, args };
+                return _pythonCmd;
+            }
+        }
+        _pythonCmd = { cmd: 'python', args: [] };
+        return _pythonCmd;
+    })();
+    return _pythonResolving;
+}
+
+async function ensureInferWorker() {
     if (_workerProc && !_workerProc.killed)
         return _workerProc;
 
     const scriptPath = path.resolve(import.meta.dirname, './worker/local_infer_worker.py');
-    const proc = spawn(resolvePythonCommand(), [scriptPath], {
+    const { cmd, args } = await resolvePythonCommandAsync();
+    const proc = spawn(cmd, [...args, scriptPath], {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -190,6 +268,14 @@ function ensureInferWorker() {
         }
     });
 
+    // stderr не JSON-протокол: держим кольцевой буфер для диагностики падений (нехватка пакетов, заглушка Store и т.п.)
+    const stderrTail = [];
+    proc.stderr.on('data', chunk => {
+        stderrTail.push(String(chunk));
+        if (stderrTail.length > 16)
+            stderrTail.shift();
+    });
+
     const failAll = (errText) => {
         for (const req of _pendingRequests.values())
             req.onMessage({ event: 'error', error: errText });
@@ -200,8 +286,10 @@ function ensureInferWorker() {
 
     proc.on('error', err => failAll(String(err?.message || err)));
     proc.on('close', code => {
-        if (code !== 0 && _pendingRequests.size > 0)
-            failAll(`Процесс локального инференса завершился (код ${code})`);
+        if (code !== 0 && _pendingRequests.size > 0) {
+            const tail = stderrTail.join('').trim().slice(-800);
+            failAll(`Процесс локального инференса завершился (код ${code})${tail ? ': ' + tail : ''}`);
+        }
         _workerProc = null;
         _workerReady = false;
     });
@@ -314,7 +402,7 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         const promptText = buildChatMlPrompt(turns.length ? turns : [{ role: 'user', content: 'Привет!' }], grounding, enableThinking);
         const inputIds = Array.from(tokenizer.encode(promptText), Number);
 
-        const proc = ensureInferWorker();
+        const proc = await ensureInferWorker();
         proc.stdout?.ref?.();
         const reqId = 'req_' + crypto.randomUUID().slice(0, 8);
 
@@ -450,9 +538,9 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
     throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights (откройте /MODELS/Local для установки).');
 }
 
-function runWorkerOp(payload, timeoutMs = 120000) {
+async function runWorkerOp(payload, timeoutMs = 120000) {
     touchLocalEngineActivity();
-    const proc = ensureInferWorker();
+    const proc = await ensureInferWorker();
     proc.stdout?.ref?.();
     const reqId = 'op_' + crypto.randomUUID().slice(0, 8);
     return new Promise((resolve, reject) => {
@@ -629,9 +717,8 @@ export function installLocalPythonDeps(packages = []) {
         .filter(p => ALLOWED_PYTHON_DEPS.has(p)))];
     if (!clean.length)
         return Promise.resolve({ ok: false, error: 'Не указаны разрешённые Python-пакеты.' });
-    const py = resolvePythonCommand();
-    return new Promise((resolve) => {
-        const proc = spawn(py, ['-m', 'pip', 'install', '--upgrade', ...clean], {
+    return resolvePythonCommandAsync().then(({ cmd, args }) => new Promise((resolve) => {
+        const proc = spawn(cmd, [...args, '-m', 'pip', 'install', '--upgrade', ...clean], {
             windowsHide: true,
             stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -649,7 +736,7 @@ export function installLocalPythonDeps(packages = []) {
                 resolve({ ok: false, packages: clean, error: (err || out || `pip завершился с кодом ${code}`).trim() });
             }
         });
-    });
+    }));
 }
 
 export const localEngine = Object.freeze({
