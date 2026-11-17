@@ -77,7 +77,9 @@ export async function open() {
         return null;
     db = d;
     const { contentVersion } = await import('./config.js');
-    const version = contentVersion();
+    const { activeEmbedModelKey } = await import('./embedder.js');
+    const embedModel = await activeEmbedModelKey().catch(() => '');
+    const version = contentVersion(embedModel);
     const row = st('SELECT value FROM rag_meta WHERE key = ?').get('version');
     if (row?.value !== version) {
         transaction(db, () => {

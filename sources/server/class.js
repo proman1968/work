@@ -22,6 +22,7 @@ import { DATA_METHODS, classHasObjects, classObjectCount, markClassesDirty } fro
 import {
     TRAINER_METHODS,
     localStreamChat,
+    localEngine,
     ensureHalogenBackendRunning,
     halogenFallback,
     evaluateAiNodeActivitySync,
@@ -860,6 +861,11 @@ Object.defineProperty($class.prototype, 'messengerBot', {
 });
 Object.defineProperty($class.prototype, 'localStreamChat', {
     value: localStreamChat,
+    writable: true,
+    configurable: true,
+});
+Object.defineProperty($class.prototype, 'localEngine', {
+    value: localEngine,
     writable: true,
     configurable: true,
 });

@@ -4,13 +4,17 @@
 Поддерживает архитектуры Qwen3, Qwen2.5, Llama-3, DeepSeek-R1-Distill, Gemma, Mistral (включая многофайловые шарды).
 Общается с Node.js-сервером WORK по протоколу JSONL (stdin -> stdout), удерживая веса модели в памяти между запросами.
 """
+import base64
 import glob
+import io
 import json
 import mmap
 import os
 import struct
 import sys
+import time
 import warnings
+import wave
 
 warnings.filterwarnings("ignore")
 
@@ -248,8 +252,276 @@ class LocalCausalLM:
         return int(sorted_indices[sampled_idx].item())
 
 
+def _best_device_and_dtype():
+    if torch.cuda.is_available():
+        return "cuda", torch.bfloat16
+    return "cpu", torch.float32
+
+
+def _missing_pkg_error(exc, required_map):
+    msg = str(exc)
+    missing = []
+    for mod, pkg in required_map.items():
+        if mod in msg or f"'{mod}'" in msg:
+            missing.append(pkg)
+    if not missing:
+        missing = list(dict.fromkeys(required_map.values()))
+    return {
+        "error": f"В Python-окружении отсутствуют пакеты ({', '.join(missing)}): {msg}",
+        "missingDeps": missing,
+    }
+
+
+def handle_check_deps():
+    mods = {
+        "torch": "torch",
+        "transformers": "transformers",
+        "diffusers": "diffusers",
+        "accelerate": "accelerate",
+        "PIL": "pillow",
+        "soundfile": "soundfile",
+        "qwen_tts": "qwen-tts",
+        "qwen_asr": "qwen-asr",
+    }
+    status = {}
+    for mod, pkg in mods.items():
+        try:
+            __import__(mod)
+            status[pkg] = True
+        except Exception:
+            status[pkg] = False
+    cuda = False
+    device_name = "CPU"
+    try:
+        cuda = bool(torch.cuda.is_available())
+        if cuda:
+            device_name = torch.cuda.get_device_name(0)
+    except Exception:
+        pass
+    return {
+        "packages": status,
+        "cuda": cuda,
+        "deviceName": device_name,
+        "python": sys.executable,
+    }
+
+
+def _load_embed_model(weights_dir, cache):
+    key = ("embed", weights_dir)
+    if key in cache:
+        return cache[key]
+    try:
+        from transformers import AutoTokenizer, AutoModel
+    except Exception as e:
+        raise RuntimeError(json.dumps(_missing_pkg_error(e, {"transformers": "transformers"})))
+    device, dtype = _best_device_and_dtype()
+    tok = AutoTokenizer.from_pretrained(weights_dir, local_files_only=True)
+    mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype if device == "cuda" else torch.float32)
+    mdl.to(device).eval()
+    cache[key] = (tok, mdl, device)
+    return cache[key]
+
+
+def handle_embed(req, cache):
+    weights_dir = req["weightsDir"]
+    texts = req.get("input") or []
+    if isinstance(texts, str):
+        texts = [texts]
+    tok, mdl, device = _load_embed_model(weights_dir, cache)
+    with torch.inference_mode():
+        encoded = tok(texts, padding=True, truncation=True, max_length=int(req.get("maxLength", 2048)), return_tensors="pt")
+        encoded = {k: v.to(device) for k, v in encoded.items()}
+        out = mdl(**encoded)
+        last_hidden = out.last_hidden_state
+        mask = encoded["attention_mask"].unsqueeze(-1).expand(last_hidden.size()).float()
+        summed = torch.sum(last_hidden.float() * mask, dim=1)
+        counts = torch.clamp(mask.sum(dim=1), min=1e-9)
+        vecs = F.normalize(summed / counts, p=2, dim=1)
+        arr = vecs.cpu().tolist()
+    return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0}
+
+
+def _load_rerank_model(weights_dir, cache):
+    key = ("rerank", weights_dir)
+    if key in cache:
+        return cache[key]
+    try:
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    except Exception as e:
+        raise RuntimeError(json.dumps(_missing_pkg_error(e, {"transformers": "transformers"})))
+    device, dtype = _best_device_and_dtype()
+    tok = AutoTokenizer.from_pretrained(weights_dir, local_files_only=True)
+    mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype if device == "cuda" else torch.float32)
+    mdl.to(device).eval()
+    cache[key] = (tok, mdl, device)
+    return cache[key]
+
+
+def handle_rerank(req, cache):
+    weights_dir = req["weightsDir"]
+    query = str(req.get("query", ""))
+    docs = req.get("documents") or []
+    if not docs:
+        return {"results": []}
+    tok, mdl, device = _load_rerank_model(weights_dir, cache)
+    pairs = [[query, str(d.get("text", d) if isinstance(d, dict) else d)] for d in docs]
+    with torch.inference_mode():
+        inputs = tok(pairs, padding=True, truncation=True, max_length=int(req.get("maxLength", 1024)), return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+        logits = mdl(**inputs).logits.view(-1).float()
+        scores = torch.sigmoid(logits).cpu().tolist()
+    ranked = sorted(
+        [{"index": i, "relevance_score": float(s), "document": docs[i]} for i, s in enumerate(scores)],
+        key=lambda x: x["relevance_score"],
+        reverse=True,
+    )
+    top_n = int(req.get("topN") or 0)
+    if top_n > 0:
+        ranked = ranked[:top_n]
+    return {"results": ranked}
+
+
+def _load_image_pipeline(weights_dir, cache):
+    key = ("image", weights_dir)
+    if key in cache:
+        return cache[key]
+    try:
+        import diffusers
+        import accelerate  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(json.dumps(_missing_pkg_error(e, {
+            "diffusers": "diffusers",
+            "accelerate": "accelerate",
+            "PIL": "pillow",
+        })))
+    device, dtype = _best_device_and_dtype()
+    pipe = None
+    if hasattr(diffusers, "ZImagePipeline"):
+        try:
+            pipe = diffusers.ZImagePipeline.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
+        except Exception:
+            pipe = None
+    if pipe is None:
+        pipe = diffusers.AutoPipelineForText2Image.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
+    pipe.to(device)
+    cache[key] = (pipe, device)
+    return cache[key]
+
+
+def handle_image(req, cache):
+    weights_dir = req["weightsDir"]
+    prompt = str(req.get("prompt", "")).strip()
+    size_str = str(req.get("size", "512x512"))
+    try:
+        w, h = [max(256, min(1536, int(v))) for v in size_str.lower().split("x")[:2]]
+    except Exception:
+        w, h = 512, 512
+    steps = int(req.get("steps") or 8)
+    seed = int(req.get("seed") if req.get("seed") is not None else 42)
+    pipe, device = _load_image_pipeline(weights_dir, cache)
+    gen = torch.Generator(device=device).manual_seed(seed)
+    kwargs = {"prompt": prompt, "width": w, "height": h, "num_inference_steps": steps, "generator": gen}
+    if "z-image" in weights_dir.lower() or "turbo" in weights_dir.lower():
+        kwargs["guidance_scale"] = 0.0
+    with torch.inference_mode():
+        out = pipe(**kwargs)
+        img = out.images[0]
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return {"mime": "image/png", "base64": base64.b64encode(buf.getvalue()).decode("ascii")}
+
+
+def _pcm_to_wav_base64(samples, sample_rate):
+    import array
+    if hasattr(samples, "detach"):
+        samples = samples.detach().cpu().float().flatten().tolist()
+    elif hasattr(samples, "tolist"):
+        samples = samples.flatten().tolist()
+    pcm = array.array("h", (max(-32767, min(32767, int(float(s) * 32767.0))) for s in samples))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(int(sample_rate))
+        wf.writeframes(pcm.tobytes())
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def handle_tts(req, cache):
+    weights_dir = req["weightsDir"]
+    text = str(req.get("text", "")).strip()
+    language = str(req.get("language") or "Russian")
+    instructions = str(req.get("instructions") or "").strip()
+    key = ("tts", weights_dir)
+    if key not in cache:
+        try:
+            from qwen_tts import Qwen3TTSModel
+        except Exception as e:
+            raise RuntimeError(json.dumps(_missing_pkg_error(e, {
+                "qwen_tts": "qwen-tts",
+                "soundfile": "soundfile",
+            })))
+        device, dtype = _best_device_and_dtype()
+        mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=device, dtype=dtype)
+        cache[key] = mdl
+    mdl = cache[key]
+    if hasattr(mdl, "generate_voice_design") and instructions:
+        wavs, sr = mdl.generate_voice_design(text=text, language=language, instruct=instructions)
+    elif hasattr(mdl, "generate_custom_voice"):
+        wavs, sr = mdl.generate_custom_voice(text=text, language=language, speaker=str(req.get("voice") or "serena"), instruct=instructions or None)
+    else:
+        wavs, sr = mdl.generate_voice_design(text=text, language=language, instruct=instructions or "Natural clear voice")
+    audio = wavs[0] if isinstance(wavs, (list, tuple)) else wavs
+    return {"audioBase64": _pcm_to_wav_base64(audio, sr), "sampleRate": int(sr)}
+
+
+def handle_stt(req, cache):
+    weights_dir = req["weightsDir"]
+    audio_b64 = req.get("audioBase64", "")
+    language = str(req.get("language") or "Russian")
+    raw = base64.b64decode(audio_b64)
+    key = ("stt", weights_dir)
+    if key not in cache:
+        loader = None
+        try:
+            from qwen_asr import Qwen3ASRModel
+            device, dtype = _best_device_and_dtype()
+            loader = ("qwen_asr", Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device))
+        except Exception as e_qwen:
+            try:
+                from transformers import pipeline
+                device, dtype = _best_device_and_dtype()
+                loader = ("hf_asr", pipeline("automatic-speech-recognition", model=weights_dir, device=0 if device == "cuda" else -1, torch_dtype=dtype))
+            except Exception:
+                raise RuntimeError(json.dumps(_missing_pkg_error(e_qwen, {
+                    "qwen_asr": "qwen-asr",
+                    "soundfile": "soundfile",
+                })))
+        cache[key] = loader
+    kind, mdl = cache[key]
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+        tf.write(raw)
+        tmp_path = tf.name
+    try:
+        if kind == "qwen_asr":
+            res = mdl.transcribe(audio=tmp_path, language=language)
+            txt = res[0].text if isinstance(res, list) and res else getattr(res, "text", str(res))
+        else:
+            res = mdl(tmp_path)
+            txt = res.get("text", "") if isinstance(res, dict) else str(res)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+    return {"text": str(txt or "").strip()}
+
+
 def main():
     models = {}
+    mod_cache = {}
     print(json.dumps({"event": "ready"}), flush=True)
 
     for line in sys.stdin:
@@ -260,6 +532,42 @@ def main():
         try:
             req = json.loads(line)
             req_id = req.get("id", "")
+            op = req.get("op", "chat")
+
+            if op == "check_deps":
+                print(json.dumps({"id": req_id, "event": "result", "data": handle_check_deps()}), flush=True)
+                continue
+            if op == "embed":
+                t0 = time.time()
+                res = handle_embed(req, mod_cache)
+                res["durationMs"] = int((time.time() - t0) * 1000)
+                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
+                continue
+            if op == "rerank":
+                t0 = time.time()
+                res = handle_rerank(req, mod_cache)
+                res["durationMs"] = int((time.time() - t0) * 1000)
+                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
+                continue
+            if op == "image":
+                t0 = time.time()
+                res = handle_image(req, mod_cache)
+                res["durationMs"] = int((time.time() - t0) * 1000)
+                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
+                continue
+            if op == "tts":
+                t0 = time.time()
+                res = handle_tts(req, mod_cache)
+                res["durationMs"] = int((time.time() - t0) * 1000)
+                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
+                continue
+            if op == "stt":
+                t0 = time.time()
+                res = handle_stt(req, mod_cache)
+                res["durationMs"] = int((time.time() - t0) * 1000)
+                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
+                continue
+
             weights_dir = req["weightsDir"]
             prompt_ids = req["inputIds"]
             max_new_tokens = int(req.get("maxNewTokens", 384))
@@ -277,7 +585,17 @@ def main():
                 eos_ids=eos_ids,
             )
         except Exception as e:
-            print(json.dumps({"id": req_id, "event": "error", "error": str(e)}), flush=True)
+            err_str = str(e)
+            payload = {"id": req_id, "event": "error", "error": err_str}
+            try:
+                parsed = json.loads(err_str)
+                if isinstance(parsed, dict) and parsed.get("error"):
+                    payload["error"] = parsed["error"]
+                    if parsed.get("missingDeps"):
+                        payload["missingDeps"] = parsed["missingDeps"]
+            except Exception:
+                pass
+            print(json.dumps(payload), flush=True)
 
 
 if __name__ == "__main__":

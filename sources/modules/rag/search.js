@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import { CONFIG, queryInput } from './config.js';
 import * as store from './store.js';
 import * as REFS from '../../server/access/refs.js';
-import { embed } from './embedder.js';
+import { embed, resolveLocalRagModel } from './embedder.js';
 import { buildContexts, scopeDocs, feedDocs, layerWeight, inVerticalCone } from './scope.js';
 import { invalidate, pending } from './indexer.js';
 
@@ -145,11 +145,9 @@ export async function search(point, params = {}) {
     }
 
     // повторная проверка прав на выходе (та же политика, что при открытии файла)
-    const results = [];
     const texts = new Map(store.chunksByIds(picked.map(r => r.id)).map(c => [c.id, c]));
+    const authorized = [];
     for (const r of picked) {
-        if (results.length >= k)
-            break;
         const { doc, context } = r.cand;
         if (!system && context.kind !== 'cabinet') {
             let meta = null;
@@ -169,6 +167,34 @@ export async function search(point, params = {}) {
         const chunk = texts.get(r.id);
         if (!chunk)
             continue;
+        authorized.push({ r, chunk });
+    }
+
+    // Второй этап ранжирования через активный локальный реранкер (/MODELS/Local/BGE-Reranker-v2-M3 или Qwen3-Reranker-NPU)
+    if (authorized.length > 1) {
+        const reranker = await resolveLocalRagModel('rerank');
+        if (reranker && typeof reranker.rerank === 'function') {
+            try {
+                const rr = await reranker.rerank({
+                    query,
+                    documents: authorized.map(x => x.chunk.text),
+                    top_n: authorized.length,
+                });
+                const scoreMap = new Map((rr?.results || []).map(x => [x.index, Number(x.relevance_score) || 0]));
+                if (scoreMap.size) {
+                    authorized.forEach((x, idx) => { x.rerankScore = scoreMap.get(idx) ?? 0; });
+                    authorized.sort((a, b) => (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
+                }
+            }
+            catch { /* fallback к исходному порядку RRF */ }
+        }
+    }
+
+    const results = [];
+    for (const { r, chunk, rerankScore } of authorized) {
+        if (results.length >= k)
+            break;
+        const { doc, context } = r.cand;
         results.push({
             path: doc.virtual,
             source: doc.virtual !== doc.path ? doc.path : undefined,
@@ -181,7 +207,7 @@ export async function search(point, params = {}) {
             text: chunk.text,
             start: chunk.start,
             end: chunk.end,
-            score: +r.score.toFixed(5),
+            score: rerankScore != null ? +rerankScore.toFixed(5) : +r.score.toFixed(5),
             sim: r.sim ? +r.sim.toFixed(3) : undefined,
         });
     }

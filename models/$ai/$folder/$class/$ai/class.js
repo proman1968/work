@@ -320,6 +320,11 @@ export default {
 
         // Вызовы инструментов копятся по index (параллельные tool_calls), отдаются одним событием в конце.
         const calls = [];
+        const tStart = Date.now();
+        let tFirstToken = 0;
+        let lastToolProgressAt = 0;
+        let streamedChars = 0;
+        let emittedUsage = false;
         const noteCall = (idx, id, name, args) => {
             const e = calls[idx] ??= { id: '', name: '', args: '' };
             if (id)
@@ -328,6 +333,24 @@ export default {
                 e.name = name;
             if (args != null)
                 e.args = appendFunctionArgs(e.args, args);
+            return e;
+        };
+        const buildSpeedMeta = (completionTokens, timings) => {
+            const now = Date.now();
+            const ttftMs = tFirstToken ? Math.max(1, tFirstToken - tStart) : Math.max(1, now - tStart);
+            const decodeMs = tFirstToken ? Math.max(1, now - tFirstToken) : ttftMs;
+            const predPerSec = Number(timings?.predicted_per_second) || 0;
+            const promptPerSec = Number(timings?.prompt_per_second) || 0;
+            const estTok = completionTokens > 0 ? completionTokens : Math.round(streamedChars / 4);
+            const tokPerSec = predPerSec > 0
+                ? +predPerSec.toFixed(1)
+                : (estTok > 0 && decodeMs > 0 ? +((estTok * 1000) / decodeMs).toFixed(1) : 0);
+            return {
+                ttftMs,
+                decodeMs,
+                ...(tokPerSec > 0 ? { tokPerSec } : {}),
+                ...(promptPerSec > 0 ? { promptTokPerSec: +promptPerSec.toFixed(1) } : {}),
+            };
         };
         // Конец ответа: finish_reason и/или [DONE]; без обоих — поток оборвался (цикл агента повторит ход).
         let finishReason = null;
@@ -359,16 +382,49 @@ export default {
                 finishReason = String(json.choices[0].finish_reason);
             const delta = json.choices?.[0]?.delta || json.choices?.[0]?.message || {};
             const reasoning = delta.reasoning ?? delta.reasoning_content;
-            if (reasoning)
+            if (reasoning) {
+                tFirstToken ||= Date.now();
+                streamedChars += String(reasoning).length;
                 yield { type: 'reasoning', content: String(reasoning) };
+            }
             const content = delta.content || delta.text;
-            if (content)
+            if (content) {
+                tFirstToken ||= Date.now();
+                streamedChars += String(content).length;
                 yield String(content);
-            if (Array.isArray(delta.tool_calls))
-                for (const tc of delta.tool_calls)
-                    noteCall(tc.index ?? 0, tc.id, tc.function?.name, tc.function?.arguments);
-            if (delta.function_call)
-                noteCall(0, null, delta.function_call.name, delta.function_call.arguments);
+            }
+            let activeTool = null;
+            if (Array.isArray(delta.tool_calls)) {
+                tFirstToken ||= Date.now();
+                for (const tc of delta.tool_calls) {
+                    const entry = noteCall(tc.index ?? 0, tc.id, tc.function?.name, tc.function?.arguments);
+                    if (tc.function?.arguments)
+                        streamedChars += String(tc.function.arguments).length;
+                    if (entry?.name)
+                        activeTool = { index: tc.index ?? 0, entry, freshName: Boolean(tc.function?.name) };
+                }
+            }
+            if (delta.function_call) {
+                tFirstToken ||= Date.now();
+                const entry = noteCall(0, null, delta.function_call.name, delta.function_call.arguments);
+                if (delta.function_call.arguments)
+                    streamedChars += String(delta.function_call.arguments).length;
+                if (entry?.name)
+                    activeTool = { index: 0, entry, freshName: Boolean(delta.function_call.name) };
+            }
+            if (activeTool) {
+                const now = Date.now();
+                if (activeTool.freshName || now - lastToolProgressAt >= 200) {
+                    lastToolProgressAt = now;
+                    yield {
+                        type: 'tool_progress',
+                        index: activeTool.index,
+                        name: activeTool.entry.name,
+                        target: extractToolTarget(activeTool.entry.args),
+                        chars: activeTool.entry.args.length,
+                    };
+                }
+            }
             if (json.usage) {
                 const u = json.usage;
                 const timings = json.timings || lastTimings || null;
@@ -382,12 +438,14 @@ export default {
                     promptTokens = (Number(u.input_tokens) || 0) + cached + cacheWrite;
                 const completionTokens = Number(u.completion_tokens ?? u.completionTokens ?? u.output_tokens ?? 0) || 0;
                 const totalTokens = Number(u.total_tokens ?? u.totalTokens ?? (promptTokens + completionTokens)) || 0;
+                emittedUsage = true;
                 yield {
                     type: 'usage',
                     prompt_tokens: promptTokens,
                     completion_tokens: completionTokens,
                     total_tokens: totalTokens,
                     cached_tokens: cached,
+                    ...buildSpeedMeta(completionTokens, timings),
                     ...(u.completion_tokens_details ? { completion_tokens_details: u.completion_tokens_details } : {}),
                     ...(timings ? { timings } : {}),
                     ...(halogenFromHeader ? { halogen_from: halogenFromHeader } : {}),
@@ -412,6 +470,21 @@ export default {
         }
         if (String(buf || '').trim())
             yield* parseLine(buf.trim());
+
+        if (!emittedUsage && (lastTimings || tFirstToken || streamedChars > 0)) {
+            const predCount = Number(lastTimings?.predicted_n) || Math.round(streamedChars / 4);
+            const promptCount = Number(lastTimings?.prompt_n) || 0;
+            yield {
+                type: 'usage',
+                prompt_tokens: promptCount,
+                completion_tokens: predCount,
+                total_tokens: promptCount + predCount,
+                cached_tokens: Number(lastTimings?.cache_n) || 0,
+                ...buildSpeedMeta(predCount, lastTimings),
+                ...(lastTimings ? { timings: lastTimings } : {}),
+                ...(halogenFromHeader ? { halogen_from: halogenFromHeader } : {}),
+            };
+        }
 
         // reasoning не подменяем content: silent-меню иначе получает абзац «think»
         const done = calls.filter(c => c && c.name);
@@ -438,6 +511,8 @@ export default {
         const ai = params.$ai || this;
         if (!hasCap(ai, 'image'))
             throw new Error('generateImage: у модели нет capabilities image');
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.generateImage === 'function')
+            return WORK.localEngine.generateImage(ai, params);
         const prompt = String(params.prompt || params.post || '').trim();
         if (!prompt)
             throw new Error('generateImage: пустой prompt');
@@ -501,6 +576,8 @@ export default {
         const ai = params.$ai || this;
         if (!hasCap(ai, 'tts'))
             throw new Error('speak: у модели нет capabilities tts');
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.speak === 'function')
+            return WORK.localEngine.speak(ai, params);
         const text = String(params.text ?? params.post ?? '').trim().slice(0, 1500);
         if (!text)
             throw new Error('speak: пустой текст');
@@ -583,6 +660,8 @@ export default {
         const ai = params.$ai || this;
         if (!hasCap(ai, 'stt'))
             throw new Error('transcribe: у модели нет capabilities stt');
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.transcribe === 'function')
+            return WORK.localEngine.transcribe(ai, params);
         const audio = Buffer.isBuffer(params.audio) ? params.audio : null;
         if (!audio?.length)
             throw new Error('transcribe: нет аудио');
@@ -627,6 +706,8 @@ export default {
      */
     async embed(params = {}) {
         const ai = params.$ai || this;
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.embed === 'function')
+            return WORK.localEngine.embed(ai, params);
         const tag = String(params.model || ai.model || 'qwen3-embedding-0.6b').trim();
         const input = params.input ?? params.text ?? params.post ?? '';
         const origin = speechOrigin(params, ai, 'embed');
@@ -660,6 +741,8 @@ export default {
      */
     async rerank(params = {}) {
         const ai = params.$ai || this;
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.rerank === 'function')
+            return WORK.localEngine.rerank(ai, params);
         const tag = String(params.model || ai.model || 'qwen3-reranker-0.6b').trim();
         const query = String(params.query || '').trim();
         const documents = Array.isArray(params.documents) ? params.documents : [];
@@ -695,6 +778,8 @@ export default {
      */
     async decide(params = {}) {
         const ai = params.$ai || this;
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.decide === 'function')
+            return WORK.localEngine.decide(ai, params);
         const tag = String(params.model || ai.model || 'decider-0.8b').trim();
         const origin = speechOrigin(params, ai, 'decide');
         const headers = await getAuthHeaders(ai);
@@ -726,6 +811,13 @@ function isHalogenModel(ai) {
     return ai?.protocol === 'halogen'
         || p.startsWith('/MODELS/Halogen/')
         || (p.startsWith('/MODELS/Local/') && b.includes(':8731'));
+}
+
+function isLocalDirectModel(ai) {
+    const p = String(ai?.path || ai?.short || '');
+    const b = String(ai?.baseUrl || ai?.DATA?.baseUrl || '').trim();
+    return ai?.protocol === 'local'
+        || (p.startsWith('/MODELS/Local/') && !b && ai?.protocol !== 'halogen');
 }
 
 function speechOrigin(params, ai, who) {
@@ -1392,6 +1484,9 @@ const ANTHROPIC_STOP = { end_turn: 'stop', stop_sequence: 'stop', tool_use: 'too
 export function createAnthropicParser(model = '') {
     const blocks = [];
     const usage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0 };
+    const tStart = Date.now();
+    let tFirstToken = 0;
+    let lastToolProgressAt = 0;
     let stop = null;
     let done = false;
     const takeUsage = u => {
@@ -1412,18 +1507,35 @@ export function createAnthropicParser(model = '') {
                 case 'content_block_start': {
                     const cb = ev.content_block || {};
                     blocks[ev.index] = { type: cb.type, id: cb.id, name: cb.name, args: '', thinking: cb.thinking || '', signature: cb.signature || '', data: cb.data };
-                    if (cb.type === 'text' && cb.text)
+                    if (cb.type === 'text' && cb.text) {
+                        tFirstToken ||= Date.now();
                         out.push(String(cb.text));
+                    }
+                    else if (cb.type === 'tool_use' && cb.name) {
+                        tFirstToken ||= Date.now();
+                        lastToolProgressAt = Date.now();
+                        out.push({ type: 'tool_progress', index: ev.index, name: cb.name, target: '', chars: 0 });
+                    }
                     break;
                 }
                 case 'content_block_delta': {
                     const d = ev.delta || {};
                     const b = blocks[ev.index] ??= { type: d.type === 'input_json_delta' ? 'tool_use' : 'text', args: '', thinking: '', signature: '' };
-                    if (d.type === 'text_delta' && d.text)
+                    if (d.type === 'text_delta' && d.text) {
+                        tFirstToken ||= Date.now();
                         out.push(String(d.text));
-                    else if (d.type === 'input_json_delta')
+                    }
+                    else if (d.type === 'input_json_delta') {
+                        tFirstToken ||= Date.now();
                         b.args += d.partial_json || '';
+                        const now = Date.now();
+                        if (b.name && now - lastToolProgressAt >= 200) {
+                            lastToolProgressAt = now;
+                            out.push({ type: 'tool_progress', index: ev.index, name: b.name, target: extractToolTarget(b.args), chars: b.args.length });
+                        }
+                    }
                     else if (d.type === 'thinking_delta' && d.thinking) {
+                        tFirstToken ||= Date.now();
                         b.thinking += d.thinking;
                         out.push({ type: 'reasoning', content: String(d.thinking) });
                     }
@@ -1455,14 +1567,27 @@ export function createAnthropicParser(model = '') {
             if (calls.length)
                 out.push({ type: 'tool_calls', calls });
             const prompt = usage.input + usage.cacheRead + usage.cacheWrite;
+            const now = Date.now();
+            const ttftMs = tFirstToken ? Math.max(1, tFirstToken - tStart) : Math.max(1, now - tStart);
+            const decodeMs = tFirstToken ? Math.max(1, now - tFirstToken) : ttftMs;
+            const tokPerSec = usage.output > 0 && decodeMs > 0 ? +((usage.output * 1000) / decodeMs).toFixed(1) : 0;
             out.push({
                 type: 'usage', prompt_tokens: prompt, completion_tokens: usage.output, total_tokens: prompt + usage.output,
                 cached_tokens: usage.cacheRead, cache_creation_tokens: usage.cacheWrite,
+                ttftMs, decodeMs, ...(tokPerSec > 0 ? { tokPerSec } : {}),
             });
             out.push({ type: 'finish', reason: stop ? (ANTHROPIC_STOP[stop] || stop) : null, done });
             return out;
         },
     };
+}
+
+function extractToolTarget(rawArgs) {
+    const s = String(rawArgs || '');
+    const m = /"(?:path|filePath|file|target|command|cmd|query|url|name)"\s*:\s*"((?:[^"\\]|\\.)*)/i.exec(s);
+    if (!m)
+        return '';
+    return m[1].replace(/\\"/g, '"').replace(/\\\\/g, '\\').slice(0, 80);
 }
 
 /** SSE-поток Messages API (res — ответ HTTP) → события адаптера. Строки `event:` не нужны: тип есть в каждом data. */

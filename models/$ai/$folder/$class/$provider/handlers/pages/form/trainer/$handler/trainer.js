@@ -389,6 +389,10 @@ export default {
                     Локальные модели (/MODELS/Local) · установлено: {{localModels.length}}
                 </div>
                 <div class="toolbar">
+                    <button type="button" class="btn primary" :disabled="checkingAll" @tap="checkAllModels()">
+                        <oda-icon icon="carbon:checkmark-outline" icon-size="15"></oda-icon>
+                        <span>{{checkingAll ? 'Проверяю модели…' : 'Проверить все модели'}}</span>
+                    </button>
                     <button type="button" class="btn" @tap="toggleNetworkPanel()">
                         <oda-icon icon="carbon:network-4" icon-size="15"></oda-icon>
                         <span>Сеть: {{networkSummary}}</span>
@@ -401,6 +405,30 @@ export default {
                         <oda-icon icon="carbon:download" icon-size="15"></oda-icon>
                         <span>Загрузить с диска / флешки</span>
                     </button>
+                </div>
+            </div>
+
+            <!-- Панель диагностики всех локальных моделей и Python-окружения -->
+            <div class="bios-box" ~if="checkAllResult" style="margin-bottom:8px;">
+                <div class="model-main" style="margin-bottom:6px;">
+                    <strong>Диагностика локальных моделей (/MODELS/Local)</strong>
+                    <div class="toolbar">
+                        <span class="status-chip ok" ~if="checkAllResult.pythonDeps?.deviceName">Python: {{checkAllResult.pythonDeps.deviceName}}</span>
+                        <button type="button" class="btn primary" ~if="missingPythonPkgs.length" :disabled="installingPythonDeps" @tap="installMissingPythonDeps()">
+                            {{installingPythonDeps ? 'Установка…' : ('Доустановить пакеты (' + missingPythonPkgs.join(', ') + ')')}}
+                        </button>
+                    </div>
+                </div>
+                <div class="model-row" ~for="checkAllResult.results || []" style="padding:6px 0;">
+                    <div class="model-main">
+                        <div>
+                            <div class="model-name">{{$for.item.label}} <span style="opacity:0.65;font-weight:normal;">({{$for.item.modality}})</span></div>
+                            <div class="model-desc">{{$for.item.ok ? $for.item.summary : ($for.item.error || $for.item.summary)}}</div>
+                        </div>
+                        <span class="status-chip" ~class="$for.item.ok ? 'ok' : ($for.item.skipped ? 'warn' : 'err')">
+                            {{$for.item.ok ? 'Работает' : ($for.item.skipped ? 'Пропущена' : 'Ошибка')}}
+                        </span>
+                    </div>
                 </div>
             </div>
 
@@ -719,7 +747,27 @@ export default {
     netClearToken: false,
     netBusy: false,
     halogenPrepareState: null,
+    checkingAll: false,
+    installingPythonDeps: false,
+    checkAllResult: null,
     _pollTimer: null,
+
+    get missingPythonPkgs() {
+        const res = this.checkAllResult;
+        if (!res)
+            return [];
+        const set = new Set();
+        const pkgs = res.pythonDeps?.packages || {};
+        for (const [k, ok] of Object.entries(pkgs)) {
+            if (!ok)
+                set.add(k);
+        }
+        for (const r of (res.results || [])) {
+            for (const dep of (r.missingDeps || []))
+                set.add(dep);
+        }
+        return [...set];
+    },
 
     get hasNetworkChanges() {
         const n = this.network || {};
@@ -1025,6 +1073,49 @@ export default {
         catch (e) {
             this.error = String(e?.message || e);
             return null;
+        }
+    },
+    async checkAllModels() {
+        if (!this.$item)
+            return;
+        this.checkingAll = true;
+        this.error = '';
+        this.notice = '';
+        try {
+            const res = await this.$item.fetch('trainer_check_all_models');
+            this.checkAllResult = res;
+            const total = (res?.results || []).filter(r => !r.skipped).length;
+            const passed = (res?.results || []).filter(r => r.ok).length;
+            this.notice = `Проверка завершена: работает ${passed} из ${total} активных моделей.`;
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.checkingAll = false;
+        }
+    },
+    async installMissingPythonDeps() {
+        if (!this.$item || !this.missingPythonPkgs.length)
+            return;
+        this.installingPythonDeps = true;
+        this.error = '';
+        this.notice = '';
+        try {
+            const res = await this.$item.fetch('trainer_install_python_deps', {}, { packages: this.missingPythonPkgs });
+            if (res?.ok) {
+                this.notice = 'Пакеты установлены: ' + (res.packages || []).join(', ') + '. Повторяем проверку…';
+                await this.checkAllModels();
+            }
+            else {
+                this.error = res?.error || 'Не удалось установить Python-пакеты.';
+            }
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.installingPythonDeps = false;
         }
     },
     _invalidateClientModelsTree() {

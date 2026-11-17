@@ -1138,10 +1138,10 @@ describe('состав виртуального справочника (form/vir
 });
 
 describe('архитектура представлений формы (VIEW по ролям), $handler счетов и Ведомость', () => {
-    it('компактная кнопка Консультант (icons:help) и сервисная панель item-tools в подвале work-form', () => {
+    it('компактная кнопка Консультант (bootstrap:robot) и сервисная панель item-tools в подвале work-form', () => {
         const formSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/handlers/pages/form/$handler/form.js'), 'utf-8');
         const svgSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/tools/icons/lib/svg/odant.svg'), 'utf-8');
-        assert.match(formSrc, /id="consultantBtn"[^>]*icon="icons:help"/, 'кнопка Консультант с иконкой ?');
+        assert.match(formSrc, /id="consultantBtn"[^>]*icon="bootstrap:robot"/, 'кнопка Консультант с иконкой ИИ-бота');
         assert.ok(!/id="consultantBtn"[^>]*label="Консультант"/.test(formSrc), 'без громоздкой текстовой метки Консультант');
         assert.match(formSrc, /id="classTreeToggleBtn"[^>]*icon="icons:tree-structure"/, 'кнопка-тогл дерева классов перед вкладками формы');
         assert.match(formSrc, /hideLeftTabs:\s*true/, 'левая полоса селектора с одной вкладкой скрыта в work-form');

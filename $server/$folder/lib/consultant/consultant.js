@@ -298,43 +298,6 @@ ODA({
                 width: 16px;
                 height: 16px;
             }
-            .ctx-bar {
-                @apply --horizontal;
-                align-items: center;
-                gap: 6px;
-                padding: 5px 10px;
-                border-bottom: 1px solid var(--subtle-border);
-                background: var(--subtle-background);
-                font-size: 12px;
-                min-width: 0;
-            }
-            .ctx-label {
-                @apply --flex;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                color: var(--muted-color);
-            }
-            .ctx-label b {
-                color: var(--content-color);
-                font-weight: 600;
-            }
-            .ctx-ask-btn {
-                @apply --no-flex;
-                padding: 2px 8px;
-                border-radius: 12px;
-                font-size: 11px;
-                font-weight: 600;
-                border: 1px solid var(--accent-color);
-                background: var(--accent-soft);
-                color: var(--accent-color);
-                cursor: pointer;
-                white-space: nowrap;
-            }
-            .ctx-ask-btn:hover {
-                background: var(--accent-color);
-                color: var(--accent-back);
-            }
             .history-panel {
                 @apply --vertical;
                 gap: 4px;
@@ -554,12 +517,6 @@ ODA({
             <oda-button no-flex icon="carbon:chat" :icon-size="16" title="Открыть ленту пользователя" @tap="openUserFeed"></oda-button>
             <oda-button no-flex ~if="taskItem" icon="box:i-expand" :icon-size="15" title="Открыть задачу полностью" @tap="openFullTask"></oda-button>
             <oda-button no-flex icon="carbon:add" :icon-size="18" title="Новый вопрос (новая задача)" @tap="startNewChat"></oda-button>
-        </div>
-
-        <div class="ctx-bar" no-flex ~if="activeFormSummary">
-            <oda-icon no-flex icon="icons:dashboard" :icon-size="14"></oda-icon>
-            <span class="ctx-label" :title="activeFormSummary.path">Форма: <b>{{activeFormSummary.label}}{{activeFormSummary.focusSubject ? ' · ' + activeFormSummary.focusSubject : ''}}</b></span>
-            <button class="ctx-ask-btn" @tap="askCurrentForm" title="Задать Консультанту вопрос по открытой форме">Спросить по форме</button>
         </div>
 
         <div class="prompts-panel" no-flex ~if="showPrompts && hasMessages">
@@ -1225,11 +1182,27 @@ ODA({
     },
 
     _onDelta(d) {
-        if (!d?.item || !d.token)
+        if (!d?.item)
             return;
         const cur = this.streams[d.item] || {};
+        if (d.field === 'tool') {
+            this.streams = {
+                ...this.streams,
+                [d.item]: { ...cur, tool: { name: d.name || '', target: d.target || '', chars: Number(d.chars) || 0 } },
+            };
+            this._lastDelta = Date.now();
+            if (this.status !== 'running')
+                this.status = 'running';
+            this._stick();
+            return;
+        }
+        if (!d.token)
+            return;
         const field = d.field === 'reasoning' ? 'reasoning' : 'content';
-        this.streams = { ...this.streams, [d.item]: { ...cur, [field]: (cur[field] || '') + d.token } };
+        const next = { ...cur, [field]: (cur[field] || '') + d.token };
+        if (next.tool)
+            delete next.tool;
+        this.streams = { ...this.streams, [d.item]: next };
         this._lastDelta = Date.now();
         if (this.status !== 'running')
             this.status = 'running';

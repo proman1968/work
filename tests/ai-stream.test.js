@@ -80,7 +80,12 @@ describe('streamChat: usage и токены кэша провайдера', () =
 
     it('OpenAI: prompt_tokens — полный размер запроса, cached_tokens из prompt_tokens_details', async () => {
         const u = await usageOf({ prompt_tokens: 1000, completion_tokens: 20, total_tokens: 1020, prompt_tokens_details: { cached_tokens: 800 } });
-        assert.deepEqual(u, { type: 'usage', prompt_tokens: 1000, completion_tokens: 20, total_tokens: 1020, cached_tokens: 800 });
+        assert.equal(u.type, 'usage');
+        assert.equal(u.prompt_tokens, 1000);
+        assert.equal(u.completion_tokens, 20);
+        assert.equal(u.total_tokens, 1020);
+        assert.equal(u.cached_tokens, 800);
+        assert.ok(u.ttftMs >= 1 && u.tokPerSec > 0);
     });
 
     it('DeepSeek: prompt_cache_hit_tokens; без кэша — cached_tokens: 0', async () => {
@@ -345,5 +350,42 @@ describe('F28: память не отдана провайдеру — пото�
             if (typeof t === 'string') out += t;
         assert.equal(out, 'Ок');
         assert.deepEqual(seenBody.messages, [{ role: 'user', content: 'Тест' }]);
+    });
+
+    it('streamChat отдаёт tool_progress и метрики скорости (ttftMs, tokPerSec) при стриминге tool_calls', async () => {
+        async function* fakeRes() {
+            yield Buffer.from(sseLine({ choices: [{ delta: { content: 'Добавляю логику игры в файл.' } }] }));
+            yield Buffer.from(sseLine({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'write', arguments: '{"path":"/$server/сапёр.html",' } }] } }] }));
+            yield Buffer.from(sseLine({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"content":"<html>...</html>"}' } }] } }] }));
+            yield Buffer.from(sseLine({
+                choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+                timings: { predicted_per_second: 64.2, prompt_per_second: 1450.5, cache_n: 120 },
+                usage: { prompt_tokens: 300, completion_tokens: 45, total_tokens: 345 },
+            }) + 'data: [DONE]\n');
+        }
+        globalThis.WORK = {
+            http: {
+                request(_opts, cb) {
+                    queueMicrotask(() => cb(Object.assign(fakeRes(), { statusCode: 200 })));
+                    return { on() {}, setTimeout() {}, destroy() {}, write() {}, end() {} };
+                },
+            },
+        };
+        const events = [];
+        for await (const ev of aiDef.streamChat.call(
+            { protocol: 'halogen', baseUrl: 'http://127.0.0.1:8731/v1/chat/completions', model: 'halogen-qwen3.8-flash-next' },
+            { messages: [{ role: 'user', content: 'сделай сапёр' }] }
+        )) {
+            events.push(ev);
+        }
+        const tp = events.find(e => e?.type === 'tool_progress');
+        assert.ok(tp, 'должно прийти событие tool_progress при стриминге tool_calls');
+        assert.equal(tp.name, 'write');
+        assert.ok(tp.chars > 0);
+        const usage = events.find(e => e?.type === 'usage');
+        assert.ok(usage, 'должно прийти событие usage');
+        assert.equal(usage.tokPerSec, 64.2);
+        assert.equal(usage.promptTokPerSec, 1450.5);
+        assert.ok(usage.ttftMs >= 1);
     });
 });

@@ -3,7 +3,7 @@
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectDocs, taskFiles, computerUse, realPathOfSnapshot } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
+import { collectDocs, taskFiles, computerUse, realPathOfSnapshot, activityOf } from '../$server/$folder/$file/$task/handlers/pages/form/file/$handler/ui/docs.js';
 
 const snap = (path, day, ts, uid = 'U1') => {
     const parts = path.split('/');
@@ -126,5 +126,22 @@ describe('collectDocs: результаты без шума реплик', () =>
         ];
         const docs = collectDocs(items, []);
         assert.equal(docs.some(d => String(d.key).startsWith('answer:')), false);
+    });
+});
+
+describe('activityOf: живой статус при генерации аргументов tool_call', () => {
+    it('показывает действие, путь и объём (КБ), даже если до вызова была вводная фраза в content', () => {
+        const res = activityOf({
+            status: 'running',
+            items: [{ id: 'a1', type: 'assistant', content: '' }],
+            streams: {
+                a1: {
+                    content: 'Добавляю логику игры в файл.',
+                    tool: { name: 'write', target: '/$server/сапёр.html', chars: 2048 },
+                },
+            },
+        });
+        assert.equal(res?.kind, 'tool_stream');
+        assert.match(res?.text || '', /Запись.*\/\$server\/сапёр\.html.*2\.0 КБ/);
     });
 });

@@ -133,12 +133,31 @@ async function getTokenizer(weightsDir) {
     return tok;
 }
 
+function resolvePythonCommand(rootDir = process.cwd()) {
+    const candidates = os.platform() === 'win32'
+        ? [
+            path.resolve(rootDir, '.venv/Scripts/python.exe'),
+            path.resolve(rootDir, 'venv/Scripts/python.exe'),
+            path.resolve(rootDir, 'MODELS/Local/.venv/Scripts/python.exe'),
+        ]
+        : [
+            path.resolve(rootDir, '.venv/bin/python'),
+            path.resolve(rootDir, 'venv/bin/python'),
+            path.resolve(rootDir, 'MODELS/Local/.venv/bin/python'),
+        ];
+    for (const c of candidates) {
+        if (fs.existsSync(c))
+            return c;
+    }
+    return 'python';
+}
+
 function ensureInferWorker() {
     if (_workerProc && !_workerProc.killed)
         return _workerProc;
 
     const scriptPath = path.resolve(import.meta.dirname, './worker/local_infer_worker.py');
-    const proc = spawn('python', [scriptPath], {
+    const proc = spawn(resolvePythonCommand(), [scriptPath], {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -335,6 +354,8 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
 
         proc.stdin.write(payload);
 
+        const tStart = Date.now();
+        let tFirstToken = 0;
         const generatedIds = [];
         let prevDecoded = '';
 
@@ -344,6 +365,7 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
                     await new Promise(resolve => { notify = resolve; });
                 }
                 while (queue.length > 0) {
+                    tFirstToken ||= Date.now();
                     const tokId = queue.shift();
                     generatedIds.push(tokId);
                     const fullDecoded = tokenizer.decode(generatedIds, { skip_special_tokens: true });
@@ -377,6 +399,10 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
             tokens: inputIds.length,
         });
         const cachedTokens = sessionRes.cachedTokens ? Math.min(inputIds.length, sessionRes.cachedTokens) : 0;
+        const now = Date.now();
+        const ttftMs = tFirstToken ? Math.max(1, tFirstToken - tStart) : Math.max(1, now - tStart);
+        const decodeMs = tFirstToken ? Math.max(1, now - tFirstToken) : ttftMs;
+        const tokPerSec = generatedIds.length > 0 && decodeMs > 0 ? +((generatedIds.length * 1000) / decodeMs).toFixed(1) : 0;
 
         yield {
             type: 'usage',
@@ -384,6 +410,9 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
             completion_tokens: generatedIds.length,
             total_tokens: inputIds.length + generatedIds.length,
             cached_tokens: cachedTokens,
+            ttftMs,
+            decodeMs,
+            ...(tokPerSec > 0 ? { tokPerSec } : {}),
             ...(sessionRes.fromStatus ? { halogen_from: sessionRes.fromStatus } : {}),
         };
         yield {
@@ -420,3 +449,217 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
 
     throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights (откройте /MODELS/Local для установки).');
 }
+
+function runWorkerOp(payload, timeoutMs = 120000) {
+    touchLocalEngineActivity();
+    const proc = ensureInferWorker();
+    proc.stdout?.ref?.();
+    const reqId = 'op_' + crypto.randomUUID().slice(0, 8);
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            _pendingRequests.delete(reqId);
+            if (_pendingRequests.size === 0)
+                proc.stdout?.unref?.();
+            reject(new Error(`Локальный движок (${payload.op}): таймаут ${Math.round(timeoutMs / 1000)}с`));
+        }, timeoutMs);
+        _pendingRequests.set(reqId, {
+            onMessage(msg) {
+                if (msg.event === 'result') {
+                    clearTimeout(timer);
+                    _pendingRequests.delete(reqId);
+                    if (_pendingRequests.size === 0)
+                        proc.stdout?.unref?.();
+                    resolve(msg.data || {});
+                }
+                else if (msg.event === 'error') {
+                    clearTimeout(timer);
+                    _pendingRequests.delete(reqId);
+                    if (_pendingRequests.size === 0)
+                        proc.stdout?.unref?.();
+                    const err = new Error(msg.error || 'Ошибка локального движка');
+                    if (Array.isArray(msg.missingDeps))
+                        err.missingDeps = msg.missingDeps;
+                    reject(err);
+                }
+            },
+        });
+        proc.stdin.write(JSON.stringify({ id: reqId, ...payload }) + '\n');
+    });
+}
+
+function assertLocalWeightsReady(ai) {
+    const weightsDir = resolveWeightsDir(ai);
+    const wInsp = inspectWeightsDirectorySync(weightsDir);
+    if (wInsp.incompatibleOnPlatform)
+        throw new Error(wInsp.incompatibleReason);
+    if (!wInsp.exists || (!wInsp.hasSafetensors && !wInsp.hasConfig))
+        throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights.');
+    return weightsDir;
+}
+
+export async function localEmbed(ai, params = {}) {
+    const weightsDir = assertLocalWeightsReady(ai);
+    const raw = params.input ?? params.text ?? params.post ?? '';
+    const input = Array.isArray(raw) ? raw.map(String) : [String(raw)];
+    const res = await runWorkerOp({ op: 'embed', weightsDir, input }, 60000);
+    return {
+        object: 'list',
+        model: String(ai?.model || ai?.id || 'local-embed'),
+        data: (res.embeddings || []).map((embedding, index) => ({ object: 'embedding', index, embedding })),
+        dimensions: res.dimensions || 0,
+        durationMs: res.durationMs || 0,
+    };
+}
+
+export async function localRerank(ai, params = {}) {
+    const weightsDir = assertLocalWeightsReady(ai);
+    const query = String(params.query || '').trim();
+    const documents = Array.isArray(params.documents) ? params.documents : [];
+    const res = await runWorkerOp({
+        op: 'rerank',
+        weightsDir,
+        query,
+        documents,
+        topN: Number(params.top_n || params.topN) || 0,
+    }, 60000);
+    return {
+        model: String(ai?.model || ai?.id || 'local-rerank'),
+        results: res.results || [],
+        durationMs: res.durationMs || 0,
+    };
+}
+
+export async function localGenerateImage(ai, params = {}) {
+    const weightsDir = assertLocalWeightsReady(ai);
+    const prompt = String(params.prompt || params.post || '').trim();
+    if (!prompt)
+        throw new Error('generateImage: пустой prompt');
+    const res = await runWorkerOp({
+        op: 'image',
+        weightsDir,
+        prompt,
+        size: String(params.size || '512x512'),
+        steps: Number(params.steps) || 8,
+        seed: params.seed != null ? Number(params.seed) : 42,
+    }, 240000);
+    return {
+        mime: res.mime || 'image/png',
+        base64: res.base64,
+        model: String(ai?.model || ai?.id || 'local-image'),
+        durationMs: res.durationMs || 0,
+    };
+}
+
+export async function localSpeak(ai, params = {}) {
+    const weightsDir = assertLocalWeightsReady(ai);
+    const text = String(params.text ?? params.post ?? '').trim().slice(0, 1500);
+    if (!text)
+        throw new Error('speak: пустой текст');
+    const res = await runWorkerOp({
+        op: 'tts',
+        weightsDir,
+        text,
+        language: String(params.language || ai?.language || 'Russian'),
+        instructions: String(params.instructions || ai?.instructions || '').trim(),
+        voice: String(params.voice || ai?.voice || 'serena'),
+    }, 120000);
+    return Buffer.from(res.audioBase64 || '', 'base64');
+}
+
+export async function localTranscribe(ai, params = {}) {
+    const weightsDir = assertLocalWeightsReady(ai);
+    const audio = Buffer.isBuffer(params.audio) ? params.audio : null;
+    if (!audio?.length)
+        throw new Error('transcribe: нет аудио');
+    const res = await runWorkerOp({
+        op: 'stt',
+        weightsDir,
+        audioBase64: audio.toString('base64'),
+        language: String(params.language || ai?.language || 'Russian'),
+    }, 120000);
+    return {
+        text: String(res.text || '').trim(),
+        model: String(ai?.model || ai?.id || 'local-stt'),
+        durationMs: res.durationMs || 0,
+    };
+}
+
+export async function localDecide(ai, params = {}) {
+    const state = String(params.state ?? '').trim();
+    const questions = params.questions && typeof params.questions === 'object' ? params.questions : {};
+    const prompt = `Ответь строго в JSON по схеме ключей ${JSON.stringify(Object.keys(questions))}.\nВопросы: ${JSON.stringify(questions)}\nКонтекст: ${state}`;
+    let out = '';
+    for await (const ch of localStreamChat(ai, { messages: [{ role: 'user', content: prompt }], max_tokens: 160, temperature: 0.1 }, { effort: 'off' })) {
+        if (typeof ch === 'string')
+            out += ch;
+    }
+    try {
+        const m = /\{[\s\S]*\}/.exec(out);
+        return { answers: m ? JSON.parse(m[0]) : {}, raw: out.trim(), model: String(ai?.model || ai?.id || 'local-decide') };
+    }
+    catch {
+        return { answers: {}, raw: out.trim(), model: String(ai?.model || ai?.id || 'local-decide') };
+    }
+}
+
+export async function checkLocalPythonDeps() {
+    try {
+        return await runWorkerOp({ op: 'check_deps' }, 15000);
+    }
+    catch (e) {
+        return { error: String(e?.message || e), packages: {}, cuda: false, deviceName: 'CPU' };
+    }
+}
+
+const ALLOWED_PYTHON_DEPS = new Set([
+    'transformers',
+    'diffusers',
+    'accelerate',
+    'pillow',
+    'soundfile',
+    'qwen-tts',
+    'qwen-asr',
+    'sentencepiece',
+    'safetensors',
+]);
+
+export function installLocalPythonDeps(packages = []) {
+    const clean = [...new Set((Array.isArray(packages) ? packages : [packages])
+        .map(s => String(s || '').trim().toLowerCase())
+        .filter(p => ALLOWED_PYTHON_DEPS.has(p)))];
+    if (!clean.length)
+        return Promise.resolve({ ok: false, error: 'Не указаны разрешённые Python-пакеты.' });
+    const py = resolvePythonCommand();
+    return new Promise((resolve) => {
+        const proc = spawn(py, ['-m', 'pip', 'install', '--upgrade', ...clean], {
+            windowsHide: true,
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let out = '';
+        let err = '';
+        proc.stdout.on('data', d => { out += String(d); if (out.length > 8000) out = out.slice(-8000); });
+        proc.stderr.on('data', d => { err += String(d); if (err.length > 8000) err = err.slice(-8000); });
+        proc.on('error', e => resolve({ ok: false, error: String(e?.message || e) }));
+        proc.on('close', code => {
+            if (code === 0) {
+                closeInferWorker();
+                resolve({ ok: true, packages: clean, log: out.trim() });
+            }
+            else {
+                resolve({ ok: false, packages: clean, error: (err || out || `pip завершился с кодом ${code}`).trim() });
+            }
+        });
+    });
+}
+
+export const localEngine = Object.freeze({
+    streamChat: localStreamChat,
+    embed: localEmbed,
+    rerank: localRerank,
+    generateImage: localGenerateImage,
+    speak: localSpeak,
+    transcribe: localTranscribe,
+    decide: localDecide,
+    checkDeps: checkLocalPythonDeps,
+    installDeps: installLocalPythonDeps,
+});

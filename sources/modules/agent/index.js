@@ -279,16 +279,49 @@ async function findFirstAvailableChatModel() {
     }
     return firstAny;
 }
+/** Найти активную локальную модель в /MODELS/Local по capabilities (или id). */
+async function findActiveLocalModel({ caps = [], ids = [], method = '' } = {}) {
+    const local = await WORK.get_item('/MODELS/Local').catch(() => null);
+    const items = (await local?.items) || [];
+    const wantCaps = new Set(caps.map(s => String(s).toLowerCase()));
+    const wantIds = new Set(ids.map(s => String(s).toLowerCase()));
+    const scored = [];
+    for (const m of items) {
+        if (!m || Array.isArray(m))
+            continue;
+        await m.init?.catch?.(() => {});
+        if ((m.aiActive ?? m.DATA?.aiActive) === false || m.DATA?.enabled === false)
+            continue;
+        if (method && typeof m[method] !== 'function')
+            continue;
+        const mCaps = (Array.isArray(m.capabilities) ? m.capabilities : String(m.capabilities || '').split(/[\s,]+/))
+            .map(s => String(s).trim().toLowerCase()).filter(Boolean);
+        const idLow = String(m.id || '').toLowerCase();
+        const capMatch = wantCaps.size ? [...wantCaps].some(c => mCaps.includes(c)) : false;
+        const idMatch = wantIds.size ? wantIds.has(idLow) : false;
+        if (!capMatch && !idMatch)
+            continue;
+        scored.push({ m, prio: idMatch ? 0 : 1 });
+    }
+    scored.sort((a, b) => a.prio - b.prio);
+    return scored[0]?.m || null;
+}
+
 async function findImageModel(config) {
     if (config.imageModel) {
         const m = await WORK.get_item(config.imageModel).catch(() => null);
-        if (m)
+        if (m && (m.aiActive ?? m.DATA?.aiActive) !== false)
             return m;
     }
+    const localImg = await findActiveLocalModel({ caps: ['image'], ids: ['Z-Image-Turbo', 'Flux2-Klein-NPU'], method: 'generateImage' });
+    if (localImg)
+        return localImg;
     const root = await WORK.get_item('/MODELS').catch(() => null);
     for (const provider of (await root?.items) || []) {
         for (const m of (await provider.items) || []) {
             await m.init;
+            if ((m.aiActive ?? m.DATA?.aiActive) === false)
+                continue;
             const caps = Array.isArray(m.capabilities) ? m.capabilities : String(m.capabilities || '').split(/[\s,]+/);
             if (caps.includes('image') && typeof m.generateImage === 'function')
                 return m;
@@ -401,11 +434,22 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
         },
         /** 9.1: список запасных моделей из ai/config.js слоёв (ближний перекрывает). */
         fallbackModels: () => [].concat(config.fallbackModels || []),
-        /** 9.2: дешёвая/быстрая модель для сжатия контекста (compactModel), иначе — текущая модель задачи. */
+        /** 9.2: дешёвая/быстрая модель для сжатия контекста (compactModel или активная локальная Qwen3-4B / Qwen3.5-2B). */
         compactLlm: async (fallbackPath) => {
-            const p = config.compactModel || fallbackPath || config.model || DEFAULT_MODEL;
+            if (config.compactModel)
+                return env.llmFor(config.compactModel);
+            const localCompact = await findActiveLocalModel({
+                ids: ['Qwen3-4B', 'Qwen3.5-2B-NPU', 'Qwen3-0.6B'],
+                caps: ['chat'],
+                method: 'streamChat',
+            });
+            if (localCompact?.path)
+                return env.llmFor(localCompact.path);
+            const p = fallbackPath || config.model || DEFAULT_MODEL;
             return env.llmFor(p);
         },
+        /** Быстрая локальная модель классификации/маршрутизации (Qwen3-0.6B / Decider-NPU). */
+        classifierModel: () => findActiveLocalModel({ ids: ['Qwen3-0.6B', 'Decider-NPU'], caps: ['classify', 'decide'] }),
         imageModel: () => findImageModel(config),
         async extTools() {
             extTools ??= Promise.all([serviceTools(session), mcpTools({ onError: (s, e) => {

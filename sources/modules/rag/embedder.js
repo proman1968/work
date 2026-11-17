@@ -45,14 +45,51 @@ function spawn() {
     worker.on('exit', code => code && fail('exit ' + code));
 }
 
+/** Найти активную локальную модель в /MODELS/Local по capability (`embeddings` | `rerank`). */
+export async function resolveLocalRagModel(cap = 'embeddings') {
+    try {
+        const local = await globalThis.WORK?.get_item?.('/MODELS/Local').catch(() => null);
+        for (const m of (await local?.items) || []) {
+            if (!m || Array.isArray(m))
+                continue;
+            await m.init?.catch?.(() => {});
+            if ((m.aiActive ?? m.DATA?.aiActive) === false || m.DATA?.enabled === false)
+                continue;
+            const c = m.capabilities ?? m.DATA?.capabilities;
+            const list = Array.isArray(c) ? c.map(s => String(s).toLowerCase()) : String(c || '').split(/[\s,]+/).map(s => s.toLowerCase());
+            if (list.includes(cap))
+                return m;
+        }
+    }
+    catch { /* ignore */ }
+    return null;
+}
+
+export async function activeEmbedModelKey() {
+    const local = await resolveLocalRagModel('embeddings');
+    return local ? String(local.model || local.id || 'local-embed') : CONFIG.model;
+}
+
 /**
  * Эмбеддинги текстов (нормализованные, mean pooling).
+ * Если в /MODELS/Local активна модель эмбеддингов (напр. BGE-M3), используем её,
+ * иначе встроенный ONNX-воркер (EmbeddingGemma 2).
  * @param {string[]} texts
  * @returns {Promise<Float32Array[]>}
  */
-export function embed(texts) {
+export async function embed(texts) {
     if (!texts?.length)
-        return Promise.resolve([]);
+        return [];
+    const localModel = await resolveLocalRagModel('embeddings');
+    if (localModel && typeof localModel.embed === 'function') {
+        try {
+            const res = await localModel.embed({ input: texts });
+            const list = (res?.data || []).map(d => new Float32Array(d.embedding || []));
+            if (list.length === texts.length && list[0]?.length > 0)
+                return list;
+        }
+        catch { /* fallback к ONNX-воркеру */ }
+    }
     clearTimeout(idleTimer);
     if (!worker)
         spawn();

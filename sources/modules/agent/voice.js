@@ -34,10 +34,34 @@ async function configFor(file) {
     return loadConfig(place);
 }
 
-/** Узел модели из конфига с нужной возможностью; нет — null. */
+/** Найти активную локальную модель в /MODELS/Local с заданной возможностью (stt/tts). */
+async function localVoiceModel(cap) {
+    try {
+        const local = await WORK.get_item('/MODELS/Local').catch(() => null);
+        for (const m of (await local?.items) || []) {
+            if (!m || Array.isArray(m))
+                continue;
+            await m.init?.catch?.(() => {});
+            if ((m.aiActive ?? m.DATA?.aiActive) === false || m.DATA?.enabled === false)
+                continue;
+            if (capsOf(m).includes(cap))
+                return m;
+        }
+    }
+    catch { /* ignore */ }
+    return null;
+}
+
+/** Узел модели из конфига с нужной возможностью (при дефолте приоритетно проверяем активную локальную /MODELS/Local/*). */
 async function modelFor(file, key, cap) {
     const cfg = await configFor(file);
     const path = cfg?.[key];
+    const isDefaultCloud = !path || /^\/MODELS\/odant\//i.test(String(path));
+    if (isDefaultCloud) {
+        const local = await localVoiceModel(cap);
+        if (local)
+            return { item: local, cfg, path: local.path };
+    }
     if (!path)
         return null;
     let item;
@@ -55,6 +79,10 @@ async function modelFor(file, key, cap) {
 
 /** Есть ли модель на шлюзе провайдера (кэш 60 с). true / false / null — проверить не удалось. */
 async function listedRemote(item) {
+    const p = String(item?.path || item?.short || '');
+    const proto = String(item?.protocol || item?.DATA?.protocol || '');
+    if (proto === 'local' || proto === 'halogen' || p.startsWith('/MODELS/Local/'))
+        return (item?.aiActive ?? item?.DATA?.aiActive) !== false;
     const key = item.path || item.id;
     const hit = probes.get(key);
     if (hit && Date.now() - hit.at < PROBE_TTL)

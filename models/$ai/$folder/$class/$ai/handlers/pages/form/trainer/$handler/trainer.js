@@ -268,25 +268,104 @@ export default {
         </div>
 
         <div class="card">
-            <div class="section-title">Быстрая проверка ответа</div>
-            <textarea rows="3" :value="testPrompt" placeholder="Введите тестовый вопрос к модели…" @input="testPrompt = $this.value"></textarea>
+            <div class="section-title">Быстрая проверка ({{testModalityLabel}})</div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'llm'">
+                <textarea rows="3" :value="testPrompt" placeholder="Введите тестовый вопрос к модели…" @input="testPrompt = $this.value"></textarea>
+            </div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'tts'">
+                <textarea rows="2" :value="testTtsText" placeholder="Текст для озвучивания…" @input="testTtsText = $this.value"></textarea>
+            </div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'stt'">
+                <div style="font-size:12px;opacity:0.8;">Можно загрузить WAV-файл или запустить автоматическую проверку встроенным тестовым аудиосигналом.</div>
+                <input type="file" accept="audio/wav,.wav" @change="onSttFileChange($event)">
+            </div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'image'">
+                <textarea rows="2" :value="testImagePrompt" placeholder="Опишите изображение…" @input="testImagePrompt = $this.value"></textarea>
+            </div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'embed'">
+                <textarea rows="3" :value="testEmbedInput" placeholder="Строки для векторизации (по одной в строке)…" @input="testEmbedInput = $this.value"></textarea>
+            </div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'rerank'">
+                <textarea rows="2" :value="testRerankQuery" placeholder="Поисковый запрос…" @input="testRerankQuery = $this.value"></textarea>
+                <textarea rows="3" :value="testRerankDocs" placeholder="Документы (по одному в строке)…" @input="testRerankDocs = $this.value"></textarea>
+            </div>
             <div class="toolbar">
                 <button type="button" class="btn primary" :disabled="testing" @tap="runTestPrompt()">
-                    {{testing ? 'Ожидание ответа…' : 'Отправить запрос'}}
+                    {{testing ? 'Выполняю…' : testButtonLabel}}
                 </button>
             </div>
+            <div class="msg warn" ~if="testMissingDeps.length">
+                <span>Не хватает Python-библиотек: <code>{{testMissingDeps.join(', ')}}</code></span>
+                <button type="button" class="btn primary" :disabled="installingDeps" @tap="installMissingDeps()">
+                    {{installingDeps ? 'Установка…' : 'Доустановить зависимости'}}
+                </button>
+            </div>
+            <div class="toolbar" ~if="testMetricsLine" style="font-size:12px;opacity:0.85;">
+                <span class="pill">{{testMetricsLine}}</span>
+            </div>
             <div class="reply-box" ~if="testReply">{{testReply}}</div>
+            <audio controls ~if="testAudioUrl" :src="testAudioUrl" style="width:100%;"></audio>
+            <img ~if="testImageUrl" :src="testImageUrl" style="max-width:100%;max-height:360px;object-fit:contain;border-radius:6px;border:1px solid var(--border-color, #cbd5e1);">
         </div>
     </div>
     `,
     info: null,
     modelEnabled: true,
     testPrompt: 'Привет! Представься коротко в одном предложении.',
+    testTtsText: 'Привет! Локальный синтез речи платформы WORK работает.',
+    testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
+    testEmbedInput: 'Учётная система WORK\nОборотно-сальдовая ведомость',
+    testRerankQuery: 'остатки на расчётном счёте 51',
+    testRerankDocs: 'Счёт 51 «Расчётные счета»: обороты и остатки денежных средств\nДоговор аренды офиса и коммунальные услуги',
+    testSttBase64: '',
     testReply: '',
+    testAudioUrl: '',
+    testImageUrl: '',
+    testMetricsLine: '',
+    testMissingDeps: [],
     testing: false,
+    installingDeps: false,
     busyAction: false,
     notice: '',
     error: '',
+    get testModality() {
+        const mod = String(this.info?.modality || this.info?.DATA?.modality || '').toLowerCase();
+        const caps = (this.capabilities || []).map(c => String(c).toLowerCase());
+        const id = String(this.info?.id || this.resolvedModelId || '').toLowerCase();
+        if (caps.includes('tts') || mod === 'tts' || mod === 'voice')
+            return 'tts';
+        if (caps.includes('stt') || caps.includes('asr') || mod === 'stt' || mod === 'asr')
+            return 'stt';
+        if (caps.includes('image') || caps.includes('text-to-image') || mod === 'image')
+            return 'image';
+        if (caps.includes('rerank') || mod === 'rerank' || id.includes('rerank'))
+            return 'rerank';
+        if (caps.includes('embeddings') || caps.includes('rag') || mod === 'embed' || mod === 'embedding')
+            return 'embed';
+        return 'llm';
+    },
+    get testModalityLabel() {
+        const map = {
+            llm: 'Чат / LLM',
+            tts: 'Синтез речи (TTS)',
+            stt: 'Распознавание речи (STT)',
+            image: 'Генерация изображений',
+            embed: 'Эмбеддинги (RAG)',
+            rerank: 'Реранкинг (RAG)',
+        };
+        return map[this.testModality] || 'Модель';
+    },
+    get testButtonLabel() {
+        const map = {
+            llm: 'Отправить запрос',
+            tts: 'Озвучить фразу',
+            stt: 'Проверить распознавание',
+            image: 'Сгенерировать картинку',
+            embed: 'Проверить эмбеддинги',
+            rerank: 'Проверить реранкинг',
+        };
+        return map[this.testModality] || 'Проверить';
+    },
     get providerName() {
         const parts = String(this.info?.path || this.$item?.path || '').split('/').filter(Boolean);
         return parts[1] || 'MODELS';
@@ -422,19 +501,113 @@ export default {
             this.error = String(e?.message || e);
         }
     },
+    onSttFileChange(e) {
+        const f = e?.target?.files?.[0];
+        if (!f) {
+            this.testSttBase64 = '';
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+            const res = String(reader.result || '');
+            this.testSttBase64 = res.includes(',') ? res.split(',')[1] : '';
+        };
+        reader.readAsDataURL(f);
+    },
+    async installMissingDeps() {
+        if (!this.$item || !this.testMissingDeps.length)
+            return;
+        this.installingDeps = true;
+        this.error = '';
+        this.notice = '';
+        try {
+            const res = await this.$item.fetch('trainer_install_python_deps', {}, { packages: this.testMissingDeps });
+            if (res?.ok) {
+                this.testMissingDeps = [];
+                this.notice = 'Пакеты установлены: ' + (res.packages || []).join(', ') + '. Повторяем проверку…';
+                await this.runTestPrompt();
+            }
+            else {
+                this.error = res?.error || 'Не удалось установить Python-пакеты.';
+            }
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.installingDeps = false;
+        }
+    },
     async runTestPrompt() {
-        if (!this.$item || !this.testPrompt.trim())
+        if (!this.$item)
+            return;
+        const m = this.testModality;
+        if (m === 'llm' && !this.testPrompt.trim())
             return;
         this.testing = true;
         this.error = '';
+        this.notice = '';
         this.testReply = '';
+        this.testAudioUrl = '';
+        this.testImageUrl = '';
+        this.testMetricsLine = '';
+        this.testMissingDeps = [];
         try {
-            const res = await this.$item.fetch('chat', {}, {
-                messages: [{ role: 'user', content: this.testPrompt.trim() }],
-            });
-            this.testReply = typeof res === 'string'
-                ? res
-                : String(res?.content ?? res?.text ?? JSON.stringify(res));
+            const body = { modality: m };
+            if (m === 'llm')
+                body.messages = [{ role: 'user', content: this.testPrompt.trim() }];
+            else if (m === 'tts')
+                body.text = this.testTtsText.trim();
+            else if (m === 'stt' && this.testSttBase64)
+                body.audioBase64 = this.testSttBase64;
+            else if (m === 'image')
+                body.prompt = this.testImagePrompt.trim();
+            else if (m === 'embed')
+                body.input = this.testEmbedInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+            else if (m === 'rerank') {
+                body.query = this.testRerankQuery.trim();
+                body.documents = this.testRerankDocs.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+            }
+
+            const res = await this.$item.fetch('trainer_test_model', {}, body);
+            if (!res?.ok) {
+                this.error = res?.error || 'Ошибка проверки модели.';
+                if (Array.isArray(res?.missingDeps))
+                    this.testMissingDeps = res.missingDeps;
+                return;
+            }
+            const parts = [];
+            if (res.durationMs)
+                parts.push(`Время: ${(res.durationMs / 1000).toFixed(2)} с`);
+            if (res.ttftMs)
+                parts.push(`TTFT: ${(res.ttftMs / 1000).toFixed(2)} с`);
+            if (res.tokPerSec)
+                parts.push(`Скорость: ${res.tokPerSec} tok/s`);
+            if (res.promptTokPerSec)
+                parts.push(`Prefill: ${res.promptTokPerSec} tok/s`);
+            if (res.usage?.completion_tokens)
+                parts.push(`Токенов: ${res.usage.prompt_tokens || 0} → ${res.usage.completion_tokens}`);
+            if (res.summary && m !== 'llm')
+                parts.push(res.summary);
+            this.testMetricsLine = parts.join(' · ');
+
+            if (m === 'tts' && res.audioBase64) {
+                this.testAudioUrl = 'data:audio/wav;base64,' + res.audioBase64;
+            }
+            else if (m === 'image' && res.base64) {
+                this.testImageUrl = `data:${res.mime || 'image/png'};base64,${res.base64}`;
+            }
+            else if (m === 'embed') {
+                this.testReply = `Получено векторов: ${res.count}, размерность: ${res.dimensions}`;
+            }
+            else if (m === 'rerank') {
+                this.testReply = (res.results || [])
+                    .map((r, i) => `${i + 1}. [${((r.relevance_score ?? 0) * 100).toFixed(1)}%] ${r.document || ''}`)
+                    .join('\n');
+            }
+            else {
+                this.testReply = String(res.text ?? '');
+            }
         }
         catch (e) {
             this.error = String(e?.message || e);

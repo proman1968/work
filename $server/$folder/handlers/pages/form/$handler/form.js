@@ -201,7 +201,7 @@ ODA({is: 'work-form',
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item="rootItem"></item-node-explorer>
                 <div flex></div>
-                <oda-button id="consultantBtn" shadow icon="icons:help" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
+                <oda-button id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">

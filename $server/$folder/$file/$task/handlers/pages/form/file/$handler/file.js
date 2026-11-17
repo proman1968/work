@@ -423,11 +423,27 @@ export default {
         return Array.isArray(t) && t.length && t.some(x => x.status !== 'completed');
     },
     _onDelta(d) {
-        if (!d?.item || !d.token)
+        if (!d?.item)
             return;
         const cur = this.streams[d.item] || {};
+        if (d.field === 'tool') {
+            this.streams = {
+                ...this.streams,
+                [d.item]: { ...cur, tool: { name: d.name || '', target: d.target || '', chars: Number(d.chars) || 0 } },
+            };
+            this._lastDelta = Date.now();
+            if (this.status !== 'running')
+                this.status = 'running';
+            this._stick();
+            return;
+        }
+        if (!d.token)
+            return;
         const field = d.field === 'reasoning' ? 'reasoning' : 'content';
-        this.streams = { ...this.streams, [d.item]: { ...cur, [field]: (cur[field] || '') + d.token } };
+        const next = { ...cur, [field]: (cur[field] || '') + d.token };
+        if (next.tool)
+            delete next.tool;
+        this.streams = { ...this.streams, [d.item]: next };
         this._lastDelta = Date.now();
         if (this.status !== 'running')
             this.status = 'running';

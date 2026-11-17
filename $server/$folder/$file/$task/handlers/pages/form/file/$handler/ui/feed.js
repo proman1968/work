@@ -222,14 +222,18 @@ ODA({ is: 'microchat-assistant',
     get reasoning() { return liveText(this.data?.reasoning, this.stream?.reasoning); },
     /** Стрим — как есть (ссылки дорисуются по завершении), готовый ответ — с WORK-ссылками. */
     get md() { return this.streamingText ? this.text : linkifyWork(this.text, this.artifacts || new Map()); },
-    get streamingText() { return !!this.stream?.content && !this.data?.durationMs; },
-    get thinkingNow() { return !!this.stream?.reasoning && !this.stream?.content && !this.data?.durationMs; },
+    get streamingText() { return !!this.stream?.content && !this.stream?.tool && !this.data?.durationMs; },
+    get thinkingNow() { return !!this.stream?.reasoning && !this.stream?.content && !this.stream?.tool && !this.data?.durationMs; },
     get reasoningOpen() { return this.showReasoning || this.thinkingNow; },
     get info() {
         const u = this.data?.usage;
+        const tps = Number(u?.tokPerSec ?? u?.timings?.predicted_per_second) || 0;
+        const ttft = Number(u?.ttftMs) || 0;
         return [
             modelShort(this.data?.model),
             fmtDuration(this.data?.durationMs),
+            tps > 0 ? `${tps.toFixed(1)} tok/s` : '',
+            ttft > 0 ? `TTFT ${fmtDuration(ttft)}` : '',
             u?.total ? fmtTokens(u.prompt) + ' → ' + fmtTokens(u.completion) + ' ток.' : '',
         ].filter(Boolean).join(' · ');
     },
@@ -344,7 +348,7 @@ ODA({ is: 'microchat-tool',
             .ask .q { font-weight: 600; line-height: 1.4; white-space: pre-wrap; }
             .ask .why { @apply --muted; font-size: x-small; }
             .btns { @apply --horizontal; flex-wrap: wrap; gap: 8px; }
-            .btns oda-button { border-radius: var(--radius-s); padding: 9px 18px; min-height: 36px; }
+            .btns oda-button { border-radius: var(--radius-s); padding: 4px 12px; box-sizing: border-box; }
             .ghost { border: 1px solid var(--subtle-border); background: var(--content-background); }
             .danger { color: var(--error-color); fill: var(--error-color); }
             .opt[selected] { outline: 2px solid var(--accent-color); }

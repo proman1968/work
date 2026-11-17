@@ -522,11 +522,17 @@ async function streamTurn({ llm, host, it, messages, schemas, effort, halogenKee
                     it.reasoning = (it.reasoning || '') + ch.content;
                     host.emit?.({ type: 'delta', item: it.id, field: 'reasoning', token: ch.content });
                 }
+                else if (ch?.type === 'tool_progress') {
+                    host.emit?.({ type: 'delta', item: it.id, field: 'tool', name: ch.name, target: ch.target || '', chars: ch.chars || 0 });
+                }
                 else if (ch?.type === 'usage')
                     it.usage = {
                         prompt: ch.prompt_tokens, completion: ch.completion_tokens, total: ch.total_tokens,
                         ...(ch.cached_tokens ? { cached: ch.cached_tokens } : {}),
                         ...(ch.cache_creation_tokens ? { cacheWrite: ch.cache_creation_tokens } : {}),
+                        ...(ch.ttftMs ? { ttftMs: ch.ttftMs } : {}),
+                        ...(ch.tokPerSec ? { tokPerSec: ch.tokPerSec } : {}),
+                        ...(ch.promptTokPerSec ? { promptTokPerSec: ch.promptTokPerSec } : {}),
                         ...(ch.timings ? { timings: ch.timings } : {}),
                         ...(ch.halogen_from ? { halogenFrom: ch.halogen_from } : {}),
                     };

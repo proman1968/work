@@ -44,6 +44,7 @@ import {
 } from './runner.js';
 import {
     localStreamChat,
+    localEngine,
     getLocalEngineStatus,
     releaseLocalEngineMemory,
     touchLocalEngineActivity,
@@ -147,6 +148,7 @@ export const halogenFallback = Object.freeze({
 
 export {
     localStreamChat,
+    localEngine,
     SOURCE_PRESETS,
     THREAD_OPTIONS,
     loadTrainerNetworkSettings,
@@ -324,6 +326,147 @@ function stripInventoryFiles(inv) {
 /**
  * Методы `trainer_*`, подключаемые к узлам `$class` (в `/MODELS/Local` и локальных `$ai`) и в шлюз `gateway.js`.
  */
+function inferTestModality(ai) {
+    const d = ai?.DATA || {};
+    const mod = String(ai?.modality || d.modality || '').toLowerCase();
+    const rawCaps = ai?.capabilities ?? d.capabilities ?? [];
+    const caps = (Array.isArray(rawCaps) ? rawCaps : String(rawCaps || '').split(/[\s,]+/))
+        .map(s => String(s).trim().toLowerCase()).filter(Boolean);
+    if (caps.includes('tts') || mod === 'tts' || mod === 'voice')
+        return 'tts';
+    if (caps.includes('stt') || caps.includes('asr') || mod === 'stt' || mod === 'asr')
+        return 'stt';
+    if (caps.includes('image') || caps.includes('text-to-image') || mod === 'image')
+        return 'image';
+    if (caps.includes('rerank') || mod === 'rerank' || /rerank/i.test(String(ai?.id || ai?.model || '')))
+        return 'rerank';
+    if (caps.includes('embeddings') || caps.includes('rag') || mod === 'embed' || mod === 'embedding')
+        return 'embed';
+    return 'llm';
+}
+
+async function runSingleModelSmokeTest(ai, p = {}) {
+    await ai?.init?.catch?.(() => {});
+    const modality = String(p.modality || inferTestModality(ai));
+    const t0 = Date.now();
+    try {
+        if (modality === 'tts') {
+            const text = String(p.text || p.prompt || 'Привет! Проверка локального синтеза речи WORK.').trim();
+            const buf = await ai.speak({ text, language: p.language, instructions: p.instructions });
+            const durationMs = Math.max(1, Date.now() - t0);
+            return {
+                ok: true,
+                modality,
+                durationMs,
+                bytes: buf.length,
+                audioBase64: buf.toString('base64'),
+                summary: `WAV ${(buf.length / 1024).toFixed(1)} КБ за ${(durationMs / 1000).toFixed(2)} с`,
+            };
+        }
+        if (modality === 'stt') {
+            let audio = null;
+            if (p.audioBase64)
+                audio = Buffer.from(String(p.audioBase64), 'base64');
+            else
+                audio = synthesizeFallbackWav('проверка');
+            const res = await ai.transcribe({ audio, language: p.language || 'ru' });
+            const durationMs = Math.max(1, Date.now() - t0);
+            return {
+                ok: true,
+                modality,
+                durationMs,
+                text: res?.text || '',
+                summary: res?.text ? `«${res.text.slice(0, 60)}» (${durationMs} мс)` : `Обработано за ${durationMs} мс`,
+            };
+        }
+        if (modality === 'image') {
+            const prompt = String(p.prompt || 'Минималистичная 3D-иконка офисного здания на светлом фоне').trim();
+            const pic = await ai.generateImage({ prompt, size: p.size || '512x512', steps: p.steps ? Number(p.steps) : undefined });
+            const durationMs = Math.max(1, Date.now() - t0);
+            return {
+                ok: true,
+                modality,
+                durationMs,
+                mime: pic?.mime || 'image/png',
+                base64: pic?.base64 || '',
+                summary: `Картинка ${pic?.mime || 'image/png'} за ${(durationMs / 1000).toFixed(1)} с`,
+            };
+        }
+        if (modality === 'embed') {
+            const input = Array.isArray(p.input) && p.input.length
+                ? p.input
+                : String(p.prompt || 'Учётная система WORK\nОборотно-сальдовая ведомость').split(/\r?\n/).filter(Boolean);
+            const res = await ai.embed({ input });
+            const durationMs = Math.max(1, Date.now() - t0);
+            const list = res?.data || [];
+            const dims = list[0]?.embedding?.length || res?.dimensions || 0;
+            return {
+                ok: true,
+                modality,
+                durationMs,
+                count: list.length,
+                dimensions: dims,
+                summary: `${list.length} вект. × ${dims}d за ${durationMs} мс`,
+            };
+        }
+        if (modality === 'rerank') {
+            const query = String(p.query || p.prompt || 'остатки на расчётном счёте 51').trim();
+            const documents = Array.isArray(p.documents) && p.documents.length
+                ? p.documents
+                : ['Счёт 51 «Расчётные счета»: обороты и остатки денежных средств', 'Договор аренды офиса и коммунальные услуги'];
+            const res = await ai.rerank({ query, documents, top_n: documents.length });
+            const durationMs = Math.max(1, Date.now() - t0);
+            const top = res?.results?.[0];
+            return {
+                ok: true,
+                modality,
+                durationMs,
+                results: res?.results || [],
+                summary: `Топ #${(top?.index ?? 0) + 1} (${((top?.relevance_score ?? 0) * 100).toFixed(1)}%) за ${durationMs} мс`,
+            };
+        }
+        const messages = Array.isArray(p.messages) && p.messages.length
+            ? p.messages
+            : [{ role: 'user', content: String(p.prompt || 'Привет! Представься коротко в одном предложении.') }];
+        let text = '';
+        let usage = null;
+        for await (const chunk of ai.streamChat({ messages, max_tokens: Number(p.maxTokens) || 192 }, {})) {
+            if (typeof chunk === 'string')
+                text += chunk;
+            else if (chunk?.type === 'usage')
+                usage = chunk;
+        }
+        const durationMs = Math.max(1, Date.now() - t0);
+        const ttftMs = Number(usage?.ttftMs) || 0;
+        const tokPerSec = Number(usage?.tokPerSec) || 0;
+        const promptTokPerSec = Number(usage?.promptTokPerSec) || 0;
+        return {
+            ok: true,
+            modality: 'llm',
+            text: text.trim(),
+            durationMs,
+            ttftMs,
+            tokPerSec,
+            promptTokPerSec,
+            usage,
+            summary: [
+                tokPerSec > 0 ? `${tokPerSec} tok/s` : `${durationMs} мс`,
+                ttftMs > 0 ? `TTFT ${(ttftMs / 1000).toFixed(2)} с` : '',
+            ].filter(Boolean).join(' · '),
+        };
+    }
+    catch (e) {
+        const durationMs = Math.max(1, Date.now() - t0);
+        return {
+            ok: false,
+            modality,
+            durationMs,
+            error: String(e?.message || e),
+            ...(Array.isArray(e?.missingDeps) && e.missingDeps.length ? { missingDeps: e.missingDeps } : {}),
+        };
+    }
+}
+
 export const TRAINER_METHODS = Object.freeze({
     trainer_status: {
         level: 'read',
@@ -1086,6 +1229,73 @@ export const TRAINER_METHODS = Object.freeze({
                 threads: args.threads !== undefined ? Number(args.threads) : saved.threads,
                 token,
             });
+        },
+    },
+    trainer_test_model: {
+        level: 'call',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            let target = this;
+            if (args.nodePath || args.path) {
+                const found = await globalThis.WORK?.get_item?.(args.nodePath || args.path).catch(() => null);
+                if (found)
+                    target = found;
+            }
+            return runSingleModelSmokeTest(target, args);
+        },
+    },
+    trainer_check_all_models: {
+        level: 'call',
+        fn: async function () {
+            const pythonDeps = await localEngine.checkDeps();
+            const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local').catch(() => null);
+            const items = (await localNode?.items) || [];
+            const results = [];
+            for (const m of items) {
+                if (!m || Array.isArray(m))
+                    continue;
+                await m.init?.catch?.(() => {});
+                const act = evaluateAiNodeActivitySync(m);
+                const modality = inferTestModality(m);
+                if (!act.active) {
+                    results.push({
+                        id: m.id,
+                        path: m.path,
+                        label: m.label || m.DATA?.label || m.id,
+                        modality,
+                        active: false,
+                        ok: false,
+                        skipped: true,
+                        summary: act.reason || 'Неактивна',
+                    });
+                    continue;
+                }
+                const res = await runSingleModelSmokeTest(m, {
+                    prompt: modality === 'llm' ? 'Ответь одним словом: Готов.' : undefined,
+                });
+                results.push({
+                    id: m.id,
+                    path: m.path,
+                    label: m.label || m.DATA?.label || m.id,
+                    active: true,
+                    ...res,
+                });
+            }
+            return {
+                ok: results.every(r => r.skipped || r.ok),
+                pythonDeps,
+                results,
+            };
+        },
+    },
+    trainer_install_python_deps: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            const list = Array.isArray(args.packages)
+                ? args.packages
+                : String(args.packages || '').split(/[\s,]+/).filter(Boolean);
+            return localEngine.installDeps(list);
         },
     },
 });

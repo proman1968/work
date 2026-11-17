@@ -54,8 +54,8 @@ export const CONFIG = {
 };
 
 /** Ключ версии содержимого (в hash документа). */
-export function contentVersion() {
-    return CONFIG.model + '|' + CONFIG.chunker + '|' + CONFIG.inputVersion;
+export function contentVersion(model = CONFIG.model) {
+    return (model || CONFIG.model) + '|' + CONFIG.chunker + '|' + CONFIG.inputVersion;
 }
 
 /** Модель семейства EmbeddingGemma (префиксы входа обязательны). */

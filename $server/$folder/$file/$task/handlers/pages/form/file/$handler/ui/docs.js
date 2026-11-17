@@ -228,6 +228,19 @@ export function stableDocs(prev, list) {
 }
 
 /**
+ * Формат строки активности во время генерации аргументов tool_call (напр. запись кода в файл).
+ */
+export function formatToolStreamActivity(t) {
+    if (!t?.name)
+        return 'Готовлю вызов инструмента…';
+    const label = toolMeta(t.name)?.label || t.name;
+    const target = String(t.target || '').trim();
+    const chars = Number(t.chars) || 0;
+    const size = chars >= 1024 ? ` (${(chars / 1024).toFixed(1)} КБ)` : (chars > 0 ? ` (${chars} симв.)` : '');
+    return `${label}${target ? ': ' + target : ''}${size}…`;
+}
+
+/**
  * Чем занят агент: текст строки состояния. null — виден текст с кареткой или задача не running.
  */
 export function activityOf({ status, items, streams, nowMs, lastDeltaMs } = {}) {
@@ -235,6 +248,8 @@ export function activityOf({ status, items, streams, nowMs, lastDeltaMs } = {}) 
         return null;
     const last = Array.isArray(items) ? items[items.length - 1] : null;
     const s = last && streams ? streams[last.id] : null;
+    if (s?.tool && !last?.durationMs)
+        return { kind: 'tool_stream', text: formatToolStreamActivity(s.tool) };
     if (String(s?.content || '').trim())
         return null;
     const tool = last?.tools?.find(t => t?.status === 'running' || t?.status === 'pending');
