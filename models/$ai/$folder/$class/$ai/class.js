@@ -298,10 +298,7 @@ export default {
             if (backend?.ready) {
                 res = await doRequest();
             }
-            else if (backend?.code === 'INCOMPATIBLE_FORMAT') {
-                throw new Error(backend.reason);
-            }
-            else if (typeof WORK?.localStreamChat !== 'function') {
+            else if (isHalogenNode || backend?.code === 'INCOMPATIBLE_FORMAT' || typeof WORK?.localStreamChat !== 'function') {
                 throw new Error(backend?.reason || 'Встроенный локальный движок ИИ не запущен.');
             }
         }

@@ -737,7 +737,27 @@ describe('Единый локальный контур /MODELS/Local для ма
             assert.ok(spawnedCmds[0].args.includes('--draft-head-model'));
             assert.ok(spawnedCmds[0].args.includes(fakeDraftHead));
             assert.ok(spawnedCmds[0].args.includes('subagents'));
+            assert.ok(!spawnedCmds[0].args.includes('--cache-disk'), 'без bubo-package.json флаг --cache-disk не передаётся');
+            assert.ok(!spawnedCmds[0].args.includes('--manifest'), 'без bubo-package.json флаг --manifest не передаётся');
+            assert.deepEqual(spawnedCmds[0].opts.stdio, ['ignore', 'pipe', 'pipe']);
             assert.equal(spawnedCmds[0].opts.env.BUBO_RUNTIME_DIR, rocmDir);
+
+            stopHalogenBackend();
+
+            // Если рядом с весами присутствует bubo-package.json — включаются и --manifest, и --cache-disk
+            spawnedCmds.length = 0;
+            const manifestPath = path.join(weightsDir, 'bubo-package.json');
+            await fsp.writeFile(manifestPath, '{}');
+            const startWithManifest = await startHalogenBackend({
+                rootDir: tmpRoot,
+                port: 59996,
+                profile: 'subagents',
+                spawnImpl: mockSpawn,
+            });
+            assert.equal(startWithManifest.started, true);
+            assert.ok(spawnedCmds[0].args.includes('--manifest'));
+            assert.ok(spawnedCmds[0].args.includes(manifestPath));
+            assert.ok(spawnedCmds[0].args.includes('--cache-disk'));
 
             stopHalogenBackend();
         }
@@ -982,6 +1002,113 @@ describe('Единый локальный контур /MODELS/Local для ма
             }
         }
         finally {
+            await fsp.rm(tmpRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('11. Перехват stderr при падении bubo.exe (PROCESS_EXITED) и отказ от повторного круга в localStreamChat для halogen', async () => {
+        const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-bubo-err-'));
+        try {
+            const buboBinDir = path.join(tmpRoot, 'MODELS', 'Local', '$provider', '#runtime', 'bubo', 'bin');
+            const weightsDir = path.join(tmpRoot, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '$ai', '#weights');
+            await fsp.mkdir(buboBinDir, { recursive: true });
+            await fsp.mkdir(weightsDir, { recursive: true });
+            await fsp.writeFile(path.join(buboBinDir, 'bubo.exe'), 'MZ_FAKE_BUBO');
+            await fsp.writeFile(path.join(weightsDir, 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf'), 'GGUF_MAIN');
+
+            const makeExitSpawn = (stderrText, code = 1) => () => {
+                const listeners = { exit: [], error: [] };
+                const stderrListeners = [];
+                const proc = {
+                    pid: 51515,
+                    killed: false,
+                    stdout: { on: () => {} },
+                    stderr: {
+                        on(ev, cb) {
+                            if (ev === 'data')
+                                stderrListeners.push(cb);
+                        },
+                    },
+                    on(ev, cb) {
+                        if (listeners[ev])
+                            listeners[ev].push(cb);
+                    },
+                    unref: () => {},
+                    kill: () => { proc.killed = true; },
+                };
+                setImmediate(() => {
+                    if (stderrText) {
+                        for (const cb of stderrListeners)
+                            cb(Buffer.from(stderrText, 'utf-8'));
+                    }
+                    for (const cb of listeners.exit)
+                        cb(code, null);
+                });
+                return proc;
+            };
+
+            const failWithMsg = await ensureHalogenBackendRunning({
+                rootDir: tmpRoot,
+                baseUrl: 'http://127.0.0.1:59994/v1/chat/completions',
+                ai: { id: 'Qwen3.8-Flash-Next', weightsDir },
+                waitTimeoutMs: 5000,
+                platform: 'win32',
+                spawnImpl: makeExitSpawn('Error: failed to allocate GPU memory buffer\n', 1),
+            });
+            assert.equal(failWithMsg.ready, false);
+            assert.equal(failWithMsg.code, 'PROCESS_EXITED');
+            assert.equal(failWithMsg.exitCode, 1);
+            assert.match(failWithMsg.reason, /код 1/);
+            assert.match(failWithMsg.reason, /failed to allocate GPU memory buffer/);
+            assert.ok(!/проверьте наличие VC\+\+ Redistributable/i.test(failWithMsg.reason), 'при наличии stderr не выводится ложная заглушка');
+
+            const failSilent = await ensureHalogenBackendRunning({
+                rootDir: tmpRoot,
+                baseUrl: 'http://127.0.0.1:59994/v1/chat/completions',
+                ai: { id: 'Qwen3.8-Flash-Next', weightsDir },
+                waitTimeoutMs: 5000,
+                platform: 'win32',
+                spawnImpl: makeExitSpawn('', 2),
+            });
+            assert.equal(failSilent.ready, false);
+            assert.equal(failSilent.code, 'PROCESS_EXITED');
+            assert.equal(failSilent.exitCode, 2);
+            assert.match(failSilent.reason, /код 2/);
+            assert.match(failSilent.reason, /VC\+\+ Redistributable/);
+
+            // streamChat для halogen-модели при ошибке ensureHalogenBackendRunning не проваливается в localStreamChat
+            const flashModel = await WORK.get_item('/MODELS/Local/Qwen3.8-Flash-Next');
+            await flashModel.init;
+            const origBase = flashModel.baseUrl;
+            const origEnsure = WORK.ensureHalogenBackendRunning;
+            const origLocalStream = WORK.localStreamChat;
+            let localCalled = 0;
+            flashModel.baseUrl = 'http://127.0.0.1:59994/v1/chat/completions';
+            WORK.ensureHalogenBackendRunning = async () => ({
+                ready: false,
+                code: 'PROCESS_EXITED',
+                reason: 'Точная причина падения движка',
+            });
+            WORK.localStreamChat = async function* () {
+                localCalled += 1;
+                yield 'unexpected';
+            };
+            try {
+                await assert.rejects(async () => {
+                    for await (const _ of flashModel.streamChat({ messages: [{ role: 'user', content: 'Привет' }] })) {
+                        // noop
+                    }
+                }, /Точная причина падения движка/);
+                assert.equal(localCalled, 0, 'повторный вызов localStreamChat не выполняется');
+            }
+            finally {
+                flashModel.baseUrl = origBase;
+                WORK.ensureHalogenBackendRunning = origEnsure;
+                WORK.localStreamChat = origLocalStream;
+            }
+        }
+        finally {
+            stopHalogenBackend();
             await fsp.rm(tmpRoot, { recursive: true, force: true });
         }
     });

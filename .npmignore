@@ -104,3 +104,4 @@ Thumbs.db
 *.log
 *.tgz
 current_session.json
+opencode_session.json

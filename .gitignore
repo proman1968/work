@@ -110,3 +110,5 @@ ORGANIZATIONS/**/$*/pptx/
 
 # Рабочие данные лицензионного сервера (ключ центра сертификации, реестр) при локальном запуске
 /data/
+opencode_session.json
+current_session.json

@@ -476,8 +476,96 @@ const _sessionHandles = new Map();
 const SESSION_HANDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_HANDLE_MAX = 16;
 
+const BACKEND_LOG_TAIL_CHARS = 8192;
 let _managedProc = null;
 let _managedInfo = null;
+let _lastManagedExit = null;
+
+function appendLogTail(prev, chunk) {
+    const text = prev + (Buffer.isBuffer(chunk) ? chunk.toString('utf-8') : String(chunk || ''));
+    return text.length > BACKEND_LOG_TAIL_CHARS ? text.slice(-BACKEND_LOG_TAIL_CHARS) : text;
+}
+
+function attachManagedBackendProcess(proc, meta = {}) {
+    _managedProc = proc;
+    _lastManagedExit = null;
+    const state = {
+        ...meta,
+        pid: proc?.pid,
+        startedAt: Date.now(),
+        stdout: '',
+        stderr: '',
+        errorMessage: '',
+    };
+    _managedInfo = state;
+
+    proc?.stdout?.on?.('data', chunk => {
+        state.stdout = appendLogTail(state.stdout, chunk);
+    });
+    proc?.stderr?.on?.('data', chunk => {
+        state.stderr = appendLogTail(state.stderr, chunk);
+    });
+    proc?.on?.('error', err => {
+        state.errorMessage = String(err?.message || err || '');
+    });
+    proc?.on?.('exit', (code, signal) => {
+        _lastManagedExit = {
+            pid: proc?.pid,
+            runtime: state.runtime,
+            code,
+            signal,
+            stderr: state.stderr,
+            stdout: state.stdout,
+            errorMessage: state.errorMessage,
+            exitedAt: Date.now(),
+        };
+        if (_managedProc === proc) {
+            _managedProc = null;
+            _managedInfo = null;
+        }
+    });
+    return state;
+}
+
+function extractProcessErrorDetail(exitInfo) {
+    if (!exitInfo)
+        return '';
+    const combined = [exitInfo.stderr, exitInfo.stdout, exitInfo.errorMessage]
+        .filter(Boolean)
+        .join('\n')
+        .replace(/\u001b\[[0-9;]*m/g, '');
+    const lines = combined
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean);
+    if (!lines.length)
+        return '';
+    const errorLines = lines.filter(line => /^(error|fatal|exception|panic)\b/i.test(line) || /\b(error|failed|fatal)\s*:/i.test(line));
+    const picked = (errorLines.length ? errorLines : lines).slice(-3).join(' | ');
+    return picked.length > 450 ? `${picked.slice(0, 447)}...` : picked;
+}
+
+function formatBackendExitReason({ runtimeLabel, exitInfo, winEnv }) {
+    const label = runtimeLabel || exitInfo?.runtime || 'встроенный движок';
+    const detail = extractProcessErrorDetail(exitInfo);
+    const codePart = exitInfo?.code !== undefined && exitInfo?.code !== null
+        ? `код ${exitInfo.code}`
+        : (exitInfo?.signal ? `сигнал ${exitInfo.signal}` : 'без кода');
+
+    if (detail) {
+        const envNotes = [];
+        if (winEnv?.isWindows) {
+            if (winEnv.vcRedistInstalled === false)
+                envNotes.push('не найден VC++ Redistributable (vcruntime140.dll)');
+            if (winEnv.pageFileOk === false)
+                envNotes.push(`PageFile ${winEnv.pageFileGb} ГБ вместо рекомендуемых 128 ГБ`);
+        }
+        const suffix = envNotes.length ? ` (${envNotes.join('; ')})` : '';
+        return `Встроенный движок ИИ (${label}) завершился (${codePart}): ${detail}${suffix}`;
+    }
+
+    return `Встроенный движок ИИ (${label}) завершился сразу после запуска (${codePart}; проверьте наличие VC++ Redistributable, драйвера AMD и PageFile 128 ГБ).`;
+}
 let _windowsPrepareState = {
     status: 'idle',
     step: '',
@@ -698,8 +786,7 @@ export function computeHalogenMemoryPlan({
         `  --model "MODELS\\Local\\Qwen3.8-Flash-Next\\$ai\\#weights\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf" ^`,
         `  --served-model-name halogen-qwen3.8-flash-next ^`,
         `  --profile ${kvSlots > 1 ? 'subagents' : 'default'} --context ${contextTokens} ^`,
-        `  --npu-prefill on ^`,
-        `  --cache-disk "MODELS\\Local\\$provider\\#cache\\disk"`,
+        `  --npu-prefill on`,
     ].join('\n');
 
     const windowsGufoServicesCommand = [
@@ -1340,12 +1427,28 @@ export async function startHalogenBackend({
     }
 
     const winEnv = inspectWindowsHalogenEnvironment({ rootDir });
+
+    if (_managedProc && !_managedProc.killed && _managedInfo?.port === port) {
+        return {
+            started: true,
+            alreadyStarting: true,
+            mode: _managedInfo.runtime === 'llama-server' ? 'llama-server-windows' : 'bubo-windows',
+            runtime: _managedInfo.runtimeLabel || _managedInfo.runtime,
+            pid: _managedProc.pid,
+            port,
+            modelPath: _managedInfo.modelPath,
+            windowsEnv: winEnv,
+        };
+    }
+
     const cacheDir = localCacheDir(rootDir);
     fs.mkdirSync(path.join(cacheDir, 'disk'), { recursive: true });
     fs.mkdirSync(path.join(cacheDir, 'slots'), { recursive: true });
 
     const ggufPath = modelPath || findLocalGgufModel(rootDir);
     const resolvedSidecars = ggufPath ? resolveBuboModelFiles(path.dirname(ggufPath)) : null;
+    const manifestCandidate = ggufPath ? path.join(path.dirname(ggufPath), 'bubo-package.json') : '';
+    const hasBuboManifest = Boolean(manifestCandidate && fs.existsSync(manifestCandidate));
 
     // 1. Приоритет №1 на Windows: нативный движок Halowin Bubo (`bubo.exe serve llm` на ROCm 10.0.0 gfx1151 + Ryzen AI NPU)
     if (winEnv.buboInstalled && ggufPath && fs.existsSync(ggufPath)) {
@@ -1355,13 +1458,13 @@ export async function startHalogenBackend({
                 '--host', '127.0.0.1',
                 '--port', String(port),
                 '--model', ggufPath,
+                ...(hasBuboManifest ? ['--manifest', manifestCandidate, '--cache-disk', path.join(cacheDir, 'disk')] : []),
                 ...(resolvedSidecars?.mtpModel ? ['--mtp-model', resolvedSidecars.mtpModel] : []),
                 ...(resolvedSidecars?.mmprojModel ? ['--mmproj', resolvedSidecars.mmprojModel] : []),
                 ...(resolvedSidecars?.twinModel ? ['--twin-model', resolvedSidecars.twinModel] : []),
                 ...(resolvedSidecars?.draftHeadModel ? ['--draft-head-model', resolvedSidecars.draftHeadModel] : []),
                 '--served-model-name', 'halogen-qwen3.8-flash-next',
                 '--profile', profile || 'subagents',
-                '--cache-disk', path.join(cacheDir, 'disk'),
             ];
             if (npuPrefill && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent && profile !== 'exact' && profile !== 'stock') {
                 args.push('--npu-prefill', 'on');
@@ -1374,22 +1477,15 @@ export async function startHalogenBackend({
                 cwd: path.dirname(winEnv.buboExePath),
                 env,
                 windowsHide: true,
-                stdio: 'ignore',
+                stdio: ['ignore', 'pipe', 'pipe'],
                 detached: false,
             });
             proc.unref?.();
-            _managedProc = proc;
-            _managedInfo = {
-                pid: proc.pid,
+            attachManagedBackendProcess(proc, {
                 port,
                 modelPath: ggufPath,
-                startedAt: Date.now(),
                 runtime: 'bubo',
                 npuPrefill: Boolean(npuPrefill && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent),
-            };
-            proc.on('exit', () => {
-                _managedProc = null;
-                _managedInfo = null;
             });
             return {
                 started: true,
@@ -1419,21 +1515,14 @@ export async function startHalogenBackend({
             const proc = spawnImpl(winEnv.gufoExePath, args, {
                 cwd: path.dirname(winEnv.gufoExePath),
                 windowsHide: true,
-                stdio: 'ignore',
+                stdio: ['ignore', 'pipe', 'pipe'],
                 detached: false,
             });
             proc.unref?.();
-            _managedProc = proc;
-            _managedInfo = {
-                pid: proc.pid,
+            attachManagedBackendProcess(proc, {
                 port,
                 modelPath: ggufPath,
-                startedAt: Date.now(),
                 runtime: 'gufo',
-            };
-            proc.on('exit', () => {
-                _managedProc = null;
-                _managedInfo = null;
             });
             return {
                 started: true,
@@ -1465,21 +1554,14 @@ export async function startHalogenBackend({
             ];
             const proc = spawnImpl('llama-server', args, {
                 windowsHide: true,
-                stdio: 'ignore',
+                stdio: ['ignore', 'pipe', 'pipe'],
                 detached: false,
             });
             proc.unref?.();
-            _managedProc = proc;
-            _managedInfo = {
-                pid: proc.pid,
+            attachManagedBackendProcess(proc, {
                 port,
                 modelPath: ggufPath,
-                startedAt: Date.now(),
                 runtime: 'llama-server',
-            };
-            proc.on('exit', () => {
-                _managedProc = null;
-                _managedInfo = null;
             });
             return {
                 started: true,
@@ -1512,6 +1594,7 @@ export function stopHalogenBackend() {
     }
     _managedProc = null;
     _managedInfo = null;
+    _lastManagedExit = null;
     return { stopped: true };
 }
 
@@ -1523,7 +1606,7 @@ export async function ensureHalogenBackendRunning({
     rootDir = process.cwd(),
     baseUrl = HALOGEN_DEFAULT_BASE_URL,
     ai = null,
-    waitTimeoutMs = 20000,
+    waitTimeoutMs = 120000,
     platform = os.platform(),
     spawnImpl = spawn,
 } = {}) {
@@ -1590,13 +1673,21 @@ export async function ensureHalogenBackendRunning({
                 };
             }
 
-            const deadline = Date.now() + Math.max(2000, Number(waitTimeoutMs) || 20000);
+            const timeoutMs = Math.max(2000, Number(waitTimeoutMs) || 120000);
+            const deadline = Date.now() + timeoutMs;
             while (Date.now() < deadline) {
                 if (!_managedProc && startRes.started && !startRes.alreadyRunning) {
+                    const exitInfo = _lastManagedExit;
                     return {
                         ready: false,
                         code: 'PROCESS_EXITED',
-                        reason: 'Встроенный движок ИИ завершился сразу после запуска (проверьте наличие VC++ Redistributable, драйвера AMD и PageFile 128 ГБ).',
+                        reason: formatBackendExitReason({
+                            runtimeLabel: startRes.runtime || startRes.mode,
+                            exitInfo,
+                            winEnv,
+                        }),
+                        exitCode: exitInfo?.code ?? null,
+                        stderr: exitInfo?.stderr || '',
                         windowsEnv: winEnv,
                     };
                 }
@@ -1615,7 +1706,7 @@ export async function ensureHalogenBackendRunning({
             return {
                 ready: false,
                 code: 'START_TIMEOUT',
-                reason: `Встроенный движок (${startRes.runtime || startRes.mode}) запущен, но ещё загружает веса модели в память. Повторите запрос через 15–30 секунд.`,
+                reason: `Встроенный движок (${startRes.runtime || startRes.mode}) запущен, но ещё загружает веса модели в память (ожидание ${Math.round(timeoutMs / 1000)} с истекло). Повторите запрос через 15–30 секунд.`,
                 windowsEnv: winEnv,
             };
         }
