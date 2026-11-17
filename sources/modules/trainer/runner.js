@@ -410,13 +410,9 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
         }
 
         const isAdapterNode = Boolean(meta.adapterPath);
-        const hasBuboExternal = e.name === 'Qwen3.8-Flash-Next' && (
-            fs.existsSync(path.join(localRoot, 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'))
-            || fs.existsSync(path.join(localRoot, 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'))
-        );
 
         // Если папка модели пустая (ни готовых весов, ни незавершённой загрузки, ни адаптера) — убираем мусор
-        if (!isDownloading && !hasPendingDownload && !hasRealWeightBinary && !isAdapterNode && !hasBuboExternal) {
+        if (!isDownloading && !hasPendingDownload && !hasRealWeightBinary && !isAdapterNode) {
             try {
                 await fsp.rm(path.join(localRoot, e.name), { recursive: true, force: true });
             }
@@ -429,10 +425,10 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
             continue;
         }
 
-        if (hasRealWeightBinary || isAdapterNode || hasBuboExternal) {
+        if (hasRealWeightBinary || isAdapterNode) {
             const enabled = meta.enabled !== false;
             const isHalogenLinuxRepo = platform === 'win32' && /^peonist-ai\/halogen-/i.test(String(meta.hfRepo || ''));
-            const incompatible = !hasBuboExternal && (wInsp.incompatibleOnPlatform || (isHalogenLinuxRepo && !wInsp.hasGguf && !wInsp.hasBuboManifest));
+            const incompatible = wInsp.incompatibleOnPlatform || (isHalogenLinuxRepo && !wInsp.hasGguf && !wInsp.hasBuboManifest);
             const incompatibleReason = wInsp.incompatibleReason || (incompatible ? 'Веса формата Linux (.hgn/.hnpw) несовместимы с Windows. Удалите их и установите Windows-версию.' : '');
             models.push({
                 id: e.name,
@@ -444,10 +440,10 @@ export async function listLocalModelsAndAdapters(rootDir = process.cwd()) {
                 capabilities: Array.isArray(meta.capabilities) ? meta.capabilities : ['chat', 'stream'],
                 maxTokens: meta.maxTokens || 16384,
                 enabled,
-                active: enabled && (hasRealWeightBinary || isAdapterNode || hasBuboExternal) && !incompatible,
+                active: enabled && (hasRealWeightBinary || isAdapterNode) && !incompatible,
                 incompatibleOnPlatform: incompatible,
                 incompatibleReason: incompatible ? incompatibleReason : '',
-                weightFormat: hasBuboExternal ? 'bubo' : wInsp.weightFormat,
+                weightFormat: wInsp.weightFormat,
                 path: `/MODELS/Local/${e.name}`,
                 hasClass: fs.existsSync(aiClassFile),
                 weightFiles,

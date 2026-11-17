@@ -1943,7 +1943,8 @@ export async function resumeHuggingFaceDownload({
 
     const stateHasCustomUrls = Array.isArray(state.files) && state.files.some(f => f?.url || f?.destRelPath);
     const resolvedCustomFiles = customFiles ?? entry?.customFiles ?? (stateHasCustomUrls ? state.files : null);
-    const resolvedCustomDir = customFilesDir || entry?.customFilesDir || state.customFilesDir || '';
+    const rawCustomDir = customFilesDir || entry?.customFilesDir || state.customFilesDir || '';
+    const resolvedCustomDir = /^MODELS[\\/]+Local[\\/]+models([\\/]|$)/i.test(rawCustomDir) ? '' : rawCustomDir;
     const stateFileNames = Array.isArray(state.files) && state.files.length
         ? state.files.map(f => f?.name).filter(Boolean)
         : null;

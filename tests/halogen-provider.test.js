@@ -656,25 +656,36 @@ describe('Единый локальный контур /MODELS/Local для ма
         try {
             const buboBinDir = path.join(tmpRoot, 'MODELS', 'Local', '$provider', '#runtime', 'bubo', 'bin');
             const rocmDir = path.join(tmpRoot, 'MODELS', 'Local', '$provider', '#runtime', 'bubo', 'runtime', 'rocm-10.0.0-gfx1151');
-            const manifestDir = path.join(tmpRoot, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1');
+            const weightsDir = path.join(tmpRoot, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '$ai', '#weights');
             await fsp.mkdir(buboBinDir, { recursive: true });
             await fsp.mkdir(rocmDir, { recursive: true });
-            await fsp.mkdir(manifestDir, { recursive: true });
+            await fsp.mkdir(path.join(weightsDir, 'mtp'), { recursive: true });
+            await fsp.mkdir(path.join(weightsDir, 'mmproj'), { recursive: true });
+            await fsp.mkdir(path.join(weightsDir, 'twin'), { recursive: true });
+            await fsp.mkdir(path.join(weightsDir, 'draft_head'), { recursive: true });
 
             const fakeBuboExe = path.join(buboBinDir, 'bubo.exe');
-            const fakeManifest = path.join(manifestDir, 'bubo-package.json');
+            const fakeShard1 = path.join(weightsDir, 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf');
+            const fakeMtp = path.join(weightsDir, 'mtp', 'mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf');
+            const fakeMmproj = path.join(weightsDir, 'mmproj', 'mmproj-Qwen3.8-Flash-Next-BF16.gguf');
+            const fakeTwin = path.join(weightsDir, 'twin', 'iq4-nofullattn-nohc.gguf');
+            const fakeDraftHead = path.join(weightsDir, 'draft_head', 'draft-out-q4k.gguf');
             await fsp.writeFile(fakeBuboExe, 'MZ_FAKE_BUBO');
-            await fsp.writeFile(fakeManifest, JSON.stringify({ model: 'qwen38-flash-next-base-ud-q4-k-xl-v1' }));
+            await fsp.writeFile(fakeShard1, 'GGUF_MAIN');
+            await fsp.writeFile(fakeMtp, 'GGUF_MTP');
+            await fsp.writeFile(fakeMmproj, 'GGUF_MMPROJ');
+            await fsp.writeFile(fakeTwin, 'GGUF_TWIN');
+            await fsp.writeFile(fakeDraftHead, 'GGUF_DRAFT');
 
             const envInfo = inspectWindowsHalogenEnvironment({ rootDir: tmpRoot });
             assert.equal(envInfo.buboInstalled, true);
             assert.equal(envInfo.buboExePath, fakeBuboExe);
             assert.equal(envInfo.rocmRuntimePrepared, true);
             assert.equal(envInfo.buboModelPrepared, true);
-            assert.equal(envInfo.buboManifestPath, fakeManifest);
+            assert.equal(envInfo.buboManifestPath, null);
             assert.equal(envInfo.buboRelease.version, BUBO_WINDOWS_RELEASE.version);
 
-            // Проверка оркестрации prepareWindowsBuboRuntime
+            // Проверка оркестрации prepareWindowsBuboRuntime (только движок в $provider/#runtime/bubo)
             const spawnedCmds = [];
             const mockSpawn = (cmd, args, opts) => {
                 spawnedCmds.push({ cmd, args, opts });
@@ -701,7 +712,7 @@ describe('Единый локальный контур /MODELS/Local для ма
             assert.equal(spawnedCmds[0].cmd, fakeBuboExe);
             assert.deepEqual(spawnedCmds[0].args.slice(0, 2), ['prepare', 'runtime']);
 
-            // Проверка запуска bubo.exe serve llm через startHalogenBackend
+            // Проверка запуска bubo.exe serve llm через startHalogenBackend с прямыми путями к весам и sidecar-ам
             spawnedCmds.length = 0;
             const startRes = await startHalogenBackend({
                 rootDir: tmpRoot,
@@ -715,8 +726,16 @@ describe('Единый локальный контур /MODELS/Local для ма
             assert.equal(spawnedCmds[0].cmd, fakeBuboExe);
             assert.ok(spawnedCmds[0].args.includes('serve'));
             assert.ok(spawnedCmds[0].args.includes('llm'));
-            assert.ok(spawnedCmds[0].args.includes('--manifest'));
-            assert.ok(spawnedCmds[0].args.includes(fakeManifest));
+            assert.ok(spawnedCmds[0].args.includes('--model'));
+            assert.ok(spawnedCmds[0].args.includes(fakeShard1));
+            assert.ok(spawnedCmds[0].args.includes('--mtp-model'));
+            assert.ok(spawnedCmds[0].args.includes(fakeMtp));
+            assert.ok(spawnedCmds[0].args.includes('--mmproj'));
+            assert.ok(spawnedCmds[0].args.includes(fakeMmproj));
+            assert.ok(spawnedCmds[0].args.includes('--twin-model'));
+            assert.ok(spawnedCmds[0].args.includes(fakeTwin));
+            assert.ok(spawnedCmds[0].args.includes('--draft-head-model'));
+            assert.ok(spawnedCmds[0].args.includes(fakeDraftHead));
             assert.ok(spawnedCmds[0].args.includes('subagents'));
             assert.equal(spawnedCmds[0].opts.env.BUBO_RUNTIME_DIR, rocmDir);
 
@@ -882,13 +901,15 @@ describe('Единый локальный контур /MODELS/Local для ма
         }
     });
 
-    it('10. Windows Qwen3.8-Flash-Next: штатный многопоточный загрузчик качает 8 файлов Bubo с подпапками (mtp/mmproj/twin/draft_head) и вызывает onComplete', async () => {
+    it('10. Windows Qwen3.8-Flash-Next: качает 8 GGUF-файлов прямо в $ai/#weights (без MODELS/Local/models), чинит старый class.js и переносит хвосты 1.0.32', async () => {
         const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-bubo-dl-'));
         try {
-            const { startHuggingFaceDownload, BUBO_ORIGINAL_MODEL_FILES, BUBO_ORIGINAL_MODEL_DIR_REL } = await import('../sources/modules/trainer/index.js');
-            const customMock = BUBO_ORIGINAL_MODEL_FILES.slice(0, 2).map((f, idx) => ({
+            const { startHuggingFaceDownload, QWEN_FLASH_NEXT_GGUF_FILES } = await import('../sources/modules/trainer/index.js');
+            const { migrateLocalModelsLayoutSync, modelWeightsDir, modelClassFile } = await import('../sources/modules/trainer/paths.js');
+            const { listLocalModelsAndAdapters } = await import('../sources/modules/trainer/runner.js');
+            const customMock = QWEN_FLASH_NEXT_GGUF_FILES.slice(0, 2).map((f, idx) => ({
                 ...f,
-                destRelPath: idx === 0 ? 'shard1.gguf' : 'mtp/mtp-test.gguf',
+                destRelPath: idx === 0 ? 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf' : 'mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf',
                 url: `https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/main/${idx === 0 ? 'shard1.gguf' : 'mtp-test.gguf'}`,
                 size: 16,
             }));
@@ -907,7 +928,6 @@ describe('Единый локальный контур /MODELS/Local для ма
             const job = await startHuggingFaceDownload({
                 repoId: 'unsloth/Qwen3.8-Flash-Next-GGUF',
                 customFiles: customMock,
-                customFilesDir: BUBO_ORIGINAL_MODEL_DIR_REL,
                 onComplete: async () => { finalized = true; },
                 rootDir: tmpRoot,
                 platform: 'win32',
@@ -918,9 +938,48 @@ describe('Единый локальный контур /MODELS/Local для ма
 
             assert.equal(job.status, 'completed');
             assert.equal(job.progress, 100);
-            assert.equal(finalized, true, 'после скачивания файлов вызвана финализация Bubo');
-            assert.ok(fs.existsSync(path.join(tmpRoot, BUBO_ORIGINAL_MODEL_DIR_REL, 'shard1.gguf')));
-            assert.ok(fs.existsSync(path.join(tmpRoot, BUBO_ORIGINAL_MODEL_DIR_REL, 'mtp', 'mtp-test.gguf')));
+            assert.equal(finalized, true, 'после скачивания файлов вызвана установка движка');
+            const canonicalWeights = modelWeightsDir(tmpRoot, 'Qwen3.8-Flash-Next', 'Local');
+            assert.ok(fs.existsSync(path.join(canonicalWeights, 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf')));
+            assert.ok(fs.existsSync(path.join(canonicalWeights, 'mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf')));
+            assert.equal(fs.existsSync(path.join(tmpRoot, 'MODELS', 'Local', 'models')), false, 'папка MODELS/Local/models не создаётся');
+
+            // Проверка авто-миграции из MODELS/Local/models/qwen38-* и авто-починки class.js
+            const tmpMigr = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-bubo-migr-'));
+            try {
+                const legacyPkg = path.join(tmpMigr, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1');
+                await fsp.mkdir(path.join(legacyPkg, 'mtp'), { recursive: true });
+                await fsp.writeFile(path.join(legacyPkg, 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf'), 'GGUF_MAIN_123456');
+                await fsp.writeFile(path.join(legacyPkg, 'mtp', 'mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf'), 'GGUF_MTP_123456');
+                const aiFile = modelClassFile(tmpMigr, 'Qwen3.8-Flash-Next', 'Local');
+                await fsp.mkdir(path.dirname(aiFile), { recursive: true });
+                await fsp.writeFile(aiFile, `export default ${JSON.stringify({
+                    label: 'Qwen3.8-Flash-Next',
+                    protocol: 'halogen',
+                    weightsDir: 'MODELS/Local/models/qwen38-flash-next-base-ud-q4-k-xl-v1',
+                    primaryFile: 'bubo-package.json',
+                }, null, 4)};\n`);
+
+                migrateLocalModelsLayoutSync(tmpMigr);
+                const newW = modelWeightsDir(tmpMigr, 'Qwen3.8-Flash-Next', 'Local');
+                assert.ok(fs.existsSync(path.join(newW, 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf')));
+                assert.ok(fs.existsSync(path.join(newW, 'mtp', 'mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf')));
+                assert.equal(fs.existsSync(path.join(tmpMigr, 'MODELS', 'Local', 'models')), false);
+
+                const rawClass = await fsp.readFile(aiFile, 'utf-8');
+                assert.ok(rawClass.includes('MODELS/Local/Qwen3.8-Flash-Next/$ai/#weights'));
+                assert.ok(rawClass.includes('Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf'));
+                assert.ok(!rawClass.includes('bubo-package.json'));
+
+                const inv = await listLocalModelsAndAdapters(tmpMigr);
+                const m = inv.models.find(x => x.id === 'Qwen3.8-Flash-Next');
+                assert.ok(m, 'модель видна в установленных после переноса');
+                assert.equal(m.weightFiles.length, 2, 'видны как основной шард, так и файл в подпапке mtp/');
+                assert.equal(m.active, true);
+            }
+            finally {
+                await fsp.rm(tmpMigr, { recursive: true, force: true });
+            }
         }
         finally {
             await fsp.rm(tmpRoot, { recursive: true, force: true });

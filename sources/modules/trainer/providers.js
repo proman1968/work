@@ -865,9 +865,6 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
     // 1. Локальный провайдер /MODELS/Local и его модели
     if (providerId === 'Local' || data.protocol === 'local' || data.protocol === 'halogen') {
         const platform = os.platform();
-        const buboManifest1 = path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json');
-        const buboManifest2 = path.join(rootDir, 'MODELS', 'Local', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json');
-        const hasBuboGlobal = fs.existsSync(buboManifest1) || fs.existsSync(buboManifest2);
 
         if (type === '$provider') {
             const localDir = path.join(rootDir, 'MODELS', 'Local');
@@ -888,8 +885,8 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
                 }
             }
             catch { /* ignore */ }
-            if (installedCount > 0 || hasBuboGlobal) {
-                return { active: true, reason: `Активен (моделей: ${installedCount || 1})`, configuredKey: true };
+            if (installedCount > 0) {
+                return { active: true, reason: `Активен (моделей: ${installedCount})`, configuredKey: true };
             }
             return { active: false, reason: 'Нет совместимых скачанных локальных моделей (откройте для установки)', configuredKey: false };
         }
@@ -899,7 +896,6 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
         const canonicalWeightsRel = path.join('MODELS', 'Local', modelName, '$ai', '#weights');
         const legacyWeightsRel = path.join('MODELS', 'Local', modelName, '#weights');
         const adapterRel = data.adapterPath || path.join('MODELS', 'Local', '$provider', '#adapters', modelName);
-        const isFlashNext = modelName === 'Qwen3.8-Flash-Next';
 
         const check = inspectDirCandidatesSync([
             data.weightsDir ? path.resolve(rootDir, data.weightsDir) : '',
@@ -909,7 +905,7 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
         ], platform);
 
         const isHalogenLinuxRepo = /^peonist-ai\/halogen-/i.test(String(data.hfRepo || ''));
-        if (platform === 'win32' && isHalogenLinuxRepo && !(isFlashNext && hasBuboGlobal) && !check.info?.hasGguf && !check.info?.hasBuboManifest) {
+        if (platform === 'win32' && isHalogenLinuxRepo && !check.info?.hasGguf && !check.info?.hasBuboManifest) {
             return {
                 active: false,
                 reason: check.info?.incompatibleReason || 'Веса формата Linux (.hgn/.hnpw) несовместимы с Windows',
@@ -917,7 +913,7 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
                 configuredKey: false,
             };
         }
-        if (check.ready || (isFlashNext && hasBuboGlobal)) {
+        if (check.ready) {
             return { active: true, reason: 'Активна (веса модели на диске)', configuredKey: true };
         }
         if (check.incompatible) {

@@ -16,6 +16,28 @@ import path from 'node:path';
 
 export const WEIGHT_FILE_EXT_RE = /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i;
 export const LINUX_ONLY_HALOGEN_EXT_RE = /\.(hgn|hnpw)$/i;
+export const WEIGHT_SIDECAR_SUBDIRS = Object.freeze(['mtp', 'mmproj', 'twin', 'draft_head']);
+
+function collectWeightDirRawEntriesSync(dirPath) {
+    const out = [];
+    const rootEntries = fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const ent of rootEntries) {
+        if (ent.isFile()) {
+            out.push(ent.name);
+        }
+        else if (ent.isDirectory() && WEIGHT_SIDECAR_SUBDIRS.includes(ent.name)) {
+            try {
+                const subEntries = fs.readdirSync(path.join(dirPath, ent.name), { withFileTypes: true });
+                for (const sub of subEntries) {
+                    if (sub.isFile())
+                        out.push(`${ent.name}/${sub.name}`);
+                }
+            }
+            catch { /* ignore */ }
+        }
+    }
+    return out;
+}
 
 export function localRootDir(rootDir = process.cwd()) {
     return path.join(rootDir, 'MODELS', 'Local');
@@ -68,7 +90,7 @@ export function hasReadyWeightFilesSync(dirPath) {
     if (!dirPath || !fs.existsSync(dirPath))
         return false;
     try {
-        return fs.readdirSync(dirPath).some(f => !f.endsWith('.part') && WEIGHT_FILE_EXT_RE.test(f));
+        return collectWeightDirRawEntriesSync(dirPath).some(f => !f.endsWith('.part') && WEIGHT_FILE_EXT_RE.test(f));
     }
     catch {
         return false;
@@ -98,7 +120,7 @@ export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
     if (!dirPath || !fs.existsSync(dirPath))
         return empty;
     try {
-        const raw = fs.readdirSync(dirPath);
+        const raw = collectWeightDirRawEntriesSync(dirPath);
         const hasParts = raw.some(f => f.endsWith('.part'));
         let pendingState = false;
         if (raw.includes('download-state.json')) {
@@ -330,7 +352,23 @@ export function migrateLocalModelsLayoutSync(rootDir = process.cwd(), { skipMode
         catch { /* ignore */ }
     }
 
-    // 3. Папки моделей со старым #weights на уровне модели (рядом с $ai) переносим в $ai/#weights
+    // 2.5. Перенос весов из ошибочной папки v1.0.32 `MODELS/Local/models/qwen38-*` в `MODELS/Local/Qwen3.8-Flash-Next/$ai/#weights`
+    const legacyModelsDir = path.join(localRoot, 'models');
+    if (fs.existsSync(legacyModelsDir) && !(skipModels && skipModels.has('Qwen3.8-Flash-Next'))) {
+        try {
+            const flashWeightsDir = modelWeightsDir(rootDir, 'Qwen3.8-Flash-Next');
+            for (const pkgName of ['qwen38-flash-next-base-ud-q4-k-xl-v1', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1']) {
+                const pkgDir = path.join(legacyModelsDir, pkgName);
+                if (fs.existsSync(pkgDir))
+                    mergeMoveDirSync(pkgDir, flashWeightsDir);
+            }
+            if (fs.existsSync(legacyModelsDir) && !fs.readdirSync(legacyModelsDir).length)
+                fs.rmdirSync(legacyModelsDir);
+        }
+        catch { /* ignore */ }
+    }
+
+    // 3. Папки моделей со старым #weights на уровне модели (рядом с $ai) переносим в $ai/#weights и чиним пути в class.js
     try {
         const entries = fs.readdirSync(localRoot, { withFileTypes: true });
         for (const e of entries) {
@@ -352,9 +390,19 @@ export function migrateLocalModelsLayoutSync(rootDir = process.cwd(), { skipMode
                     const meta = JSON.parse(jsonPart);
                     let changed = false;
                     const expectedWeightsRel = path.relative(rootDir, newWeights).replace(/\\/g, '/');
-                    if (meta.weightsDir && !meta.weightsDir.includes('/$ai/#weights') && fs.existsSync(newWeights)) {
+                    if (meta.weightsDir && meta.weightsDir !== expectedWeightsRel && fs.existsSync(newWeights)) {
                         meta.weightsDir = expectedWeightsRel;
                         changed = true;
+                    }
+                    if (meta.primaryFile === 'bubo-package.json' && fs.existsSync(newWeights)) {
+                        const wFiles = collectWeightDirRawEntriesSync(newWeights);
+                        const primaryGguf = wFiles
+                            .filter(f => f.toLowerCase().endsWith('.gguf') && !f.endsWith('.part') && !/^(mtp|mmproj|twin|draft|iq4-nofullattn)/i.test(path.basename(f)))
+                            .sort((a, b) => (/-00001-of-/i.test(a) ? -1 : /-00001-of-/i.test(b) ? 1 : a.localeCompare(b)))[0];
+                        if (primaryGguf) {
+                            meta.primaryFile = path.basename(primaryGguf);
+                            changed = true;
+                        }
                     }
                     if (meta.adapterPath && !meta.adapterPath.includes('/$provider/#adapters/')) {
                         const adName = path.basename(String(meta.adapterPath));

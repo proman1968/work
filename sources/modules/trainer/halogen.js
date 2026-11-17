@@ -70,11 +70,10 @@ export const BUBO_WINDOWS_RELEASE = Object.freeze({
 });
 
 /**
- * Точные 8 файлов пакета `qwen38-flash-next-base-ud-q4-k-xl-v1` (108.608 GiB / 116.6 ГБ)
- * для скачивания штатным многопоточным загрузчиком WORK и финализации через `bubo.exe prepare model --offline`.
+ * Точные 8 GGUF-файлов сети `Qwen3.8-Flash-Next` (`UD-Q4_K_XL` + `MTP` + `Vision` + `Dense Twin` + `Draft Head`, 108.6 GiB)
+ * для скачивания штатным многопоточным загрузчиком WORK прямо в метапапку модели `MODELS/Local/Qwen3.8-Flash-Next/$ai/#weights/`.
  */
-export const BUBO_ORIGINAL_MODEL_DIR_REL = 'MODELS/Local/models/qwen38-flash-next-base-ud-q4-k-xl-v1';
-export const BUBO_ORIGINAL_MODEL_FILES = Object.freeze([
+export const QWEN_FLASH_NEXT_GGUF_FILES = Object.freeze([
     {
         name: 'UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf',
         destRelPath: 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf',
@@ -101,29 +100,30 @@ export const BUBO_ORIGINAL_MODEL_FILES = Object.freeze([
     },
     {
         name: 'mtp/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf',
-        destRelPath: 'mtp/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf',
+        destRelPath: 'mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf',
         url: 'https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/766911a6b7369840a91dbcd95f9f997acaab6cd6/MTP/mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf',
         size: 2786568256,
     },
     {
         name: 'mmproj/mmproj-Qwen3.8-Flash-Next-BF16.gguf',
-        destRelPath: 'mmproj/mmproj-Qwen3.8-Flash-Next-BF16.gguf',
+        destRelPath: 'mmproj-Qwen3.8-Flash-Next-BF16.gguf',
         url: 'https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/766911a6b7369840a91dbcd95f9f997acaab6cd6/mmproj-BF16.gguf',
         size: 907542944,
     },
     {
         name: 'twin/iq4-nofullattn-nohc.gguf',
-        destRelPath: 'twin/iq4-nofullattn-nohc.gguf',
+        destRelPath: 'iq4-nofullattn-nohc.gguf',
         url: 'https://huggingface.co/HaloForgeLabs/bubo-qwen3.8-flash-next/resolve/0a3c343bec2095f43f2906371c83e4faa8a47da1/twin-base/iq4-nofullattn-nohc.gguf',
         size: 1230788768,
     },
     {
         name: 'draft_head/draft-out-q4k.gguf',
-        destRelPath: 'draft_head/draft-out-q4k.gguf',
+        destRelPath: 'draft-out-q4k.gguf',
         url: 'https://huggingface.co/HaloForgeLabs/bubo-qwen3.8-flash-next/resolve/0a3c343bec2095f43f2906371c83e4faa8a47da1/draft_head/draft-out-q4k.gguf',
         size: 357581248,
     },
 ]);
+export const BUBO_ORIGINAL_MODEL_FILES = QWEN_FLASH_NEXT_GGUF_FILES;
 
 /**
  * Каталог штатных моделей для машинок Halo в `/MODELS/Local` (1 основная GPU-модель + 7 NPU-моделей на одном порту 8731).
@@ -687,16 +687,15 @@ export function computeHalogenMemoryPlan({
         `  ${HALOGEN_IMAGE_TAG}`,
     ].join('\n');
 
-    // Нативная подготовка и запуск Halowin Bubo (gufo v0.26.0 + AMD ROCm 10.0.0 gfx1151 + Ryzen AI XRT NPU) на Windows 11
+    // Нативная подготовка движка Halowin Bubo (AMD ROCm 10.0.0 gfx1151) и запуск нейросети из её метапапки `$ai/#weights`
     const windowsPrepareCommand = [
-        `.\\bubo.exe prepare runtime --yes`,
-        `.\\bubo.exe prepare model --model-set original --output "MODELS\\Local" --yes`,
+        `.\\bubo.exe prepare runtime --runtime-dir "MODELS\\Local\\$provider\\#runtime\\bubo\\runtime\\rocm-10.0.0-gfx1151" --yes`,
     ].join('\n');
 
     const windowsCommand = [
         `bubo.exe serve llm ^`,
         `  --host 127.0.0.1 --port ${HALOGEN_DEFAULT_PORT} ^`,
-        `  --manifest "MODELS\\Local\\models\\qwen38-flash-next-base-ud-q4-k-xl-v1\\bubo-package.json" ^`,
+        `  --model "MODELS\\Local\\Qwen3.8-Flash-Next\\$ai\\#weights\\Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf" ^`,
         `  --served-model-name halogen-qwen3.8-flash-next ^`,
         `  --profile ${kvSlots > 1 ? 'subagents' : 'default'} --context ${contextTokens} ^`,
         `  --npu-prefill on ^`,
@@ -807,19 +806,9 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
     ].filter(Boolean);
     const rocmRuntimeDir = rocmCandidates.find(p => fs.existsSync(p)) || null;
 
-    const manifestCandidates = [
-        process.env.BUBO_MANIFEST || '',
-        path.join(modelWeightsDir(rootDir, 'Qwen3.8-Flash-Next', 'Local'), 'bubo-package.json'),
-        path.join(rootDir, 'MODELS', 'Local', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'),
-        path.join(rootDir, 'MODELS', 'Local', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'),
-        path.join(rootDir, 'MODELS', 'Local', 'Qwen3.8-Flash-Next', '#weights', 'bubo-package.json'),
-        path.join(rootDir, 'MODELS', 'Halogen', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'),
-        path.join(rootDir, 'MODELS', 'Halogen', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'),
-        path.join(rootDir, 'MODELS', 'Halogen', 'Qwen3.8-Flash-Next', '#weights', 'bubo-package.json'),
-        path.join(localAppData, 'Bubo', 'models', 'qwen38-flash-next-base-ud-q4-k-xl-v1', 'bubo-package.json'),
-        path.join(localAppData, 'Bubo', 'models', 'huihui-qwen38-flash-next-ud-q4-k-xl-v1', 'bubo-package.json'),
-    ].filter(Boolean);
-    const buboManifestPath = manifestCandidates.find(p => fs.existsSync(p)) || null;
+    const flashWeightsDir = modelWeightsDir(rootDir, 'Qwen3.8-Flash-Next', 'Local');
+    const flashResolved = resolveBuboModelFiles(flashWeightsDir);
+    const anyLocalGguf = flashResolved.mainModel || findLocalGgufModel(rootDir);
 
     const gufoCandidates = [
         path.join(rtBase, 'gufo', 'gufo.exe'),
@@ -866,8 +855,8 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
         buboRootDir,
         rocmRuntimePrepared: Boolean(rocmRuntimeDir),
         rocmRuntimeDir,
-        buboModelPrepared: Boolean(buboManifestPath),
-        buboManifestPath,
+        buboModelPrepared: Boolean(anyLocalGguf),
+        buboManifestPath: null,
         gufoInstalled: Boolean(gufoExePath),
         gufoExePath,
         strataInstalled: Boolean(strataExePath),
@@ -1029,40 +1018,78 @@ export async function probeHalogenServer(baseUrl = HALOGEN_DEFAULT_BASE_URL, { f
 }
 
 /**
- * Найти локальный GGUF-файл модели (в `/MODELS/Halogen` или `/MODELS/Local`).
+ * Найти основной шард GGUF и все вспомогательные файлы (MTP, Vision mmproj, Dense Twin, Draft Head)
+ * внутри метапапки модели `$ai/#weights` — поддерживается как плоская раскладка, так и подпапки `mtp/`, `mmproj/`, `twin/`, `draft_head/`.
  */
-function findLocalGgufModel(rootDir = process.cwd()) {
-    const searchRoots = [
-        path.join(rootDir, 'MODELS', 'Local', 'models'),
-        path.join(rootDir, 'MODELS', 'Local'),
-        path.join(rootDir, 'MODELS', 'Halogen', 'models'),
-        path.join(rootDir, 'MODELS', 'Halogen'),
-    ];
-    for (const base of searchRoots) {
-        if (!fs.existsSync(base))
-            continue;
+export function resolveBuboModelFiles(weightsDir) {
+    const empty = { mainModel: null, mtpModel: null, mmprojModel: null, twinModel: null, draftHeadModel: null };
+    if (!weightsDir || !fs.existsSync(weightsDir))
+        return empty;
+    const candidates = [];
+    const scanDir = (dir) => {
+        if (!fs.existsSync(dir))
+            return;
         try {
-            for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
-                if (!entry.isDirectory() || entry.name.startsWith('$') || entry.name.startsWith('#'))
-                    continue;
-                const candidates = [
-                    path.join(base, entry.name, '$ai', '#weights'),
-                    path.join(base, entry.name, '#weights'),
-                    path.join(base, entry.name),
-                ];
-                for (const dir of candidates) {
-                    if (!fs.existsSync(dir))
-                        continue;
-                    const gguf = fs.readdirSync(dir)
-                        .filter(f => f.endsWith('.gguf') && !f.endsWith('.part') && !/mtp|mmproj/i.test(f))
-                        .sort()[0];
-                    if (gguf)
-                        return path.join(dir, gguf);
-                }
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                if (ent.isFile() && ent.name.toLowerCase().endsWith('.gguf') && !ent.name.endsWith('.part'))
+                    candidates.push(path.join(dir, ent.name));
             }
         }
         catch { /* ignore */ }
+    };
+    scanDir(weightsDir);
+    for (const sub of ['mtp', 'mmproj', 'twin', 'draft_head'])
+        scanDir(path.join(weightsDir, sub));
+
+    const isSidecar = (p) => {
+        const base = path.basename(p).toLowerCase();
+        const dirName = path.basename(path.dirname(p)).toLowerCase();
+        return ['mtp', 'mmproj', 'twin', 'draft_head'].includes(dirName)
+            || /^(mtp[-_]|mmproj[-_]|iq4-nofullattn|twin[-_]|draft[-_]?out|draft[-_]?head)/.test(base);
+    };
+
+    const mainModel = candidates
+        .filter(p => !isSidecar(p))
+        .sort((a, b) => (/-00001-of-/i.test(a) ? -1 : /-00001-of-/i.test(b) ? 1 : a.localeCompare(b)))[0] || null;
+    const mtpModel = candidates.find(p =>
+        path.basename(path.dirname(p)).toLowerCase() === 'mtp' || /^mtp[-_]/i.test(path.basename(p))
+    ) || null;
+    const mmprojModel = candidates.find(p =>
+        path.basename(path.dirname(p)).toLowerCase() === 'mmproj' || /^mmproj[-_]/i.test(path.basename(p))
+    ) || null;
+    const twinModel = candidates.find(p =>
+        path.basename(path.dirname(p)).toLowerCase() === 'twin' || /iq4-nofullattn|^twin[-_]/i.test(path.basename(p))
+    ) || null;
+    const draftHeadModel = candidates.find(p =>
+        path.basename(path.dirname(p)).toLowerCase() === 'draft_head' || /draft[-_]?out|draft[-_]?head/i.test(path.basename(p))
+    ) || null;
+
+    return { mainModel, mtpModel, mmprojModel, twinModel, draftHeadModel };
+}
+
+/**
+ * Найти локальный GGUF-файл модели в метапапках моделей `/MODELS/Local/<Модель>/$ai/#weights`.
+ */
+function findLocalGgufModel(rootDir = process.cwd()) {
+    const preferred = resolveBuboModelFiles(modelWeightsDir(rootDir, 'Qwen3.8-Flash-Next', 'Local'));
+    if (preferred.mainModel)
+        return preferred.mainModel;
+
+    const localRoot = path.join(rootDir, 'MODELS', 'Local');
+    if (!fs.existsSync(localRoot))
+        return null;
+    try {
+        for (const entry of fs.readdirSync(localRoot, { withFileTypes: true })) {
+            if (!entry.isDirectory() || entry.name.startsWith('$') || entry.name.startsWith('#') || entry.name === 'models')
+                continue;
+            for (const dir of [modelWeightsDir(rootDir, entry.name, 'Local'), path.join(localRoot, entry.name, '#weights')]) {
+                const resolved = resolveBuboModelFiles(dir);
+                if (resolved.mainModel)
+                    return resolved.mainModel;
+            }
+        }
     }
+    catch { /* ignore */ }
     return null;
 }
 
@@ -1108,14 +1135,12 @@ export function checkWindowsHalogenPreflight({
 }
 
 /**
- * Скачать и подготовить нативный Windows-движок `Halowin Bubo` (`bubo-v0.1.2-windows-x64-gfx1151.zip`),
- * официальный рантайм AMD ROCm 10.0.0 (`gfx1151`) и пакет весов `Qwen3.8-Flash-Next` (`UD-Q4_K_XL` + `Dense Twin` + `MTP`).
+ * Скачать и подготовить общий нативный Windows-движок `Halowin Bubo` (`bubo-v0.1.2-windows-x64-gfx1151.zip`)
+ * и официальный рантайм AMD ROCm 10.0.0 (`gfx1151`) в `MODELS/Local/$provider/#runtime/bubo/`.
  */
 export async function prepareWindowsBuboRuntime({
     rootDir = process.cwd(),
     step = 'runtime',
-    modelSet = 'original',
-    offline = false,
     fetchImpl = globalThis.fetch,
     spawnImpl = spawn,
 } = {}) {
@@ -1123,7 +1148,6 @@ export async function prepareWindowsBuboRuntime({
     const runtimeRoot = localRuntimeDir(rootDir);
     const buboDir = path.join(runtimeRoot, 'bubo');
     const rocmDir = path.join(buboDir, 'runtime', 'rocm-10.0.0-gfx1151');
-    const modelsOutDir = path.join(rootDir, 'MODELS', 'Local');
 
     await fsp.mkdir(runtimeRoot, { recursive: true });
 
@@ -1131,7 +1155,7 @@ export async function prepareWindowsBuboRuntime({
         status: 'running',
         step,
         progress: 5,
-        message: 'Проверка нативного пакета Halowin Bubo (gfx1151)…',
+        message: 'Проверка нативного движка Halowin Bubo (gfx1151)…',
         logs: [],
         error: '',
         updatedAt: Date.now(),
@@ -1145,22 +1169,10 @@ export async function prepareWindowsBuboRuntime({
         if (_windowsPrepareState.logs.length > 80)
             _windowsPrepareState.logs.shift();
         _windowsPrepareState.message = clean;
-        const pctMatch = clean.match(/\b(\d{1,3})%/);
-        if (pctMatch && (step === 'model' || step === 'all')) {
-            const pct = Math.min(99, Math.max(0, Number(pctMatch[1])));
-            if (pct > _windowsPrepareState.progress)
-                _windowsPrepareState.progress = pct;
-        }
         _windowsPrepareState.updatedAt = Date.now();
     };
 
     try {
-        if (step === 'model' || step === 'all') {
-            const freeGb = getFreeDiskSpaceGb(rootDir);
-            if (freeGb !== null && freeGb < 118) {
-                appendLog(`Предупреждение: на диске свободно ${freeGb} ГБ (рекомендуется ~120 ГБ для модели).`);
-            }
-        }
 
         const netCfg = loadTrainerNetworkSettings(rootDir);
         const childEnv = {
@@ -1254,11 +1266,11 @@ export async function prepareWindowsBuboRuntime({
         }
 
         const buboExe = envInfo.buboExePath || path.join(buboDir, 'bin', 'bubo.exe');
-        if ((step === 'runtime' || step === 'model' || step === 'all') && !fs.existsSync(buboExe)) {
+        if ((step === 'runtime' || step === 'all') && !fs.existsSync(buboExe)) {
             throw new Error(`Исполняемый файл bubo.exe не найден по пути: ${buboExe}`);
         }
 
-        // Шаг 2: Установка официальных библиотек AMD ROCm 10.0.0 (`gfx1151`) через `bubo.exe prepare runtime --yes`
+        // Шаг 2: Установка официальных библиотек AMD ROCm 10.0.0 (`gfx1151`) в общий #runtime/bubo/runtime/
         if ((step === 'runtime' || step === 'all') && fs.existsSync(buboExe)) {
             appendLog('Загрузка официальных пакетов AMD ROCm 10.0.0 для gfx1151 (bubo prepare runtime --yes)…');
             _windowsPrepareState.progress = Math.max(_windowsPrepareState.progress, 35);
@@ -1277,60 +1289,6 @@ export async function prepareWindowsBuboRuntime({
                 proc.on('error', reject);
                 proc.on('close', code => code === 0 ? resolve() : reject(new Error(`bubo prepare runtime завершился с кодом ${code}`)));
             });
-        }
-
-        // Шаг 3: Подготовка 8 файлов модели Qwen3.8-Flash-Next (UD-Q4_K_XL + MTP + Dense Twin + Draft Head + Vision)
-        if ((step === 'model' || step === 'all') && fs.existsSync(buboExe)) {
-            appendLog(`Подготовка модели Qwen3.8-Flash-Next (${modelSet}${offline ? ', проверка локальных файлов' : ''}) через bubo prepare model…`);
-            _windowsPrepareState.progress = Math.max(_windowsPrepareState.progress, 45);
-            const args = [
-                'prepare', 'model',
-                ...(modelSet === 'original' ? ['--model-set', 'original'] : []),
-                ...(offline ? ['--offline'] : []),
-                '--output', modelsOutDir,
-                '--yes',
-            ];
-            await new Promise((resolve, reject) => {
-                const proc = spawnImpl(buboExe, args, {
-                    cwd: path.dirname(buboExe),
-                    env: childEnv,
-                    windowsHide: true,
-                });
-                proc.stdout?.on('data', d => appendLog(d));
-                proc.stderr?.on('data', d => appendLog(d));
-                proc.on('error', reject);
-                proc.on('close', code => code === 0 ? resolve() : reject(new Error(`bubo prepare model завершился с кодом ${code}`)));
-            });
-
-            const afterEnv = inspectWindowsHalogenEnvironment({ rootDir });
-            const flashSpec = HALOGEN_MODELS_CATALOG.find(m => m.nodeName === 'Qwen3.8-Flash-Next');
-            if (flashSpec) {
-                const wDir = afterEnv.buboManifestPath
-                    ? path.dirname(afterEnv.buboManifestPath)
-                    : modelWeightsDir(rootDir, flashSpec.nodeName, 'Local');
-                await registerLocalModelNode({
-                    rootDir,
-                    folderName: flashSpec.nodeName,
-                    label: flashSpec.label,
-                    repoId: flashSpec.windowsBuboRepo || 'unsloth/Qwen3.8-Flash-Next-GGUF',
-                    model: flashSpec.model,
-                    protocol: 'halogen',
-                    icon: flashSpec.icon || 'ai:qwen',
-                    modality: flashSpec.modality,
-                    capabilities: flashSpec.capabilities,
-                    efforts: flashSpec.efforts,
-                    maxTokens: flashSpec.maxTokens,
-                    maxOutput: flashSpec.maxOutput,
-                    baseUrl: flashSpec.baseUrl || HALOGEN_DEFAULT_BASE_URL,
-                    weightsDir: wDir,
-                    primaryFile: 'bubo-package.json',
-                });
-                try {
-                    const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
-                    localNode?.reset?.();
-                }
-                catch { /* ignore */ }
-            }
         }
 
         _windowsPrepareState.status = 'completed';
@@ -1387,17 +1345,20 @@ export async function startHalogenBackend({
     fs.mkdirSync(path.join(cacheDir, 'slots'), { recursive: true });
 
     const ggufPath = modelPath || findLocalGgufModel(rootDir);
+    const resolvedSidecars = ggufPath ? resolveBuboModelFiles(path.dirname(ggufPath)) : null;
 
-    // 1. Приоритет №1 на Windows: нативный Halowin Bubo (`bubo.exe serve llm` на ROCm 10.0.0 gfx1151 + Ryzen AI NPU)
-    if (winEnv.buboInstalled && (winEnv.buboManifestPath || (ggufPath && fs.existsSync(ggufPath)))) {
+    // 1. Приоритет №1 на Windows: нативный движок Halowin Bubo (`bubo.exe serve llm` на ROCm 10.0.0 gfx1151 + Ryzen AI NPU)
+    if (winEnv.buboInstalled && ggufPath && fs.existsSync(ggufPath)) {
         try {
             const args = [
                 'serve', 'llm',
                 '--host', '127.0.0.1',
                 '--port', String(port),
-                ...(winEnv.buboManifestPath
-                    ? ['--manifest', winEnv.buboManifestPath]
-                    : ['--model', ggufPath]),
+                '--model', ggufPath,
+                ...(resolvedSidecars?.mtpModel ? ['--mtp-model', resolvedSidecars.mtpModel] : []),
+                ...(resolvedSidecars?.mmprojModel ? ['--mmproj', resolvedSidecars.mmprojModel] : []),
+                ...(resolvedSidecars?.twinModel ? ['--twin-model', resolvedSidecars.twinModel] : []),
+                ...(resolvedSidecars?.draftHeadModel ? ['--draft-head-model', resolvedSidecars.draftHeadModel] : []),
                 '--served-model-name', 'halogen-qwen3.8-flash-next',
                 '--profile', profile || 'subagents',
                 '--cache-disk', path.join(cacheDir, 'disk'),
@@ -1421,7 +1382,7 @@ export async function startHalogenBackend({
             _managedInfo = {
                 pid: proc.pid,
                 port,
-                modelPath: winEnv.buboManifestPath || ggufPath,
+                modelPath: ggufPath,
                 startedAt: Date.now(),
                 runtime: 'bubo',
                 npuPrefill: Boolean(npuPrefill && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent),
@@ -1436,7 +1397,7 @@ export async function startHalogenBackend({
                 runtime: 'bubo.exe (AMD ROCm 10.0.0 gfx1151)',
                 pid: proc.pid,
                 port,
-                modelPath: winEnv.buboManifestPath || ggufPath,
+                modelPath: ggufPath,
                 windowsEnv: winEnv,
             };
         }
@@ -1592,7 +1553,7 @@ export async function ensureHalogenBackendRunning({
     const wInsp = candidateWeightsDir ? inspectWeightsDirectorySync(candidateWeightsDir, platform) : null;
     const winEnv = inspectWindowsHalogenEnvironment({ rootDir });
 
-    if (platform === 'win32' && wInsp?.incompatibleOnPlatform && !winEnv.buboModelPrepared) {
+    if (platform === 'win32' && wInsp?.incompatibleOnPlatform) {
         return {
             ready: false,
             code: 'INCOMPATIBLE_FORMAT',
@@ -1607,7 +1568,7 @@ export async function ensureHalogenBackendRunning({
     _backendStartPromise = (async () => {
         try {
             const explicitGguf = (wInsp?.hasGguf && candidateWeightsDir)
-                ? path.join(candidateWeightsDir, wInsp.files.filter(f => f.toLowerCase().endsWith('.gguf') && !/mtp|mmproj/i.test(f)).sort()[0] || '')
+                ? (resolveBuboModelFiles(candidateWeightsDir).mainModel || '')
                 : '';
 
             const startRes = await startHalogenBackend({
@@ -1888,15 +1849,15 @@ export async function ensureHalogenModelNodes(rootDir = process.cwd(), { models 
 }
 
 /**
- * Финализировать установленные файлы Windows-модели `Qwen3.8-Flash-Next`:
- * установить `bubo.exe` + ROCm 10.0.0 `gfx1151` (если ещё не стоят) и сгенерировать `bubo-package.json` через `bubo prepare model --offline`.
+ * Убедиться, что общий нативный Windows-движок `bubo.exe` + `ROCm 10.0.0 gfx1151`
+ * установлен в `MODELS/Local/$provider/#runtime/bubo/` (без скачивания или копирования весов).
  */
-export async function finalizeWindowsBuboModel({
+export async function ensureWindowsBuboEngineInstalled({
     rootDir = process.cwd(),
     fetchImpl = globalThis.fetch,
     spawnImpl = spawn,
 } = {}) {
-    let envInfo = inspectWindowsHalogenEnvironment({ rootDir });
+    const envInfo = inspectWindowsHalogenEnvironment({ rootDir });
     if (!envInfo.buboInstalled || !envInfo.rocmRuntimePrepared) {
         const rtRes = await prepareWindowsBuboRuntime({
             rootDir,
@@ -1907,33 +1868,9 @@ export async function finalizeWindowsBuboModel({
         if (!rtRes.ok)
             throw new Error(rtRes.error || 'Не удалось установить встроенный движок Halowin Bubo (ROCm 10.0 gfx1151)');
     }
-    envInfo = inspectWindowsHalogenEnvironment({ rootDir });
-    if (!envInfo.buboModelPrepared) {
-        // Сначала пробуем --offline (быстрая проверка уже скачанных 8 файлов),
-        // если вдруг не хватает лицензионных файлов — разрешаем bubo дозаписать их онлайн без повторной загрузки шардов.
-        let modRes = await prepareWindowsBuboRuntime({
-            rootDir,
-            step: 'model',
-            modelSet: 'original',
-            offline: true,
-            fetchImpl,
-            spawnImpl,
-        });
-        if (!modRes.ok) {
-            modRes = await prepareWindowsBuboRuntime({
-                rootDir,
-                step: 'model',
-                modelSet: 'original',
-                offline: false,
-                fetchImpl,
-                spawnImpl,
-            });
-        }
-        if (!modRes.ok)
-            throw new Error(modRes.error || 'Не удалось сгенерировать манифест bubo-package.json');
-    }
     return { ok: true, windowsEnv: inspectWindowsHalogenEnvironment({ rootDir }) };
 }
+export const finalizeWindowsBuboModel = ensureWindowsBuboEngineInstalled;
 
 /**
  * Проверить наличие скачанных весов и узлов `$ai` для каждой модели Halo, совместимой с текущей ОС.
@@ -1941,7 +1878,6 @@ export async function finalizeWindowsBuboModel({
 export function inspectHalogenCatalogWithStatus(rootDir = process.cwd(), { platform = os.platform() } = {}) {
     migrateLocalModelsLayoutSync(rootDir);
     const activeDownloads = listHuggingFaceDownloads(rootDir);
-    const winEnv = platform === 'win32' ? inspectWindowsHalogenEnvironment({ rootDir }) : null;
     const catalog = getHalogenCatalogForPlatform(platform);
 
     return catalog.map(spec => {
@@ -1953,14 +1889,11 @@ export function inspectHalogenCatalogWithStatus(rootDir = process.cwd(), { platf
             : (fs.existsSync(legacyHalogenDir) ? legacyHalogenDir : localWeightsDir));
 
         const wInsp = inspectWeightsDirectorySync(weightsDir, platform);
-        const hasBuboReady = platform === 'win32'
-            && spec.nodeName === 'Qwen3.8-Flash-Next'
-            && Boolean(winEnv?.buboModelPrepared && winEnv?.buboManifestPath);
 
         const nodeConfigured = fs.existsSync(modelClassFile(rootDir, spec.nodeName, 'Local'));
         let activeJob = activeDownloads.find(d =>
             (d.status === 'downloading' || d.status === 'paused' || d.status === 'failed')
-            && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
+            && (d.repoId === spec.hfRepo || (spec.windowsBuboRepo && d.repoId === spec.windowsBuboRepo) || d.folderName === spec.nodeName || d.modelPath === spec.path)
         ) || null;
 
         if (!activeJob && platform === 'win32' && spec.nodeName === 'Qwen3.8-Flash-Next' && (_windowsPrepareState.status === 'running' || _windowsPrepareState.status === 'error')) {
@@ -1974,22 +1907,22 @@ export function inspectHalogenCatalogWithStatus(rootDir = process.cwd(), { platf
                 progress: _windowsPrepareState.progress || 5,
                 downloadedBytes: 0,
                 totalBytes: 0,
-                currentFile: _windowsPrepareState.message || 'Подготовка Halowin Bubo…',
+                currentFile: _windowsPrepareState.message || 'Установка движка Halowin Bubo…',
                 sourceLabel: 'Halowin Bubo (ROCm 10.0)',
                 speedMBs: 0,
                 avgSpeedMBs: 0,
             };
         }
 
-        const weightsDownloaded = hasBuboReady || (!activeJob && !wInsp.pendingDownload && wInsp.hasReadyWeights && !wInsp.incompatibleOnPlatform);
+        const weightsDownloaded = !activeJob && !wInsp.pendingDownload && wInsp.hasReadyWeights && !wInsp.incompatibleOnPlatform;
 
         return {
             ...spec,
             nodeConfigured,
-            weightsDir: path.relative(rootDir, hasBuboReady ? path.dirname(winEnv.buboManifestPath) : weightsDir).replace(/\\/g, '/'),
+            weightsDir: path.relative(rootDir, weightsDir).replace(/\\/g, '/'),
             weightsDownloaded,
-            incompatibleOnPlatform: !hasBuboReady && wInsp.incompatibleOnPlatform,
-            incompatibleReason: !hasBuboReady ? wInsp.incompatibleReason : '',
+            incompatibleOnPlatform: wInsp.incompatibleOnPlatform,
+            incompatibleReason: wInsp.incompatibleReason || '',
             downloadedFiles: wInsp.files,
             activeDownload: activeJob,
         };
@@ -2048,7 +1981,7 @@ export async function downloadHalogenBundle({
         for (const spec of targets) {
             const running = existingDownloads.find(d =>
                 d.status === 'downloading'
-                && (d.repoId === spec.hfRepo || d.folderName === spec.nodeName || d.modelPath === spec.path)
+                && (d.repoId === spec.hfRepo || (spec.windowsBuboRepo && d.repoId === spec.windowsBuboRepo) || d.folderName === spec.nodeName || d.modelPath === spec.path)
             );
             if (running) {
                 alreadyActiveCount++;
@@ -2059,9 +1992,8 @@ export async function downloadHalogenBundle({
             if (spec.runtimeType === 'bubo') {
                 const job = await startHuggingFaceDownload({
                     repoId: spec.windowsBuboRepo || 'unsloth/Qwen3.8-Flash-Next-GGUF',
-                    customFiles: BUBO_ORIGINAL_MODEL_FILES,
-                    customFilesDir: BUBO_ORIGINAL_MODEL_DIR_REL,
-                    onComplete: ({ rootDir: rd }) => finalizeWindowsBuboModel({ rootDir: rd, fetchImpl }),
+                    customFiles: QWEN_FLASH_NEXT_GGUF_FILES,
+                    onComplete: ({ rootDir: rd }) => ensureWindowsBuboEngineInstalled({ rootDir: rd, fetchImpl }),
                     providerFolder: 'Local',
                     targetNodeName: spec.nodeName,
                     platform,
@@ -2076,7 +2008,7 @@ export async function downloadHalogenBundle({
                         maxTokens: spec.maxTokens,
                         maxOutput: spec.maxOutput,
                         baseUrl: spec.baseUrl || HALOGEN_DEFAULT_BASE_URL,
-                        primaryFile: 'bubo-package.json',
+                        primaryFile: 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf',
                     },
                     rootDir,
                     token,

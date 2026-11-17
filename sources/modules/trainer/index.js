@@ -65,8 +65,10 @@ import {
     computeHalogenMemoryPlan,
     inspectWindowsHalogenEnvironment,
     prepareWindowsBuboRuntime,
+    ensureWindowsBuboEngineInstalled,
     finalizeWindowsBuboModel,
-    BUBO_ORIGINAL_MODEL_DIR_REL,
+    resolveBuboModelFiles,
+    QWEN_FLASH_NEXT_GGUF_FILES,
     BUBO_ORIGINAL_MODEL_FILES,
     probeHalogenServer,
     startHalogenBackend,
@@ -121,6 +123,7 @@ import {
 import {
     inspectWeightsDirectorySync,
     modelWeightsDir,
+    migrateLocalModelsLayoutSync,
     LINUX_ONLY_HALOGEN_EXT_RE,
 } from './paths.js';
 
@@ -176,8 +179,10 @@ export {
     computeHalogenMemoryPlan,
     inspectWindowsHalogenEnvironment,
     prepareWindowsBuboRuntime,
+    ensureWindowsBuboEngineInstalled,
     finalizeWindowsBuboModel,
-    BUBO_ORIGINAL_MODEL_DIR_REL,
+    resolveBuboModelFiles,
+    QWEN_FLASH_NEXT_GGUF_FILES,
     BUBO_ORIGINAL_MODEL_FILES,
     probeHalogenServer,
     startHalogenBackend,
@@ -376,17 +381,30 @@ export const TRAINER_METHODS = Object.freeze({
             const parts = itemPath.split('/').filter(Boolean);
             const providerId = parts[1] || 'MODELS';
             const isLocal = providerId === 'Local' || d.protocol === 'local' || d.protocol === 'halogen';
+            if (isLocal) {
+                migrateLocalModelsLayoutSync(process.cwd());
+            }
             const act = evaluateAiNodeActivitySync(this);
 
             let weightInfo = null;
             let halogenProbe = null;
             let sizeGb = 0;
             let needsRuntime = false;
+            let resolvedWeightsRel = d.weightsDir || '';
+            let resolvedPrimaryFile = d.primaryFile || '';
 
             if (isLocal) {
-                const wDirRel = d.weightsDir || path.join('MODELS', 'Local', this?.id || '', '$ai', '#weights');
-                const wDirAbs = path.resolve(process.cwd(), wDirRel);
+                const canonicalWeightsRel = path.join('MODELS', 'Local', this?.id || '', '$ai', '#weights');
+                const canonicalWeightsAbs = path.resolve(process.cwd(), canonicalWeightsRel);
+                const configuredAbs = d.weightsDir ? path.resolve(process.cwd(), d.weightsDir) : '';
+                const wDirAbs = fs.existsSync(canonicalWeightsAbs) ? canonicalWeightsAbs : (configuredAbs || canonicalWeightsAbs);
+                resolvedWeightsRel = path.relative(process.cwd(), wDirAbs).replace(/\\/g, '/');
                 weightInfo = inspectWeightsDirectorySync(wDirAbs, os.platform());
+                if (resolvedPrimaryFile === 'bubo-package.json' || (!resolvedPrimaryFile && weightInfo?.hasGguf)) {
+                    const resolvedGguf = resolveBuboModelFiles(wDirAbs);
+                    if (resolvedGguf.mainModel)
+                        resolvedPrimaryFile = path.basename(resolvedGguf.mainModel);
+                }
                 if (weightInfo.exists) {
                     let bytes = 0;
                     for (const f of weightInfo.files) {
@@ -421,8 +439,8 @@ export const TRAINER_METHODS = Object.freeze({
                 maxOutput: Number(d.maxOutput || d.$public?.maxOutput) || 8192,
                 capabilities: Array.isArray(d.capabilities) ? d.capabilities : (d.$public?.capabilities || ['chat', 'stream']),
                 efforts: Array.isArray(d.efforts) ? d.efforts : [],
-                weightsDir: d.weightsDir || '',
-                primaryFile: d.primaryFile || '',
+                weightsDir: resolvedWeightsRel,
+                primaryFile: resolvedPrimaryFile,
                 enabled: d.enabled !== false,
                 aiActive: act.active,
                 aiStatusReason: act.reason,
@@ -779,9 +797,8 @@ export const TRAINER_METHODS = Object.freeze({
                 folderName,
                 repoId: isWinBubo ? (haloSpec?.windowsBuboRepo || 'unsloth/Qwen3.8-Flash-Next-GGUF') : (args.repoId || haloSpec?.hfRepo || ''),
                 ...(isWinBubo ? {
-                    customFiles: BUBO_ORIGINAL_MODEL_FILES,
-                    customFilesDir: BUBO_ORIGINAL_MODEL_DIR_REL,
-                    onComplete: ({ rootDir: rd }) => finalizeWindowsBuboModel({ rootDir: rd }),
+                    customFiles: QWEN_FLASH_NEXT_GGUF_FILES,
+                    onComplete: ({ rootDir: rd }) => ensureWindowsBuboEngineInstalled({ rootDir: rd }),
                 } : {}),
                 quant: args.quant || 'Q8_0',
                 token: args.token || '',
@@ -796,7 +813,7 @@ export const TRAINER_METHODS = Object.freeze({
                     maxTokens: haloSpec.maxTokens,
                     maxOutput: haloSpec.maxOutput,
                     baseUrl: haloSpec.baseUrl ?? '',
-                    ...(isWinBubo ? { primaryFile: 'bubo-package.json' } : {}),
+                    ...(isWinBubo ? { primaryFile: 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf' } : {}),
                 } : null,
             });
             try {
