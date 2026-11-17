@@ -25,7 +25,25 @@ import {
     chromeOpen, chromeSnapshot, chromeClick, chromeType, chromeNav, chromeScreenshot,
 } from '../../bridge/chrome.js';
 import { assertPageUrl } from './browse.js';
-import { askEach } from '../system.js';
+import { askEach, askScoped } from '../system.js';
+
+function chromePageScope(ctx) {
+    const uid = ctx?.session?.uid;
+    const conn = uid ? getChromeForUser(uid) : null;
+    let host = '';
+    try {
+        if (conn?.lastUrl)
+            host = hostnameOf(conn.lastUrl);
+    }
+    catch { /* ignore */ }
+    return {
+        key: host ? 'chrome:page:' + host : 'chrome:page',
+        label: host
+            ? 'клики, ввод и навигация на сайте «' + host + '» в этой задаче'
+            : 'клики, ввод и навигация в открытой вкладке Chrome в этой задаче',
+        buttonLabel: 'Разрешить подобные',
+    };
+}
 
 const hostScopes = new WeakMap();
 
@@ -164,7 +182,8 @@ export const chromeTools = [
             },
             required: ['ref'],
         },
-        permission: askEach(args => (args?.reason ? args.reason + ' — ' : '') + 'клик по элементу [' + args?.ref + '] в вашем Chrome'),
+        permission: askScoped(args => (args?.reason ? args.reason + ' — ' : '') + 'клик по элементу [' + args?.ref + '] в вашем Chrome'),
+        approvalScope: (_args, ctx) => chromePageScope(ctx),
         async run(args, ctx) {
             const r = await chromeClick(uidOf(ctx), scopeKeyOf(ctx), args?.ref);
             return r.label + ' — проверьте результат новым chrome_snapshot.';
@@ -186,7 +205,8 @@ export const chromeTools = [
             },
             required: ['ref', 'text'],
         },
-        permission: askEach(args => (args?.reason ? args.reason + ' — ' : '') + 'ввод текста в поле [' + args?.ref + '] в вашем Chrome'),
+        permission: askScoped(args => (args?.reason ? args.reason + ' — ' : '') + 'ввод текста в поле [' + args?.ref + '] в вашем Chrome'),
+        approvalScope: (_args, ctx) => chromePageScope(ctx),
         async run(args, ctx) {
             const r = await chromeType(uidOf(ctx), scopeKeyOf(ctx), args?.ref, args?.text, Boolean(args?.submit));
             return r.label + ' — проверьте результат новым chrome_snapshot.';
@@ -205,7 +225,8 @@ export const chromeTools = [
             },
             required: ['action'],
         },
-        permission: askEach(args => 'навигация в вашем Chrome: ' + String(args?.action || 'reload')),
+        permission: askScoped(args => 'навигация в вашем Chrome: ' + String(args?.action || 'reload')),
+        approvalScope: (_args, ctx) => chromePageScope(ctx),
         async run(args, ctx) {
             const snap = await chromeNav(uidOf(ctx), scopeKeyOf(ctx), args?.action);
             return fmtSnap(snap);

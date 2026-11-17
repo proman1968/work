@@ -535,10 +535,12 @@ describe('git: арена work', () => {
         await assert.rejects(git_commit.run({ message: 'x', paths: ['../evil'] }, mkCtx(ADMIN)), /недопустимый путь/);
         await assert.rejects(git_push.run({ remote: '-oОпция' }, mkCtx(ADMIN)), /недопустимый remote/);
     });
-    it('git_commit: коммит создаётся, хеш в ответе, появляется в log; подтверждение каждый раз', async () => {
-        assert.equal((await decide(git_commit, { message: 'тест' }, { host: { mode: 'auto', allowed: new Set(['git_commit']) } })).verdict, 'ask',
-            'даже с «разрешить всегда» — вопрос');
-        assert.equal((await decide(git_commit, { message: 'тест' }, { host: { mode: 'auto' } })).noAlways, true, 'без «разрешить всегда»');
+    it('git_commit: коммит создаётся, хеш в ответе, появляется в log; допускает разрешение на задачу (при taint — noAlways)', async () => {
+        const dAsk = await decide(git_commit, { message: 'тест' }, { host: { mode: 'auto' } });
+        assert.equal(dAsk.verdict, 'ask');
+        assert.equal(Boolean(dAsk.noAlways), false);
+        assert.equal((await decide(git_commit, { message: 'тест' }, { host: { mode: 'auto', allowed: new Set(['git_commit']) } })).verdict, 'allow',
+            'при разрешении git_commit в задаче проходит без повторного вопроса');
         const before = await git_log.run({ limit: 1 }, mkCtx(ADMIN));
         const out = await git_commit.run({ message: 'коммит из теста', paths: ['BOX/doc/deep/b.js'] }, mkCtx(ADMIN));
         assert.match(out, /коммит из теста/);
@@ -620,10 +622,13 @@ describe('run_checks', () => {
         await assert.rejects(run_checks.run({ where: 'work', name: 'echo-ok' }, mkCtx(UID)), /только администратору/);
         await assert.rejects(run_checks.run({ where: 'work', name: 'no-such-check' }, mkCtx(ADMIN)), /нет проверки/);
     });
-    it('подтверждение: work — вопрос каждый раз (без «всегда»), список и песочница — свободно', async () => {
+    it('подтверждение: work — вопрос с возможностью разрешить в задаче, список и песочница — свободно', async () => {
+        const ask = await decide(run_checks, { where: 'work', name: 'echo-ok' }, { host: { mode: 'auto' } });
+        assert.equal(ask.verdict, 'ask');
+        assert.equal(Boolean(ask.noAlways), false);
         const v = await decide(run_checks, { where: 'work', name: 'echo-ok' }, { host: { mode: 'auto', allowed: new Set(['run_checks']) } });
-        assert.equal(v.verdict, 'ask', 'даже с «разрешить всегда» — вопрос');
-        assert.equal(v.noAlways, true, '«разрешить всегда» не предлагается');
+        assert.equal(v.verdict, 'allow', 'после разрешения run_checks в задаче проходит автоматически');
+        assert.equal(v.autoAllowed, true);
         assert.equal((await decide(run_checks, { where: 'work' }, { host: { mode: 'ask' } })).verdict, 'allow', 'список — чтение, не запуск');
         assert.equal((await decide(run_checks, { where: 'sandbox', command: 'npm test' }, { host: { mode: 'auto' } })).verdict, 'allow');
     });

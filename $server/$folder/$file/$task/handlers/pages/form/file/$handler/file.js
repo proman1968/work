@@ -127,6 +127,11 @@ export default {
             this._resultsList = undefined;
             this.dockTab = 'context';
             this.resultKey = '';
+            this._monitorOpenedFor = '';
+            this._cuFor = null;
+            this._cu = null;
+            this.computerState = 'missing';
+            this.computerChecked = false;
         }
         this._bound = n || null;
         if (!n)
@@ -399,14 +404,25 @@ export default {
             const r = await fetch('/~computer/' + encodeURIComponent(this.computerName) + '/status' + this.computerQuery, { credentials: 'same-origin', signal: AbortSignal.timeout(6000) });
             const data = await r.json().catch(() => ({}));
             const state = data.state || 'missing';
+            const prevState = this.computerState;
             if (state !== this.computerState)
                 this.computerState = state;
+            if (state === 'running' && prevState !== 'running')
+                this._openMonitorOnce();
         }
         catch {
             if (this.computerState !== 'missing')
                 this.computerState = 'missing';
         }
         this.computerChecked = true;
+    },
+    _openMonitorOnce() {
+        const taskKey = this.$item?.path || this.$item?.id || '_';
+        if (this._monitorOpenedFor === taskKey)
+            return;
+        this._monitorOpenedFor = taskKey;
+        this.dockOpen = true;
+        this.dockTab = 'monitor';
     },
     _startPcPoll() {
         if (this._pcPoll)
@@ -434,6 +450,8 @@ export default {
             this._lastDelta = Date.now();
             if (this.status !== 'running')
                 this.status = 'running';
+            if (/^(?:computer_|sandbox_)/.test(String(d.name || '')) && d.name !== 'computer_destroy')
+                this._openMonitorOnce();
             this._stick();
             return;
         }
@@ -473,12 +491,16 @@ export default {
                             this.streams = s;
                         }
                         const before = this._docKeys;
+                        const prevComputerUsed = Boolean(this._cu?.used);
                         this.data = data;
                         this.status = data.status || 'idle';
                         this._lastDelta = Date.now();
                         this._noticeDocs(before);
-                        if (this.computer.used)
+                        if (this.computer.used) {
+                            if (!prevComputerUsed && this.status === 'running')
+                                this._openMonitorOnce();
                             this._checkComputer();
+                        }
                         if (this.starting)
                             this.async(() => this.invalidate?.('starting', 'feedItems', 'activity'), Math.max(50, 20100 - (Date.now() - (+data.created || 0))));
                         this._stick();
@@ -616,6 +638,16 @@ export default {
         const res = await this.$item?.fetch('approve', {}, JSON.stringify({ call: callId, ...payload }));
         if (res && res.ok === false)
             this.toast(res.error || 'Не удалось отправить ответ');
+        else if (this.$item?.path && navigator.serviceWorker?.controller) {
+            try {
+                navigator.serviceWorker.controller.postMessage({ type: 'work:task-visible', task: this.$item.path });
+            }
+            catch { /* ignore */ }
+        }
+    },
+    /** Кратко объяснить действие и последствия ожидающего подтверждения с помощью быстрой модели. */
+    async explainCall(callId) {
+        return this.$item?.fetch('explain_call', {}, JSON.stringify({ call: callId }));
     },
     async revert(item) {
         if (!item?.id || item.id === 'optimistic')

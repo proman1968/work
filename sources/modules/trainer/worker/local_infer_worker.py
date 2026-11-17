@@ -18,18 +18,23 @@ import wave
 
 warnings.filterwarnings("ignore")
 
-import torch
-import torch.nn.functional as F
-
-torch.set_num_threads(max(1, (os.cpu_count() or 4) // 2))
-
-DTYPE_MAP = {
-    "BF16": torch.bfloat16,
-    "F16": torch.float16,
-    "F32": torch.float32,
-    "I64": torch.int64,
-    "I32": torch.int32,
-}
+try:
+    import torch
+    import torch.nn.functional as F
+    HAS_TORCH = True
+    torch.set_num_threads(max(1, (os.cpu_count() or 4) // 2))
+    DTYPE_MAP = {
+        "BF16": torch.bfloat16,
+        "F16": torch.float16,
+        "F32": torch.float32,
+        "I64": torch.int64,
+        "I32": torch.int32,
+    }
+except Exception:
+    torch = None
+    F = None
+    HAS_TORCH = False
+    DTYPE_MAP = {}
 
 
 class SafetensorsStore:
@@ -536,6 +541,23 @@ def main():
 
             if op == "check_deps":
                 print(json.dumps({"id": req_id, "event": "result", "data": handle_check_deps()}), flush=True)
+                continue
+            if not HAS_TORCH:
+                needed = ["torch"]
+                if op in ("embed", "rerank"):
+                    needed.append("transformers")
+                elif op == "image":
+                    needed.extend(["diffusers", "accelerate", "pillow", "transformers"])
+                elif op == "tts":
+                    needed.extend(["qwen-tts", "soundfile", "transformers"])
+                elif op == "stt":
+                    needed.extend(["qwen-asr", "soundfile", "transformers"])
+                print(json.dumps({
+                    "id": req_id,
+                    "event": "error",
+                    "error": "В Python-окружении не установлен PyTorch (torch) и необходимые библиотеки.",
+                    "missingDeps": needed,
+                }), flush=True)
                 continue
             if op == "embed":
                 t0 = time.time()

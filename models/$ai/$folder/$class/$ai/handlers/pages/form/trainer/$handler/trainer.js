@@ -294,10 +294,11 @@ export default {
                     {{testing ? 'Выполняю…' : testButtonLabel}}
                 </button>
             </div>
-            <div class="msg warn" ~if="testMissingDeps.length">
-                <span>Не хватает Python-библиотек: <code>{{testMissingDeps.join(', ')}}</code></span>
+            <div class="msg warn" ~if="testPythonMissing || testMissingDeps.length">
+                <span ~if="testPythonMissing">На ПК не найден Python — WORK автоматически установит изолированный Python 3.11 и библиотеки: <code>{{testDepsToInstall.join(', ')}}</code></span>
+                <span ~if="!testPythonMissing">Не хватает Python-библиотек: <code>{{testMissingDeps.join(', ')}}</code></span>
                 <button type="button" class="btn primary" :disabled="installingDeps" @tap="installMissingDeps()">
-                    {{installingDeps ? 'Установка…' : 'Доустановить зависимости'}}
+                    {{installingDeps ? 'Установка среды…' : (testPythonMissing ? 'Установить Python и пакеты' : 'Доустановить зависимости')}}
                 </button>
             </div>
             <div class="toolbar" ~if="testMetricsLine" style="font-size:12px;opacity:0.85;">
@@ -323,8 +324,22 @@ export default {
     testImageUrl: '',
     testMetricsLine: '',
     testMissingDeps: [],
+    testPythonMissing: false,
     testing: false,
     installingDeps: false,
+    get testDepsToInstall() {
+        if (this.testMissingDeps?.length)
+            return this.testMissingDeps;
+        const map = {
+            llm: ['torch'],
+            embed: ['torch', 'transformers'],
+            rerank: ['torch', 'transformers'],
+            image: ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers'],
+            tts: ['torch', 'qwen-tts', 'soundfile', 'transformers'],
+            stt: ['torch', 'qwen-asr', 'soundfile', 'transformers'],
+        };
+        return map[this.testModality] || ['torch', 'transformers'];
+    },
     busyAction: false,
     notice: '',
     error: '',
@@ -515,20 +530,22 @@ export default {
         reader.readAsDataURL(f);
     },
     async installMissingDeps() {
-        if (!this.$item || !this.testMissingDeps.length)
+        const pkgs = this.testDepsToInstall;
+        if (!this.$item || !pkgs.length)
             return;
         this.installingDeps = true;
         this.error = '';
         this.notice = '';
         try {
-            const res = await this.$item.fetch('trainer_install_python_deps', {}, { packages: this.testMissingDeps });
+            const res = await this.$item.fetch('trainer_install_python_deps', {}, { packages: pkgs });
             if (res?.ok) {
                 this.testMissingDeps = [];
-                this.notice = 'Пакеты установлены: ' + (res.packages || []).join(', ') + '. Повторяем проверку…';
+                this.testPythonMissing = false;
+                this.notice = 'Среда готова, пакеты установлены: ' + (res.packages || []).join(', ') + '. Повторяем проверку…';
                 await this.runTestPrompt();
             }
             else {
-                this.error = res?.error || 'Не удалось установить Python-пакеты.';
+                this.error = res?.error || 'Не удалось установить Python-среду и пакеты.';
             }
         }
         catch (e) {
@@ -552,6 +569,7 @@ export default {
         this.testImageUrl = '';
         this.testMetricsLine = '';
         this.testMissingDeps = [];
+        this.testPythonMissing = false;
         try {
             const body = { modality: m };
             if (m === 'llm')
@@ -572,6 +590,8 @@ export default {
             const res = await this.$item.fetch('trainer_test_model', {}, body);
             if (!res?.ok) {
                 this.error = res?.error || 'Ошибка проверки модели.';
+                if (res?.pythonMissing)
+                    this.testPythonMissing = true;
                 if (Array.isArray(res?.missingDeps))
                     this.testMissingDeps = res.missingDeps;
                 return;

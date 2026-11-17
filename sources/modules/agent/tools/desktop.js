@@ -90,10 +90,14 @@ export const desktopTools = [
                 return { verdict: 'allow' };
             return {
                 verdict: 'ask',
-                noAlways: true,
                 reason: (args?.reason ? args.reason + ' — ' : '') + 'запись файла на компьютере пользователя: ' + String(args?.path || '?'),
             };
         },
+        approvalScope: () => ({
+            key: 'desktop_file:write',
+            label: 'запись файлов на компьютере пользователя в разрешённой папке моста в этой задаче',
+            buttonLabel: 'Разрешить подобные',
+        }),
         async run(args, ctx) {
             const uid = uidOf(ctx);
             if (args.action === 'ls') {
@@ -150,10 +154,20 @@ export const desktopTools = [
             const target = args?.action === 'open' ? ('запуск программы «' + (args?.app || '?') + '»') : ('переключение на окно «' + (args?.title || '?') + '»');
             return {
                 verdict: 'ask',
-                noAlways: true,
                 reason: (args?.reason ? args.reason + ' — ' : '') + 'действие на компьютере пользователя: ' + target,
             };
         },
+        approvalScope: args => args?.action === 'open'
+            ? {
+                key: 'desktop_app:open:' + String(args?.app || '*').toLowerCase(),
+                label: 'запуск программы «' + String(args?.app || '?') + '» на ПК в этой задаче',
+                buttonLabel: 'Разрешить подобные',
+            }
+            : {
+                key: 'desktop_app:focus',
+                label: 'переключение окон на ПК в этой задаче',
+                buttonLabel: 'Разрешить подобные',
+            },
         async run(args, ctx) {
             const uid = uidOf(ctx);
             if (args.action === 'open') {

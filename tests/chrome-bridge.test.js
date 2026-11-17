@@ -263,17 +263,34 @@ describe('инструменты chrome_* и политика безопасно
             assert.equal(chromeBridgeAvailable({ uid: USER2 }), false);
             assert.equal(conn.readOnly, true);
 
-            // в режиме auto все изменяющие chrome_* всё равно требуют отдельного подтверждения (askEach)
+            // chrome_mode и chrome_open спрашивают без общего разрешения; клики/ввод/навигация предлагают скоуп по домену вкладки (но при taint — noAlways)
             for (const [name, args] of [
                 ['chrome_mode', { readOnly: false }],
                 ['chrome_open', { url: 'https://ya.ru/' }],
+            ]) {
+                const d = await decide(byName[name], args, ctx1);
+                assert.equal(d.verdict, 'ask', name + ' обязан спрашивать подтверждение');
+                assert.equal(d.noAlways, true, name + ' не должен разрешать «всегда»');
+            }
+            for (const [name, args] of [
                 ['chrome_click', { ref: 2 }],
                 ['chrome_type', { ref: 1, text: 'привет' }],
                 ['chrome_nav', { action: 'reload' }],
             ]) {
                 const d = await decide(byName[name], args, ctx1);
                 assert.equal(d.verdict, 'ask', name + ' обязан спрашивать подтверждение');
-                assert.equal(d.noAlways, true, name + ' не должен разрешать «всегда»');
+                assert.equal(d.scope?.key, 'chrome:page', name + ' скоуп до открытия вкладки');
+                // после открытия сайта в conn.lastUrl скоуп привязывается к конкретному домену
+                conn.lastUrl = 'https://ya.ru/';
+                const dHost = await decide(byName[name], args, ctx1);
+                assert.equal(dHost.scope?.key, 'chrome:page:ya.ru', name + ' скоуп по домену текущей вкладки');
+                const dAllowed = await decide(byName[name], args, { ...ctx1, host: { mode: 'auto', allowed: new Set(['chrome:page:ya.ru']) } });
+                assert.equal(dAllowed.verdict, 'allow');
+                assert.equal(dAllowed.autoAllowed, true);
+                conn.lastUrl = '';
+                const dTainted = await decide(byName[name], args, { ...ctx1, tainted: ['chrome_snapshot'], host: { mode: 'auto', allowed: new Set(['chrome:page:ya.ru']) } });
+                assert.equal(dTainted.verdict, 'ask');
+                assert.equal(dTainted.noAlways, true, name + ' при taint не должен разрешать «всегда»');
             }
 
             // readOnly=true блокирует open, но chrome_status работает

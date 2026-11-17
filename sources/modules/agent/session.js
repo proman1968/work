@@ -585,11 +585,18 @@ function applyOffline(body, reply) {
     }
     if (reply.accept) {
         entry.status = 'approved';
-        if (reply.always && !entry.noAlways && !body.allowed.includes(entry.name))
-            body.allowed.push(entry.name);
+        const scopeKey = entry.approvalScope || entry.name;
+        if (reply.always && !entry.noAlways && !body.allowed.includes(scopeKey))
+            body.allowed.push(scopeKey);
+        delete entry.approvalScope;
+        delete entry.approvalLabel;
+        delete entry.alwaysLabel;
     }
     else {
         entry.status = 'denied';
+        delete entry.approvalScope;
+        delete entry.approvalLabel;
+        delete entry.alwaysLabel;
         if (reply.content)
             entry.answer = String(reply.content);
     }
@@ -810,6 +817,86 @@ export async function approve(file, params = {}) {
         return { ok: false, error: 'нет ожидания' };
     start(s, p.session, file);
     return { ok: true, resumed: true };
+}
+
+/**
+ * Кратко объяснить действие и последствия ожидающего подтверждения с помощью быстрой модели (Q5).
+ * @param {any} file элемент .task
+ * @param {{ call?: string, [key: string]: any }} params
+ * @returns {Promise<{ ok: boolean, text?: string, model?: string, cached?: boolean, error?: string }>}
+ */
+export async function explainCall(file, params = {}) {
+    await assertTaskOwner(file, params);
+    const s = stateOf(file);
+    const p = argsOf(params);
+    const body = await getBody(file);
+    const callId = p.call || p.post?.call || body.waiting?.call;
+    const hit = callId ? findCall(body.items, callId) : null;
+    if (!hit?.entry)
+        return { ok: false, error: 'вызов не найден' };
+    const entry = hit.entry;
+    if (entry.explanation)
+        return { ok: true, text: entry.explanation, cached: true };
+
+    const place = file.$class || file.$owner || null;
+    const env = await createEnv({ place, session: params.session, host: { mode: body.mode || 'auto' } });
+    const fallbackPath = body.model || await env.defaultModel();
+    const candidates = [];
+    try {
+        const fast = await env.compactLlm(fallbackPath);
+        if (fast)
+            candidates.push(fast);
+    }
+    catch { /* пробуем основную */ }
+    try {
+        const main = await env.llmFor(fallbackPath);
+        if (main && !candidates.some(c => c.name === main.name))
+            candidates.push(main);
+    }
+    catch { /* ignore */ }
+    if (!candidates.length)
+        return { ok: false, error: 'нет доступной модели для пояснения' };
+
+    const argsPreview = entry.hideArgs
+        ? '(параметры скрыты политикой безопасности)'
+        : JSON.stringify(entry.args || {}, null, 2).slice(0, 2500);
+    const userPrompt = [
+        'Инструмент: ' + entry.name,
+        entry.reason ? ('Причина запроса: ' + entry.reason) : '',
+        entry.approvalLabel ? ('Область общего разрешения: ' + entry.approvalLabel) : '',
+        'Параметры:\n' + argsPreview,
+    ].filter(Boolean).join('\n\n');
+
+    const system = 'Ты помощник безопасности платформы WORK. Кратко и понятно на русском языке (3–5 коротких пунктов, без воды) объясни человеку перед подтверждением:\n'
+        + '1. Что именно делает это действие или команда.\n'
+        + '2. Какие файлы, службы, процессы или внешние ресурсы оно затрагивает.\n'
+        + '3. Какие есть риски/последствия (изменение системы, перезапуск, потеря данных) и обратимо ли оно.';
+
+    let lastErr = '';
+    for (const llm of candidates) {
+        try {
+            let text = '';
+            for await (const ch of llm.stream({
+                system,
+                messages: [{ role: 'user', content: userPrompt }],
+                maxTokens: 450,
+                effort: 'off',
+            })) {
+                if (typeof ch === 'string')
+                    text += ch;
+            }
+            const clean = text.trim();
+            if (clean) {
+                entry.explanation = clean;
+                await save(s, params.session);
+                return { ok: true, text: clean, model: llm.name || '' };
+            }
+        }
+        catch (e) {
+            lastErr = String(e?.message || e);
+        }
+    }
+    return { ok: false, error: lastErr || 'модель не вернула объяснение' };
 }
 
 /** Стоп: оборвать стрим/инструмент, снять ожидания.

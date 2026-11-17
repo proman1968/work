@@ -133,42 +133,125 @@ async function getTokenizer(weightsDir) {
     return tok;
 }
 
+function runtimeRoot(rootDir = process.cwd()) {
+    return path.resolve(rootDir, 'MODELS', 'Local', '$provider', '#runtime');
+}
+
+function runtimeVenvPython(rootDir = process.cwd()) {
+    const rt = runtimeRoot(rootDir);
+    return os.platform() === 'win32'
+        ? path.join(rt, 'venv', 'Scripts', 'python.exe')
+        : path.join(rt, 'venv', 'bin', 'python');
+}
+
 function venvPythonCandidates(rootDir = process.cwd()) {
     const rel = os.platform() === 'win32'
         ? ['.venv/Scripts/python.exe', 'venv/Scripts/python.exe', 'MODELS/Local/.venv/Scripts/python.exe']
         : ['.venv/bin/python', 'venv/bin/python', 'MODELS/Local/.venv/bin/python'];
-    return rel.map(r => path.resolve(rootDir, r));
+    return [runtimeVenvPython(rootDir), ...rel.map(r => path.resolve(rootDir, r))];
 }
 
-/** Известные расположения python.exe вне PATH (установщики Python пишут сюда). */
-function knownPythonPaths() {
-    if (os.platform() !== 'win32')
-        return [];
+function execText(cmd, args = [], timeoutMs = 4000) {
+    return new Promise(resolve => {
+        let out = '';
+        let done = false;
+        const finish = (ok) => {
+            if (!done) {
+                done = true;
+                resolve(ok ? out : '');
+            }
+        };
+        try {
+            const p = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+            const t = setTimeout(() => { p.kill(); finish(false); }, timeoutMs);
+            p.stdout.on('data', d => { out += String(d); });
+            p.on('error', () => { clearTimeout(t); finish(false); });
+            p.on('close', code => { clearTimeout(t); finish(code === 0); });
+        }
+        catch {
+            finish(false);
+        }
+    });
+}
+
+/** Известные расположения python.exe вне PATH (установщики Python, реестр Windows, uv, conda). */
+async function knownPythonPaths(rootDir = process.cwd()) {
     const out = [];
-    const bases = [process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs'), 'C:\\Program Files', 'C:\\Program Files (x86)']
-        .filter(Boolean);
-    for (const base of bases) {
+    const rt = runtimeRoot(rootDir);
+    if (os.platform() !== 'win32') {
+        const candidates = [
+            path.join(rt, 'python', 'bin', 'python3'),
+            path.join(rt, 'python', 'bin', 'python'),
+            '/usr/bin/python3',
+            '/usr/local/bin/python3',
+        ];
+        return candidates.filter(p => fs.existsSync(p));
+    }
+
+    const pushIf = p => {
+        if (p && fs.existsSync(p) && !/\\WindowsApps\\/i.test(p))
+            out.push(p);
+    };
+    const scanDir = (base, pattern) => {
+        if (!base)
+            return;
         try {
             for (const dir of fs.readdirSync(base)) {
-                if (/^Python/i.test(dir) && fs.existsSync(path.join(base, dir, 'python.exe')))
-                    out.push(path.join(base, dir, 'python.exe'));
+                if (pattern.test(dir)) {
+                    pushIf(path.join(base, dir, 'python.exe'));
+                    pushIf(path.join(base, dir, 'bin', 'python.exe'));
+                }
             }
         }
         catch { /* нет папки */ }
-    }
-    try {
-        for (const dir of fs.readdirSync('C:\\')) {
-            if (/^Python\d+/i.test(dir) && fs.existsSync(path.join('C:\\', dir, 'python.exe')))
-                out.push(path.join('C:\\', dir, 'python.exe'));
+    };
+
+    // 1. Внутренний #runtime/python (если ставился без venv)
+    scanDir(path.join(rt, 'python'), /.*/);
+    pushIf(path.join(rt, 'python', 'python.exe'));
+
+    // 2. Реестр Windows (PythonCore)
+    for (const rootKey of ['HKCU\\SOFTWARE\\Python\\PythonCore', 'HKLM\\SOFTWARE\\Python\\PythonCore', 'HKLM\\SOFTWARE\\WOW6432Node\\Python\\PythonCore']) {
+        const regOut = await execText('reg', ['query', rootKey, '/s', '/v', 'ExecutablePath'], 3000);
+        for (const line of regOut.split(/\r?\n/)) {
+            const m = /ExecutablePath\s+REG_SZ\s+(.+)$/i.exec(line.trim());
+            if (m)
+                pushIf(m[1].trim());
         }
     }
-    catch { /* нет диска C:\ */ }
-    return out;
+
+    // 3. Типичные папки установки Python / uv / Conda / Scoop
+    const localApp = process.env.LOCALAPPDATA || '';
+    const userProf = process.env.USERPROFILE || os.homedir();
+    scanDir(path.join(localApp, 'Programs', 'Python'), /^Python/i);
+    scanDir(path.join(localApp, 'uv', 'python'), /^cpython/i);
+    scanDir('C:\\Program Files', /^Python/i);
+    scanDir('C:\\Program Files (x86)', /^Python/i);
+    scanDir('C:\\', /^Python\d+/i);
+    for (const c of [
+        path.join(userProf, 'miniconda3', 'python.exe'),
+        path.join(userProf, 'anaconda3', 'python.exe'),
+        'C:\\ProgramData\\miniconda3\\python.exe',
+        'C:\\ProgramData\\anaconda3\\python.exe',
+        path.join(userProf, 'scoop', 'apps', 'python', 'current', 'python.exe'),
+    ])
+        pushIf(c);
+
+    // 4. where.exe python (без WindowsApps-заглушки)
+    const whereOut = await execText('where.exe', ['python'], 2000);
+    for (const line of whereOut.split(/\r?\n/))
+        pushIf(line.trim());
+
+    return [...new Set(out)];
 }
 
-/** Пробный запуск кандидата: заглушка Microsoft Store (код 9009) и отсутствующие команды отсеиваются. */
+/**
+ * Пробный запуск кандидата: проверяет не только код возврата 0,
+ * но и что фактический sys.executable не является заглушкой Microsoft Store (WindowsApps).
+ */
 function probePython(cmd, extraArgs = []) {
     return new Promise(resolve => {
+        let out = '';
         let done = false;
         const finish = ok => {
             if (!done) {
@@ -177,18 +260,23 @@ function probePython(cmd, extraArgs = []) {
             }
         };
         try {
-            const p = spawn(cmd, [...extraArgs, '--version'], { windowsHide: true, stdio: 'ignore' });
+            const p = spawn(cmd, [...extraArgs, '-c', 'import sys; print(sys.executable)'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
             const t = setTimeout(() => {
                 p.kill();
                 finish(false);
             }, 7000);
+            p.stdout.on('data', d => { out += String(d); });
             p.on('error', () => {
                 clearTimeout(t);
                 finish(false);
             });
             p.on('close', code => {
                 clearTimeout(t);
-                finish(code === 0);
+                const exe = out.trim();
+                if (code !== 0 || !exe || /\\WindowsApps\\/i.test(exe))
+                    finish(false);
+                else
+                    finish(true);
             });
         }
         catch {
@@ -200,42 +288,63 @@ function probePython(cmd, extraArgs = []) {
 let _pythonCmd = null;
 let _pythonResolving = null;
 
+function resetPythonCache() {
+    _pythonCmd = null;
+    _pythonResolving = null;
+}
+
 /**
- * Найти рабочий интерпретатор Python: .venv проекта → команды из PATH (с пробным запуском,
- * чтобы отсеять заглушку WindowsApps, завершающуюся с кодом 9009) → известные папки установки.
- * @returns {Promise<{ cmd: string, args: string[] }>}
+ * Найти рабочий интерпретатор Python: #runtime/venv / .venv проекта → команды из PATH и py -3
+ * (с отсеиванием заглушки WindowsApps) → реестр Windows и известные папки установки.
+ * Если Python не найден нигде — возвращает null (НЕ подставляет заглушку Store).
+ * @returns {Promise<{ cmd: string, args: string[] } | null>}
  */
 function resolvePythonCommandAsync(rootDir = process.cwd()) {
     if (_pythonCmd)
         return Promise.resolve(_pythonCmd);
     _pythonResolving ??= (async () => {
         for (const v of venvPythonCandidates(rootDir)) {
-            if (fs.existsSync(v)) {
+            if (fs.existsSync(v) && await probePython(v, [])) {
                 _pythonCmd = { cmd: v, args: [] };
                 return _pythonCmd;
             }
         }
-        const candidates = ['python', 'python3', 'py', ...knownPythonPaths()];
+        const known = await knownPythonPaths(rootDir);
+        const candidates = [
+            { cmd: 'python', args: [] },
+            { cmd: 'python3', args: [] },
+            ...(os.platform() === 'win32' ? [{ cmd: 'py', args: ['-3'] }] : []),
+            ...known.map(cmd => ({ cmd, args: [] })),
+        ];
         for (const c of candidates) {
-            const args = c === 'py' ? ['-3'] : [];
-            if (await probePython(c, args)) {
-                _pythonCmd = { cmd: c, args };
+            if (await probePython(c.cmd, c.args)) {
+                _pythonCmd = c;
                 return _pythonCmd;
             }
         }
-        _pythonCmd = { cmd: 'python', args: [] };
-        return _pythonCmd;
+        _pythonResolving = null;
+        return null;
     })();
     return _pythonResolving;
+}
+
+function makePythonMissingError() {
+    const err = new Error('На этом ПК не найдена локальная среда Python. Нажмите «Установить Python и пакеты» — WORK автоматически развернёт изолированный Python 3.11 внутри MODELS/Local/$provider/#runtime/.');
+    err.pythonMissing = true;
+    err.missingDeps = ['torch', 'transformers', 'accelerate', 'safetensors'];
+    return err;
 }
 
 async function ensureInferWorker() {
     if (_workerProc && !_workerProc.killed)
         return _workerProc;
 
+    const py = await resolvePythonCommandAsync();
+    if (!py)
+        throw makePythonMissingError();
+
     const scriptPath = path.resolve(import.meta.dirname, './worker/local_infer_worker.py');
-    const { cmd, args } = await resolvePythonCommandAsync();
-    const proc = spawn(cmd, [...args, scriptPath], {
+    const proc = spawn(py.cmd, [...py.args, scriptPath], {
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -691,15 +800,35 @@ export async function localDecide(ai, params = {}) {
 }
 
 export async function checkLocalPythonDeps() {
+    const py = await resolvePythonCommandAsync();
+    if (!py) {
+        return {
+            pythonMissing: true,
+            error: 'На этом ПК не установлена среда Python.',
+            packages: {
+                torch: false,
+                transformers: false,
+                diffusers: false,
+                accelerate: false,
+                pillow: false,
+                soundfile: false,
+                'qwen-tts': false,
+                'qwen-asr': false,
+            },
+            cuda: false,
+            deviceName: 'Python не установлен',
+        };
+    }
     try {
         return await runWorkerOp({ op: 'check_deps' }, 15000);
     }
     catch (e) {
-        return { error: String(e?.message || e), packages: {}, cuda: false, deviceName: 'CPU' };
+        return { error: String(e?.message || e), pythonMissing: Boolean(e?.pythonMissing), packages: {}, cuda: false, deviceName: 'CPU' };
     }
 }
 
 const ALLOWED_PYTHON_DEPS = new Set([
+    'torch',
     'transformers',
     'diffusers',
     'accelerate',
@@ -711,32 +840,169 @@ const ALLOWED_PYTHON_DEPS = new Set([
     'safetensors',
 ]);
 
-export function installLocalPythonDeps(packages = []) {
-    const clean = [...new Set((Array.isArray(packages) ? packages : [packages])
-        .map(s => String(s || '').trim().toLowerCase())
-        .filter(p => ALLOWED_PYTHON_DEPS.has(p)))];
-    if (!clean.length)
-        return Promise.resolve({ ok: false, error: 'Не указаны разрешённые Python-пакеты.' });
-    return resolvePythonCommandAsync().then(({ cmd, args }) => new Promise((resolve) => {
-        const proc = spawn(cmd, [...args, '-m', 'pip', 'install', '--upgrade', ...clean], {
-            windowsHide: true,
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
+function runSpawnCapture(cmd, args, timeoutMs = 900000) {
+    return new Promise((resolve) => {
+        const proc = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
         let out = '';
         let err = '';
-        proc.stdout.on('data', d => { out += String(d); if (out.length > 8000) out = out.slice(-8000); });
-        proc.stderr.on('data', d => { err += String(d); if (err.length > 8000) err = err.slice(-8000); });
-        proc.on('error', e => resolve({ ok: false, error: String(e?.message || e) }));
+        let timedOut = false;
+        const t = setTimeout(() => {
+            timedOut = true;
+            proc.kill();
+        }, timeoutMs);
+        proc.stdout?.on('data', d => { out += String(d); if (out.length > 12000) out = out.slice(-12000); });
+        proc.stderr?.on('data', d => { err += String(d); if (err.length > 12000) err = err.slice(-12000); });
+        proc.on('error', e => { clearTimeout(t); resolve({ ok: false, code: -1, out, err: String(e?.message || e) }); });
         proc.on('close', code => {
-            if (code === 0) {
-                closeInferWorker();
-                resolve({ ok: true, packages: clean, log: out.trim() });
-            }
-            else {
-                resolve({ ok: false, packages: clean, error: (err || out || `pip завершился с кодом ${code}`).trim() });
-            }
+            clearTimeout(t);
+            resolve({ ok: !timedOut && code === 0, code: code ?? -1, out: out.trim(), err: (timedOut ? 'Таймаут операции. ' : '') + err.trim() });
         });
-    }));
+    });
+}
+
+async function ensureUvBinary(rootDir = process.cwd()) {
+    const rt = runtimeRoot(rootDir);
+    const uvDir = path.join(rt, 'uv');
+    const uvExe = path.join(uvDir, os.platform() === 'win32' ? 'uv.exe' : 'uv');
+    if (fs.existsSync(uvExe))
+        return uvExe;
+    const sysUv = await execText(os.platform() === 'win32' ? 'where.exe' : 'which', ['uv'], 2000);
+    const first = sysUv.split(/\r?\n/).map(s => s.trim()).find(Boolean);
+    if (first && fs.existsSync(first))
+        return first;
+
+    if (os.platform() !== 'win32')
+        return '';
+
+    const url = process.arch === 'arm64'
+        ? 'https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-pc-windows-msvc.zip'
+        : 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip';
+    fs.mkdirSync(uvDir, { recursive: true });
+    const resp = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(120000) });
+    if (!resp.ok)
+        throw new Error(`Не удалось скачать uv (${resp.status})`);
+    const zipBuf = Buffer.from(await resp.arrayBuffer());
+    const { default: AdmZip } = await import('adm-zip');
+    const zip = new AdmZip(zipBuf);
+    for (const entry of zip.getEntries()) {
+        if (!entry.isDirectory && /uv\.exe$/i.test(entry.entryName)) {
+            fs.writeFileSync(uvExe, entry.getData());
+            break;
+        }
+    }
+    if (!fs.existsSync(uvExe))
+        throw new Error('Архив uv не содержит uv.exe');
+    return uvExe;
+}
+
+/**
+ * Автоматически развернуть изолированный Python 3.11 + venv внутри MODELS/Local/$provider/#runtime/.
+ * Не требует прав администратора и не зависит от Microsoft Store.
+ */
+export async function ensureLocalPythonRuntime(rootDir = process.cwd()) {
+    const existing = await resolvePythonCommandAsync(rootDir);
+    const venvPy = runtimeVenvPython(rootDir);
+    if (existing && fs.existsSync(venvPy))
+        return { ok: true, python: venvPy, uv: fs.existsSync(path.join(runtimeRoot(rootDir), 'uv', 'uv.exe')) ? path.join(runtimeRoot(rootDir), 'uv', 'uv.exe') : '' };
+
+    const rt = runtimeRoot(rootDir);
+    const pyDir = path.join(rt, 'python');
+    const venvDir = path.join(rt, 'venv');
+    fs.mkdirSync(rt, { recursive: true });
+
+    let uv = '';
+    try {
+        uv = await ensureUvBinary(rootDir);
+    }
+    catch (e) {
+        if (!existing)
+            throw e;
+    }
+
+    if (uv) {
+        if (!existing) {
+            const inst = await runSpawnCapture(uv, ['python', 'install', '3.11', '--install-dir', pyDir], 600000);
+            if (!inst.ok)
+                throw new Error('uv python install: ' + (inst.err || inst.out || `код ${inst.code}`));
+        }
+        const venvArgs = existing
+            ? ['venv', venvDir, '--python', existing.cmd, '--seed', '--allow-existing']
+            : ['venv', venvDir, '--python', '3.11', '--python-preference', 'only-managed', '--seed', '--allow-existing'];
+        const env = { ...process.env, UV_PYTHON_INSTALL_DIR: pyDir };
+        const venvRes = await new Promise((resolve) => {
+            const proc = spawn(uv, venvArgs, { windowsHide: true, env, stdio: ['ignore', 'pipe', 'pipe'] });
+            let out = '';
+            let err = '';
+            proc.stdout.on('data', d => { out += String(d); });
+            proc.stderr.on('data', d => { err += String(d); });
+            proc.on('error', e => resolve({ ok: false, err: String(e?.message || e) }));
+            proc.on('close', code => resolve({ ok: code === 0, out: out.trim(), err: err.trim(), code }));
+        });
+        if (!venvRes.ok && !fs.existsSync(venvPy))
+            throw new Error('uv venv: ' + (venvRes.err || venvRes.out || `код ${venvRes.code}`));
+        resetPythonCache();
+        return { ok: true, python: venvPy, uv };
+    }
+
+    if (existing) {
+        const mk = await runSpawnCapture(existing.cmd, [...existing.args, '-m', 'venv', venvDir], 120000);
+        if (mk.ok && fs.existsSync(venvPy)) {
+            resetPythonCache();
+            return { ok: true, python: venvPy, uv: '' };
+        }
+        return { ok: true, python: existing.cmd, args: existing.args, uv: '' };
+    }
+
+    throw makePythonMissingError();
+}
+
+export async function installLocalPythonDeps(packages = []) {
+    let clean = [...new Set((Array.isArray(packages) ? packages : [packages])
+        .map(s => String(s || '').trim().toLowerCase())
+        .filter(p => ALLOWED_PYTHON_DEPS.has(p)))];
+    let py = await resolvePythonCommandAsync();
+    let uv = '';
+
+    if (!py) {
+        try {
+            const rt = await ensureLocalPythonRuntime();
+            uv = rt.uv || '';
+            py = await resolvePythonCommandAsync();
+        }
+        catch (e) {
+            return { ok: false, error: 'Не удалось развернуть Python: ' + String(e?.message || e) };
+        }
+        if (!clean.length)
+            clean = ['torch', 'transformers', 'accelerate', 'safetensors'];
+    }
+    if (!py)
+        return { ok: false, error: 'Python не найден и не удалось установить.' };
+    if (!clean.length)
+        return { ok: false, error: 'Не указаны разрешённые Python-пакеты.' };
+
+    // Если установка запущена для любой модели без torch — доставляем torch вместе с ней
+    if (!clean.includes('torch') && clean.some(p => p !== 'safetensors'))
+        clean.unshift('torch');
+
+    if (!uv) {
+        const localUv = path.join(runtimeRoot(), 'uv', os.platform() === 'win32' ? 'uv.exe' : 'uv');
+        if (fs.existsSync(localUv))
+            uv = localUv;
+    }
+
+    let res;
+    if (uv && fs.existsSync(runtimeVenvPython())) {
+        res = await runSpawnCapture(uv, ['pip', 'install', '--python', runtimeVenvPython(), '--upgrade', ...clean], 900000);
+    }
+    else {
+        res = await runSpawnCapture(py.cmd, [...py.args, '-m', 'pip', 'install', '--upgrade', ...clean], 900000);
+    }
+    if (res.ok) {
+        closeInferWorker();
+        resetPythonCache();
+        return { ok: true, packages: clean, log: res.out };
+    }
+    return { ok: false, packages: clean, error: (res.err || res.out || `Установка завершилась с кодом ${res.code}`).trim() };
 }
 
 export const localEngine = Object.freeze({

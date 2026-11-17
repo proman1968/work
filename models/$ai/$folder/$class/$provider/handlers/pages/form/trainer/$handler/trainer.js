@@ -413,9 +413,9 @@ export default {
                 <div class="model-main" style="margin-bottom:6px;">
                     <strong>Диагностика локальных моделей (/MODELS/Local)</strong>
                     <div class="toolbar">
-                        <span class="status-chip ok" ~if="checkAllResult.pythonDeps?.deviceName">Python: {{checkAllResult.pythonDeps.deviceName}}</span>
+                        <span class="status-chip" ~class="checkAllResult.pythonDeps?.pythonMissing ? 'err' : 'ok'" ~if="checkAllResult.pythonDeps?.deviceName">Python: {{checkAllResult.pythonDeps.deviceName}}</span>
                         <button type="button" class="btn primary" ~if="missingPythonPkgs.length" :disabled="installingPythonDeps" @tap="installMissingPythonDeps()">
-                            {{installingPythonDeps ? 'Установка…' : ('Доустановить пакеты (' + missingPythonPkgs.join(', ') + ')')}}
+                            {{installingPythonDeps ? 'Установка среды (это займёт 1–3 мин)…' : (checkAllResult.pythonDeps?.pythonMissing ? 'Установить Python 3.11 и все библиотеки' : ('Доустановить пакеты (' + missingPythonPkgs.join(', ') + ')'))}}
                         </button>
                     </div>
                 </div>

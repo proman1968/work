@@ -20,7 +20,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { run, isAdmin, audit, askEach } from '../../system.js';
+import { run, isAdmin, audit, askEach, askScoped } from '../../system.js';
 import { ctxRun } from '../sandbox.js';
 import { useSandbox, markSandboxTaint } from './search.js';
 import { execRaw } from '../../../sandbox/manager.js';
@@ -214,7 +214,7 @@ export const git_commit = {
         },
         required: ['message'],
     },
-    permission: askEach(a => 'создать git-коммит' + (a?.message ? ' «' + String(a.message).slice(0, 80) + '»' : '') + ' — изменение системы'),
+    permission: askScoped(a => 'создать git-коммит' + (a?.message ? ' «' + String(a.message).slice(0, 80) + '»' : '') + ' — изменение системы'),
     async run(args, ctx) {
         const message = String(args?.message ?? '').trim();
         if (!message)

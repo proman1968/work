@@ -349,6 +349,18 @@ ODA({ is: 'microchat-tool',
             .ask .why { @apply --muted; font-size: x-small; }
             .btns { @apply --horizontal; flex-wrap: wrap; gap: 8px; }
             .btns oda-button { border-radius: var(--radius-s); padding: 4px 12px; box-sizing: border-box; }
+            .btns .help-btn { padding: 4px 9px; font-weight: 700; min-width: 28px; }
+            .auto-tag { padding: 1px 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }
+            .explain-box {
+                padding: 8px 10px;
+                border-radius: var(--radius-s);
+                background: var(--content-background);
+                border: 1px solid var(--subtle-border);
+                font-size: 12px;
+                line-height: 1.45;
+                user-select: text;
+            }
+            .explain-err { color: var(--error-color); font-size: 12px; }
             .ghost { border: 1px solid var(--subtle-border); background: var(--content-background); }
             .danger { color: var(--error-color); fill: var(--error-color); }
             .opt[selected] { outline: 2px solid var(--accent-color); }
@@ -375,6 +387,7 @@ ODA({ is: 'microchat-tool',
             <span class="label" no-flex>{{meta.label}}</span>
             <span class="target" flex :title="linkPath ? 'Открыть ' + linkPath : target" :link="!!linkPath" @tap.stop="openArtifact">{{target}}</span>
             <span class="aux" no-flex ~if="data?.diff"><span class="plus">+{{data.diff.added}}</span> <span class="minus">−{{data.diff.removed}}</span></span>
+            <span class="aux auto-tag" no-flex ~if="data?.autoAllowed" :title="data?.scopeLabel || 'Разрешено ранее в этой задаче'">авторазрешено</span>
             <span class="aux" no-flex ~if="statusLabel">{{statusLabel}}</span>
             <span class="aux" no-flex ~if="duration">{{duration}}</span>
             <oda-icon no-flex :icon="statusIcon" :icon-size="16" :bad="['error', 'denied'].includes(data?.status)" :good="data?.status === 'ok'" :hold="attention"></oda-icon>
@@ -387,8 +400,15 @@ ODA({ is: 'microchat-tool',
             <div class="why" ~if="data?.reason">{{data.reason}}</div>
             <div class="btns">
                 <oda-button hide-icon accent-invert label="Разрешить" @tap="approve(true)"></oda-button>
-                <oda-button hide-icon class="ghost" ~if="!data?.noAlways" label="Разрешить всегда" :title="'Не спрашивать про «' + meta.label + '» в этой задаче'" @tap="approve(true, true)"></oda-button>
+                <oda-button hide-icon class="ghost" ~if="!data?.noAlways" :label="alwaysBtnLabel" :title="alwaysBtnTitle" @tap="approve(true, true)"></oda-button>
                 <oda-button hide-icon class="ghost danger" label="Отклонить" @tap="approve(false)"></oda-button>
+                <oda-button hide-icon class="ghost help-btn" label="?" :disabled="explainLoading" title="Кратко объяснить действие и последствия с помощью ИИ" @tap="toggleExplain()"></oda-button>
+            </div>
+            <div class="why" ~if="!data?.noAlways && data?.approvalLabel">Общее разрешение: {{data.approvalLabel}}</div>
+            <div class="explain-box" ~if="explainLoading">Анализирую действие…</div>
+            <div class="explain-err" ~if="explainError && !explainLoading">{{explainError}}</div>
+            <div class="explain-box" ~if="explainOpen && !explainLoading && explainText">
+                <oda-markdown-viewer vertical :value="explainText"></oda-markdown-viewer>
             </div>
         </div>
 
@@ -637,6 +657,50 @@ ODA({ is: 'microchat-tool',
         if (this.fields.length)
             return shell.reply(this.data.id, { values: this.values, content: text || undefined });
         shell.reply(this.data.id, { content: text });
+    },
+    explainOpen: false,
+    explainLoading: false,
+    explainError: '',
+    explainLocal: '',
+    get explainText() {
+        return this.explainLocal || this.data?.explanation || '';
+    },
+    get alwaysBtnLabel() {
+        return this.data?.alwaysLabel || 'Разрешить подобные';
+    },
+    get alwaysBtnTitle() {
+        return this.data?.approvalLabel
+            ? 'Не спрашивать в этой задаче: ' + this.data.approvalLabel
+            : 'Не спрашивать про «' + (this.meta?.label || '') + '» в этой задаче';
+    },
+    async toggleExplain() {
+        if (this.explainLoading)
+            return;
+        if (this.explainText) {
+            this.explainOpen = !this.explainOpen;
+            return;
+        }
+        const shell = findShell(this);
+        if (typeof shell?.explainCall !== 'function') {
+            this.explainError = 'Пояснение недоступно вне окна задачи';
+            return;
+        }
+        this.explainLoading = true;
+        this.explainError = '';
+        this.explainOpen = true;
+        try {
+            const res = await shell.explainCall(this.data.id);
+            if (res?.ok && res.text)
+                this.explainLocal = String(res.text);
+            else
+                this.explainError = res?.error || 'Не удалось получить пояснение от модели';
+        }
+        catch (e) {
+            this.explainError = String(e?.message || e || 'Ошибка запроса');
+        }
+        finally {
+            this.explainLoading = false;
+        }
     },
     approve(accept, always) {
         findShell(this)?.reply(this.data.id, { accept, always: !!always, content: String(this.comment || '').trim() || undefined });

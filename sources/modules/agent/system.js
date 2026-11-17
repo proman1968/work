@@ -219,12 +219,19 @@ export function guarded(tools) {
 
 // ── подтверждения ─────────────────────────────────────────────────────────
 
-/** Изменение в ОС: подтверждение; «разрешить всегда» — можно. */
+/** Изменение в ОС: подтверждение; «разрешить в задаче» — можно. */
 export function askOnce(reason) {
-    return (args, ctx) => ctx?.host?.allowed?.has?.(ctx.entry?.name) ? { verdict: 'allow' } : { verdict: 'ask', reason: reason(args) };
+    return (args, ctx) => ctx?.host?.allowed?.has?.(ctx.entry?.name)
+        ? { verdict: 'allow', autoAllowed: true }
+        : { verdict: 'ask', reason: reason(args) };
 }
 
-/** Опасное действие: каждый раз отдельно, без «разрешить всегда». */
+/** Действие с подтверждением, допускающее общее разрешение на подобные действия в задаче (область определяет `resolveApprovalScope`). */
+export function askScoped(reason) {
+    return args => ({ verdict: 'ask', reason: reason(args) });
+}
+
+/** Опасное / необратимое действие: каждый раз отдельно, без общего разрешения. */
 export function askEach(reason) {
     return args => ({ verdict: 'ask', noAlways: true, reason: reason(args) });
 }

@@ -9,7 +9,7 @@ import { log } from '../log.js';
 import { clip } from '../util.js';
 import { urlCarriesData } from '../taint.js';
 import { callAs } from './work.js';
-import { askEach } from '../system.js';
+import { askScoped } from '../system.js';
 
 const REGISTRY_TTL = 60_000;
 const MCP_TOOLS_TTL = 10 * 60_000;
@@ -194,7 +194,12 @@ export async function serviceTools(session) {
                 outbound: !(spec?.readonly ?? READ_NAME.test(method)),
                 risk: (spec?.readonly ?? READ_NAME.test(method)) ? undefined : 'danger',
                 permission: s.data.lanKind && !(spec?.readonly ?? READ_NAME.test(method))
-                    ? askEach(() => (s.data.label || s.id) + ': ' + method) : undefined,
+                    ? askScoped(() => (s.data.label || s.id) + ': ' + method) : undefined,
+                approvalScope: () => ({
+                    key: 'svc:' + s.id,
+                    label: 'действия LAN-сервиса «' + (s.data.label || s.id) + '» в этой задаче',
+                    buttonLabel: 'Разрешить подобные',
+                }),
                 description: '[' + (s.data.label || s.id) + '] ' + String(spec?.description || method),
                 parameters: spec?.params && typeof spec.params === 'object' ? spec.params : { type: 'object', properties: {} },
                 source: { service: s.path, method },

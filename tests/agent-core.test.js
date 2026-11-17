@@ -1986,14 +1986,19 @@ describe('внешние инструменты: web_search / svc_* / mcp_* (ser
         assert.equal(weather.readonly, true);
         assert.equal(weather.untrusted, false);
         assert.equal(await weather.run({}, ctx()), 'ясно');
-        // LAN-сервис, не-читающий метод: каждый раз с разрешения, без «разрешить всегда»
+        // LAN-сервис, не-читающий метод: спрашивает разрешение, допускает скоуп на сервис; при taint — noAlways
         const print = tools.find(t => t.name === 'svc_lanthing_print');
         assert.ok(print, 'LAN-сервис с методом печати');
         assert.equal(print.readonly, false);
         assert.equal(print.untrusted, false);
-        const p = print.permission({}, {});
+        const { decide } = await import('../sources/modules/agent/permissions.js');
+        const p = await decide(print, {}, { host: { mode: 'auto', allowed: new Set() } });
         assert.equal(p.verdict, 'ask');
-        assert.equal(p.noAlways, true);
+        assert.equal(Boolean(p.noAlways), false);
+        assert.equal(p.scope?.key, 'svc:lanthing');
+        const pAllowed = await decide(print, {}, { host: { mode: 'auto', allowed: new Set(['svc:lanthing']) } });
+        assert.equal(pAllowed.verdict, 'allow');
+        assert.equal(pAllowed.autoAllowed, true);
         assert.match(p.reason, /LAN-вещь: print/);
         assert.match(await print.run({ n: 1 }, ctx()), /^напечатано \{"n":1,/);
         resetServiceRegistry();
@@ -2884,16 +2889,19 @@ describe('управление компьютером пользователя: 
         fs.writeFileSync(path.join(rootDir, 'readme-pc.md'), 'Локальная заметка пользователя');
 
         const byName = Object.fromEntries(desktopTools.map(t => [t.name, t]));
-        // каждое изменяющее действие требует подтверждения человека без «разрешить всегда»
-        for (const [toolName, sampleArgs] of [
-            ['desktop_mode', { readOnly: false }],
-            ['desktop_file', { action: 'write', path: 'a.txt', content: '1' }],
-            ['desktop_app', { action: 'open', app: 'notepad', reason: 'открыть блокнот' }],
-            ['desktop_app', { action: 'focus', title: 'Блокнот', reason: 'переключить окно' }],
+        // desktop_mode — без общего разрешения; остальные действия на ПК допускают скоуп на задачу
+        const pMode = byName.desktop_mode.permission({ readOnly: false });
+        assert.equal(pMode?.verdict, 'ask');
+        assert.equal(pMode?.noAlways, true, 'desktop_mode не разрешает «всегда»');
+        for (const [toolName, sampleArgs, expectedScope] of [
+            ['desktop_file', { action: 'write', path: 'a.txt', content: '1' }, 'desktop_file:write'],
+            ['desktop_app', { action: 'open', app: 'notepad', reason: 'открыть блокнот' }, 'desktop_app:open:notepad'],
+            ['desktop_app', { action: 'focus', title: 'Блокнот', reason: 'переключить окно' }, 'desktop_app:focus'],
         ]) {
             const p = byName[toolName].permission(sampleArgs);
-            assert.equal(p?.verdict, 'ask', toolName + ' не требует подтверждения человека');
-            assert.equal(p?.noAlways, true, toolName + ' не запретил «разрешить всегда»');
+            assert.equal(p?.verdict, 'ask', toolName + ' обязан требовать подтверждения человека');
+            assert.equal(Boolean(p?.noAlways), false, toolName + ' допускает разрешение на подобные в задаче');
+            assert.equal(byName[toolName].approvalScope?.(sampleArgs)?.key, expectedScope);
         }
 
         // регистрируем мост USER1 в режиме «только просмотр» (readOnly: true)
@@ -3025,5 +3033,134 @@ describe('savedNote: рабочие ссылки без повторения л�
         const note = savedNote(req, real);
         assert.ok(note.includes(real), 'должен содержать фактический путь');
         assert.equal(note.includes(req), false, 'не должен повторять несуществующий запрошенный путь');
+    });
+});
+
+describe('подобные разрешения в задаче (approvalScope, shell:read/prog, autoAllowed) и explainCall', () => {
+    it('classifyShellCommand и decide: shell:read пропускает безопасное чтение после разрешения, но спрашивает winget/Remove-Item', async () => {
+        const { classifyShellCommand, decide } = await import('../sources/modules/agent/permissions.js');
+        const { osProcTools } = await import('../sources/modules/agent/tools/os-proc.js');
+        const shellTool = osProcTools.find(t => t.name === 'shell');
+        const svcTool = osProcTools.find(t => t.name === 'os_service');
+
+        const readCmd = 'if (Test-Path C:\\WORK\\docker-install.log) { Get-Content C:\\WORK\\docker-install.log -Encoding utf8 -Tail 40 } else { "log not present yet" }';
+        assert.equal(classifyShellCommand(readCmd).key, 'shell:read');
+        assert.equal(classifyShellCommand('wsl --status').key, 'shell:read');
+        assert.equal(classifyShellCommand('docker ps').key, 'shell:read');
+        assert.equal(classifyShellCommand('winget install Docker.DockerDesktop').key, 'shell:prog:winget');
+        assert.equal(classifyShellCommand('Remove-Item C:\\WORK\\* -Recurse').noAlways, true);
+        assert.equal(classifyShellCommand('Get-Content a.log > out.txt').key, 'shell:prog:get-content');
+
+        const host = { mode: 'auto', allowed: new Set(['shell:read', 'os_service:docker']) };
+        const dRead = await decide(shellTool, { command: readCmd }, { host });
+        assert.equal(dRead.verdict, 'allow');
+        assert.equal(dRead.autoAllowed, true);
+
+        const dWinget = await decide(shellTool, { command: 'winget install Docker.DockerDesktop' }, { host });
+        assert.equal(dWinget.verdict, 'ask');
+        assert.equal(dWinget.scope?.key, 'shell:prog:winget');
+
+        const dDanger = await decide(shellTool, { command: 'Remove-Item C:\\WORK\\x' }, { host });
+        assert.equal(dDanger.verdict, 'ask');
+        assert.equal(dDanger.noAlways, true);
+
+        const dSvcSame = await decide(svcTool, { name: 'docker', action: 'status' }, { host });
+        assert.equal(dSvcSame.verdict, 'allow');
+        assert.equal(dSvcSame.autoAllowed, true);
+
+        const dSvcOther = await decide(svcTool, { name: 'postgresql', action: 'restart' }, { host });
+        assert.equal(dSvcOther.verdict, 'ask');
+        assert.equal(dSvcOther.scope?.key, 'os_service:postgresql');
+    });
+
+    it('runLoop: res.always сохраняет approvalScope и помечает следующие шаги autoAllowed', async () => {
+        const { osProcTools } = await import('../sources/modules/agent/tools/os-proc.js');
+        const shellTool = osProcTools.find(t => t.name === 'shell');
+        const readOnlyShell = { ...shellTool, run: async a => 'ok: ' + a.command };
+        const allowed = new Set();
+        const asked = [];
+        const host = mkHost({
+            allowed,
+            wait: async req => {
+                asked.push(req);
+                return { accept: true, always: true };
+            },
+        });
+        const items = [{ id: 'u1', type: 'user', content: 'проверь лог дважды' }];
+        await runLoop({
+            llm: scripted([
+                { calls: [{ name: 'shell', args: { command: 'Get-Content C:\\WORK\\a.log -Tail 10' } }] },
+                { calls: [{ name: 'shell', args: { command: 'wsl --status' } }] },
+                { text: 'готово' },
+            ]),
+            system: 'S',
+            items,
+            tools: [readOnlyShell],
+            host,
+            ctx: {},
+        });
+        assert.equal(asked.length, 1, 'вопрос задан только 1 раз');
+        assert.equal(asked[0].approvalScope, 'shell:read');
+        assert.equal(allowed.has('shell:read'), true, 'в allowed сохранён именно скоуп shell:read, а не весь shell');
+        assert.equal(allowed.has('shell'), false);
+        const toolEntries = items.flatMap(i => i.tools || []);
+        assert.equal(toolEntries.length, 2);
+        assert.equal(toolEntries[0].autoAllowed, undefined);
+        assert.equal(toolEntries[1].autoAllowed, true, 'второй вызов помечен autoAllowed');
+    });
+
+    it('explainCall: объясняет ожидающий вызов через быструю модель и кэширует результат в entry.explanation', async () => {
+        const { explainCall } = await import('../sources/modules/agent/session.js');
+        let streamCalls = 0;
+        globalThis.__MOCK_STREAM__ = async function* () {
+            streamCalls++;
+            yield '1. Читает последние 20 строк лога.\n2. Файлы и службы не изменяются.\n3. Безопасно и обратимо.';
+        };
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'work-explain-'));
+        try {
+            const taskDir = path.join(tmpDir, 'explain-test.task');
+            const body = {
+                version: 2,
+                name: 'test',
+                items: [
+                    { id: 'u1', type: 'user', content: 'проверь лог' },
+                    {
+                        id: 'a1',
+                        type: 'assistant',
+                        content: '',
+                        tools: [{
+                            id: 'call_1',
+                            name: 'shell',
+                            status: 'approval',
+                            reason: 'команда на сервере: Get-Content a.log',
+                            args: { command: 'Get-Content a.log -Tail 20' },
+                        }],
+                    },
+                ],
+                waiting: { kind: 'approval', item: 'a1', call: 'call_1' },
+            };
+            fs.writeFileSync(taskDir, JSON.stringify(body));
+            const file = {
+                dir: taskDir,
+                path: '/BOX/task/explain-test.task',
+                short: '/BOX/task/explain-test.task',
+                load: async ({ encoding } = {}) => fs.readFileSync(taskDir, encoding || 'utf-8'),
+                reset() {},
+                $class: { path: '/BOX' },
+            };
+            const r1 = await explainCall(file, { call: 'call_1' });
+            assert.equal(r1.ok, true);
+            assert.match(r1.text, /Читает последние 20 строк/);
+            assert.equal(streamCalls, 1);
+            const r2 = await explainCall(file, { call: 'call_1' });
+            assert.equal(r2.ok, true);
+            assert.equal(r2.cached, true);
+            assert.equal(streamCalls, 1, 'повторный вызов берётся из кэша entry.explanation');
+            const saved = JSON.parse(fs.readFileSync(taskDir, 'utf-8'));
+            assert.match(saved.items[1].tools[0].explanation, /Читает последние 20 строк/);
+        }
+        finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
     });
 });

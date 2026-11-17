@@ -48,7 +48,7 @@ async function waitFor(fn, what) {
         catch { /* ещё не отрисовалось */ }
         await new Promise(r => setTimeout(r, 100));
     }
-    throw new Error('не дождались: ' + what);
+    throw new Error('не дождались: ' + (typeof what === 'function' ? what() : what));
 }
 function mount(data) {
     const el = document.createElement('microchat-tool');
@@ -153,43 +153,87 @@ await test('connect: signup раскрывается в тот же предпр
     }
 });
 
-// 9.7 (final): карточка разрешения — что именно, причина, три кнопки; noAlways убирает «всегда»
-const approvalEntry = (noAlways) => ({
+// 9.7 (final): карточка разрешения — что именно, причина, компактные кнопки + ? и бейдж «авторазрешено»
+const approvalEntry = (noAlways, extra = {}) => ({
     id: 'c3', name: 'write', status: 'approval', noAlways,
     args: { path: '/ORG/Отчёты/годовой.md' },
     reason: 'изменение системы: /ORG/Отчёты/годовой.md',
+    ...extra,
 });
 
-await test('approval: что именно и причина видны; без служебного JSON и поля комментария; крупные кнопки', async () => {
-    const el = mount(approvalEntry(false));
+await test('approval: что именно и причина видны; без служебного JSON; кнопка «Разрешить подобные», «?» и бейдж «авторазрешено»', async () => {
+    const el = mount(approvalEntry(false, {
+        name: 'shell',
+        args: { command: 'Get-Content C:\\WORK\\docker.log -Tail 20' },
+        reason: 'команда на сервере: Get-Content',
+        alwaysLabel: 'Разрешить подобные',
+        approvalLabel: 'команды чтения и проверки состояния в этой задаче',
+    }));
     try {
         const ask = await waitFor(() => el.$$('.ask').find(a => a.textContent.includes('Разрешить')), 'карточка разрешения');
         const text = ask.textContent;
         assert(/Разрешить «[^»]+»/.test(text), 'название действия: ' + text);
-        assert(text.includes('/ORG/Отчёты/годовой.md'), 'цель: ' + text);
-        assert(text.includes('изменение системы'), 'причина: ' + text);
+        assert(text.includes('команда на сервере'), 'причина: ' + text);
+        assert(text.includes('команды чтения и проверки состояния'), 'область общего разрешения: ' + text);
         eq(ask.querySelectorAll('textarea').length, 0, 'в карточке не должно быть поля комментария');
         eq(ask.querySelectorAll('pre').length, 0, 'в карточке не должно быть служебного JSON');
         const labels = el.$$('oda-button').map(b => b.getAttribute('label')).filter(Boolean);
-        for (const want of ['Разрешить', 'Разрешить всегда', 'Отклонить'])
+        for (const want of ['Разрешить', 'Разрешить подобные', 'Отклонить', '?'])
             assert(labels.includes(want), 'нет кнопки «' + want + '»: ' + labels.join('|'));
         const btn = el.$$('oda-button').find(b => b.getAttribute('label') === 'Разрешить');
         const cs = getComputedStyle(btn);
-        assert(parseFloat(cs.minHeight) >= 34, 'кнопка низкая: ' + cs.minHeight);
-        assert(parseFloat(cs.paddingTop) >= 6 && parseFloat(cs.paddingBottom) >= 6, 'мало падинга по вертикали: ' + cs.padding);
+        assert(parseFloat(cs.paddingTop) >= 4 && parseFloat(cs.paddingBottom) >= 4, 'компактный вертикальный падинг: ' + cs.padding);
+
+        // Клик по кнопке ? запрашивает пояснение и рисует его под кнопками
+        let explained = 0;
+        const shellHost = {
+            explainCall: async (id) => {
+                explained++;
+                return { ok: true, text: 'Читает последние 20 строк лога docker.log. Ничего не меняет.' };
+            },
+            reply: () => {},
+        };
+        const wrap = document.createElement('div');
+        wrap.__microchatShell = true;
+        Object.assign(wrap, shellHost);
+        wrap.appendChild(el);
+        document.body.appendChild(wrap);
+        await tick();
+        const helpBtn = await waitFor(() => el.$$('oda-button').find(b => b.getAttribute('label') === '?'), 'кнопка ?');
+        helpBtn.click();
+        await waitFor(() => {
+            if (el.$('.explain-err'))
+                throw new Error('explainErr: ' + el.$('.explain-err').textContent);
+            const mv = el.$('.explain-box oda-markdown-viewer');
+            return mv && String(mv.value || '').includes('Читает последние 20 строк');
+        }, () => `блок пояснения по ? (explained=${explained}, open=${el.explainOpen}, loading=${el.explainLoading}, local=${el.explainLocal}, box=${!!el.$('.explain-box')})`);
+        eq(explained, 1, 'пояснение запрошено 1 раз');
+        // повторный клик сворачивает без нового запроса
+        helpBtn.click();
+        await waitFor(() => !el.$('.explain-box'), 'блок пояснения свернулся');
+        eq(explained, 1, 'повторный клик не шлёт повторный запрос');
+        wrap.remove();
     }
     finally {
         el.remove();
     }
     const no = mount(approvalEntry(true));
     try {
-        await waitFor(() => el2labels(no).includes('Разрешить'), 'карточка без «всегда»');
+        await waitFor(() => el2labels(no).includes('Разрешить'), 'карточка без «Разрешить подобные»');
         const labels = el2labels(no);
-        assert(labels.includes('Разрешить') && labels.includes('Отклонить'), 'кнопки: ' + labels.join('|'));
-        assert(!labels.includes('Разрешить всегда'), '«всегда» показана при noAlways: ' + labels.join('|'));
+        assert(labels.includes('Разрешить') && labels.includes('Отклонить') && labels.includes('?'), 'кнопки: ' + labels.join('|'));
+        assert(!labels.includes('Разрешить подобные') && !labels.includes('Разрешить всегда'), 'общее разрешение показано при noAlways: ' + labels.join('|'));
     }
     finally {
         no.remove();
+    }
+    const autoEl = mount({ id: 'c4', name: 'shell', status: 'ok', autoAllowed: true, scopeLabel: 'команды чтения', args: { command: 'Get-Content a.log' } });
+    try {
+        const tag = await waitFor(() => autoEl.$('.auto-tag'), 'бейдж авторазрешено');
+        eq(tag.textContent.trim(), 'авторазрешено');
+    }
+    finally {
+        autoEl.remove();
     }
 });
 function el2labels(el) {

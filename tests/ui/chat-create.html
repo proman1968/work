@@ -357,8 +357,8 @@ await test('переключатель «Мои записи / Местный л
         };
         await waitFor(() => chat.showFeedModeToggle && chat.$('.feed-mode-bar'), 'переключатель показан для BOSS');
         eq(chat.feedMode, 'own', 'даже для BOSS по умолчанию выбран режим «Мои записи»');
+        await waitFor(() => seenDatesParams.some(p => p?.nonEmpty === 1 && !p?.local), 'dates вызывается с nonEmpty: 1 и без local');
         assert(seenChatSource.length > 0 && seenChatSource.every(p => !p?.local), 'по умолчанию chatSource вызывается без local');
-        assert(seenDatesParams.some(p => p?.nonEmpty === 1 && !p?.local), 'dates вызывается с nonEmpty: 1 и без local');
 
         // Плашка даты есть, а пунктирной линии .date-line::before больше нет
         const day = await waitFor(() => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY), 'chat-day сегодня');

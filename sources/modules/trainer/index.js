@@ -462,6 +462,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             modality,
             durationMs,
             error: String(e?.message || e),
+            ...(e?.pythonMissing ? { pythonMissing: true } : {}),
             ...(Array.isArray(e?.missingDeps) && e.missingDeps.length ? { missingDeps: e.missingDeps } : {}),
         };
     }

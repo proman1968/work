@@ -1282,6 +1282,15 @@ ODA({
         const res = await this.taskItem?.fetch('approve', {}, JSON.stringify({ call: callId, ...payload }));
         if (res && res.ok === false)
             this.toast(res.error || 'Не удалось отправить ответ');
+        else if (this.taskItem?.path && navigator.serviceWorker?.controller) {
+            try {
+                navigator.serviceWorker.controller.postMessage({ type: 'work:task-visible', task: this.taskItem.path });
+            }
+            catch { /* ignore */ }
+        }
+    },
+    async explainCall(callId) {
+        return this.taskItem?.fetch('explain_call', {}, JSON.stringify({ call: callId }));
     },
 
     async revert(item) {

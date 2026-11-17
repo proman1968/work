@@ -5,7 +5,7 @@
  */
 import os from 'node:os';
 import { clip } from '../util.js';
-import { IS_WIN, checkPath, askEach, run, powershell, psQuote, formatRun, loadConfig } from '../system.js';
+import { IS_WIN, checkPath, askEach, askScoped, run, powershell, psQuote, formatRun, loadConfig } from '../system.js';
 import { size } from './os-files.js';
 
 const NAME = /^[\w.@:-]{1,128}$/;
@@ -88,7 +88,12 @@ export const osProcTools = [
     },
     {
         name: 'os_service',
-        permission: askEach(a => (a?.action || '?') + ' службы «' + a?.name + '» на сервере'),
+        permission: askScoped(a => (a?.action || '?') + ' службы «' + a?.name + '» на сервере'),
+        approvalScope: a => ({
+            key: 'os_service:' + String(a?.name || '*').trim().toLowerCase(),
+            label: 'действия со службой «' + String(a?.name || '*') + '» в этой задаче',
+            buttonLabel: 'Разрешить подобные',
+        }),
         description: 'Запустить, остановить или перезапустить службу сервера.',
         parameters: {
             type: 'object',
@@ -128,8 +133,8 @@ export const osProcTools = [
     },
     {
         name: 'shell',
-        permission: askEach(a => 'команда на сервере' + (a?.reason ? ' (' + a.reason + ')' : '') + ':\n' + a?.command),
-        description: 'Выполнить команду на сервере WORK: PowerShell на Windows, sh на Linux/macOS. Каждая команда — с подтверждением человека. Предпочитай специальные os_*/net_* инструменты; shell — когда их не хватает.',
+        permission: askScoped(a => 'команда на сервере' + (a?.reason ? ' (' + a.reason + ')' : '') + ':\n' + a?.command),
+        description: 'Выполнить команду на сервере WORK: PowerShell на Windows, sh на Linux/macOS. Команды требуют подтверждения человека (для безопасного чтения/проверок и повторяющихся утилит можно выдать общее разрешение в задаче). Предпочитай специальные os_*/net_* инструменты; shell — когда их не хватает.',
         parameters: {
             type: 'object',
             properties: {
@@ -154,7 +159,12 @@ export const osProcTools = [
     },
     {
         name: 'install_package',
-        permission: askEach(a => 'установить npm-пакет в WORK: ' + a?.name + (a?.reason ? ' — ' + a.reason : '')),
+        permission: askScoped(a => 'установить npm-пакет в WORK: ' + a?.name + (a?.reason ? ' — ' + a.reason : '')),
+        approvalScope: () => ({
+            key: 'install_package',
+            label: 'установка npm-пакетов в этой задаче',
+            buttonLabel: 'Разрешить в задаче',
+        }),
         description: 'Установить npm-пакет в WORK (драйверы SQL и т.п., по мере необходимости): npm install --save.',
         parameters: { type: 'object', properties: { name: { type: 'string', description: 'Пакет, например pg или mssql@11' }, reason: { type: 'string' } }, required: ['name'] },
         async run(args, ctx) {

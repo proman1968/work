@@ -254,6 +254,20 @@ await test('новая задача из чата: «Запускаю агент
     finally { shell.remove(); WORK.get_item = realGetItem; }
 });
 
+await test('включение песочницы автоматически открывает правую панель на вкладке «Монитор»', async () => {
+    const shell = await mountShell({ name: 'Песочница', status: 'running', results: [], items: [{ id: 'u1', type: 'user', content: 'запусти компьютер' }] });
+    try {
+        shell.dockOpen = false;
+        shell.dockTab = 'context';
+        // прилетает событие tool_progress о вызове sandbox_exec
+        shell._onDelta({ item: 'a1', field: 'tool', name: 'sandbox_exec', target: 'uname -a', chars: 20 });
+        await waitFor(() => shell.dockOpen && shell.dockTab === 'monitor', 'панель открылась на Мониторе');
+        eq(shell.dockOpen, true, 'правая панель открыта');
+        eq(shell.dockTab, 'monitor', 'выбрана вкладка Монитор');
+    }
+    finally { shell.remove(); WORK.get_item = realGetItem; }
+});
+
 window.__done = true;
 </script>
 </body>

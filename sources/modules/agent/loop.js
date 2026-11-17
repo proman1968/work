@@ -23,7 +23,7 @@
  */
 import { log } from './log.js';
 import { genId, clip, estimateTokens, resultText, StopError, throwIfStopped } from './util.js';
-import { decide } from './permissions.js';
+import { decide, resolveApprovalScope } from './permissions.js';
 import { newNonce, wrapUntrusted, taintSources, untrustedNames } from './taint.js';
 import { runPreTool, runAppend, runNotify } from './hooks.js';
 import { costOf, recordUsage, budgetExceeded } from './cost.js';
@@ -734,6 +734,11 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         await noteAudit(tool, entry, ctx, 'deny', 'policy', { reason: clip(entry.error, 300) });
         return;
     }
+    if (decision.verdict === 'allow' && decision.autoAllowed) {
+        entry.autoAllowed = true;
+        if (decision.scopeLabel)
+            entry.scopeLabel = decision.scopeLabel;
+    }
     if (decision.verdict === 'ask' && typeof host.wait !== 'function') {
         entry.status = 'denied';
         entry.error = 'нужно подтверждение человека (' + (decision.reason || 'политика') + '), а запуск автономный — предложи действие в ответе';
@@ -748,23 +753,53 @@ async function runOne({ entry, tool, it, host, llm, opts, preapproved }) {
         entry.status = 'approval';
         entry.reason = decision.reason;
         // действия во внешнем мире — каждое подтверждается отдельно («разрешить всегда» не предлагается)
-        if (decision.noAlways)
+        if (decision.noAlways) {
             entry.noAlways = true;
+        }
+        else {
+            const scope = decision.scope || resolveApprovalScope(tool, entry.args || {}, ctx);
+            if (scope?.noAlways) {
+                entry.noAlways = true;
+            }
+            else if (scope?.key) {
+                entry.approvalScope = scope.key;
+                if (scope.label)
+                    entry.approvalLabel = scope.label;
+                if (scope.buttonLabel)
+                    entry.alwaysLabel = scope.buttonLabel;
+            }
+        }
         if (decision.hideArgs)
             entry.hideArgs = true;
         await host.save();
-        const res = await host.wait({ kind: 'approval', item: it.id, call: entry.id, tool: entry.name, args: entry.args, reason: decision.reason, hideArgs: decision.hideArgs }) || {};
+        const res = await host.wait({
+            kind: 'approval',
+            item: it.id,
+            call: entry.id,
+            tool: entry.name,
+            args: entry.args,
+            reason: decision.reason,
+            hideArgs: decision.hideArgs,
+            approvalScope: entry.approvalScope,
+            approvalLabel: entry.approvalLabel,
+            alwaysLabel: entry.alwaysLabel,
+        }) || {};
         throwIfStopped(host.signal);
         delete entry.reason;
+        const scopeKey = entry.approvalScope || entry.name;
+        delete entry.approvalLabel;
+        delete entry.alwaysLabel;
         if (res.always && !entry.noAlways)
-            host.allowed?.add?.(entry.name);
+            host.allowed?.add?.(scopeKey);
         if (!res.accept) {
+            delete entry.approvalScope;
             entry.status = 'denied';
             entry.answer = res.content ? String(res.content) : undefined;
             await host.save();
             await noteAudit(tool, entry, ctx, 'ask', 'denied', { reason: clip(decision.reason, 300), answer: entry.answer ? clip(entry.answer, 300) : undefined });
             return;
         }
+        delete entry.approvalScope;
         approved = { reason: decision.reason, always: !!(res.always && !entry.noAlways) };
     }
     entry.status = 'running';
