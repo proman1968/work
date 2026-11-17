@@ -10,10 +10,22 @@ import { DEV_MODE } from '../../host/config.js';
 const ACCESS_DENIED = 'Доступ запрещён';
 
 export const classFeedMethods = {
+    /** Может ли вызывающий принудительно открыть местный лог точки (роль BOSS здесь или выше по дереву). */
+    async _canViewLocalFeed(params = {}) {
+        if (params.role && params.role !== 'BOSS')
+            return false;
+        if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
+            return true;
+        if (globalThis.WORK && await this._isWorkBoss?.(params).catch(() => false))
+            return true;
+        const roles = await this.roles(params).catch(() => []);
+        return roles.includes('BOSS');
+    },
+
     /**
-     * Источник логов чата для текущей роли пользователя.
-     * Независимо от того, где работает пользователь, он всегда видит записи только своего лога
-     * (/USERS/<uid>), кроме режима BOSS — в режиме BOSS пользователь видит логи подразделения (this.path).
+     * Источник логов чата для пользователя.
+     * По умолчанию, куда бы пользователь ни смотрел, отображаются его личные записи (/USERS/<uid>).
+     * Местный лог точки (this.path) открывается только при явном включении режима `local` и наличии роли BOSS (в т.ч. вышестоящей).
      */
     async chatSource(params = {}) {
         if (this.type === '$user')
@@ -22,13 +34,8 @@ export const classFeedMethods = {
         const own = params.session?.principal?.kind === 'node'
             ? params.session.$user?.path
             : (uid ? '/USERS//' + uid : null);
-        if (params.role) {
-            if (params.role === 'BOSS')
-                return this.path;
-            return own || this.path;
-        }
-        const roles = await this.roles(params);
-        if (roles.includes('BOSS'))
+        const wantLocal = params.local === true || params.local === '1' || params.local === 'true' || params.feedMode === 'local';
+        if (wantLocal && await this._canViewLocalFeed(params))
             return this.path;
         return own || this.path;
     },
@@ -193,8 +200,10 @@ export const classFeedMethods = {
             return ownOnly ? rows.filter(r => POLICY.isOwnLogRow(r, ownOnly)) : rows;
         };
         switch (params.mode || 'folder') {
-            case 'dates':
-                return LOGS.datesList(this);
+            case 'dates': {
+                const nonEmpty = params.nonEmpty === true || params.nonEmpty === '1' || params.nonEmpty === 'true';
+                return LOGS.datesList(this, { nonEmpty, ownOnly });
+            }
             case 'bodies':
                 return bodies();
             case 'index':

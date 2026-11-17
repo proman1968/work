@@ -840,6 +840,14 @@ Reactor.join_props = function (parent, child) {
         const p = parent[key] || {};
         const c = child[key] || {};
         const res = Object.assign({}, p, c);
+        if ('value' in c) {
+            delete res.get;
+            delete res.set;
+        }
+        else if ('get' in c || 'set' in c) {
+            delete res.value;
+            delete res.writable;
+        }
 
         if (res.get) {
             res.get.getter = c?.get?.getter || p?.get?.getter;

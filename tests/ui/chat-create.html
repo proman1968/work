@@ -226,6 +226,8 @@ await test('SQL-логи подразделения (logs mode: bodies с logsFi
     eq(bound[0].logsFilePath, rawLogRow.logsFilePath, 'поле logsFilePath сохранено');
 
     const { host, chat } = await mountChat();
+    host.$item.fetch = async (method, p) => (method === 'logs' && p?.mode === 'dates') ? [TODAY] : (method === 'logs' ? [] : null);
+    await chat.$('#ribbon').refreshFeed();
     try {
         const day = await waitFor(() => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY), 'chat-day сегодня');
         const wrapped = day._wrapLogRow(bound[0]);
@@ -282,7 +284,14 @@ await test('при наличии старой задачи («Гранит») �
             };
         }),
     });
-    host.$item.fetch = async (method) => method === 'logs' ? serverLogs.map(x => ({ ...x })) : null;
+    host.$item.fetch = async (method, p) => {
+        if (method === 'logs' && p?.mode === 'dates')
+            return [TODAY];
+        if (method === 'logs')
+            return serverLogs.map(x => ({ ...x }));
+        return null;
+    };
+    await chat.$('#ribbon').refreshFeed();
 
     try {
         const day = await waitFor(() => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY), 'chat-day сегодня');
@@ -310,6 +319,65 @@ await test('при наличии старой задачи («Гранит») �
         eq(expandedAfter[0]._identityOfItem(expandedAfter[0].$item), 'task:1791000000005.U1.task', 'раскрыта именно новая задача, а не Гранит');
     }
     finally { restore(); host.remove(); }
+});
+
+await test('переключатель «Мои записи / Местный лог»: скрыт у USER, виден у BOSS, по умолчанию «Мои записи»', async () => {
+    const { host, chat } = await mountChat();
+    const seenChatSource = [];
+    const seenDatesParams = [];
+    const prevDev = WORK.DEV_MODE;
+    WORK.DEV_MODE = false;
+    try {
+        // 1. Обычный USER без BOSS — переключатель скрыт
+        host.$item = {
+            id: 'DEPT', path: '/ORG/DEPT', short: '/ORG/DEPT', type: '$structure', name: 'DEPT',
+            async fetch(m, p) {
+                if (m === 'roles') return ['USER'];
+                if (m === 'chatSource') { seenChatSource.push(p); return '/USERS//U1'; }
+                if (m === 'logs' && p?.mode === 'dates') { seenDatesParams.push(p); return []; }
+                return [];
+            },
+        };
+        await sleep(80);
+        eq(chat.feedMode, 'own', 'по умолчанию режим own');
+        eq(chat.showFeedModeToggle, false, 'переключатель скрыт для USER');
+        assert(!chat.$('.feed-mode-bar'), 'в DOM нет плашки переключателя для USER');
+
+        // 2. Пользователь с ролью BOSS — переключатель виден, но по умолчанию «Мои записи» (без local)
+        seenChatSource.length = 0;
+        seenDatesParams.length = 0;
+        host.$item = {
+            id: 'WORK', path: '/', short: '/', type: '$server', name: 'WORK',
+            async fetch(m, p) {
+                if (m === 'roles') return ['BOSS'];
+                if (m === 'chatSource') { seenChatSource.push(p); return p?.local ? '/' : '/USERS//U1'; }
+                if (m === 'logs' && p?.mode === 'dates') { seenDatesParams.push(p); return [TODAY]; }
+                return [];
+            },
+        };
+        await waitFor(() => chat.showFeedModeToggle && chat.$('.feed-mode-bar'), 'переключатель показан для BOSS');
+        eq(chat.feedMode, 'own', 'даже для BOSS по умолчанию выбран режим «Мои записи»');
+        assert(seenChatSource.length > 0 && seenChatSource.every(p => !p?.local), 'по умолчанию chatSource вызывается без local');
+        assert(seenDatesParams.some(p => p?.nonEmpty === 1 && !p?.local), 'dates вызывается с nonEmpty: 1 и без local');
+
+        // Плашка даты есть, а пунктирной линии .date-line::before больше нет
+        const day = await waitFor(() => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY), 'chat-day сегодня');
+        const dateLine = day.$('.date-line');
+        assert(dateLine, 'элемент .date-line присутствует');
+        const beforeContent = getComputedStyle(dateLine, '::before').content;
+        assert(beforeContent === 'none' || beforeContent === '', 'пунктирная линия ::before у даты убрана');
+
+        // 3. Переключение на «Местный лог» передаёт local: 1
+        seenChatSource.length = 0;
+        chat.setFeedMode('local');
+        await waitFor(() => seenChatSource.some(p => p?.local === 1), 'chatSource получил local: 1');
+        eq(chat.feedMode, 'local', 'активен режим Местный лог');
+    }
+    finally {
+        WORK.DEV_MODE = prevDev;
+        restore();
+        host.remove();
+    }
 });
 
 window.__done = true;

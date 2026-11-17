@@ -309,6 +309,44 @@ ODA({is: 'oda-chat',
             .mover>oda-button{
                 border-radius: 50%;
             }
+            .feed-mode-bar {
+                position: absolute;
+                top: 8px;
+                right: 12px;
+                z-index: 8;
+                display: inline-flex;
+                align-items: center;
+                gap: 2px;
+                padding: 2px;
+                border-radius: 999px;
+                background: var(--content-background, #ffffff);
+                border: 1px solid var(--border-color, #cbd5e1);
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+                opacity: 0.92;
+            }
+            .feed-mode-bar:hover {
+                opacity: 1;
+            }
+            .feed-mode-btn {
+                border: none;
+                background: transparent;
+                color: var(--content-color, inherit);
+                font: inherit;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 4px 10px;
+                border-radius: 999px;
+                cursor: pointer;
+                white-space: nowrap;
+                transition: background 0.15s ease, color 0.15s ease;
+            }
+            .feed-mode-btn:hover:not(.active) {
+                background: var(--subtle-background, rgba(0, 0, 0, 0.05));
+            }
+            .feed-mode-btn.active {
+                background: var(--accent-color, #2563eb);
+                color: var(--accent-back, #ffffff);
+            }
         </style>
 
         <style>
@@ -327,6 +365,10 @@ ODA({is: 'oda-chat',
             }
         </style>
         <div class="back"></div>
+        <div class="feed-mode-bar" ~if="showFeedModeToggle">
+            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'own' }" @tap="setFeedMode('own')" title="Мои записи из личного кабинета (/USERS)">Мои записи</button>
+            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'local' }" @tap="setFeedMode('local')" title="Местный лог открытой точки (доступно только BOSS)">Местный лог</button>
+        </div>
         <chat-ribbon id="ribbon" :$item @chat-item-expanded="onCardExpanded($event)"></chat-ribbon>
         <div class="mover" vertical hidden>
             <oda-button :hidden="$('#ribbon').scrollTop < 0" content shadow icon="icons:chevron-right:270" @tap="$('#ribbon').scrollTop = -($('#ribbon').scrollHeight)"></oda-button>
@@ -515,7 +557,77 @@ ODA({is: 'oda-chat',
         this.$('work-prompt-bar')?.focusInput();
     },
     focusedItem: null,
-    $item: null,
+    feedMode: 'own',
+    _canLocalFeed: false,
+    get showFeedModeToggle() {
+        return Boolean(this.$item && this.$item.type !== '$user' && this._canLocalFeed);
+    },
+    async _refreshCanLocalFeed(item = this.$item) {
+        if (!item || item.type === '$user') {
+            this._canLocalFeed = false;
+            return;
+        }
+        if (globalThis.WORK?.DEV_MODE) {
+            this._canLocalFeed = true;
+            return;
+        }
+        const key = (item.path || '') + '|' + (item.id || '');
+        try {
+            const cached = item.myRoles;
+            const roles = await Promise.resolve(cached !== undefined ? cached : item.fetch?.('roles')).catch(() => []);
+            const curKey = (this.$item?.path || '') + '|' + (this.$item?.id || '');
+            if (curKey !== key)
+                return;
+            this._canLocalFeed = Array.isArray(roles) && roles.includes('BOSS');
+        }
+        catch {
+            const curKey = (this.$item?.path || '') + '|' + (this.$item?.id || '');
+            if (curKey === key)
+                this._canLocalFeed = false;
+        }
+    },
+    setFeedMode(mode) {
+        const next = mode === 'local' && this.showFeedModeToggle ? 'local' : 'own';
+        if (this.feedMode === next)
+            return;
+        this.feedMode = next;
+        this.$('#ribbon')?.refreshFeed?.();
+    },
+    async _ownCabinet() {
+        const uid = globalThis.WORK?.uid;
+        if (!uid || typeof globalThis.WORK?.get_item !== 'function')
+            return null;
+        return globalThis.WORK.get_item('/USERS//' + uid).catch(() => null);
+    },
+    _isAccessError(err) {
+        return /доступ запрещ|forbidden|\b403\b/i.test(String(err?.message || err || ''));
+    },
+    async _runWithCabinetFallback(fn) {
+        const primary = this.$pdp?.$item || this.$item;
+        try {
+            return { target: primary, result: await fn(primary) };
+        }
+        catch (err) {
+            if (this.feedMode !== 'own' || primary?.type === '$user' || !this._isAccessError(err))
+                throw err;
+            const cab = await this._ownCabinet();
+            if (!cab)
+                throw err;
+            return { target: cab, result: await fn(cab) };
+        }
+    },
+    $item: {
+        $def: null,
+        set(n) {
+            const changed = Boolean(this._prevItem && this._prevItem !== n);
+            this._prevItem = n;
+            this.feedMode = 'own';
+            this._canLocalFeed = false;
+            this._refreshCanLocalFeed(n);
+            if (changed)
+                this.$('#ribbon')?.refreshFeed?.();
+        }
+    },
     taskItem: null,
     data: null,
     streams: {},
@@ -618,25 +730,31 @@ ODA({is: 'oda-chat',
                 else if (this.$pdp.receivers.length)
                     params.receivers = this.$pdp.receivers.map(u => u.id);
                 const uploadedPaths = [];
-                if (list.length) {
-                    const formData = new FormData();
-                    for (const file of list)
-                        formData.append('file', file, file.name);
-                    const fileParams = text ? { ...params, ignore_save_logs: true } : params;
-                    const savedLogs = await this.$pdp.$item.save_files(formData, fileParams);
-                    const arr = Array.isArray(savedLogs) ? savedLogs : (savedLogs ? [savedLogs] : []);
-                    for (const l of arr) {
-                        const p = await pathOfLog(l);
-                        if (p)
-                            uploadedPaths.push(p.startsWith('/') ? p : '/' + p);
+                const runWrite = typeof this._runWithCabinetFallback === 'function'
+                    ? fn => this._runWithCabinetFallback(fn)
+                    : async fn => ({ target: this.$pdp.$item, result: await fn(this.$pdp.$item) });
+                await runWrite(async target => {
+                    uploadedPaths.length = 0;
+                    if (list.length) {
+                        const formData = new FormData();
+                        for (const file of list)
+                            formData.append('file', file, file.name);
+                        const fileParams = text ? { ...params, ignore_save_logs: true } : params;
+                        const savedLogs = await target.save_files(formData, fileParams);
+                        const arr = Array.isArray(savedLogs) ? savedLogs : (savedLogs ? [savedLogs] : []);
+                        for (const l of arr) {
+                            const p = await pathOfLog(l);
+                            if (p)
+                                uploadedPaths.push(p.startsWith('/') ? p : '/' + p);
+                        }
                     }
-                }
-                if (text) {
-                    params.message = text;
-                    if (uploadedPaths.length)
-                        params.includes = JSON.stringify(uploadedPaths);
-                    await this.$pdp.$item.fetch('save_message', params);
-                }
+                    if (text) {
+                        const msgParams = { ...params, message: text };
+                        if (uploadedPaths.length)
+                            msgParams.includes = JSON.stringify(uploadedPaths);
+                        await target.fetch('save_message', msgParams);
+                    }
+                });
                 this.clear();
                 this.$('#ribbon')?.refreshFeed?.();
             }
@@ -677,7 +795,7 @@ ODA({is: 'oda-chat',
         this._awaitingLogExpand = false;
         this._awaitTaskPath = '';
         this._awaitTaskKey = '';
-        this._awaitKnown = this._collectKnownLogKeys();
+        this._awaitKnown = this._collectKnownLogKeys?.() || new Set();
         clearTimeout(this._awaitTimer);
         const item = this.$pdp.$item;
         try {
@@ -718,27 +836,33 @@ ODA({is: 'oda-chat',
             if (globalThis.WORK?.uid)
                 params.sender = globalThis.WORK.uid;
             const canLookupTask = typeof globalThis.WORK?.get_item === 'function';
-            if (files.length && !canLookupTask) {
-                const preAttachments = [];
-                await Promise.all(files.map(async file => {
-                    const fLog = await item.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
-                    const fPath = await pathOfLog(fLog);
-                    if (fPath)
-                        preAttachments.push({ path: fPath.startsWith('/') ? fPath : '/' + fPath, name: file.name });
-                }));
-                if (preAttachments.length) {
-                    params.includes = JSON.stringify(preAttachments.map(a => a.path));
-                    params.attachments = JSON.stringify(preAttachments);
+            const runWrite = typeof this._runWithCabinetFallback === 'function'
+                ? fn => this._runWithCabinetFallback(fn)
+                : async fn => ({ target: item, result: await fn(item) });
+            const { target: writeTarget, result: log } = await runWrite(async targetItem => {
+                const saveParams = { ...params };
+                if (files.length && !canLookupTask) {
+                    const preAttachments = [];
+                    await Promise.all(files.map(async file => {
+                        const fLog = await targetItem.save_file(file, { encoding: 'utf-8', ignore_save_logs: true });
+                        const fPath = await pathOfLog(fLog);
+                        if (fPath)
+                            preAttachments.push({ path: fPath.startsWith('/') ? fPath : '/' + fPath, name: file.name });
+                    }));
+                    if (preAttachments.length) {
+                        saveParams.includes = JSON.stringify(preAttachments.map(a => a.path));
+                        saveParams.attachments = JSON.stringify(preAttachments);
+                    }
                 }
-            }
-            // Сначала создаём саму задачу, чтобы прикреплённые и создаваемые файлы размещались в папке этого таска
-            if (files.length && canLookupTask)
-                params.skip_file_handler = true;
-            const log = await item.save_file(new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' }), params);
+                // Сначала создаём саму задачу, чтобы прикреплённые и создаваемые файлы размещались в папке этого таска
+                if (files.length && canLookupTask)
+                    saveParams.skip_file_handler = true;
+                return targetItem.save_file(new File([JSON.stringify(body, null, 2)], name + '.task', { type: 'application/json' }), saveParams);
+            });
             const path = await pathOfLog(log);
             if (path && files.length && canLookupTask) {
                 const createdTask = await globalThis.WORK.get_item(path).catch(() => null);
-                const targetHolder = createdTask || item;
+                const targetHolder = createdTask || writeTarget || item;
                 const attachments = [];
                 await Promise.all(files.map(async file => {
                     const fLog = await targetHolder.save_file(file, { encoding: 'utf-8', ignore_save_logs: true, mainContext: path });
@@ -748,7 +872,7 @@ ODA({is: 'oda-chat',
                 }));
                 if (attachments.length && createdTask) {
                     const includePaths = attachments.map(a => a.path);
-                    await item.fetch?.('append_log_includes', { entryPath: path, includePaths })?.catch?.(() => {});
+                    await (writeTarget || item).fetch?.('append_log_includes', { entryPath: path, includePaths })?.catch?.(() => {});
                     await createdTask.fetch?.('prompt', {}, JSON.stringify({ prompt: text, attachments }))?.catch?.(() => {});
                 }
             }
@@ -1076,29 +1200,46 @@ ODA({is: 'chat-ribbon',
     dateList: [],
     _datesWatch: null,
     _lastRole: '',
+    _listenedSource: null,
     get activeRole() {
         return this.$item?.role || 'USER';
+    },
+    get isLocalFeed() {
+        return this.$pdp?.feedMode === 'local';
     },
     async _resolveLogsSource() {
         if (!this.$item)
             return null;
         try {
-            const path = await this.$item.fetch('chatSource', { role: this.activeRole, uid: WORK.uid || '' });
+            const path = await this.$item.fetch('chatSource', {
+                role: this.activeRole,
+                uid: WORK.uid || '',
+                ...(this.isLocalFeed ? { local: 1 } : {}),
+            });
             if (path && typeof path === 'string')
                 return (await WORK.get_item(path)) || this.$item;
         }
         catch { /* fallback */ }
         return this.$item;
     },
+    _syncSourceListeners(source) {
+        if (this._listenedSource === source)
+            return;
+        if (this._listenedSource && this._listenedSource !== this.$item)
+            this._listenedSource.unlisten?.('changed', this.onChanged);
+        this._listenedSource = source || null;
+        if (source && source !== this.$item)
+            source.listen?.('changed', this.onChanged);
+    },
     async refreshFeed() {
         this.dateList = [];
-        await this.refreshDates();
+        await this.refreshDates(true);
         for (const dayEl of this.$$('chat-day') || []) {
             dayEl._logsInit = false;
             dayEl._ensureLogsInit?.();
         }
     },
-    async refreshDates(){
+    async refreshDates(force = false){
         if (!this.$item)
             return false;
         const curRole = this.activeRole;
@@ -1106,23 +1247,26 @@ ODA({is: 'chat-ribbon',
             this.dateList = [];
         }
         this._lastRole = curRole;
-        // «сегодня» — по местному времени (папки журнала на сервере — по местной дате, не UTC)
-        const today = new Date().toLocalDay();
-        let dates;
-        if (this.dateList.length) {
-            if (this.dateList.includes(today))
-                return false;
-            dates = [...this.dateList];
-        } else {
-            const source = (await this._resolveLogsSource()) || this.$item;
-            source.invalidate?.('logs_dates');
-            dates = await source.fetch('logs', { mode: 'dates', role: curRole, uid: WORK.uid || '' });
-            // dates на сервере — по убыванию; в ленте дни — от старых к новым.
-            // Дни с сервера не отбрасываем: папка дня есть — есть записи (пояса браузера и сервера могут различаться)
-            dates = (Array.isArray(dates) ? dates : []).slice().reverse();
+        const source = (await this._resolveLogsSource()) || this.$item;
+        this._syncSourceListeners(source);
+        source.invalidate?.('logs_dates');
+        let dates = await source.fetch('logs', {
+            mode: 'dates',
+            nonEmpty: 1,
+            ...(this.isLocalFeed ? { local: 1 } : {}),
+            role: curRole,
+            uid: WORK.uid || '',
+        });
+        // dates на сервере — по убыванию; в ленте дни — от старых к новым.
+        dates = (Array.isArray(dates) ? dates : []).slice().reverse();
+        // Пока создаётся новая задача (awaitTask), не сбрасываем локально добавленный _openCreated день
+        if (!force && this.$pdp?.awaitTask && Array.isArray(this.dateList)) {
+            for (const d of this.dateList) {
+                if (d && !dates.includes(d))
+                    dates.push(d);
+            }
+            dates.sort();
         }
-        if (!dates.includes(today))
-            dates = [...dates, today].sort();
         const prevDates = Array.isArray(this.dateList) ? this.dateList : [];
         if (prevDates.length !== dates.length || prevDates.some((d, i) => d !== dates[i])) {
             this.dateList = dates;
@@ -1142,6 +1286,7 @@ ODA({is: 'chat-ribbon',
         if (!this._rolePollTimer) {
             this._rolePollTimer = setInterval(() => {
                 if (this.$item && this._lastRole && this.activeRole !== this._lastRole) {
+                    this.$pdp?._refreshCanLocalFeed?.();
                     this.refreshFeed();
                 }
             }, 400);
@@ -1154,6 +1299,9 @@ ODA({is: 'chat-ribbon',
     },
     detached() {
         this.$item?.unlisten?.('changed', this.onChanged);
+        if (this._listenedSource && this._listenedSource !== this.$item)
+            this._listenedSource.unlisten?.('changed', this.onChanged);
+        this._listenedSource = null;
         if (this._rolePollTimer) {
             clearInterval(this._rolePollTimer);
             this._rolePollTimer = 0;
@@ -1189,16 +1337,6 @@ ODA({is: 'chat-day',
                 position: sticky;
                 align-items: center;
                 width: -webkit-fill-available;
-            }
-            .date-line::before{
-                content: '';
-                display: block;
-                position: absolute;
-                left: 0px;
-                right: 0px;
-                height: 0px;
-                border-top: 1px dashed;
-                opacity: .5;
             }
             .day-ribbon{
                 gap: 8px;
@@ -1408,12 +1546,13 @@ ODA({is: 'chat-day',
             return [];
         const role = this.$pdp?.$item?.role || 'USER';
         const uid = WORK.uid || '';
+        const local = this.$pdp?.isLocalFeed ? { local: 1 } : {};
         let rows = [];
         try {
             if (typeof source.fetch === 'function')
-                rows = await source.fetch('logs', { mode: 'bodies', day: this.day, role, uid });
+                rows = await source.fetch('logs', { mode: 'bodies', day: this.day, role, uid, ...local });
             else if (typeof source.logs === 'function')
-                rows = await source.logs({ mode: 'bodies', day: this.day, role, uid });
+                rows = await source.logs({ mode: 'bodies', day: this.day, role, uid, ...local });
         }
         catch {
             rows = [];
@@ -1563,11 +1702,12 @@ ODA({is: 'chat-day',
         }
     },
     get logsSource(){
-        // Источник логов определяется сервером по роли:
-        // USER → личный кабинет (/USERS/<uid>), BOSS → подразделение (this.$pdp.$item)
+        // По умолчанию всегда показывается личный кабинет (/USERS/<uid>);
+        // местный лог точки (this.$pdp.$item) — только при явном включении режима local для BOSS.
         const role = this.$pdp?.$item?.role || 'USER';
         const uid = WORK.uid || '';
-        return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource', { role, uid })).then(path => {
+        const local = this.$pdp?.isLocalFeed ? { local: 1 } : {};
+        return Promise.resolve(this.$pdp.$item?.fetch?.('chatSource', { role, uid, ...local })).then(path => {
             if (path && typeof path === 'string')
                 return WORK.get_item(path);
             return this.$pdp.$item;

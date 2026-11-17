@@ -12,6 +12,7 @@ import path from 'node:path';
 import { $item } from '../core.js';
 import { FS } from './index.js';
 import * as REFS from './access/refs.js';
+import { isOwnLogRow } from './access/policy.js';
 import { dataDb } from '../data/db.js';
 
 /** Сегодня по местному времени сервера (YYYY-MM-DD). */
@@ -170,16 +171,42 @@ function diskLogsDir(storage) {
     return fs.existsSync(d) ? d : '';
 }
 
-/** Даты, за которые есть логи (по убыванию); сегодня — всегда в списке. */
-export async function datesList(storage) {
-    const dateSet = new Set([today()]);
+function isVisibleChatRootRow(row, ownOnly = null) {
+    if (!row || row.time == null || row.mainContext)
+        return false;
+    if (ownOnly && !isOwnLogRow(row, ownOnly))
+        return false;
+    return true;
+}
+
+/**
+ * Даты, за которые есть логи (по убыванию).
+ * По умолчанию сегодня всегда в списке; при `nonEmpty: true` — только дни, где есть хотя бы одна видимая корневая запись (без `mainContext`).
+ */
+export async function datesList(storage, { nonEmpty = false, ownOnly = null } = {}) {
+    const dateSet = new Set(nonEmpty ? [] : [today()]);
     try {
         const db = await dbForStorage(storage);
         const fp = feedPathOf(storage);
-        const rows = db.prepare('SELECT DISTINCT day FROM logs WHERE feed_path = ?').all(fp);
-        for (const r of rows) {
-            if (r?.day && /^\d{4}-\d{2}-\d{2}$/.test(r.day))
-                dateSet.add(r.day);
+        if (nonEmpty) {
+            const rows = db.prepare('SELECT day, body FROM logs WHERE feed_path = ?').all(fp);
+            for (const r of rows) {
+                if (!r?.day || !/^\d{4}-\d{2}-\d{2}$/.test(r.day) || dateSet.has(r.day))
+                    continue;
+                try {
+                    const row = typeof r.body === 'string' ? JSON.parse(r.body) : r.body;
+                    if (isVisibleChatRootRow(row, ownOnly))
+                        dateSet.add(r.day);
+                }
+                catch { /* skip broken json */ }
+            }
+        }
+        else {
+            const rows = db.prepare('SELECT DISTINCT day FROM logs WHERE feed_path = ?').all(fp);
+            for (const r of rows) {
+                if (r?.day && /^\d{4}-\d{2}-\d{2}$/.test(r.day))
+                    dateSet.add(r.day);
+            }
         }
     }
     catch (e) {
@@ -189,8 +216,23 @@ export async function datesList(storage) {
     if (diskDir) {
         try {
             for (const entry of fs.readdirSync(diskDir, { withFileTypes: true })) {
-                if (entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))
+                if (!entry.isDirectory() || !/^\d{4}-\d{2}-\d{2}$/.test(entry.name) || dateSet.has(entry.name))
+                    continue;
+                if (!nonEmpty) {
                     dateSet.add(entry.name);
+                    continue;
+                }
+                const dayPath = path.join(diskDir, entry.name);
+                for (const fname of fs.readdirSync(dayPath).filter(n => n.endsWith('.logs'))) {
+                    try {
+                        const row = JSON.parse(fs.readFileSync(path.join(dayPath, fname), 'utf-8'));
+                        if (isVisibleChatRootRow(row, ownOnly)) {
+                            dateSet.add(entry.name);
+                            break;
+                        }
+                    }
+                    catch { /* skip */ }
+                }
             }
         }
         catch { /* ignore */ }

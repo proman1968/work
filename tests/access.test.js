@@ -223,15 +223,21 @@ describe('ядро: canSee / canWrite по модели', () => {
         );
     });
 
-    it('документооборот подразделения: двойной лог (подразделение + личный кабинет + получатели) и chatSource (USER -> свой лог, BOSS -> лог подразделения)', async () => {
+    it('документооборот подразделения: двойной лог (подразделение + личный кабинет + получатели) и chatSource (по умолчанию свой лог, local — только BOSS)', async () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         const u1Cab = await WORK.get_item('/USERS/u1');
         const u2Cab = await WORK.get_item('/USERS/u2');
 
-        // 1. В режиме USER (или ADMIN) chatSource возвращает личный кабинет пользователя, а в режиме BOSS — само подразделение
-        assert.equal(await dept.chatSource(as('u1', 'USER')), '/USERS//u1', 'в режиме USER источник логов — личный кабинет');
-        assert.equal(await dept.chatSource(as('b1', 'ADMIN')), '/USERS//b1', 'вне режима BOSS источник логов — личный кабинет');
-        assert.equal(await dept.chatSource(as('b1', 'BOSS')), '/ORG/DEPT', 'в режиме BOSS источник логов — подразделение');
+        // 1. По умолчанию для всех (включая BOSS) chatSource возвращает личный кабинет пользователя
+        assert.equal(await dept.chatSource(as('u1', 'USER')), '/USERS//u1', 'USER по умолчанию -> личный кабинет');
+        assert.equal(await dept.chatSource(as('b1', 'BOSS')), '/USERS//b1', 'BOSS по умолчанию -> личный кабинет');
+        assert.equal(await dept.chatSource({ session: { uid: 'b1' } }), '/USERS//b1', 'BOSS без local -> личный кабинет');
+
+        // Местный лог точки возвращается только при явном local: true и роли BOSS; у обычного USER local игнорируется
+        assert.equal(await dept.chatSource({ ...as('b1', 'BOSS'), local: true }), '/ORG/DEPT', 'BOSS с local: true -> лог подразделения');
+        assert.equal(await dept.chatSource({ session: { uid: 'b1' }, local: true }), '/ORG/DEPT', 'BOSS по ролям точки с local: true -> лог подразделения');
+        assert.equal(await dept.chatSource({ ...as('u1', 'USER'), local: true }), '/USERS//u1', 'USER с local: true -> всё равно личный кабинет');
+        assert.equal(await dept.chatSource({ session: { uid: 'u1' }, local: true }), '/USERS//u1', 'USER без роли BOSS с local: true -> личный кабинет');
 
         // 2. Отправка сообщения в подразделении с получателем u2 пишет в лог подразделения, в кабинет автора u1 и в кабинет получателя u2
         const msg = 'Документ согласован #' + Date.now();

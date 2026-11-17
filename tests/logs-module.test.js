@@ -115,6 +115,21 @@ describe('logs.js: чистые функции', () => {
 
             const updated = await LOGS.appendIncludes(salesDept, found.logsFilePath, ['/ORGANIZATIONS/OrgA/sales/work/att.xlsx']);
             assert.deepEqual(updated.includes, ['/ORGANIZATIONS/OrgA/sales/work/att.xlsx'], 'appendIncludes обновляет запись в SQLite');
+
+            // 5. nonEmpty: true отсекает пустой сегодня и дни только со скрытыми mainContext-записями
+            const emptyDept = { id: 'empty', path: '/ORGANIZATIONS/OrgA/empty', type: '$structure', $parent: orgBase };
+            const hiddenDayTime = new Date('2026-10-05T10:00:00Z').getTime();
+            await LOGS.saveDataLogRow(emptyDept, {}, {
+                time: hiddenDayTime,
+                sender: 'ivan',
+                ext: 'png',
+                path: '/ORGANIZATIONS/OrgA/empty/att.png',
+                mainContext: '/ORGANIZATIONS/OrgA/empty/t1.task',
+            });
+            const nonEmptyDates = await LOGS.datesList(emptyDept, { nonEmpty: true });
+            assert.deepEqual(nonEmptyDates, [], 'при nonEmpty: true нет ни пустого today, ни дня с одним mainContext');
+            const defaultDates = await LOGS.datesList(emptyDept);
+            assert.ok(defaultDates.includes(LOGS.today()), 'без nonEmpty сегодня остаётся в списке');
         }
         finally {
             await closeDataDb();
