@@ -14,9 +14,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const WEIGHT_FILE_EXT_RE = /\.(gguf|safetensors|hgn|hnpw|bin|onnx|pt|pth)$/i;
+export const WEIGHT_FILE_EXT_RE = /\.(gguf|safetensors|hgn|hnpw|bin|onnx|onnx_data|pt|pth)$/i;
 export const LINUX_ONLY_HALOGEN_EXT_RE = /\.(hgn|hnpw)$/i;
 export const WEIGHT_SIDECAR_SUBDIRS = Object.freeze(['mtp', 'mmproj', 'twin', 'draft_head']);
+// Компоненты Diffusers/токенизаторов и ONNX-подпапка: веса лежат не в корне `#weights`.
+export const WEIGHT_COMPONENT_SUBDIRS = Object.freeze([
+    'transformer', 'vae', 'text_encoder', 'text_encoder_2', 'unet', 'tokenizer', 'tokenizer_2',
+    'scheduler', 'onnx', 'speech_tokenizer', 'audio_encoder', 'decoder', 'prior',
+]);
+const WEIGHT_SCANNED_SUBDIRS = [...WEIGHT_SIDECAR_SUBDIRS, ...WEIGHT_COMPONENT_SUBDIRS];
 
 function collectWeightDirRawEntriesSync(dirPath) {
     const out = [];
@@ -25,7 +31,7 @@ function collectWeightDirRawEntriesSync(dirPath) {
         if (ent.isFile()) {
             out.push(ent.name);
         }
-        else if (ent.isDirectory() && WEIGHT_SIDECAR_SUBDIRS.includes(ent.name)) {
+        else if (ent.isDirectory() && WEIGHT_SCANNED_SUBDIRS.includes(ent.name)) {
             try {
                 const subEntries = fs.readdirSync(path.join(dirPath, ent.name), { withFileTypes: true });
                 for (const sub of subEntries) {
@@ -143,7 +149,7 @@ export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
         const hasBuboManifest = files.includes('bubo-package.json');
         const hasHgn = files.some(f => f.toLowerCase().endsWith('.hgn'));
         const hasHnpw = files.some(f => f.toLowerCase().endsWith('.hnpw'));
-        const hasOther = files.some(f => /\.(bin|onnx|pt|pth)$/i.test(f));
+        const hasOther = files.some(f => /\.(bin|onnx|onnx_data|pt|pth)$/i.test(f));
         const hasConfig = files.includes('config.json');
         const hasTokenizer = files.includes('tokenizer.json');
         const pendingDownload = hasParts || pendingState;

@@ -20,6 +20,10 @@ const JSON_BODY_MAX = 16 * 1024 * 1024;  // F28: JSON-ответ (картинк
 
 const REMOTE_BODY_MAX = 32 * 1024 * 1024; // R7 (8.35): бинарный ответ провайдера (WAV речи/распознавания)
 
+// Один раз на процесс проверяем сигнатуру запущенного движка Halogen (:8731) —
+// если висит старый bubo.exe с прежними флагами, он будет перезапущен с актуальными.
+const _engineEnsurePromises = new Map();
+
 export default {
     icon: 'carbon:machine-learning-model',
     form: 'trainer',
@@ -229,6 +233,18 @@ export default {
             headers['X-Halogen-Guard'] = typeof options.halogenGuard === 'string' ? options.halogenGuard : 'watch';
         const url = new URL(isAnthropic ? anthropicUrl(ai.baseUrl) : ai.baseUrl);
         const transport = transportFor(url);
+        // Перед первым обращением к локальному движку сверяем сигнатуру запуска:
+        // старый bubo.exe (профиль subagents / latin-словарь) иначе тихо тормозит кириллицу.
+        if (isHalogenNode && typeof WORK?.ensureHalogenBackendRunning === 'function'
+            && /^(https?:\/\/)?(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/i.test(String(ai.baseUrl || ''))) {
+            const key = url.origin + '::' + String(ai?.model || '');
+            if (!_engineEnsurePromises.has(key)) {
+                _engineEnsurePromises.set(key, Promise.resolve()
+                    .then(() => WORK.ensureHalogenBackendRunning({ baseUrl: ai.baseUrl, ai }))
+                    .catch(() => null));
+            }
+            await _engineEnsurePromises.get(key);
+        }
         // Явный Content-Length (без Transfer-Encoding: chunked) — нативные локальные серверы вроде bubo.exe отклоняют chunked POST с 400 malformed request
         const payload = JSON.stringify(body);
         const reqHeaders = { ...headers, 'Content-Length': Buffer.byteLength(payload) };

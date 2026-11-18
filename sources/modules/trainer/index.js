@@ -24,6 +24,10 @@ import {
     resumeInterruptedDownloads,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
+    detectBrokenWeightsLayout,
+    repairLocalModelWeightsIfNeeded,
+    getWeightsRepairState,
+    readLocalModelMetaSync,
 } from './huggingface.js';
 import {
     buildWorkDataset,
@@ -247,6 +251,10 @@ export {
     resumeInterruptedDownloads,
     cancelHuggingFaceDownload,
     registerLocalModelNode,
+    detectBrokenWeightsLayout,
+    repairLocalModelWeightsIfNeeded,
+    getWeightsRepairState,
+    readLocalModelMetaSync,
     buildWorkDataset,
     listWorkDatasets,
     verifyCompletion,
@@ -378,6 +386,43 @@ function inferTestModality(ai) {
 async function runSingleModelSmokeTest(ai, p = {}) {
     await ai?.init?.catch?.(() => {});
     const modality = String(p.modality || inferTestModality(ai));
+    const modelFolder = String(ai?.id || '').trim();
+    if (modelFolder) {
+        // Раскладка весов могла быть сплющена старым загрузчиком (Qwen3-TTS, Z-Image-Turbo,
+        // Qwen3-ASR, BGE-M3): сначала автоматически докачиваем недостающие конфиги/индексы
+        // и внешние данные ONNX, и только потом запускаем тест.
+        try {
+            const layout = detectBrokenWeightsLayout(modelWeightsDir(process.cwd(), modelFolder, 'Local'));
+            if (layout.broken && process.env.WORK_DISABLE_AUTO_REPAIR !== '1') {
+                await repairLocalModelWeightsIfNeeded({ rootDir: process.cwd(), folderName: modelFolder, waitForCompletion: false });
+                const deadline = Date.now() + 90000;
+                while (Date.now() < deadline) {
+                    const st = getWeightsRepairState(modelFolder);
+                    if (!st?.active)
+                        break;
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+                const st = getWeightsRepairState(modelFolder);
+                if (st?.active) {
+                    return {
+                        ok: false,
+                        modality,
+                        error: `Идёт автоматическая докачка файлов модели (${Number(st.progress) || 0}%). Повторите проверку через минуту — недостающие файлы скачаются сами.`,
+                        weightsRepair: st,
+                    };
+                }
+                if (st?.status === 'failed') {
+                    return {
+                        ok: false,
+                        modality,
+                        error: `Не удалось автоматически починить файлы модели: ${st.error || 'неизвестная ошибка'}`,
+                        weightsRepair: st,
+                    };
+                }
+            }
+        }
+        catch { /* тест не должен падать из-за проверки раскладки */ }
+    }
     const t0 = Date.now();
     try {
         if (modality === 'tts') {
@@ -460,7 +505,19 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             : [{ role: 'user', content: String(p.prompt || 'Привет! Представься коротко в одном предложении.') }];
         const isHalo = ai?.protocol === 'halogen' || ai?.DATA?.protocol === 'halogen';
         const haloUrl = ai?.baseUrl || ai?.DATA?.baseUrl || HALOGEN_DEFAULT_BASE_URL;
+        // Холодный запуск bubo.exe (загрузка 116 ГБ весов) не должен выглядеть как медленная генерация:
+        // поднимаем движок заранее и замеряем это отдельно.
+        let engineStartMs = 0;
+        if (isHalo) {
+            const pre = await probeHalogenServer(haloUrl).catch(() => null);
+            if (!pre?.online) {
+                const startedAt = Date.now();
+                await ensureHalogenBackendRunning({ rootDir: process.cwd(), baseUrl: haloUrl, ai }).catch(() => null);
+                engineStartMs = Date.now() - startedAt;
+            }
+        }
         const metricsBefore = isHalo ? await readHalogenMetrics(haloUrl).catch(() => null) : null;
+        const genT0 = Date.now();
         const maxOut = Number(p.maxOutput || p.maxTokens) || 256;
         const chatOpts = {
             messages,
@@ -476,7 +533,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             else if (chunk?.type === 'usage')
                 usage = chunk;
         }
-        const durationMs = Math.max(1, Date.now() - t0);
+        const durationMs = Math.max(1, Date.now() - genT0);
         const metricsAfter = isHalo ? await readHalogenMetrics(haloUrl).catch(() => null) : null;
         const metricsDelta = isHalo ? computeHalogenMetricsDelta(metricsBefore, metricsAfter) : null;
 
@@ -501,12 +558,15 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             mtpAcceptPct,
             mtpTokensPerStep,
             usage,
+            engineStartMs,
+            totalMs: durationMs + engineStartMs,
             summary: [
                 tokPerSec > 0 ? `${tokPerSec} tok/s` : `${durationMs} мс`,
                 ttftMs > 0 ? `TTFT ${(ttftMs / 1000).toFixed(2)} с` : '',
                 mtpAcceptPct !== null
                     ? `MTP ${mtpAcceptPct}%${mtpTokensPerStep ? ` (${mtpTokensPerStep} ток/шаг)` : ''}`
                     : '',
+                engineStartMs > 500 ? `старт движка ${(engineStartMs / 1000).toFixed(1)} с` : '',
             ].filter(Boolean).join(' · '),
         };
     }
@@ -606,7 +666,9 @@ export const TRAINER_METHODS = Object.freeze({
             const providerId = parts[1] || 'MODELS';
             const isLocal = providerId === 'Local' || d.protocol === 'local' || d.protocol === 'halogen';
             if (isLocal) {
-                migrateLocalModelsLayoutSync(process.cwd());
+                // Миграция раскладки не должна ломать карточку модели (занятые файлы, EBUSY на Windows).
+                try { migrateLocalModelsLayoutSync(process.cwd()); }
+                catch { /* ignore */ }
             }
             const act = evaluateAiNodeActivitySync(this);
 
@@ -623,13 +685,17 @@ export const TRAINER_METHODS = Object.freeze({
                 const configuredAbs = d.weightsDir ? path.resolve(process.cwd(), d.weightsDir) : '';
                 const wDirAbs = fs.existsSync(canonicalWeightsAbs) ? canonicalWeightsAbs : (configuredAbs || canonicalWeightsAbs);
                 resolvedWeightsRel = path.relative(process.cwd(), wDirAbs).replace(/\\/g, '/');
-                weightInfo = inspectWeightsDirectorySync(wDirAbs, os.platform());
+                try { weightInfo = inspectWeightsDirectorySync(wDirAbs, os.platform()); }
+                catch { weightInfo = null; }
                 if (resolvedPrimaryFile === 'bubo-package.json' || (!resolvedPrimaryFile && weightInfo?.hasGguf)) {
-                    const resolvedGguf = resolveBuboModelFiles(wDirAbs);
-                    if (resolvedGguf.mainModel)
-                        resolvedPrimaryFile = path.basename(resolvedGguf.mainModel);
+                    try {
+                        const resolvedGguf = resolveBuboModelFiles(wDirAbs);
+                        if (resolvedGguf.mainModel)
+                            resolvedPrimaryFile = path.basename(resolvedGguf.mainModel);
+                    }
+                    catch { /* ignore */ }
                 }
-                if (weightInfo.exists) {
+                if (weightInfo?.exists) {
                     let bytes = 0;
                     for (const f of weightInfo.files) {
                         try {
@@ -639,10 +705,21 @@ export const TRAINER_METHODS = Object.freeze({
                     }
                     sizeGb = +(bytes / (1024 ** 3)).toFixed(2);
                 }
+                // Формат весов всегда виден в карточке: если инспекция не распознала каталог,
+                // выводим его по фактическому основному файлу модели.
+                if (!weightInfo?.weightFormat && resolvedPrimaryFile) {
+                    const ext = path.extname(resolvedPrimaryFile).replace('.', '').toLowerCase();
+                    if (ext)
+                        weightInfo = { ...(weightInfo || {}), weightFormat: ext };
+                }
                 if (d.protocol === 'halogen' || weightInfo?.hasGguf || weightInfo?.hasBuboManifest) {
                     halogenProbe = await probeHalogenServer(d.baseUrl || HALOGEN_DEFAULT_BASE_URL).catch(() => null);
-                    const winEnv = halogenProbe?.windowsEnv || inspectWindowsHalogenEnvironment();
-                    if (os.platform() === 'win32' && !halogenProbe?.online && !winEnv.buboInstalled && !winEnv.gufoInstalled) {
+                    let winEnv = halogenProbe?.windowsEnv || null;
+                    if (!winEnv) {
+                        try { winEnv = inspectWindowsHalogenEnvironment(); }
+                        catch { winEnv = null; }
+                    }
+                    if (os.platform() === 'win32' && !halogenProbe?.online && winEnv && !winEnv.buboInstalled && !winEnv.gufoInstalled) {
                         needsRuntime = true;
                     }
                 }
@@ -654,6 +731,21 @@ export const TRAINER_METHODS = Object.freeze({
             const engineSetup = (resolvedProtocol === 'halogen' || weightInfo?.hasGguf)
                 ? await describeEngineSetup().catch(() => null)
                 : null;
+
+            // Автопочинка раскладки весов: при открытии карточки модель сама проверяет
+            // целостность `$ai/#weights` и в фоне докачивает недостающее (подпапки Diffusers,
+            // speech_tokenizer, индексы шардов, внешние данные ONNX).
+            const modelFolder = String(this?.id || '').trim();
+            let weightsRepair = null;
+            if (isLocal && modelFolder) {
+                try {
+                    const layout = detectBrokenWeightsLayout(modelWeightsDir(process.cwd(), modelFolder, 'Local'));
+                    weightsRepair = { broken: layout.broken, reasons: layout.reasons, ...(getWeightsRepairState(modelFolder) || {}) };
+                    if (layout.broken && process.env.WORK_DISABLE_AUTO_REPAIR !== '1')
+                        repairLocalModelWeightsIfNeeded({ rootDir: process.cwd(), folderName: modelFolder }).catch(() => {});
+                }
+                catch { weightsRepair = null; }
+            }
 
             return {
                 id: this?.id || '',
@@ -684,21 +776,34 @@ export const TRAINER_METHODS = Object.freeze({
                 halogenOnline: Boolean(halogenProbe?.online),
                 halogenMode: halogenProbe?.mode || '',
                 halogenModeLabel: halogenProbe?.modeLabel || '',
-                speculation: halogenProbe?.speculation || engineSetup?.plan || null,
+                speculation: engineSetup?.plan || halogenProbe?.speculation || null,
+                weightsRepair,
                 engineSetup,
                 engineSettings: (resolvedProtocol === 'halogen' || weightInfo?.hasGguf) ? readEngineSettings(process.cwd()) : null,
                 pythonProvision: getPythonProvisionState(),
-                windowsEnv: halogenProbe?.windowsEnv || null,
+                windowsEnv: halogenProbe?.windowsEnv || (() => { try { return inspectWindowsHalogenEnvironment(); } catch { return null; } })(),
             };
         },
     },
     trainer_provision_status: {
         level: 'read',
         fn: async function () {
-            const winEnv = inspectWindowsHalogenEnvironment();
+            let winEnv = null;
+            try { winEnv = inspectWindowsHalogenEnvironment(); }
+            catch { winEnv = null; }
+            let weightsRepair = null;
+            const folder = String(this?.id || '').trim();
+            if (folder) {
+                try {
+                    const layout = detectBrokenWeightsLayout(modelWeightsDir(process.cwd(), folder, 'Local'));
+                    weightsRepair = { broken: layout.broken, reasons: layout.reasons, ...(getWeightsRepairState(folder) || {}) };
+                }
+                catch { weightsRepair = null; }
+            }
             return {
                 python: getPythonProvisionState(),
                 buboPrepare: winEnv?.prepareState || null,
+                weightsRepair,
             };
         },
     },

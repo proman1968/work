@@ -291,4 +291,35 @@ llamacpp:spec_decode_num_accepted_tokens_total 266
         assert.equal(events[2]?.event, 'error');
         assert.deepEqual(events[2]?.missingDeps, ['torch']);
     });
+
+    it('11. Неполный ONNX-граф (без *.onnx_data) не выбирается воркером — прозрачный фоллбэк на PyTorch', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const tmpWeights = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-onnx-broken-'));
+        try {
+            await fsp.writeFile(path.join(tmpWeights, 'config.json'), '{"model_type":"xlm-roberta"}');
+            await fsp.writeFile(path.join(tmpWeights, 'model.onnx'), 'tiny-graph-without-external-data');
+            const pyRunner = [
+                'import sys, runpy',
+                "sys.modules['torch'] = None",
+                "sys.modules['torch.nn'] = None",
+                "sys.modules['torch.nn.functional'] = None",
+                `runpy.run_path(${JSON.stringify(workerPath)}, run_name='__main__')`,
+            ].join('; ');
+            const req = JSON.stringify({ id: 'e1', op: 'embed', weightsDir: tmpWeights, input: ['x'] });
+            const res = spawnSync('python', ['-c', pyRunner], {
+                input: `${req}\n`,
+                encoding: 'utf8',
+                timeout: 15000,
+            });
+            assert.equal(res.status, 0, res.stderr || '');
+            const events = String(res.stdout || '').trim().split(/\r?\n/).filter(Boolean).map(l => JSON.parse(l));
+            const err = events.find(e => e.id === 'e1');
+            assert.equal(err?.event, 'error');
+            assert.deepEqual(err?.missingDeps, ['torch', 'transformers'], 'ONNX без внешних данных не считается рабочим');
+        }
+        finally {
+            await fsp.rm(tmpWeights, { recursive: true, force: true });
+        }
+    });
 });

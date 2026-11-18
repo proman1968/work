@@ -906,21 +906,17 @@ export async function inspectHuggingFaceRepo(repoId, {
                     .map(s => {
                         const name = String(s.rfilename || s.path || '');
                         const size = Number(s.size ?? s.lfs?.size ?? 0);
-                        const ext = path.extname(name).toLowerCase();
                         const quant = extractQuantTag(name);
                         return {
                             name,
                             size,
                             sizeGb: +(size / (1024 ** 3)).toFixed(2),
                             sizeFormatted: formatBytes(size),
-                            kind: ext === '.gguf' ? 'gguf'
-                                : ext === '.safetensors' || ext === '.bin' || ext === '.hgn' || ext === '.hnpw' || ext === '.onnx' ? 'safetensors'
-                                : /\b(config|tokenizer|adapter|special_tokens|generation_config|merges|vocab|preprocessor)\b/i.test(name) ? 'config'
-                                : 'other',
+                            kind: classifyRepoFileKind(name),
                             quant,
                         };
                     })
-                    .filter(f => f.name && !/^\.git/i.test(f.name) && !/^README|^LICENSE/i.test(f.name));
+                    .filter(f => isUsefulRepoFile(f.name));
 
                 const quants = [...new Set(files.filter(f => f.kind === 'gguf' && f.quant).map(f => f.quant))];
                 const totalWeightBytes = files
@@ -990,10 +986,54 @@ export async function inspectHuggingFaceRepo(repoId, {
     };
 }
 
+const CONFIG_FILE_EXTENSIONS = ['.json', '.txt', '.model', '.tiktoken', '.jinja', '.yaml', '.yml', '.py'];
+
 /**
- * Выбрать список файлов репозитория для скачивания (либо явно переданные `files`, либо подходящий `.gguf` по `quant`, либо `config` + `.safetensors`).
+ * Классификация файла репозитория HF по расширению (без `\b`-ловушек):
+ * - `safetensors` включает `.onnx_data` (внешние тензоры ONNX), `.bin`, `.pt`, `.pth`, `.hgn`, `.hnpw`;
+ * - `config` — ВСЕ `.json` (`model_index.json`, `*.index.json`, `preprocessor_config.json`,
+ *   `scheduler_config.json`, …), `.txt`, `.model`, `.tiktoken`, `.jinja` — в том числе в подпапках
+ *   Diffusers (`transformer/`, `vae/`, `text_encoder/`, `tokenizer/`, `scheduler/`) и токенизаторов.
  */
-export function selectFilesToDownload(repoMeta, { files = null, quant = '' } = {}) {
+export function classifyRepoFileKind(name) {
+    const ext = path.extname(String(name || '')).toLowerCase();
+    if (ext === '.gguf')
+        return 'gguf';
+    if (['.safetensors', '.bin', '.hgn', '.hnpw', '.onnx', '.onnx_data', '.pt', '.pth'].includes(ext))
+        return 'safetensors';
+    if (CONFIG_FILE_EXTENSIONS.includes(ext))
+        return 'config';
+    return 'other';
+}
+
+/** Отсеять служебный мусор репозитория (README, лицензии, картинки, git-служебное). */
+export function isUsefulRepoFile(name) {
+    const n = String(name || '');
+    if (!n)
+        return false;
+    if (/^\.git/i.test(n) || /^\.gitattributes$/i.test(n))
+        return false;
+    if (/(^|\/)(README|LICENSE|NOTICE|CHANGELOG|CODE_OF_CONDUCT)(\.|$)/i.test(n))
+        return false;
+    if (/\.(md|png|jpg|jpeg|gif|svg|webp|bmp|mp4|webm|lock|ipynb)$/i.test(n))
+        return false;
+    return true;
+}
+
+/** Безопасный относительный путь файла репозитория (сохраняет подпапки `speech_tokenizer/`, `transformer/`, `onnx/`, …). */
+export function safeRepoDestRel(name) {
+    return String(name || '')
+        .replace(/\\/g, '/')
+        .split('/')
+        .filter(p => p && p !== '.' && p !== '..')
+        .join('/');
+}
+
+/**
+ * Выбрать список файлов репозитория для скачивания (либо явно переданные `files`,
+ * либо подходящий `.gguf` по `quant`, либо `config` + веса).
+ */
+export function selectFilesToDownload(repoMeta, { files = null, quant = '', modality = '' } = {}) {
     const all = Array.isArray(repoMeta?.files) ? repoMeta.files : [];
     if (Array.isArray(files) && files.length) {
         const wanted = new Set(files.map(String));
@@ -1023,7 +1063,49 @@ export function selectFilesToDownload(repoMeta, { files = null, quant = '' } = {
             });
         }
     }
-    return all.filter(f => f.kind === 'config' || f.kind === 'safetensors');
+
+    // Прочие Halogen-репозитории с весами Linux (.hgn/.hnpw) без «v2»: берём их целиком + конфиги.
+    const halogenWeights = all.filter(f => /\.(hgn|hnpw)$/i.test(f.name));
+    if (halogenWeights.length) {
+        return all.filter(f =>
+            /\.(hgn|hnpw)$/i.test(f.name)
+            || f.kind === 'config'
+            || /tokenizer|vocab|merges|\.jinja/i.test(f.name));
+    }
+
+    const configs = all.filter(f => f.kind === 'config');
+    const safetensors = all.filter(f => /\.safetensors$/i.test(f.name));
+    const torchBins = all.filter(f => /\.(bin|pt|pth)$/i.test(f.name));
+    const onnxModels = all.filter(f => /\.onnx$/i.test(f.name));
+    const onnxData = all.filter(f => /\.onnx_data$/i.test(f.name));
+    const mod = String(modality || repoMeta?.modality || '').toLowerCase();
+    const onnxWithData = onnxModels.filter(m => onnxData.some(d => d.name === `${m.name}_data`));
+
+    // Embed/Rerank: ONNX-пара (model.onnx + model.onnx_data) исполняется на iGPU/NPU через
+    // onnxruntime-directml, поэтому предпочитаем её. PyTorch-веса оставляем как прозрачный
+    // фоллбэк, если ONNX-сессия не поднимется.
+    if (onnxWithData.length && (mod === 'embed' || mod === 'rerank')) {
+        const picked = new Set(onnxWithData.map(m => m.name));
+        for (const d of onnxData) {
+            if ([...picked].some(n => `${n}_data` === d.name))
+                picked.add(d.name);
+        }
+        const hasStFallback = safetensors.length > 0;
+        return all.filter(f =>
+            picked.has(f.name)
+            || f.kind === 'config'
+            || /\.safetensors$/i.test(f.name)
+            || (!hasStFallback && /\.(bin|pt|pth)$/i.test(f.name)));
+    }
+    // Шардированные и обычные чекпоинты: только safetensors (индексы шардов — в configs).
+    if (safetensors.length)
+        return all.filter(f => f.kind === 'config' || /\.safetensors$/i.test(f.name));
+    if (torchBins.length)
+        return all.filter(f => f.kind === 'config' || /\.(bin|pt|pth)$/i.test(f.name));
+    // Self-contained ONNX без внешних данных.
+    if (onnxModels.length)
+        return all.filter(f => f.kind === 'config' || /\.onnx(_data)?$/i.test(f.name));
+    return configs;
 }
 
 /**
@@ -1289,7 +1371,7 @@ export async function startHuggingFaceDownload({
             proxyUrl: effProxy,
             fetchImpl,
         });
-        selected = selectFilesToDownload(repoMeta, { files, quant });
+        selected = selectFilesToDownload(repoMeta, { files, quant, modality: nodeMeta?.modality || repoMeta.modality });
     }
     if (!selected.length)
         throw new Error(`В репозитории ${cleanId} не найдено подходящих файлов весов (.gguf / .safetensors)`);
@@ -1366,7 +1448,9 @@ export async function startHuggingFaceDownload({
     const jobFiles = [];
     for (const f of selected) {
         const size = Number(f.size) || 0;
-        const destRelPath = f.destRelPath || path.basename(f.name);
+        // Сохраняем структуру репозитория (`speech_tokenizer/`, `transformer/`, `vae/`, `onnx/`, …),
+        // иначе одноимённые config.json/model.safetensors из подпапок затирают корневые файлы.
+        const destRelPath = f.destRelPath || safeRepoDestRel(f.name);
         const stagedFile = path.join(filesRootDir, destRelPath);
         const partFile = stagedFile + '.part';
         let downloaded = 0;
@@ -1402,7 +1486,7 @@ export async function startHuggingFaceDownload({
         jobFiles.push({
             name: f.name,
             ...(f.url ? { url: f.url } : {}),
-            ...(f.destRelPath ? { destRelPath: f.destRelPath } : {}),
+            destRelPath,
             size: size || (done ? downloaded : 0),
             downloaded,
             done,
@@ -1723,7 +1807,7 @@ export async function startHuggingFaceDownload({
             if (controller.signal.aborted && !keepFilesOnAbort) {
                 await fsp.rm(path.join(weightsDir, DOWNLOAD_STATE_FILE), { force: true }).catch(() => {});
                 for (const fileEntry of job.files)
-                    await fsp.rm(path.join(weightsDir, path.basename(fileEntry.name) + '.part'), { force: true }).catch(() => {});
+                    await fsp.rm(path.join(filesRootDir, fileEntry.destRelPath || path.basename(fileEntry.name)) + '.part', { force: true }).catch(() => {});
                 if (!hasReadyWeightFilesSync(weightsDir))
                     await fsp.rm(modelDir, { recursive: true, force: true }).catch(() => {});
             }
@@ -2104,3 +2188,316 @@ export function cancelHuggingFaceDownload(jobId, { keepFiles = false } = {}) {
     entry.job.finishedAt = Date.now();
     return { ...entry.job };
 }
+
+/** Прочитать метаданные локальной модели из `MODELS/<Провайдер>/<Модель>/$ai/class.js`. */
+export function readLocalModelMetaSync(rootDir = process.cwd(), folderName = '', providerFolder = 'Local') {
+    const safeName = String(folderName || '').trim();
+    if (!safeName)
+        return null;
+    const aiDir = path.join(rootDir, 'MODELS', String(providerFolder || 'Local'), safeName, '$ai');
+    const classFile = path.join(aiDir, 'class.js');
+    if (!fs.existsSync(classFile))
+        return null;
+    try {
+        const raw = fs.readFileSync(classFile, 'utf-8');
+        const m = raw.match(/export\s+default\s+(\{[\s\S]*\})\s*;?\s*$/);
+        const meta = JSON.parse(m ? m[1] : raw) || {};
+        return {
+            ...meta,
+            aiDir,
+            classFile,
+            weightsDir: path.join(aiDir, '#weights'),
+        };
+    }
+    catch {
+        return null;
+    }
+}
+
+function listFilesRecursiveSync(dir, maxDepth = 5, base = dir, depth = 0, acc = []) {
+    if (depth > maxDepth || !dir || !fs.existsSync(dir))
+        return acc;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch { return acc; }
+    for (const ent of entries) {
+        const abs = path.join(dir, ent.name);
+        if (ent.isDirectory()) {
+            listFilesRecursiveSync(abs, maxDepth, base, depth + 1, acc);
+        }
+        else if (ent.isFile() && !/\.(part|tmp)$/i.test(ent.name)) {
+            acc.push(path.relative(base, abs).replace(/\\/g, '/'));
+        }
+    }
+    return acc;
+}
+
+/**
+ * Быстрая (без сети) проверка целостности раскладки `$ai/#weights`.
+ * Ловит типовые последствия старого сплющивания подпапок и пропущенных файлов:
+ * перезаписанный `config.json` токенизатором, отсутствие `model_index.json` (Diffusers),
+ * отсутствие индекса шардов и внешних данных ONNX (`*.onnx_data`).
+ */
+export function detectBrokenWeightsLayout(weightsDir) {
+    const reasons = [];
+    if (!weightsDir || !fs.existsSync(weightsDir))
+        return { broken: false, reasons, files: [] };
+    const files = listFilesRecursiveSync(weightsDir);
+    const hasRel = (rel) => files.includes(rel);
+    const rootConfig = path.join(weightsDir, 'config.json');
+    if (fs.existsSync(rootConfig)) {
+        try {
+            const cfg = JSON.parse(fs.readFileSync(rootConfig, 'utf-8')) || {};
+            const mt = String(cfg.model_type || '');
+            if (/_tokenizer|speech_tokenizer/i.test(mt) && !fs.existsSync(path.join(weightsDir, 'speech_tokenizer')))
+                reasons.push(`config.json содержит конфиг токенизатора (model_type: ${mt}) вместо основной модели`);
+            else if (cfg._class_name || cfg._diffusers_version)
+                reasons.push('config.json содержит конфиг компонента Diffusers вместо model_index.json');
+        }
+        catch {
+            reasons.push('config.json повреждён (некорректный JSON)');
+        }
+    }
+    const hasShards = files.some(f => /(^|\/)[\w.-]+-\d{5}-of-\d{5}\.safetensors$/i.test(f));
+    if (hasShards && !files.some(f => /\.safetensors\.index\.json$/i.test(f)))
+        reasons.push('есть шарды весов, но нет индекса *.safetensors.index.json');
+    const onnxFiles = files.filter(f => /\.onnx$/i.test(f));
+    if (onnxFiles.length && !files.some(f => /\.onnx_data$/i.test(f))) {
+        let graphSmall = false;
+        for (const rel of onnxFiles) {
+            try {
+                const st = fs.statSync(path.join(weightsDir, rel));
+                if (st.size > 0 && st.size < 512 * 1024 * 1024)
+                    graphSmall = true;
+            }
+            catch { /* ignore */ }
+        }
+        if (graphSmall)
+            reasons.push('ONNX-граф без внешних данных *.onnx_data');
+    }
+    const componentDirs = ['transformer', 'vae', 'text_encoder', 'tokenizer', 'scheduler', 'unet']
+        .filter(d => fs.existsSync(path.join(weightsDir, d)));
+    if (componentDirs.length >= 2 && !hasRel('model_index.json'))
+        reasons.push('нет model_index.json при наличии компонентов Diffusers');
+    return { broken: reasons.length > 0, reasons, files };
+}
+
+const _weightsRepairs = new Map();
+const _weightsRepairCooldown = new Map();
+const WEIGHTS_REPAIR_COOLDOWN_MS = 10 * 60 * 1000;
+
+/** Текущее состояние автопочинки раскладки весов конкретной модели (для карточки/теста). */
+export function getWeightsRepairState(folderName) {
+    const entry = _weightsRepairs.get(String(folderName || ''));
+    if (!entry)
+        return null;
+    return {
+        active: entry.active,
+        reasons: entry.reasons,
+        jobId: entry.jobId || '',
+        status: entry.status,
+        progress: entry.progress,
+        error: entry.error || '',
+    };
+}
+
+/**
+ * Автоматическая самопочинка уже скачанной папки `$ai/#weights`:
+ * докачивает недостающие файлы строго по их относительным путям репозитория
+ * (`speech_tokenizer/`, `transformer/`, `vae/`, `onnx/`, индексы шардов, `*.onnx_data`)
+ * и убирает сплющенные в корень дубликаты, если их место — в подпапке.
+ * Запускается фоново, один раз на модель, с кулдауном — без блокировки UI.
+ */
+export async function repairLocalModelWeightsIfNeeded({
+    rootDir = process.cwd(),
+    folderName = '',
+    providerFolder = 'Local',
+    fetchImpl = globalThis.fetch,
+    force = false,
+    waitForCompletion = false,
+    usableMemoryGb = 192,
+} = {}) {
+    const safeName = String(folderName || '').trim();
+    if (!safeName)
+        return { repaired: false, reason: 'no_folder' };
+    const existing = _weightsRepairs.get(safeName);
+    if (existing?.active)
+        return { repaired: false, reason: 'in_progress', state: getWeightsRepairState(safeName) };
+    const last = _weightsRepairCooldown.get(safeName) || 0;
+    if (!force && Date.now() - last < WEIGHTS_REPAIR_COOLDOWN_MS)
+        return { repaired: false, reason: 'cooldown' };
+
+    const meta = readLocalModelMetaSync(rootDir, safeName, providerFolder);
+    if (!meta?.hfRepo)
+        return { repaired: false, reason: 'no_repo' };
+    const weightsDir = meta.weightsDir;
+    const quick = detectBrokenWeightsLayout(weightsDir);
+    if (!quick.broken && !force)
+        return { repaired: false, reason: 'layout_ok' };
+
+    // Не мешаем активной загрузке этой же модели.
+    for (const [, entry] of _downloads.entries()) {
+        if (entry.job?.folderName === safeName && entry.job.status === 'downloading')
+            return { repaired: false, reason: 'download_active' };
+    }
+
+    const state = {
+        active: true,
+        reasons: quick.reasons,
+        jobId: '',
+        status: 'checking',
+        progress: 0,
+        error: '',
+    };
+    _weightsRepairs.set(safeName, state);
+
+    const run = (async () => {
+        try {
+            const repoMeta = await inspectHuggingFaceRepo(meta.hfRepo, {
+                rootDir,
+                fetchImpl,
+                usableMemoryGb,
+                token: meta.hfToken || '',
+            });
+            const selected = selectFilesToDownload(repoMeta, { modality: meta.modality || repoMeta.modality });
+            if (!selected.length)
+                throw new Error(`Не удалось определить список файлов ${meta.hfRepo}`);
+
+            const repoPaths = new Set(selected.map(f => safeRepoDestRel(f.name)));
+            const repoByBasename = new Map();
+            for (const rel of repoPaths) {
+                const base = path.basename(rel);
+                if (!repoByBasename.has(base))
+                    repoByBasename.set(base, []);
+                repoByBasename.get(base).push(rel);
+            }
+            const sizeOf = (rel) => {
+                try { return fs.statSync(path.join(weightsDir, rel)).size; }
+                catch { return -1; }
+            };
+            const wanted = [];
+            for (const f of selected) {
+                const rel = safeRepoDestRel(f.name);
+                const localSize = sizeOf(rel);
+                if (localSize < 0) {
+                    wanted.push(f.name);
+                    continue;
+                }
+                if (Number(f.size) > 0 && localSize !== Number(f.size)) {
+                    wanted.push(f.name);
+                    continue;
+                }
+                // Уже существующий, но «чужой» конфиг в корне (перезаписан токенизатором/Diffusers).
+                if (/\.json$/i.test(rel) && rel === 'config.json') {
+                    const cfg = JSON.parse(fs.readFileSync(path.join(weightsDir, rel), 'utf-8') || '{}');
+                    const mt = String(cfg?.model_type || '');
+                    if (/_tokenizer|speech_tokenizer/i.test(mt) || cfg?._class_name || cfg?._diffusers_version)
+                        wanted.push(f.name);
+                }
+            }
+
+            // Убираем сплющенные дубликаты: корневой файл, которого нет в репозитории в корне,
+            // но такой же по имени и размеру файл лежит в подпапке.
+            const removed = [];
+            for (const [base, rels] of repoByBasename) {
+                if (rels.length < 2 || rels.includes(base))
+                    continue;
+                const localSize = sizeOf(base);
+                if (localSize < 0)
+                    continue;
+                const nestedMatch = rels.find(rel => rel !== base && sizeOf(rel) === localSize);
+                if (!nestedMatch)
+                    continue;
+                try {
+                    fs.rmSync(path.join(weightsDir, base), { force: true });
+                    removed.push(base);
+                }
+                catch { /* ignore */ }
+            }
+
+            if (!wanted.length && !removed.length) {
+                state.active = false;
+                state.status = 'ok';
+                state.progress = 100;
+                _weightsRepairCooldown.set(safeName, Date.now());
+                return { repaired: false, reason: 'nothing_to_do' };
+            }
+
+            state.status = 'downloading';
+            state.reasons = [...new Set([...quick.reasons, ...(wanted.length ? [`докачка ${wanted.length} файл(ов)`] : [])])];
+            const job = await startHuggingFaceDownload({
+                repoId: meta.hfRepo,
+                files: wanted,
+                quant: meta.quant || '',
+                rootDir,
+                providerFolder,
+                targetNodeName: safeName,
+                nodeMeta: {
+                    modality: meta.modality || repoMeta.modality || 'llm',
+                    capabilities: meta.capabilities || repoMeta.capabilities || ['chat'],
+                    label: meta.label || safeName,
+                },
+                registerInWork: false,
+                waitForCompletion,
+                fetchImpl,
+                token: meta.hfToken || '',
+            });
+            state.jobId = job?.id || '';
+            const finalize = (finalJob) => {
+                state.active = false;
+                state.status = finalJob?.status === 'completed' ? 'repaired' : 'failed';
+                state.progress = finalJob?.status === 'completed' ? 100 : (Number(finalJob?.progress) || 0);
+                state.error = finalJob?.error ? String(finalJob.error) : '';
+                _weightsRepairCooldown.set(safeName, Date.now());
+                try {
+                    Promise.resolve(globalThis.WORK?.get_item?.(`/MODELS/${providerFolder}/${safeName}`))
+                        .then(node => node?.reset?.())
+                        .catch(() => {});
+                }
+                catch { /* ignore */ }
+            };
+            if (waitForCompletion) {
+                finalize(job);
+                try {
+                    const localNode = await globalThis.WORK?.get_item?.(`/MODELS/${providerFolder}/${safeName}`);
+                    localNode?.reset?.();
+                }
+                catch { /* ignore */ }
+            }
+            else if (state.jobId) {
+                const timer = setInterval(() => {
+                    const cur = getHuggingFaceDownload(state.jobId);
+                    if (!cur) {
+                        clearInterval(timer);
+                        state.active = false;
+                        state.status = 'failed';
+                        state.error = 'загрузка потеряна';
+                        return;
+                    }
+                    state.progress = Number(cur.progress) || 0;
+                    if (cur.status !== 'downloading') {
+                        clearInterval(timer);
+                        finalize(cur);
+                    }
+                }, 1500);
+                timer.unref?.();
+            }
+            return { repaired: Boolean(wanted.length || removed.length), job, removed, reasons: state.reasons };
+        }
+        catch (err) {
+            state.active = false;
+            state.status = 'failed';
+            state.error = String(err?.message || err);
+            _weightsRepairCooldown.set(safeName, Date.now());
+            return { repaired: false, reason: 'error', error: state.error };
+        }
+    })();
+
+    // Фоновый режим: не держим HTTP-запрос карточки, докачка видна в общем списке загрузок.
+    if (!waitForCompletion)
+        run.catch(() => {});
+    const result = waitForCompletion ? await run : { started: true };
+    return { ...result, state: getWeightsRepairState(safeName) };
+}
+
+

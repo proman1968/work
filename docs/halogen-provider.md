@@ -164,5 +164,18 @@ podman run --rm -p 8731:8731 \
 ## 7. Проверка и тестирование
 
 ```bash
-node --test tests/halogen-provider.test.js
+node --test tests/halogen-provider.test.js tests/halogen-speculation.test.js tests/trainer-weights-layout.test.js
 ```
+
+### 7.1. Раскладка весов `$ai/#weights` и форматы исполнения
+
+Папка весов повторяет структуру репозитория Hugging Face: файлы из подпапок (`mtp/`, `mmproj/`, `twin/`, `draft_head/`, а у вспомогательных моделей — `speech_tokenizer/`, `transformer/`, `vae/`, `text_encoder/`, `tokenizer/`, `onnx/`) сохраняются по своим относительным путям. Старый загрузчик сплющивал всё в корень по `basename`, из-за чего `config.json` токенизатора затирал конфиг самой модели, а `model.safetensors` компонентов — основные веса.
+
+| Что проверяется | Как исправляется автоматически |
+| :--- | :--- |
+| `config.json` в корне — от токенизатора или компонента Diffusers | `detectBrokenWeightsLayout` → докачка настоящего `config.json` репозитория |
+| Шарды `*-0000X-of-0000Y.safetensors` без `*.safetensors.index.json` | докачка индекса шардов |
+| `model.onnx` без внешних данных `model.onnx_data` | докачка `*.onnx_data` (или прозрачный фоллбэк на torch-веса) |
+| Компоненты Diffusers без `model_index.json` | докачка `model_index.json` |
+
+Починка запускается в фоне при открытии карточки модели и перед «Быстрой проверкой», с кулдауном 10 минут на модель; отключается переменной `WORK_DISABLE_AUTO_REPAIR=1`. Embed/Rerank используют пару `model.onnx` + `model.onnx_data` (iGPU/NPU через `onnxruntime-directml`), а `*.safetensors` остаются резервом для torch — отказ DML-сессии не требует переустановки пакетов.

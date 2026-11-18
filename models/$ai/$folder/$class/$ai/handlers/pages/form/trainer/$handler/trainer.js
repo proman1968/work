@@ -224,6 +224,7 @@ export default {
     <div class="msg ok" ~if="notice">{{notice}}</div>
     <div class="msg err" ~if="error">{{error}}</div>
     <div class="msg info" ~if="provisionBanner">{{provisionBanner}}</div>
+    <div class="msg warn" ~if="weightsRepairLine">{{weightsRepairLine}}</div>
 
     <div class="grid-2" ~if="info">
         <div class="card">
@@ -312,6 +313,7 @@ export default {
     modelEnabled: true,
     testNoThinking: true,
     provisionBanner: '',
+    weightsRepair: null,
     testPrompt: 'Привет! Коротко в 3–4 предложениях расскажи, чем ты умеешь помогать в работе с документами, таблицами и кодом.',
     testTtsText: 'Привет! Локальный синтез речи платформы WORK работает.',
     testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
@@ -402,12 +404,32 @@ export default {
             return `Запущен (профиль ${prof}${npu})`;
         return `Автозапуск по первому запросу (профиль ${prof}${npu})`;
     },
+    get weightsRepairLine() {
+        const r = this.weightsRepair || this.info?.weightsRepair;
+        if (!r)
+            return '';
+        const reasons = Array.isArray(r.reasons) && r.reasons.length ? ` (${r.reasons.join('; ')})` : '';
+        if (r.active)
+            return `Автоматическая докачка недостающих файлов модели: ${Number(r.progress) || 0}%${reasons}`;
+        if (r.broken && r.status !== 'repaired')
+            return `Нарушена структура файлов модели${reasons}. Починка выполняется автоматически при первом обращении.`;
+        return '';
+    },
     get halogenSpeculationLine() {
         const setup = this.info?.engineSetup;
-        const plan = setup?.plan || this.info?.speculation;
+        const plan = setup?.plan || setup?.running?.speculation || this.info?.speculation;
         if (!plan)
             return '';
-        return plan.summary || (plan.enabled ? 'Активна (MTP + Draft Head)' : 'Отключена');
+        if (plan.summary)
+            return plan.summary;
+        if (plan.enabled || plan.mode === 'explicit' || plan.mode === 'weights-only') {
+            const parts = [
+                plan.mode === 'explicit' ? 'MTP включён' : 'MTP (по весам)',
+                plan.promptLookup ? 'Prompt Lookup вкл.' : 'Prompt Lookup выкл.',
+            ];
+            return parts.filter(Boolean).join(' · ');
+        }
+        return 'Отключена';
     },
     async attached() {
         await this.reload();
@@ -424,6 +446,8 @@ export default {
                 inf = await this.$item.fetch('info');
             }
             this.info = inf;
+            if (inf?.weightsRepair)
+                this.weightsRepair = inf.weightsRepair;
             this.modelEnabled = inf?.enabled !== false && inf?.DATA?.enabled !== false;
             if (inf?.pythonProvision?.active && inf.pythonProvision.stage) {
                 this.provisionBanner = inf.pythonProvision.stage + ' (выполняется один раз автоматически)';
@@ -540,6 +564,8 @@ export default {
                 else if (st?.buboPrepare?.status === 'running' && st.buboPrepare.message) {
                     this.provisionBanner = st.buboPrepare.message;
                 }
+                if (st?.weightsRepair)
+                    this.weightsRepair = st.weightsRepair;
             }
             catch { /* ignore */ }
         }, 1200);
@@ -571,8 +597,10 @@ export default {
                 return;
             }
             const parts = [];
+            if (res.engineStartMs > 500)
+                parts.push(`Старт движка: ${(res.engineStartMs / 1000).toFixed(1)} с`);
             if (res.durationMs)
-                parts.push(`Время: ${(res.durationMs / 1000).toFixed(2)} с`);
+                parts.push(`${res.engineStartMs > 500 ? 'Генерация' : 'Время'}: ${(res.durationMs / 1000).toFixed(2)} с`);
             if (res.ttftMs)
                 parts.push(`TTFT: ${(res.ttftMs / 1000).toFixed(2)} с`);
             if (res.tokPerSec)

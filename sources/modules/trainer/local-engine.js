@@ -329,6 +329,17 @@ function resolvePythonCommandAsync(rootDir = process.cwd()) {
     return _pythonResolving;
 }
 
+function hasTorchWeightsSync(weightsDir) {
+    if (!weightsDir || !fs.existsSync(weightsDir))
+        return false;
+    try {
+        return fs.readdirSync(weightsDir).some(f => /\.(safetensors|bin|pt|pth)$/i.test(f) && !f.endsWith('.part'));
+    }
+    catch {
+        return false;
+    }
+}
+
 function hasOnnxModelSync(weightsDir) {
     if (!weightsDir || !fs.existsSync(weightsDir))
         return false;
@@ -347,7 +358,12 @@ export function packagesForModality(modality = 'llm', weightsDir = '') {
     const mod = String(modality || 'llm').toLowerCase();
     const hasOnnx = hasOnnxModelSync(weightsDir);
     if ((mod === 'embed' || mod === 'embedding' || mod === 'rerank') && hasOnnx) {
-        return [os.platform() === 'win32' ? 'onnxruntime-directml' : 'onnxruntime', 'transformers', 'numpy'];
+        const pkgs = [os.platform() === 'win32' ? 'onnxruntime-directml' : 'onnxruntime', 'transformers', 'numpy'];
+        // PyTorch-веса лежат рядом как фоллбэк: если DML/NPU-сессия не поднимется,
+        // воркер прозрачно считает на torch, не требуя переустановки.
+        if (hasTorchWeightsSync(weightsDir))
+            pkgs.push('torch', 'safetensors');
+        return pkgs;
     }
     if (mod === 'embed' || mod === 'embedding' || mod === 'rerank')
         return ['torch', 'transformers', 'safetensors', 'accelerate'];

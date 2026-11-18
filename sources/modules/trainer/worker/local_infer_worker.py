@@ -294,18 +294,46 @@ def _best_device_and_dtype():
     return "cpu", (torch.bfloat16 if _cpu_supports_bf16() else torch.float32)
 
 
+def _onnx_external_data_ok(onnx_path):
+    """Внешние тензоры ONNX лежат рядом с графом (`model.onnx_data` / `model.onnx.data`)."""
+    return os.path.isfile(onnx_path + "_data") or os.path.isfile(onnx_path + ".data")
+
+
 def _find_onnx_file(weights_dir):
+    candidates = []
     for sub in ("", "onnx"):
         folder = os.path.join(weights_dir, sub) if sub else weights_dir
         if not os.path.isdir(folder):
             continue
         preferred = os.path.join(folder, "model.onnx")
         if os.path.isfile(preferred):
-            return preferred
-        found = sorted(glob.glob(os.path.join(folder, "*.onnx")))
-        if found:
-            return found[0]
+            candidates.append(preferred)
+        else:
+            found = sorted(glob.glob(os.path.join(folder, "*.onnx")))
+            candidates.extend(found)
+    for path in candidates:
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        # Маленький ONNX-граф без файла внешних данных не загрузится — пропускаем,
+        # чтобы прозрачно использовать PyTorch-веса вместо падения на сессии.
+        if size < 512 * 1024 * 1024 and not _onnx_external_data_ok(path):
+            continue
+        return path
     return None
+
+
+def _has_torch_weights(weights_dir):
+    patterns = ("*.safetensors", "*.bin", "*.pt", "*.pth")
+    for pattern in patterns:
+        if glob.glob(os.path.join(weights_dir, pattern)):
+            return True
+    for sub in ("transformer", "vae", "text_encoder"):
+        folder = os.path.join(weights_dir, sub)
+        if os.path.isdir(folder) and glob.glob(os.path.join(folder, "*.safetensors")):
+            return True
+    return False
 
 
 def _has_safetensors(weights_dir):
@@ -408,7 +436,7 @@ def _load_embed_model(weights_dir, cache):
             cache[key] = ("onnx", tok, sess, "ort")
             return cache[key]
         except Exception:
-            if not _has_safetensors(weights_dir) or not HAS_TORCH:
+            if not _has_torch_weights(weights_dir) or not HAS_TORCH:
                 raise
     device, dtype = _best_device_and_dtype()
     try:
@@ -478,7 +506,7 @@ def _load_rerank_model(weights_dir, cache):
             cache[key] = ("onnx", tok, sess, "ort")
             return cache[key]
         except Exception:
-            if not _has_safetensors(weights_dir) or not HAS_TORCH:
+            if not _has_torch_weights(weights_dir) or not HAS_TORCH:
                 raise
     device, dtype = _best_device_and_dtype()
     try:
@@ -611,7 +639,14 @@ def handle_tts(req, cache):
                 "soundfile": "soundfile",
             })))
         device, dtype = _best_device_and_dtype()
-        mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=device, dtype=dtype)
+        try:
+            mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=device, dtype=dtype)
+        except Exception as e:
+            # Пакет установлен, но веса/конфиг не читаются — отдаём реальную причину,
+            # а не ложное «нет пакетов», из-за которого раньше шёл бесконечный переустанов.
+            raise RuntimeError(json.dumps({
+                "error": f"Не удалось загрузить модель синтеза речи из {weights_dir}: {e}",
+            }))
         cache[key] = mdl
     mdl = cache[key]
     if hasattr(mdl, "generate_voice_design") and instructions:
@@ -631,22 +666,41 @@ def handle_stt(req, cache):
     raw = base64.b64decode(audio_b64)
     key = ("stt", weights_dir)
     if key not in cache:
-        loader = None
+        device, dtype = _best_device_and_dtype()
+        errors = []
         try:
             from qwen_asr import Qwen3ASRModel
-            device, dtype = _best_device_and_dtype()
-            loader = ("qwen_asr", Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device))
-        except Exception as e_qwen:
+            try:
+                cache[key] = ("qwen_asr", Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device))
+            except Exception as e:
+                errors.append(f"qwen-asr: {e}")
+        except Exception as e:
+            errors.append(f"qwen-asr (нет пакета): {e}")
+        if key not in cache:
             try:
                 from transformers import pipeline
-                device, dtype = _best_device_and_dtype()
-                loader = ("hf_asr", pipeline("automatic-speech-recognition", model=weights_dir, device=0 if device == "cuda" else -1, torch_dtype=dtype))
-            except Exception:
-                raise RuntimeError(json.dumps(_missing_pkg_error(e_qwen, {
+                try:
+                    cache[key] = ("hf_asr", pipeline(
+                        "automatic-speech-recognition",
+                        model=weights_dir,
+                        device=0 if device == "cuda" else -1,
+                        torch_dtype=dtype,
+                    ))
+                except Exception as e:
+                    errors.append(f"transformers: {e}")
+            except Exception as e:
+                errors.append(f"transformers (нет пакета): {e}")
+        if key not in cache:
+            msg = " | ".join(errors)
+            if "No module named" in msg:
+                raise RuntimeError(json.dumps(_missing_pkg_error(Exception(msg), {
                     "qwen_asr": "qwen-asr",
                     "soundfile": "soundfile",
+                    "transformers": "transformers",
                 })))
-        cache[key] = loader
+            raise RuntimeError(json.dumps({
+                "error": f"Не удалось загрузить модель распознавания речи из {weights_dir}: {msg}",
+            }))
     kind, mdl = cache[key]
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
