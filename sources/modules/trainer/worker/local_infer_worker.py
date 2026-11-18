@@ -624,10 +624,88 @@ def _pcm_to_wav_base64(samples, sample_rate):
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+DEFAULT_VOICE_DESIGN_INSTRUCT = (
+    "A warm, clear adult voice with calm professional intonation, natural pacing and clean articulation."
+)
+
+TTS_LANGUAGE_ALIASES = {
+    "ru": "Russian", "rus": "Russian", "russian": "Russian",
+    "en": "English", "eng": "English", "english": "English",
+    "zh": "Chinese", "chinese": "Chinese",
+    "auto": "Auto", "": "Auto",
+}
+
+
+def _read_json_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _tts_language(value):
+    raw = str(value or "").strip()
+    return TTS_LANGUAGE_ALIASES.get(raw.lower(), raw or "Auto")
+
+
+def _tts_model_kind(weights_dir, mdl, instructions=""):
+    """Разновидность Qwen3-TTS: VoiceDesign / CustomVoice / Base (клонирование голоса).
+
+    Метод `generate_*` в пакете есть у всех моделей, но исполняется только «свой»:
+    вызов `generate_custom_voice` на VoiceDesign падает с ошибкой пакета.
+    Поэтому тип берём из `config.json` (`tts_model_type`), а не из наличия метода.
+    """
+    cfg = _read_json_file(os.path.join(weights_dir, "config.json"))
+    raw = str(cfg.get("tts_model_type") or "")
+    if not raw:
+        for attr in ("config", "model_config", "generation_config"):
+            raw = str(getattr(getattr(mdl, attr, None), "tts_model_type", "") or "")
+            if raw:
+                break
+    low = raw.lower().replace("-", "_")
+    if "voice_design" in low or "voicedesign" in low:
+        return "voice_design"
+    if "custom_voice" in low or "customvoice" in low:
+        return "custom_voice"
+    if "base" in low or "clone" in low:
+        return "base"
+    name = os.path.basename(os.path.normpath(weights_dir)).lower()
+    if "voicedesign" in name:
+        return "voice_design"
+    if "customvoice" in name:
+        return "custom_voice"
+    if "-base" in name or name.endswith("base"):
+        return "base"
+    return "voice_design" if instructions else "custom_voice"
+
+
+def _resolve_tts_speaker(mdl, requested):
+    """Имена спикеров регистрозависимы (`Serena`, `Vivian`, …) — сопоставляем с реальным списком модели."""
+    try:
+        speakers = [str(s) for s in (mdl.get_supported_speakers() or [])]
+    except Exception:
+        speakers = []
+    want = str(requested or "").strip()
+    if not speakers:
+        return want or "Serena"
+    if want:
+        for s in speakers:
+            if s.lower() == want.lower():
+                return s
+        for s in speakers:
+            if want.lower() in s.lower():
+                return s
+    for s in speakers:
+        if s.lower() == "serena":
+            return s
+    return speakers[0]
+
+
 def handle_tts(req, cache):
     weights_dir = req["weightsDir"]
     text = str(req.get("text", "")).strip()
-    language = str(req.get("language") or "Russian")
+    language = _tts_language(req.get("language") or "Russian")
     instructions = str(req.get("instructions") or "").strip()
     key = ("tts", weights_dir)
     if key not in cache:
@@ -649,14 +727,67 @@ def handle_tts(req, cache):
             }))
         cache[key] = mdl
     mdl = cache[key]
-    if hasattr(mdl, "generate_voice_design") and instructions:
-        wavs, sr = mdl.generate_voice_design(text=text, language=language, instruct=instructions)
-    elif hasattr(mdl, "generate_custom_voice"):
-        wavs, sr = mdl.generate_custom_voice(text=text, language=language, speaker=str(req.get("voice") or "serena"), instruct=instructions or None)
-    else:
-        wavs, sr = mdl.generate_voice_design(text=text, language=language, instruct=instructions or "Natural clear voice")
+    kind = _tts_model_kind(weights_dir, mdl, instructions)
+    try:
+        if kind == "voice_design":
+            # VoiceDesign синтезирует голос по текстовому описанию (`instruct`),
+            # метод generate_custom_voice для этой разновидности не поддерживается.
+            wavs, sr = mdl.generate_voice_design(
+                text=text,
+                language=language,
+                instruct=instructions or DEFAULT_VOICE_DESIGN_INSTRUCT,
+            )
+        elif kind == "custom_voice":
+            kwargs = {
+                "text": text,
+                "language": language,
+                "speaker": _resolve_tts_speaker(mdl, req.get("voice")),
+            }
+            if instructions:
+                kwargs["instruct"] = instructions
+            try:
+                wavs, sr = mdl.generate_custom_voice(**kwargs)
+            except Exception as e:
+                # CustomVoice 0.6B не принимает instruct — повторяем без него.
+                if "instruct" in kwargs and "instruct" in str(e).lower():
+                    kwargs.pop("instruct")
+                    wavs, sr = mdl.generate_custom_voice(**kwargs)
+                else:
+                    raise
+        else:
+            ref_b64 = str(req.get("refAudioBase64") or "")
+            if not ref_b64:
+                raise RuntimeError(json.dumps({
+                    "error": "Модель Qwen3-TTS Base клонирует голос и требует эталонную запись "
+                             "(refAudioBase64 + refText). Для синтеза без эталона используйте "
+                             "Qwen3-TTS-12Hz-1.7B-VoiceDesign или -CustomVoice.",
+                }))
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                tf.write(base64.b64decode(ref_b64))
+                ref_path = tf.name
+            ref_text = str(req.get("refText") or "").strip()
+            try:
+                wavs, sr = mdl.generate_voice_clone(
+                    text=text,
+                    language=language,
+                    ref_audio=ref_path,
+                    ref_text=ref_text,
+                    x_vector_only_mode=not ref_text,
+                )
+            finally:
+                try:
+                    os.remove(ref_path)
+                except Exception:
+                    pass
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(json.dumps({
+            "error": f"Синтез речи Qwen3-TTS ({kind}) не удался: {e}",
+        }))
     audio = wavs[0] if isinstance(wavs, (list, tuple)) else wavs
-    return {"audioBase64": _pcm_to_wav_base64(audio, sr), "sampleRate": int(sr)}
+    return {"audioBase64": _pcm_to_wav_base64(audio, sr), "sampleRate": int(sr), "ttsKind": kind}
 
 
 def handle_stt(req, cache):

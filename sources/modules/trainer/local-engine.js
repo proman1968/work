@@ -878,6 +878,8 @@ export async function localSpeak(ai, params = {}) {
         language: String(params.language || ai?.language || 'Russian'),
         instructions: String(params.instructions || ai?.instructions || '').trim(),
         voice: String(params.voice || ai?.voice || 'serena'),
+        ...(params.refAudioBase64 ? { refAudioBase64: String(params.refAudioBase64) } : {}),
+        ...(params.refText ? { refText: String(params.refText) } : {}),
     }, 240000);
     return Buffer.from(res.audioBase64 || '', 'base64');
 }

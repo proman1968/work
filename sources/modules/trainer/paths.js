@@ -153,7 +153,22 @@ export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
         const hasConfig = files.includes('config.json');
         const hasTokenizer = files.includes('tokenizer.json');
         const pendingDownload = hasParts || pendingState;
-        const hasReadyWeights = !pendingDownload && (hasSafetensors || hasGguf || hasBuboManifest || hasHgn || hasHnpw || hasOther);
+        // Основные веса уже на диске — модель работоспособна, даже если в фоне докачиваются
+        // недостающие конфиги/подпапки (speech_tokenizer/, onnx/, индексы шардов).
+        // «Не скачана» должна означать отсутствие самих весов, а не наличие .part у второстепенных файлов.
+        const rootParts = raw.some(f => f.endsWith('.part') && !f.includes('/'));
+        const hasWeightBinaries = hasSafetensors || hasGguf || hasBuboManifest || hasHgn || hasHnpw || hasOther;
+        // Шардированный чекпоинт готов только когда скачаны все шарды и есть их индекс.
+        const shards = files
+            .map(f => /-(\d{5})-of-(\d{5})\.(safetensors|bin)$/i.exec(f))
+            .filter(Boolean);
+        let shardsComplete = true;
+        if (shards.length) {
+            const expected = Math.max(...shards.map(m => Number(m[2])));
+            const present = new Set(shards.map(m => m[1])).size;
+            shardsComplete = present >= expected && files.some(f => /\.index\.json$/i.test(f));
+        }
+        const hasReadyWeights = hasWeightBinaries && !rootParts && shardsComplete;
 
         let weightFormat = '';
         if (hasBuboManifest)

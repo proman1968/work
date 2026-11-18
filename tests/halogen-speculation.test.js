@@ -322,4 +322,70 @@ llamacpp:spec_decode_num_accepted_tokens_total 266
             await fsp.rm(tmpWeights, { recursive: true, force: true });
         }
     });
+
+    it('12. TTS: метод синтеза выбирается по tts_model_type (VoiceDesign / CustomVoice / Base), а не по наличию метода', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const py = `
+import json, os, runpy, tempfile
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+class FakeTTS:
+    def __init__(self, instruct_raises=False):
+        self.calls = []
+        self.instruct_raises = instruct_raises
+    def get_supported_speakers(self):
+        return ['Vivian', 'Serena', 'Ryan']
+    def generate_voice_design(self, text, language, instruct):
+        self.calls.append(['voice_design', instruct])
+        return ([[0.1, -0.2, 0.3]], 24000)
+    def generate_custom_voice(self, text, language, speaker, instruct=None):
+        self.calls.append(['custom_voice', speaker, instruct])
+        if instruct is not None and self.instruct_raises:
+            raise ValueError('this model does not support instruct')
+        return ([[0.1, -0.2]], 24000)
+
+def run(kind, extra=None, instruct_raises=False):
+    d = tempfile.mkdtemp()
+    with open(os.path.join(d, 'config.json'), 'w', encoding='utf-8') as fh:
+        json.dump({'tts_model_type': kind}, fh)
+    with open(os.path.join(d, 'model.safetensors'), 'w') as fh:
+        fh.write('w')
+    m = FakeTTS(instruct_raises)
+    req = {'weightsDir': d, 'text': 'Привет', 'language': 'Russian'}
+    req.update(extra or {})
+    try:
+        res = ns['handle_tts'](req, {('tts', d): m})
+        return {'ok': True, 'calls': m.calls, 'kind': res.get('ttsKind'), 'audio': bool(res.get('audioBase64'))}
+    except RuntimeError as e:
+        try:
+            msg = json.loads(str(e)).get('error', str(e))
+        except Exception:
+            msg = str(e)
+        return {'ok': False, 'error': msg, 'calls': m.calls}
+
+print(json.dumps([
+    run('voice_design'),
+    run('custom_voice', {'voice': 'serena'}),
+    run('base'),
+    run('custom_voice', {'voice': 'SERENA', 'instructions': 'angry tone'}, True),
+]))
+`;
+        const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 30000 });
+        assert.equal(res.status, 0, res.stderr || '');
+        const [vd, cv, base, cvNoInstruct] = JSON.parse(String(res.stdout || '').trim());
+        assert.equal(vd.ok, true, vd.error || '');
+        assert.equal(vd.kind, 'voice_design');
+        assert.equal(vd.calls[0][0], 'voice_design', 'VoiceDesign не должен вызывать generate_custom_voice');
+        assert.ok(vd.calls[0][1], 'без описания голоса подставляется дефолтный instruct');
+        assert.equal(vd.audio, true);
+        assert.equal(cv.ok, true, cv.error || '');
+        assert.equal(cv.kind, 'custom_voice');
+        assert.equal(cv.calls[0][1], 'Serena', 'имя спикера сопоставляется с регистром модели');
+        assert.equal(base.ok, false);
+        assert.match(base.error, /эталон/i, 'Base без эталонной записи даёт честную ошибку');
+        assert.equal(cvNoInstruct.ok, true, cvNoInstruct.error || '');
+        assert.equal(cvNoInstruct.calls.length, 2, 'при отказе instruct повторяем без него');
+        assert.equal(cvNoInstruct.calls[1][2], null);
+    });
 });

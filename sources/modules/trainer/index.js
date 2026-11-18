@@ -427,7 +427,14 @@ async function runSingleModelSmokeTest(ai, p = {}) {
     try {
         if (modality === 'tts') {
             const text = String(p.text || p.prompt || 'Привет! Проверка локального синтеза речи WORK.').trim();
-            const buf = await ai.speak({ text, language: p.language, instructions: p.instructions });
+            const buf = await ai.speak({
+                text,
+                language: p.language,
+                instructions: p.instructions,
+                voice: p.voice,
+                refAudioBase64: p.refAudioBase64,
+                refText: p.refText,
+            });
             const durationMs = Math.max(1, Date.now() - t0);
             return {
                 ok: true,

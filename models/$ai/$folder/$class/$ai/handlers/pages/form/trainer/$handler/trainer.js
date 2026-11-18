@@ -276,6 +276,9 @@ export default {
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'tts'">
                 <textarea rows="2" :value="testTtsText" placeholder="Текст для озвучивания…" @input="testTtsText = $this.value"></textarea>
+                <textarea rows="2" :value="testTtsInstructions" placeholder="Описание голоса и манеры (instruct): например «спокойный женский голос, деловая интонация, чёткая дикция»…" @input="testTtsInstructions = $this.value"></textarea>
+                <input ~if="ttsKind === 'custom_voice'" :value="testTtsVoice" placeholder="Голос (speaker): Serena, Vivian, Ryan, Aiden…" @input="testTtsVoice = $this.value">
+                <div ~if="ttsKind === 'base'" style="font-size:12px;opacity:0.8;">Модель Base клонирует голос: для синтеза нужна эталонная запись (WAV) и её текст. Без эталона используйте VoiceDesign или CustomVoice.</div>
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'stt'">
                 <div style="font-size:12px;opacity:0.8;">Можно загрузить WAV-файл или запустить автоматическую проверку встроенным тестовым аудиосигналом.</div>
@@ -316,6 +319,8 @@ export default {
     weightsRepair: null,
     testPrompt: 'Привет! Коротко в 3–4 предложениях расскажи, чем ты умеешь помогать в работе с документами, таблицами и кодом.',
     testTtsText: 'Привет! Локальный синтез речи платформы WORK работает.',
+    testTtsInstructions: '',
+    testTtsVoice: 'Serena',
     testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
     testEmbedInput: 'Учётная система WORK\nОборотно-сальдовая ведомость',
     testRerankQuery: 'остатки на расчётном счёте 51',
@@ -348,6 +353,18 @@ export default {
         if (caps.includes('embeddings') || caps.includes('rag') || mod === 'embed' || mod === 'embedding')
             return 'embed';
         return 'llm';
+    },
+    get ttsKind() {
+        const id = String(this.info?.id || this.resolvedModelId || '').toLowerCase();
+        const task = String(this.info?.DATA?.ttsTask || this.info?.ttsTask || '').toLowerCase();
+        const hay = `${id} ${task}`;
+        if (hay.includes('voicedesign') || hay.includes('voice_design'))
+            return 'voice_design';
+        if (hay.includes('customvoice') || hay.includes('custom_voice'))
+            return 'custom_voice';
+        if (/(^|[^a-z])base([^a-z]|$)/.test(hay))
+            return 'base';
+        return 'voice_design';
     },
     get testModalityLabel() {
         const map = {
@@ -578,8 +595,13 @@ export default {
                 if (this.hasEffortCap && this.testNoThinking)
                     body.effort = 'off';
             }
-            else if (m === 'tts')
+            else if (m === 'tts') {
                 body.text = this.testTtsText.trim();
+                if (this.testTtsInstructions.trim())
+                    body.instructions = this.testTtsInstructions.trim();
+                if (this.ttsKind === 'custom_voice' && this.testTtsVoice.trim())
+                    body.voice = this.testTtsVoice.trim();
+            }
             else if (m === 'stt' && this.testSttBase64)
                 body.audioBase64 = this.testSttBase64;
             else if (m === 'image')

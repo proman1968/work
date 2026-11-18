@@ -18,6 +18,7 @@ import {
     detectBrokenWeightsLayout,
     startHuggingFaceDownload,
 } from '../sources/modules/trainer/huggingface.js';
+import { inspectWeightsDirectorySync } from '../sources/modules/trainer/paths.js';
 
 function tmpDir(prefix = 'work-layout-test-') {
     return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -220,6 +221,42 @@ describe('trainer-weights-layout: структура репозитория, ф�
         }
         finally {
             await srv.close();
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('8. Готовность весов: фоновая докачка подпапок не помечает модель как «не скачана», незавершённые шарды — помечают', () => {
+        const root = tmpDir();
+        try {
+            // Основные веса на диске, в фоне докачивается speech_tokenizer + состояние paused.
+            const tts = path.join(root, 'tts');
+            fs.mkdirSync(path.join(tts, 'speech_tokenizer'), { recursive: true });
+            fs.writeFileSync(path.join(tts, 'config.json'), JSON.stringify({ model_type: 'qwen3_tts', tts_model_type: 'voice_design' }));
+            fs.writeFileSync(path.join(tts, 'model.safetensors'), 'main-weights');
+            fs.writeFileSync(path.join(tts, 'speech_tokenizer', 'model.safetensors.part'), 'partial');
+            fs.writeFileSync(path.join(tts, 'download-state.json'), JSON.stringify({ status: 'paused' }));
+            const info = inspectWeightsDirectorySync(tts, 'win32');
+            assert.equal(info.hasReadyWeights, true, 'модель с готовыми основными весами активна');
+            assert.equal(info.pendingDownload, true, 'фоновая докачка видна отдельно');
+
+            // Шарды скачаны не все — модель ещё не готова.
+            const llm = path.join(root, 'llm');
+            fs.mkdirSync(llm, { recursive: true });
+            fs.writeFileSync(path.join(llm, 'config.json'), JSON.stringify({ model_type: 'qwen3' }));
+            fs.writeFileSync(path.join(llm, 'model-00001-of-00003.safetensors'), 'w');
+            fs.writeFileSync(path.join(llm, 'model.safetensors.index.json'), '{}');
+            assert.equal(inspectWeightsDirectorySync(llm, 'win32').hasReadyWeights, false);
+            fs.writeFileSync(path.join(llm, 'model-00002-of-00003.safetensors'), 'w');
+            fs.writeFileSync(path.join(llm, 'model-00003-of-00003.safetensors'), 'w');
+            assert.equal(inspectWeightsDirectorySync(llm, 'win32').hasReadyWeights, true);
+
+            // Основной файл ещё качается (.part в корне) — не готова.
+            const fresh = path.join(root, 'fresh');
+            fs.mkdirSync(fresh, { recursive: true });
+            fs.writeFileSync(path.join(fresh, 'model.safetensors.part'), 'partial');
+            assert.equal(inspectWeightsDirectorySync(fresh, 'win32').hasReadyWeights, false);
+        }
+        finally {
             fs.rmSync(root, { recursive: true, force: true });
         }
     });
