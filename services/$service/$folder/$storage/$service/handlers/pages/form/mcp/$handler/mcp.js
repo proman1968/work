@@ -1,6 +1,6 @@
 ODA({
     is: 'work-mcp-manager',
-    imports: '@oda/icon, @oda/button',
+    imports: '@oda/icon, @oda/button, oda//tabs',
     template: /*html*/`
         <style>
             :host {
@@ -52,40 +52,7 @@ ODA({
                 display: flex;
                 align-items: center;
                 gap: 8px;
-                background: var(--subtle-background, #f8fafc);
-                padding: 4px;
-                border-radius: 9px;
-                border: 1px solid var(--border-color, #e2e8f0);
-            }
-            .tab-btn {
-                border: none;
-                background: transparent;
-                color: inherit;
-                font-size: 13px;
-                font-weight: 600;
-                padding: 7px 14px;
-                border-radius: 6px;
-                cursor: pointer;
-                display: inline-flex;
-                align-items: center;
-                gap: 6px;
-            }
-            .tab-btn[active] {
-                background: var(--accent-color, #2563eb);
-                color: #ffffff;
-            }
-            .badge {
-                display: inline-flex;
-                align-items: center;
-                padding: 2px 8px;
-                border-radius: 999px;
-                font-size: 11px;
-                font-weight: 600;
-                background: rgba(100, 116, 139, 0.14);
-            }
-            .tab-btn[active] .badge {
-                background: rgba(255, 255, 255, 0.22);
-                color: #fff;
+                flex-wrap: wrap;
             }
             .info-banner {
                 display: grid;
@@ -306,14 +273,7 @@ ODA({
                 </div>
             </div>
             <div class="tabs-row">
-                <button class="tab-btn" :active="activeTab === 'mcp'" @tap="setTab('mcp')">
-                    <span>🔌 MCP-серверы и Сервисы</span>
-                    <span class="badge">{{mcpServers.length}}</span>
-                </button>
-                <button class="tab-btn" :active="activeTab === 'skills'" @tap="setTab('skills')">
-                    <span>🧠 Навыки ИИ (Skills)</span>
-                    <span class="badge">{{skills.length}}</span>
-                </button>
+                <oda-tabs variant="pills" :allow-list="false" :items="mcpTabItems" :focused-index="mcpTabIndex" @tab-select="onMcpTabSelect($event)"></oda-tabs>
                 <button class="btn" @tap="reload" title="Обновить список">↻ Обновить</button>
             </div>
         </div>
@@ -631,6 +591,21 @@ ODA({
     ],
     attached() {
         this.reload();
+    },
+    get mcpTabItems() {
+        return [
+            { id: 'mcp', label: 'MCP-серверы и Сервисы', icon: 'carbon:plug', count: this.mcpServers?.length || 0, showZeroCount: true },
+            { id: 'skills', label: 'Навыки ИИ (Skills)', icon: 'carbon:skill-level', count: this.skills?.length || 0, showZeroCount: true },
+        ];
+    },
+    get mcpTabIndex() {
+        const idx = this.mcpTabItems.findIndex(t => t.id === this.activeTab);
+        return idx >= 0 ? idx : 0;
+    },
+    onMcpTabSelect(e) {
+        const id = e?.detail?.item?.id;
+        if (id)
+            this.setTab(id);
     },
     setTab(tab) {
         this.activeTab = tab;

@@ -1,5 +1,5 @@
 export default {
-    imports: 'oda//icon, oda//button',
+    imports: 'oda//icon, oda//button, oda//tabs',
     template: /*html*/`
         <style>
             :host {
@@ -35,25 +35,8 @@ export default {
                 font-size: 15px;
                 color: inherit;
             }
-            .tabs {
-                @apply --horizontal;
-                gap: 6px;
-                flex-wrap: wrap;
-            }
-            .tab {
-                padding: 4px 10px;
-                border-radius: 16px;
-                font-size: 12px;
-                font-weight: 600;
-                cursor: pointer;
-                border: 1px solid var(--subtle-border);
-                background: var(--subtle-background);
-                color: var(--content-color);
-            }
-            .tab.active {
-                background: var(--accent-color);
-                border-color: var(--accent-color);
-                color: var(--accent-back);
+            .search-bar oda-button {
+                flex-shrink: 0;
             }
             .section-title {
                 font-size: 13px;
@@ -132,12 +115,7 @@ export default {
             <oda-button icon="icons:search" @tap="runSearch">Найти</oda-button>
         </div>
 
-        <div class="tabs" ~if="searched">
-            <div class="tab" ~class="{active: scopeTab === 'all'}" @tap="scopeTab = 'all'">Все ({{files.length + objects.length + nodes.length}})</div>
-            <div class="tab" ~class="{active: scopeTab === 'files'}" @tap="scopeTab = 'files'">Файлы ({{files.length}})</div>
-            <div class="tab" ~class="{active: scopeTab === 'objects'}" @tap="scopeTab = 'objects'">Данные и документы ({{objects.length}})</div>
-            <div class="tab" ~class="{active: scopeTab === 'nodes'}" @tap="scopeTab = 'nodes'">Разделы и места ({{nodes.length}})</div>
-        </div>
+        <oda-tabs ~if="searched" variant="pills" compact :allow-list="false" :items="scopeTabItems" :focused-index="scopeTabIndex" @tab-select="onScopeTabSelect($event)"></oda-tabs>
 
         <div ~if="loading" class="empty">Поиск…</div>
         <div ~if="error" style="color: var(--error-color, #c00);">{{error}}</div>
@@ -188,6 +166,23 @@ export default {
     query: '',
     lastQuery: '',
     scopeTab: 'all',
+    get scopeTabItems() {
+        return [
+            { id: 'all', label: 'Все', count: this.files.length + this.objects.length + this.nodes.length, showZeroCount: true },
+            { id: 'files', label: 'Файлы', count: this.files.length, showZeroCount: true },
+            { id: 'objects', label: 'Данные и документы', count: this.objects.length, showZeroCount: true },
+            { id: 'nodes', label: 'Разделы и места', count: this.nodes.length, showZeroCount: true },
+        ];
+    },
+    get scopeTabIndex() {
+        const idx = this.scopeTabItems.findIndex(t => t.id === this.scopeTab);
+        return idx >= 0 ? idx : 0;
+    },
+    onScopeTabSelect(e) {
+        const id = e?.detail?.item?.id;
+        if (id)
+            this.scopeTab = id;
+    },
     loading: false,
     searched: false,
     error: '',

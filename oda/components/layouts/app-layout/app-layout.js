@@ -406,9 +406,12 @@ ODA({is: 'app-tabs',
                 box-sizing: border-box;
                 transition: background 140ms ease, transform 120ms ease, box-shadow 140ms ease;
             }
+            .nav-list oda-button:not([light]):hover {
+                background: color-mix(in oklch, var(--accent-back) 14%, transparent);
+            }
             .nav-list oda-button[light] {
                 font-weight: 700;
-                box-shadow: 0 2px 6px rgba(0, 0, 0, 0.22);
+                box-shadow: 0 2px 6px var(--shadow-color);
             }
         </style>
         <div class="nav-list" :horizontal="mobile">

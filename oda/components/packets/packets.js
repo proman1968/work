@@ -322,10 +322,11 @@ ODA({
         <style>
             :host {
                 @apply --vertical;
-                @apply --light;
-                min-height: 30px;
-                height: 30px;
-                border-bottom: 1px solid var(--border-color);
+                background: var(--subtle-background);
+                color: var(--content-color);
+                min-height: 32px;
+                height: 32px;
+                border-bottom: 1px solid var(--subtle-border);
                 box-sizing: border-box;
                 flex-shrink: 0;
             }
@@ -1563,13 +1564,13 @@ ODA({
     template: /*html*/`
         <style>
             :host {
-                @apply --light;
+                background: var(--subtle-background);
                 @apply --horizontal;
                 align-items: center;
                 color: var(--content-color);
-                border-bottom: 1px solid var(--border-color);
-                padding: 2px 6px;
-                height: 30px;
+                border-bottom: 1px solid var(--subtle-border);
+                padding: 3px 8px;
+                height: 32px;
                 gap: 4px;
                 overflow: hidden;
                 box-sizing: border-box;
@@ -1668,31 +1669,35 @@ ODA({
     template: /*html*/`
         <style>
             :host {
-                padding: 2px 7px;
+                padding: 2px 9px;
                 height: 24px;
                 max-width: 280px;
                 font-size: 12.5px;
                 line-height: 1.35;
-                border-radius: var(--radius-xs, 3px);
-                border: 1px solid transparent;
+                border-radius: 7px;
+                border: none;
                 background: transparent !important;
                 color: var(--content-color) !important;
                 fill: currentColor !important;
+                opacity: 0.82;
                 box-sizing: border-box;
-                transition: background-color 0.12s ease, border-color 0.12s ease;
+                transition: background-color var(--duration-fast) var(--easing),
+                            box-shadow var(--duration-fast) var(--easing),
+                            color var(--duration-fast) var(--easing),
+                            opacity var(--duration-fast) var(--easing);
             }
             :host(:hover) {
-                background: var(--accent-soft) !important;
-                color: var(--accent-color) !important;
+                opacity: 1;
+                background: color-mix(in oklch, var(--content-color) 6%, transparent) !important;
+                color: var(--content-color) !important;
             }
             :host([error]) {
-                border: 1px solid var(--accent-color) !important;
-                background: var(--accent-soft) !important;
+                opacity: 1;
+                border: none !important;
+                background: var(--content-background) !important;
                 color: var(--accent-color) !important;
-                font-weight: 700;
-            }
-            :host([error]) label {
-                text-decoration: underline;
+                box-shadow: var(--elevation-1);
+                font-weight: 600;
             }
             :host([disabled]) {
                 opacity: .45;

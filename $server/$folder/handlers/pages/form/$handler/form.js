@@ -41,54 +41,34 @@ export default {
             #tools {
                 gap: 4px;
                 overflow-x: auto;
+                align-items: center;
+                padding: 2px;
             }
-            #tools oda-button {
+            #tools item-node {
                 flex-shrink: 0;
-            }
-            #tools oda-button[info-invert] {
-                flex-shrink: 1;
-                min-width: 0;
-            }
-            .form-tabs-bar {
-                @apply --horizontal-center;
-                @apply --footer;
-                @apply --border-bottom;
-                gap: 4px;
-                width: 100%;
-                overflow-x: auto;
-                overflow-y: hidden;
-                scrollbar-width: thin;
-                padding: 2px 6px 0 6px;
+                border-radius: 10px;
+                padding: 3px 8px;
+                min-height: 30px;
+                align-items: center;
                 box-sizing: border-box;
+                opacity: 0.86;
+                transition: background-color var(--duration-fast) var(--easing), box-shadow var(--duration-fast) var(--easing), opacity var(--duration-fast) var(--easing);
             }
-            .form-tabs-bar[hidden],
+            #tools item-node:not([light]):hover {
+                opacity: 1;
+                background: color-mix(in oklch, var(--accent-back) 14%, transparent);
+            }
+            #tools item-node[light] {
+                opacity: 1;
+                padding: 3px 10px;
+                font-weight: 700;
+                box-shadow: 0 2px 6px var(--shadow-color);
+            }
             #formTabsBar[hidden],
             #formToolbar[hidden],
             #formFooter[hidden],
             [slot="main"][hidden] {
                 display: none !important;
-            }
-            .form-tab {
-                @apply --horizontal-center;
-                @apply --no-flex;
-                @apply --border;
-                gap: 6px;
-                max-width: 240px;
-                padding: 3px 8px;
-                border-radius: 8px 8px 0 0;
-                font-size: small;
-                white-space: nowrap !important;
-                cursor: pointer;
-                user-select: none;
-                box-sizing: border-box;
-            }
-            .form-tab:hover {
-                @apply --hover;
-            }
-            .form-tab .tab-label {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap !important;
             }
             .obj-footer-actions {
                 @apply --horizontal-center;
@@ -121,57 +101,47 @@ export default {
     }
 }
 ODA({is: 'work-form',
-    imports: 'oda//icon, oda//button, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree, ~/lib//tools, ~/lib//class-picker',
+    imports: 'oda//icon, oda//button, oda//tabs, oda//app-layout, ~/lib//node-explorer, ~/lib//confirm.js, ~/lib//tree, ~/lib//tools, ~/lib//class-picker',
     extends: 'oda-app-layout',
     template: /* html */`
         <style>
-            .view-enter {
-                animation: view-fade-in 0.5s ease;
-            }
-            @keyframes view-fade-in {
-                from { opacity: 0; }
-                to { opacity: 1; }
-            }
-            .form-tabs-bar {
-                @apply --horizontal-center;
-                @apply --footer;
-                @apply --border-bottom;
-                gap: 4px;
-                width: 100%;
-                overflow-x: auto;
-                overflow-y: hidden;
-                scrollbar-width: thin;
-                padding: 2px 6px 0 6px;
-                box-sizing: border-box;
-            }
-            .form-tabs-bar[hidden],
             #formTabsBar[hidden],
             #formToolbar[hidden],
             #formFooter[hidden],
             [slot="main"][hidden] {
                 display: none !important;
             }
-            .form-tab {
-                @apply --horizontal-center;
-                @apply --no-flex;
-                @apply --border;
-                gap: 6px;
-                max-width: 240px;
+            .form-tabs-bar oda-button#classTreeToggleBtn {
+                border-radius: 9px !important;
+                min-width: 30px;
+                min-height: 30px;
+                transition: background-color var(--duration-fast) var(--easing), box-shadow var(--duration-fast) var(--easing);
+            }
+            .form-tabs-bar oda-button#classTreeToggleBtn:not([light]):hover {
+                background: color-mix(in oklch, var(--accent-back) 14%, transparent);
+            }
+            .form-tabs-bar oda-button#classTreeToggleBtn[light] {
+                box-shadow: 0 2px 6px var(--shadow-color);
+            }
+            #tools item-node {
+                flex-shrink: 0;
+                border-radius: 10px;
                 padding: 3px 8px;
-                border-radius: 8px 8px 0 0;
-                font-size: small;
-                white-space: nowrap !important;
-                cursor: pointer;
-                user-select: none;
+                min-height: 30px;
+                align-items: center;
                 box-sizing: border-box;
+                opacity: 0.86;
+                transition: background-color var(--duration-fast) var(--easing), box-shadow var(--duration-fast) var(--easing), opacity var(--duration-fast) var(--easing);
             }
-            .form-tab:hover {
-                @apply --hover;
+            #tools item-node:not([light]):hover {
+                opacity: 1;
+                background: color-mix(in oklch, var(--accent-back) 14%, transparent);
             }
-            .form-tab .tab-label {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap !important;
+            #tools item-node[light] {
+                opacity: 1;
+                padding: 3px 10px;
+                font-weight: 700;
+                box-shadow: 0 2px 6px var(--shadow-color);
             }
             .obj-footer-actions {
                 @apply --horizontal-center;
@@ -182,18 +152,31 @@ ODA({is: 'work-form',
                 min-height: 28px;
                 padding: 4px 12px;
                 gap: 6px;
-                font-size: 13px;
+                font-size: 12.5px;
                 font-weight: 500;
-                border-radius: var(--radius-xs, 4px);
-                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                border-radius: 8px;
+                border: 1px solid var(--subtle-border);
+                background: var(--content-background);
+                color: var(--content-color);
+                box-shadow: var(--elevation-1);
                 box-sizing: border-box;
+                transition: background-color var(--duration-fast) var(--easing), border-color var(--duration-fast) var(--easing), color var(--duration-fast) var(--easing);
             }
             oda-button.obj-footer-btn:hover:not([disabled]) {
+                background: var(--accent-soft);
                 border-color: var(--accent-color);
+                color: var(--accent-color);
             }
             oda-button.obj-footer-btn.primary {
                 font-weight: 700;
                 min-width: 72px;
+            }
+            .view-enter {
+                animation: view-fade-in 0.5s ease;
+            }
+            @keyframes view-fade-in {
+                from { opacity: 0; }
+                to { opacity: 1; }
             }
         </style>
         <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
@@ -234,15 +217,13 @@ ODA({is: 'work-form',
                             ></oda-button>
 
                         </div>
-                        <div id="tools" raised no-flex horizontal style="min-height: 32px; align-items: center; gap: 8px; border-bottom: 1px solid;">
+                        <div id="tools" no-flex horizontal style="min-height: 32px; align-items: center; gap: 6px; overflow-x: auto; padding: 2px 2px 4px; border-bottom: 2px solid color-mix(in oklch, var(--accent-back) 65%, transparent);">
                             <item-node
                                 ~for="visibleFormViews"
                                 :$item="$for.item"
                                 :hide-label="view?.id !== $for.item.id"
                                 :icon-size
-                                :content="view?.id === $for.item.id"
-                                :raised="view?.id === $for.item.id"
-                                ~style="{ opacity: view?.id === $for.item.id ? 1 : 0.9, borderRadius: '4px' }"
+                                :light="view?.id === $for.item.id"
                                 @tap.stop="switchView($for.item, $event)"
                                 @pointerdown.stop="view?.id === $for.item.id && openView($event)"
                             >
@@ -255,25 +236,24 @@ ODA({is: 'work-form',
             <oda-button @tap="toggleFullscreen" ~if="currentItem?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
             <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; align-self: flex-start;"></oda-button>
         </div>
-        <div id="formTabsBar" slot="top" class="form-tabs-bar" footer border-bottom horizontal-center no-flex :hidden="!showTabsBar" ~show="showTabsBar">
-            <oda-button id="classTreeToggleBtn" ~if="hasClassTree" no-flex allow-toggle :toggled="!classTreeClosed" icon="icons:tree-structure" :icon-size="18" :title="classTreeClosed ? 'Показать дерево классов' : 'Скрыть дерево классов'" @tap.stop="toggleClassTree($event)" style="border-radius: 4px; margin-bottom: 2px;"></oda-button>
-            <div horizontal-center flex style="gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden;">
-                <div class="form-tab" horizontal-center no-flex border hoverable ~for="formTabs"
-                    ~class="{active: activeTabKey === $for.item.key}"
-                    :content="activeTabKey === $for.item.key"
-                    :light="activeTabKey !== $for.item.key"
-                    :raised="activeTabKey === $for.item.key"
-                    :focused="activeTabKey === $for.item.key"
-                    :bold="activeTabKey === $for.item.key"
-                    :title="$for.item.label" @tap="activateTab($for.item)">
-                    <oda-icon no-flex ~if="$for.item.icon" :icon="$for.item.icon" :icon-size="16"></oda-icon>
-                    <span class="tab-label">{{$for.item.label}}</span>
-                    <oda-icon class="tab-close" no-flex ~if="(formTabs?.length > 1) || $for.item.closable" icon="icons:close" :icon-size="14" title="Закрыть вкладку" @tap.stop="closeTab($for.item, $event)"></oda-icon>
-                </div>
-            </div>
-            <oda-button class="tabs-close-all" no-flex ~if="formTabs?.length > 1" icon="icons:close" :icon-size="16" title="Закрыть все дополнительные вкладки" @tap.stop="closeAllTabs($event)"></oda-button>
+        <div id="formTabsBar" slot="top" class="form-tabs-bar" accent-invert horizontal-center no-flex :hidden="!showTabsBar" ~show="showTabsBar" style="width: 100%; padding: 0 4px 0 8px; gap: 6px; box-sizing: border-box; min-height: 38px;">
+            <oda-button id="classTreeToggleBtn" ~if="hasClassTree" no-flex allow-toggle
+                :light="!classTreeClosed"
+                icon="icons:tree-structure" :icon-size="18"
+                :title="classTreeClosed ? 'Показать дерево классов' : 'Скрыть дерево классов'"
+                @tap.stop="toggleClassTree($event)"
+                style="border-radius: 9px; min-width: 30px; min-height: 30px;"></oda-button>
+            <oda-tabs flex variant="rail" allow-close allow-drag
+                :items="formTabItems" :focused-index="formFocusedTabIndex"
+                @tab-select="onFormTabSelect($event)"
+                @tab-close="onFormTabClose($event)"
+                @close-others="onFormCloseOthers($event)"
+                @close-right="onFormCloseRight($event)"
+                @close-all="closeAllTabs($event)"
+                @reorder="onFormTabsReorder($event)"
+                style="min-width: 0; padding-left: 0; padding-right: 4px;"></oda-tabs>
         </div>
-        <div id="formToolbar" slot="main-top" :hidden="!hasToolbar" ~show="hasToolbar" footer border-bottom horizontal-center no-flex style="padding: 4px 10px; gap: 8px; min-height: 36px; box-sizing: border-box;">
+        <div id="formToolbar" slot="main-top" :hidden="!hasToolbar" ~show="hasToolbar" horizontal-center no-flex style="background: var(--subtle-background); color: var(--content-color); border-bottom: 1px solid var(--subtle-border); padding: 5px 10px; gap: 8px; min-height: 38px; box-sizing: border-box;">
             <div class="toolbar-zone left" horizontal-center no-flex style="gap: 6px;">
                 <item-tools id="topMainTools" :$item="currentItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topMainToolItems" @tools-changed="onToolsListChanged('topMainToolItems', $event)" show-labels></item-tools>
                 <item-tools id="topFocusedTools" focused-only :target-item="focusedItem" :fallback-item="fallbackFocusedItem" :$item="focusedItem" :state-version="focusedStateVersion" filter="button" ::tool-items="topFocusedToolItems" @tools-changed="onToolsListChanged('topFocusedToolItems', $event)" show-labels></item-tools>
@@ -1120,6 +1100,119 @@ ODA({is: 'work-form',
     _mountSeq: 0,
     formTabs: [],
     activeTabKey: '',
+    get formTabItems() {
+        void this.focusedStateVersion;
+        const list = Array.isArray(this.formTabs) ? this.formTabs : [];
+        return list.map((t, idx) => {
+            const ctrl = t.control || this.controls[`${t.key}::${t.viewId}`];
+            const isActive = t.key === this.activeTabKey;
+            const isDirty = isActive
+                ? Boolean(this.allowSave && this.isViewChanged)
+                : Boolean(ctrl && typeof ctrl.isDirty === 'function' && ctrl.isDirty());
+            return {
+                key: t.key,
+                label: t.label,
+                title: t.label,
+                icon: t.icon || 'icons:dashboard',
+                closable: list.length > 1 && t.closable !== false,
+                dirty: isDirty,
+                _index: idx,
+            };
+        });
+    },
+    get formFocusedTabIndex() {
+        const list = Array.isArray(this.formTabs) ? this.formTabs : [];
+        return list.findIndex(t => t.key === this.activeTabKey);
+    },
+    _notifyParentDirty() {
+        if (typeof window === 'undefined' || window.parent === window)
+            return;
+        try {
+            const anyDirty = this.formTabItems.some(t => t.dirty) || Boolean(this.allowSave && this.isViewChanged);
+            window.parent.postMessage({
+                type: 'work:form-dirty',
+                url: window.location.href,
+                dirty: anyDirty,
+            }, window.location.origin);
+        }
+        catch { /* ignore */ }
+    },
+    onFormTabSelect(e) {
+        const idx = e?.detail?.index;
+        const tab = Number.isInteger(idx) ? this.formTabs?.[idx] : null;
+        if (tab)
+            this.activateTab(tab);
+    },
+    onFormTabClose(e) {
+        e?.preventDefault?.();
+        const idx = e?.detail?.index;
+        const tab = Number.isInteger(idx) ? this.formTabs?.[idx] : null;
+        if (tab)
+            this.closeTab(tab, e);
+    },
+    onFormTabsReorder(e) {
+        const nextItems = e?.detail?.items;
+        if (!Array.isArray(nextItems))
+            return;
+        const byKey = new Map((this.formTabs || []).map(t => [t.key, t]));
+        const reordered = nextItems.map(it => byKey.get(it?.key)).filter(Boolean);
+        if (reordered.length === (this.formTabs || []).length)
+            this.formTabs = reordered;
+    },
+    async _closeTabSubset(pred) {
+        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
+        const targets = [];
+        for (let i = 0; i < list.length; i++) {
+            const t = list[i];
+            if (t.closable === false)
+                continue;
+            if (pred(t, i))
+                targets.push(t);
+        }
+        if (!targets.length)
+            return;
+        for (const t of targets) {
+            const ctrl = t.control || this.controls[`${t.key}::${t.viewId}`];
+            if (ctrl && typeof ctrl.isDirty === 'function' && ctrl.isDirty()) {
+                if (typeof ctrl.confirmClose === 'function') {
+                    const canClose = await ctrl.confirmClose();
+                    if (!canClose)
+                        return;
+                }
+            }
+        }
+        const removeKeys = new Set(targets.map(t => t.key));
+        for (const t of targets) {
+            for (const k of Object.keys(this.controls)) {
+                if (k === t.key || k.startsWith(t.key + '::')) {
+                    const c = this.controls[k];
+                    if (c && this.contains(c))
+                        this.removeChild(c);
+                    delete this.controls[k];
+                }
+            }
+        }
+        const remaining = list.filter(t => !removeKeys.has(t.key));
+        if (!remaining.length)
+            return;
+        this.formTabs = remaining;
+        if (!remaining.some(t => t.key === this.activeTabKey)) {
+            await this.activateTab(remaining[remaining.length - 1]);
+        }
+        this._notifyParentDirty();
+    },
+    async onFormCloseOthers(e) {
+        e?.preventDefault?.();
+        const keepKey = e?.detail?.item?.key || this.formTabs?.[e?.detail?.index]?.key;
+        if (keepKey)
+            await this._closeTabSubset(t => t.key !== keepKey);
+    },
+    async onFormCloseRight(e) {
+        e?.preventDefault?.();
+        const idx = e?.detail?.index;
+        if (Number.isInteger(idx) && idx >= 0)
+            await this._closeTabSubset((_, i) => i > idx);
+    },
     _newObjSeq: 0,
     topMainToolItems: [],
     topFocusedToolItems: [],
@@ -1205,6 +1298,7 @@ ODA({is: 'work-form',
             }
         }
         this.async(() => this._wakeBars(), 10);
+        this._notifyParentDirty();
     },
     get $focusedItem() {
         return this.focusedItem;
@@ -1547,37 +1641,12 @@ ODA({is: 'work-form',
             const nextTab = list[Math.max(0, idx - 1)];
             await this.activateTab(nextTab);
         }
+        this._notifyParentDirty();
     },
     async closeAllTabs(e) {
+        e?.preventDefault?.();
         e?.stopPropagation?.();
-        const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
-        if (list.length <= 1)
-            return;
-        for (let i = list.length - 1; i >= 1; i--) {
-            const t = list[i];
-            const ctrl = t.control || this.controls[`${t.key}::${t.viewId}`];
-            if (ctrl && typeof ctrl.isDirty === 'function' && ctrl.isDirty()) {
-                if (typeof ctrl.confirmClose === 'function') {
-                    const canClose = await ctrl.confirmClose();
-                    if (!canClose)
-                        return;
-                }
-            }
-        }
-        for (let i = list.length - 1; i >= 1; i--) {
-            const t = list[i];
-            for (const k of Object.keys(this.controls)) {
-                if (k === t.key || k.startsWith(t.key + '::')) {
-                    const c = this.controls[k];
-                    if (c && this.contains(c))
-                        this.removeChild(c);
-                    delete this.controls[k];
-                }
-            }
-        }
-        const rootTab = list[0];
-        this.formTabs = [rootTab];
-        await this.activateTab(rootTab);
+        await this._closeTabSubset(() => true);
     },
     async closeActiveTab(reloadPrevious = false) {
         const list = Array.isArray(this.formTabs) ? [...this.formTabs] : [];
@@ -1602,6 +1671,7 @@ ODA({is: 'work-form',
                 await nextTab.control.reload();
             }
         }
+        this._notifyParentDirty();
     },
     async reloadSiblingLists() {
         const list = Array.isArray(this.formTabs) ? this.formTabs : [];

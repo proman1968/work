@@ -187,37 +187,19 @@ ODA({ is: 'microchat-header',
 });
 
 ODA({ is: 'microchat-dock',
-    imports: 'oda//button, oda//icon',
+    imports: 'oda//button, oda//icon, oda//tabs',
     template: /*html*/`
         <style>
             :host { @apply --vertical; overflow: hidden; min-width: 0; border-left: 1px solid var(--border-color); background: var(--content-background); }
-            .tabs { @apply --horizontal-center; @apply --footer; @apply --border-bottom; gap: 4px; padding: 2px 6px 0 6px; overflow-x: auto; overflow-y: hidden; box-sizing: border-box; }
-            .tab {
-                @apply --horizontal-center; @apply --no-flex; @apply --border;
-                gap: 6px; max-width: 220px; padding: 3px 8px;
-                border-radius: 8px 8px 0 0;
-                cursor: pointer; font-size: small; user-select: none; box-sizing: border-box;
-            }
-            .tab:hover { @apply --hover; }
-            .tab:focus-visible { @apply --focus-ring; }
-            .tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            .tab i { font-style: normal; font-size: x-small; font-weight: 600; min-width: 16px; height: 16px; padding: 0 4px; box-sizing: border-box; text-align: center; line-height: 16px; background: var(--accent-soft); }
+            .tabs-bar { @apply --horizontal-center; background: var(--subtle-background); border-bottom: 1px solid var(--subtle-border); gap: 4px; padding-right: 6px; }
+            .tabs-bar oda-tabs { border-bottom: none; min-width: 0; }
             .sheet { overflow: hidden; min-height: 0; }
         </style>
-        <div class="tabs" no-flex role="tablist">
-            <div class="tab" ~for="tabs" role="tab" tabindex="0"
-                :aria-selected="tab === $for.item.id ? 'true' : 'false'"
-                :on="tab === $for.item.id"
-                :content="tab === $for.item.id"
-                :light="tab !== $for.item.id"
-                :raised="tab === $for.item.id"
-                :focused="tab === $for.item.id"
-                :bold="tab === $for.item.id"
-                :title="$for.item.title" @tap="select($for.item.id)" @keydown="tabKey($event, $for.item.id)">
-                <oda-icon no-flex :icon="$for.item.icon" :icon-size="16"></oda-icon><span>{{$for.item.label}}</span><i ~if="$for.item.count">{{$for.item.count}}</i>
-            </div>
-            <div flex></div>
-            <oda-button no-flex icon="icons:close" :icon-size="16" title="Скрыть доки" @tap="hide" style="align-self: center;"></oda-button>
+        <div class="tabs-bar" no-flex>
+            <oda-tabs class="tabs" flex variant="bar" compact :allow-list="false"
+                :items="tabs" :focused-index="dockTabIndex"
+                @tab-select="onDockTabSelect($event)"></oda-tabs>
+            <oda-button no-flex icon="icons:close" :icon-size="16" title="Скрыть доки" @tap="hide" style="border-radius: 8px;"></oda-button>
         </div>
         <div class="sheet" flex vertical>
             <div flex vertical ~if="tab === 'context'" style="min-height:0"><microchat-context flex></microchat-context></div>
@@ -245,6 +227,15 @@ ODA({ is: 'microchat-dock',
         if (this.hasResults)
             list.push({ id: 'results', label: 'Результаты', icon: 'carbon:report', title: 'Результаты работы', count: this.results.length });
         return list;
+    },
+    get dockTabIndex() {
+        const idx = this.tabs.findIndex(t => t.id === this.tab);
+        return idx >= 0 ? idx : 0;
+    },
+    onDockTabSelect(e) {
+        const item = e?.detail?.item || this.tabs?.[e?.detail?.index];
+        if (item?.id)
+            this.select(item.id);
     },
     select(key) { this.shell?.selectTab(key); },
     tabKey(e, key) {

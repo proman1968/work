@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Единые табы oda-tabs (UI-тесты)</title></head>
+<body>
+<script type="module">
+await import('/sources/client.js');
+await import('/oda/components/layouts/tabs/tabs.js');
+await ODA.waitReg('oda-tabs');
+await ODA.waitReg('oda-tabs-tab');
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try { await fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, error: String(e?.stack || e) }); }
+}
+const assert = (v, msg) => { if (!v) throw new Error(msg || 'assert'); };
+const eq = (a, b, msg) => { if (a !== b) throw new Error((msg || 'eq') + ': ' + JSON.stringify(a) + ' !== ' + JSON.stringify(b)); };
+const tick = (ms = 80) => new Promise(r => setTimeout(r, ms));
+
+const makeTabs = async (props = {}) => {
+    const el = document.createElement('oda-tabs');
+    Object.assign(el, props);
+    document.body.appendChild(el);
+    await tick(120);
+    return el;
+};
+
+await test('oda-tabs: капсульная геометрия без рамок у неактивных вкладок и приоритет активной при сжатии', async () => {
+    const wrap = document.createElement('div');
+    wrap.style.width = '460px';
+    document.body.appendChild(wrap);
+    const tabs = document.createElement('oda-tabs');
+    tabs.variant = 'rail';
+    tabs.allowClose = true;
+    tabs.items = Array.from({ length: 12 }, (_, i) => ({
+        label: `Очень длинное название вкладки номер ${i + 1}`,
+        icon: 'icons:dashboard',
+        dirty: i === 2,
+        closable: i !== 0,
+    }));
+    tabs.focusedIndex = 5;
+    wrap.appendChild(tabs);
+    await tick(150);
+
+    const tabEls = tabs.$$('oda-tabs-tab');
+    eq(tabEls.length, 12, 'рендерятся все 12 вкладок');
+
+    const inactiveStyle = getComputedStyle(tabEls[1]);
+    eq(inactiveStyle.borderTopWidth, '0px', 'нет обводки у неактивной вкладки');
+    eq(inactiveStyle.borderRadius, '9px', 'скруглённая капсула со всех сторон');
+
+    const activeRect = tabEls[5].getBoundingClientRect();
+    const inactiveRect = tabEls[1].getBoundingClientRect();
+    assert(activeRect.width > inactiveRect.width * 1.5, `активная шире сжатых неактивных (${activeRect.width} > ${inactiveRect.width})`);
+    assert(tabEls[0].$$('.close-btn').length === 0, 'при closable:false крестика нет');
+    assert(tabEls[2].$$('.dirty-dot').length === 1, 'при dirty:true отображается точка-индикатор');
+    assert(tabs.$$('.list-btn').length === 1, 'справа отображается кнопка списка вкладок ▾');
+
+    wrap.remove();
+});
+
+await test('oda-tabs: выбор вкладки, закрытие по крестику и среднему клику', async () => {
+    const selected = [];
+    const closed = [];
+    const tabs = await makeTabs({
+        variant: 'bar',
+        allowClose: true,
+        items: [
+            { label: 'Первая', icon: 'icons:home', closable: false },
+            { label: 'Вторая', icon: 'icons:folder' },
+            { label: 'Третья', icon: 'icons:settings' },
+        ],
+        focusedIndex: 0,
+    });
+    tabs.addEventListener('tab-select', e => selected.push(e.detail.index));
+    tabs.addEventListener('tab-close', e => { e.preventDefault(); closed.push(e.detail.index); });
+
+    const tabEls = tabs.$$('oda-tabs-tab');
+    tabEls[1].$('.panel').click();
+    await tick(80);
+    eq(tabs.focusedIndex, 1, 'клик переключает focusedIndex');
+    eq(selected.at(-1), 1, 'событие tab-select передаёт индекс');
+
+    tabEls[1].$('.close-btn').click();
+    await tick(60);
+    eq(closed.at(-1), 1, 'клик по крестику шлёт tab-close');
+
+    tabEls[2].dispatchEvent(new MouseEvent('auxclick', { button: 1, bubbles: true, composed: true }));
+    await tick(60);
+    eq(closed.at(-1), 2, 'средний клик закрывает вкладку');
+
+    tabs.remove();
+});
+
+await test('oda-tabs: смена --main-color автоматически перекрашивает variant="rail" и variant="pills" без кнопки списка', async () => {
+    const rail = await makeTabs({
+        variant: 'rail',
+        items: [{ label: 'Окно 1', icon: 'icons:dashboard' }],
+        focusedIndex: 0,
+    });
+    const bgBefore = getComputedStyle(rail).backgroundColor;
+    document.documentElement.style.setProperty('--main-color', '#0d9488');
+    await tick(80);
+    const bgAfter = getComputedStyle(rail).backgroundColor;
+    assert(bgBefore !== bgAfter, `фон rail меняется при смене --main-color (${bgBefore} -> ${bgAfter})`);
+    document.documentElement.style.removeProperty('--main-color');
+
+    const pills = await makeTabs({
+        variant: 'pills',
+        items: [
+            { label: 'Все', count: 12, showZeroCount: true },
+            { label: 'Файлы', count: 0, showZeroCount: true },
+        ],
+        focusedIndex: 0,
+    });
+    eq(pills.$$('.list-btn').length, 0, 'в режиме pills кнопки списка нет');
+    eq(pills.$$('oda-tabs-tab')[0].$('.tab-badge')?.textContent?.trim(), '12', 'отображается счётчик-бейдж');
+
+    rail.remove();
+    pills.remove();
+});
+
+await test('oda-tabs: тёмная тема и кнопки закрытия нескольких вкладок (others / right / all)', async () => {
+    const events = [];
+    document.documentElement.style.colorScheme = 'dark';
+    const tabs = await makeTabs({
+        variant: 'bar',
+        allowClose: true,
+        items: [
+            { label: 'Корень', icon: 'icons:home', closable: false },
+            { label: 'Справочник', icon: 'icons:folder' },
+            { label: 'Операция', icon: 'icons:receipt' },
+            { label: 'Отчёт', icon: 'icons:assessment' },
+        ],
+        focusedIndex: 1,
+    });
+    const darkBg = getComputedStyle(tabs).backgroundColor;
+    assert(darkBg && darkBg !== 'rgba(0, 0, 0, 0)', 'у bar в тёмной теме задан фон');
+
+    tabs.addEventListener('close-others', e => { e.preventDefault(); events.push(['others', e.detail.index]); });
+    tabs.addEventListener('close-right', e => { e.preventDefault(); events.push(['right', e.detail.index]); });
+    tabs.addEventListener('close-all', e => { e.preventDefault(); events.push(['all', e.detail.items.length]); });
+
+    await tabs.closeOthers(1);
+    await tabs.closeRight(1);
+    await tabs.closeAll();
+    eq(JSON.stringify(events), JSON.stringify([['others', 1], ['right', 1], ['all', 4]]), 'события массового закрытия передают корректные параметры');
+
+    document.documentElement.style.colorScheme = '';
+    tabs.remove();
+});
+
+await test('work-form: кнопка #classTreeToggleBtn видна и #formTabsBar на фоне --main-color', async () => {
+    const formUrl = '/$server/$folder/handlers/pages/form/$handler/form.js';
+    const formMod = await import(formUrl);
+    await ODA.waitReg('work-form');
+    const wf = document.createElement('work-form');
+    wf.$item = {
+        short: '/ORGANIZATIONS/Маслоторг/Бухгалтерия/REGISTER',
+        path: '/ORGANIZATIONS/Маслоторг/Бухгалтерия/REGISTER',
+        id: 'REGISTER',
+        type: '$register',
+        DATA: { label: 'Журнал проводок' },
+    };
+    wf.formTabs = [
+        { key: 'tab1', label: 'Журнал проводок', icon: 'odant:grid', closable: false },
+        { key: 'tab2', label: '58 Финансовые вложения', icon: 'odant:calendar', closable: true },
+    ];
+    wf.activeTabKey = 'tab2';
+    document.body.appendChild(wf);
+    await tick(180);
+
+    const bar = wf.$('#formTabsBar');
+    const btn = wf.$('#classTreeToggleBtn');
+    const innerTabs = bar?.querySelector('oda-tabs');
+    assert(!!bar, '#formTabsBar существует');
+    assert(!!btn, 'кнопка #classTreeToggleBtn присутствует');
+    const btnRect = btn.getBoundingClientRect();
+    const tabsRect = innerTabs.getBoundingClientRect();
+    assert(btnRect.width > 0, 'кнопка #classTreeToggleBtn имеет ненулевую ширину');
+    assert(btnRect.right <= tabsRect.left + 4, `кнопка дерева слева перед табами (${btnRect.right} <= ${tabsRect.left})`);
+    assert(Math.abs(btnRect.top - tabsRect.top) < 14, `кнопка дерева на одной строке с табами (top: ${btnRect.top} vs ${tabsRect.top})`);
+    assert(!!innerTabs && innerTabs.getAttribute('variant') === 'rail', 'табы формы используют variant="rail" (--main-color)');
+    const tools = wf.$('#tools');
+    assert(!!tools && getComputedStyle(tools).borderBottomWidth === '2px', 'у группы VIEW (#tools) подчёркивание 2px');
+    assert(getComputedStyle(bar).borderTopWidth === '0px', 'белой полосы над #formTabsBar нет');
+    const barBg = getComputedStyle(bar).backgroundColor;
+    assert(barBg !== 'rgba(0, 0, 0, 0)' && barBg !== 'rgb(255, 255, 255)', `фон #formTabsBar цветной (${barBg})`);
+
+    wf.remove();
+});
+
+await test('oda-table: зебра evenOdd включена по умолчанию', async () => {
+    await import('/oda/components/table/table.js');
+    await ODA.waitReg('oda-table');
+    await ODA.waitReg('oda-table-row');
+    await ODA.waitReg('oda-table-cell');
+    const tbl = document.createElement('oda-table');
+    tbl.style.cssText = 'width: 400px; height: 180px;';
+    tbl.metadata = [{ name: 'name', label: 'Название' }];
+    tbl.dataSet = [{ name: 'Строка 1' }, { name: 'Строка 2' }, { name: 'Строка 3' }];
+    document.body.appendChild(tbl);
+    await tick(180);
+    assert(tbl.evenOdd === true, 'evenOdd включён по умолчанию');
+    const rows = tbl.$$('oda-table-row');
+    assert(rows.length >= 2, 'строки отрендерены');
+    assert(rows[1].hasAttribute('odd'), `вторая строка имеет атрибут odd (index=${JSON.stringify(rows[1].index)}, odd=${rows[1].odd}, evenOdd=${rows[1].host?.evenOdd}, table=${!!rows[1].table}, attrs=${rows[1].getAttributeNames().join(',')})`);
+    const bg0 = getComputedStyle(rows[0].$('oda-table-cell')).backgroundColor;
+    const bg1 = getComputedStyle(rows[1].$('oda-table-cell')).backgroundColor;
+    assert(bg0 !== bg1, `фон чётной и нечётной строки отличается (${bg0} vs ${bg1})`);
+    tbl.remove();
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

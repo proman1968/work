@@ -418,23 +418,31 @@ ODA({
             .sheet-tabs {
                 @apply --horizontal;
                 align-items: center;
-                gap: 2px;
+                gap: 4px;
             }
             .sheet-tab {
                 padding: 4px 12px;
-                border: 1px solid var(--border-color);
-                border-bottom: none;
-                border-radius: 4px 4px 0 0;
-                background: var(--subtle-background);
+                border: none;
+                border-radius: 7px;
+                background: transparent;
                 color: var(--content-color);
-                font-size: 12px;
+                opacity: 0.78;
+                font-size: 12.5px;
                 cursor: pointer;
+                transition: background-color var(--duration-fast) var(--easing),
+                            box-shadow var(--duration-fast) var(--easing),
+                            opacity var(--duration-fast) var(--easing);
+            }
+            .sheet-tab:hover {
+                opacity: 1;
+                background: color-mix(in oklch, var(--content-color) 6%, transparent);
             }
             .sheet-tab[active] {
+                opacity: 1;
                 background: var(--content-background);
                 color: var(--accent-color);
-                font-weight: 700;
-                border-top: 2px solid var(--accent-color);
+                box-shadow: var(--elevation-1);
+                font-weight: 600;
             }
             .sheet-stats {
                 font-size: 12px;

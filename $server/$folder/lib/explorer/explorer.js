@@ -1,6 +1,6 @@
 export default {
     icon: 'odant:structure',
-    imports: 'oda//app-layout.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js, ~/lib//class-picker.js',
+    imports: 'oda//app-layout.js, oda//tabs.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js, ~/lib//class-picker.js',
     extends: 'oda-app-layout',
     template: /*html*/`
         <item-tree order="0" slot='left-panel' allow-search :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
@@ -13,16 +13,17 @@ export default {
                 <iframe ~show="focusedPage === $for.item" style="border: none;" flex ~for="pages" :src="$for.item"></iframe>
             </div>
         </div>
-        <div id="bookmarksBar" slot="footer" class="pe-no-print" footer border-top horizontal-center no-flex :hidden="!hasBookmarks" ~show="hasBookmarks" style="gap: 4px; padding: 0 6px 2px 6px; overflow: hidden; z-index: 2;">
-            <div horizontal-center flex style="gap: 4px; min-width: 0; overflow-x: auto; overflow-y: hidden;">
-                <div ~for="bookmarks" horizontal-center no-flex border hoverable :content="isActiveBookmark($for.item)" :light="!isActiveBookmark($for.item)" :raised="isActiveBookmark($for.item)" :focused="isActiveBookmark($for.item)" :bold="isActiveBookmark($for.item)" :title="$for.item.title || $for.item.short" @tap="activateBookmark($for.item)" @auxclick="onBookmarkAuxClick($for.item, $event)" style="gap: 6px; padding: 3px 8px; max-width: 220px; border-radius: 0 0 8px 8px; cursor: pointer;">
-                    <oda-icon no-flex :icon="$for.item.icon || 'icons:dashboard'" :icon-size="16"></oda-icon>
-                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{$for.item.label}}</span>
-                    <oda-icon no-flex icon="icons:close" :icon-size="14" title="Закрыть форму" @tap.stop="closeBookmark($for.item, $event)"></oda-icon>
-                </div>
-            </div>
-            <oda-button ~if="bookmarks.length > 1" no-flex icon="icons:close" :icon-size="16" title="Закрыть все открытые формы" @tap.stop="closeAllBookmarks($event)"></oda-button>
-        </div>
+        <oda-tabs id="bookmarksBar" slot="footer" class="pe-no-print" variant="rail" allow-close allow-drag
+            :hidden="!hasBookmarks" ~show="hasBookmarks"
+            :items="bookmarkTabItems" :focused-index="bookmarkFocusedIndex"
+            @tab-select="onBookmarkSelect($event)"
+            @tab-close="onBookmarkClose($event)"
+            @close-others="onBookmarkCloseOthers($event)"
+            @close-right="onBookmarkCloseRight($event)"
+            @close-all="closeAllBookmarks($event)"
+            @reorder="onBookmarksReorder($event)"
+            style="z-index: 2;">
+        </oda-tabs>
     `,
     visibleMode: 'main',
     showSize: false,
@@ -31,6 +32,18 @@ export default {
     focusedPage: '',
     get hasBookmarks() {
         return !this.mobile && Array.isArray(this.bookmarks) && this.bookmarks.length > 0 && this.visibleMode === 'main';
+    },
+    get bookmarkTabItems() {
+        return (this.bookmarks || []).map(b => ({
+            ...b,
+            closable: true,
+            dirty: Boolean(b.dirty),
+        }));
+    },
+    get bookmarkFocusedIndex() {
+        if (this.visibleMode !== 'main' || !this.focusedPage)
+            return -1;
+        return (this.bookmarks || []).findIndex(b => b.url === this.focusedPage);
     },
     isActiveBookmark(bm) {
         return Boolean(bm && this.focusedPage === bm.url && this.visibleMode === 'main');
@@ -433,6 +446,67 @@ export default {
             await matchedTree.revealPath(clean);
         }
     },
+    onBookmarkSelect(e) {
+        const idx = e?.detail?.index;
+        const bm = Number.isInteger(idx) ? this.bookmarks?.[idx] : e?.detail?.item;
+        if (bm)
+            this.activateBookmark(bm);
+    },
+    onBookmarkClose(e) {
+        e?.preventDefault?.();
+        const idx = e?.detail?.index;
+        const bm = Number.isInteger(idx) ? this.bookmarks?.[idx] : e?.detail?.item;
+        if (bm)
+            this.closeBookmark(bm, e);
+    },
+    onBookmarkCloseOthers(e) {
+        e?.preventDefault?.();
+        const keepUrl = e?.detail?.item?.url || this.bookmarks?.[e?.detail?.index]?.url;
+        if (!keepUrl)
+            return;
+        const keepBm = (this.bookmarks || []).find(b => b.url === keepUrl);
+        if (!keepBm)
+            return;
+        for (const b of this.bookmarks || []) {
+            if (b.url !== keepUrl)
+                this.pages.remove(b.url);
+        }
+        this.bookmarks = [keepBm];
+        if (this.focusedPage !== keepUrl)
+            this.activateBookmark(keepBm);
+        else
+            this._saveBookmarksState();
+    },
+    onBookmarkCloseRight(e) {
+        e?.preventDefault?.();
+        const idx = e?.detail?.index;
+        if (!Number.isInteger(idx) || idx < 0)
+            return;
+        const list = [...(this.bookmarks || [])];
+        const removed = list.splice(idx + 1);
+        for (const b of removed)
+            this.pages.remove(b.url);
+        this.bookmarks = list;
+        if (removed.some(b => b.url === this.focusedPage)) {
+            const next = list.at(-1);
+            if (next)
+                this.activateBookmark(next);
+        }
+        else {
+            this._saveBookmarksState();
+        }
+    },
+    onBookmarksReorder(e) {
+        const nextItems = e?.detail?.items;
+        if (!Array.isArray(nextItems))
+            return;
+        const byUrl = new Map((this.bookmarks || []).map(b => [b.url, b]));
+        const reordered = nextItems.map(it => byUrl.get(it?.url)).filter(Boolean);
+        if (reordered.length === (this.bookmarks || []).length) {
+            this.bookmarks = reordered;
+            this._saveBookmarksState();
+        }
+    },
     activateBookmark(bm) {
         if (!bm?.url)
             return;
@@ -473,6 +547,7 @@ export default {
         }
     },
     closeAllBookmarks(e) {
+        e?.preventDefault?.();
         e?.stopPropagation?.();
         this.pages.splice(0, this.pages.length);
         this.bookmarks = [];
@@ -540,6 +615,24 @@ export default {
             }
         })
         window.explorer = this;
+        if (!this._dirtyMsgBound && typeof window !== 'undefined') {
+            this._dirtyMsgBound = true;
+            window.addEventListener('message', (ev) => {
+                if (ev.origin !== window.location.origin)
+                    return;
+                const d = ev.data;
+                if (d?.type !== 'work:form-dirty' || !d.url)
+                    return;
+                const norm = (u) => { try { return decodeURI(String(u)); } catch { return String(u); } };
+                const targetUrl = norm(d.url);
+                const list = this.bookmarks || [];
+                const bm = list.find(b => b.url === d.url || norm(b.url) === targetUrl);
+                if (bm && Boolean(bm.dirty) !== Boolean(d.dirty)) {
+                    bm.dirty = Boolean(d.dirty);
+                    this.bookmarks = [...list];
+                }
+            });
+        }
         this._refreshLeftButtons();
         this._initTopLicenseBanner();
         WORK.authEvents?.addEventListener('auth', () => {

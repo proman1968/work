@@ -182,7 +182,7 @@ export default {
                 </select>
             </div>
             <div class="error" ~if="error && !editorOpen">{{error}}</div>
-            <oda-table id="objectsTable" allow-focus allow-selection col-lines row-lines readonly ::focused-row="focusedRow" ::selected-rows="selectedRows"
+            <oda-table id="objectsTable" allow-focus allow-selection even-odd col-lines row-lines readonly ::focused-row="focusedRow" ::selected-rows="selectedRows"
                 :metadata="tableMetadata" :data-set="tableRows"
                 :$save-key="$item?.short || $item?.path" @click="onTableClick($event)" @dblclick="onTableDblClick($event)" @cell-link-click="onCellLinkClick($event)" @row-contextmenu="onRowContextMenu($event)"></oda-table>
             <div class="grid-footer">

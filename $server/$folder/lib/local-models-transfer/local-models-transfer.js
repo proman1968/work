@@ -25,32 +25,6 @@ const TRANSFER_STYLE = /*css*/`
     .between {
         justify-content: space-between;
     }
-    .tabs {
-        display: flex;
-        gap: 4px;
-        border-bottom: 1px solid var(--border-color, #cbd5e1);
-    }
-    .tab-btn {
-        appearance: none;
-        border: none;
-        border-bottom: 2px solid transparent;
-        background: transparent;
-        color: inherit;
-        opacity: 0.72;
-        padding: 7px 14px;
-        font-size: 13px;
-        font-weight: 600;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    .tab-btn:hover { opacity: 1; }
-    .tab-btn.active {
-        opacity: 1;
-        color: var(--accent-color, #2563eb);
-        border-bottom-color: var(--accent-color, #2563eb);
-    }
     .pill {
         appearance: none;
         display: inline-flex;
@@ -253,7 +227,7 @@ function fmtEta(sec) {
 
 ODA({
     is: 'item-local-models-transfer',
-    imports: 'oda//icon',
+    imports: 'oda//icon, oda//tabs',
     template: /*html*/`
     <style>${TRANSFER_STYLE}</style>
 
@@ -298,16 +272,7 @@ ODA({
 
     <!-- Вкладки Выгрузка / Загрузка -->
     <div class="row between">
-        <div class="tabs">
-            <button type="button" class="tab-btn" ~class="{'active': mode === 'export'}" @tap="switchMode('export')">
-                <oda-icon icon="carbon:upload" icon-size="16"></oda-icon>
-                <span>Выгрузить (Бэкап)</span>
-            </button>
-            <button type="button" class="tab-btn" ~class="{'active': mode === 'import'}" @tap="switchMode('import')">
-                <oda-icon icon="carbon:download" icon-size="16"></oda-icon>
-                <span>Загрузить (Восстановить)</span>
-            </button>
-        </div>
+        <oda-tabs variant="pills" :allow-list="false" :items="transferTabItems" :focused-index="transferTabIndex" @tab-select="onTransferTabSelect($event)"></oda-tabs>
         <div class="row">
             <button type="button" class="pill" ~class="{'active': transport === 'disk'}" @tap="transport = 'disk'">
                 <oda-icon icon="carbon:usb" icon-size="14"></oda-icon>
@@ -565,6 +530,21 @@ ODA({
 
     $item: null,
     mode: 'export',
+    get transferTabItems() {
+        return [
+            { id: 'export', label: 'Выгрузить (Бэкап)', icon: 'carbon:upload' },
+            { id: 'import', label: 'Загрузить (Восстановить)', icon: 'carbon:download' },
+        ];
+    },
+    get transferTabIndex() {
+        const idx = this.transferTabItems.findIndex(t => t.id === this.mode);
+        return idx >= 0 ? idx : 0;
+    },
+    onTransferTabSelect(e) {
+        const id = e?.detail?.item?.id;
+        if (id)
+            this.switchMode(id);
+    },
     transport: 'disk',
     roots: [],
     dirInfo: null,

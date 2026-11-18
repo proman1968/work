@@ -1,5 +1,5 @@
 export default {
-    imports: 'oda//button, oda//icon',
+    imports: 'oda//button, oda//icon, oda//tabs',
     template: /* html */`
         <style>
             :host {
@@ -50,34 +50,6 @@ export default {
             }
             .db-badge b {
                 font-weight: 600;
-            }
-            .mode-tabs {
-                @apply --horizontal;
-                gap: 4px;
-                background: var(--content-background);
-                padding: 2px;
-                border-radius: 8px;
-                border: 1px solid var(--border-color);
-            }
-            .mode-tab {
-                @apply --horizontal;
-                align-items: center;
-                gap: 6px;
-                padding: 4px 10px;
-                border-radius: 6px;
-                cursor: pointer;
-                font-size: 12px;
-                font-weight: 600;
-                user-select: none;
-                color: var(--content-color);
-            }
-            .mode-tab:hover {
-                background: var(--subtle-background);
-            }
-            .mode-tab.active {
-                background: var(--accent-color);
-                color: var(--accent-back);
-                fill: var(--accent-back);
             }
             .workspace {
                 @apply --horizontal;
@@ -548,20 +520,7 @@ export default {
                 </div>
             </div>
             <div class="top-right">
-                <div class="mode-tabs">
-                    <div class="mode-tab" ~class="{ active: viewMode === 'rows' }" @tap="setViewMode('rows')">
-                        <oda-icon icon="carbon:table-split" :icon-size="16"></oda-icon>
-                        <span>Таблицы и записи</span>
-                    </div>
-                    <div class="mode-tab" ~class="{ active: viewMode === 'er' }" @tap="setViewMode('er')">
-                        <oda-icon icon="carbon:network-3" :icon-size="16"></oda-icon>
-                        <span>Схема и связи (ER)</span>
-                    </div>
-                    <div class="mode-tab" ~class="{ active: viewMode === 'ddl' }" @tap="setViewMode('ddl')">
-                        <oda-icon icon="carbon:code" :icon-size="16"></oda-icon>
-                        <span>Структура и DDL</span>
-                    </div>
-                </div>
+                <oda-tabs variant="pills" compact :allow-list="false" :items="dbModeTabItems" :focused-index="dbModeTabIndex" @tab-select="onDbModeTabSelect($event)"></oda-tabs>
                 <button class="btn" @tap="reloadAll()" :disabled="loading">
                     <oda-icon icon="icons:refresh" :icon-size="16"></oda-icon>
                     <span>Обновить</span>
@@ -939,6 +898,22 @@ export default {
         showShadowTables: false,
         activeTableName: '',
         viewMode: 'rows', // 'rows' | 'er' | 'ddl'
+        get dbModeTabItems() {
+            return [
+                { id: 'rows', label: 'Таблицы и записи', icon: 'carbon:table-split' },
+                { id: 'er', label: 'Схема и связи (ER)', icon: 'carbon:network-3' },
+                { id: 'ddl', label: 'Структура и DDL', icon: 'carbon:code' },
+            ];
+        },
+        get dbModeTabIndex() {
+            const idx = this.dbModeTabItems.findIndex(t => t.id === this.viewMode);
+            return idx >= 0 ? idx : 0;
+        },
+        onDbModeTabSelect(e) {
+            const id = e?.detail?.item?.id;
+            if (id)
+                this.setViewMode(id);
+        },
         erSelectedTable: '',
 
         rows: { $def: [] },

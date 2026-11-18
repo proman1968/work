@@ -11,9 +11,9 @@ export default {
                 gap: 6px;
             }
             .item {
-                scale: .8;
+                scale: .84;
                 border: none;
-                border-radius: 4px;
+                border-radius: 8px;
             }
             .service-wrap {
                 @apply --horizontal-center;
@@ -24,18 +24,36 @@ export default {
                 min-height: 28px;
                 padding: 4px 12px;
                 gap: 6px;
-                font-size: 13px;
+                font-size: 12.5px;
                 font-weight: 500;
-                border-radius: var(--radius-xs, 4px);
-                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+                border-radius: 8px;
+                border: 1px solid var(--subtle-border);
+                background: var(--content-background);
+                color: var(--content-color);
+                fill: var(--content-color);
+                box-shadow: var(--elevation-1);
                 box-sizing: border-box;
+                transition: background-color var(--duration-fast) var(--easing),
+                            border-color var(--duration-fast) var(--easing),
+                            color var(--duration-fast) var(--easing),
+                            box-shadow var(--duration-fast) var(--easing),
+                            opacity var(--duration-fast) var(--easing);
             }
             oda-button.service-btn:hover:not([disabled]) {
+                background: var(--accent-soft);
                 border-color: var(--accent-color);
+                color: var(--accent-color);
+                fill: var(--accent-color);
+            }
+            oda-button.service-btn[disabled] {
+                opacity: 0.45;
+                box-shadow: none;
+                background: transparent;
+                border-color: var(--subtle-border);
             }
         </style>
         <div class="service-wrap" ~show="showLabels && toolItems?.length">
-            <oda-button class="service-btn" content border hoverable ~for="toolItems"
+            <oda-button class="service-btn" hoverable ~for="toolItems"
                 :icon="$for.item?.icon || ''"
                 :icon-size="18"
                 :label="$for.item?.label || $for.item?.id"

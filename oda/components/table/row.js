@@ -69,7 +69,7 @@ ODA({
                 --row-color: var(--selected-color);
             }
             :host([odd]:not([selected]):not([focused])) {
-                --row-surface: color-mix(in oklch, var(--content-color) 4%, var(--content-background));
+                --row-surface: color-mix(in oklch, var(--content-color) 5%, var(--content-background));
             }
             :host([selected]) {
                 --row-surface: var(--selected-background);
@@ -87,10 +87,11 @@ ODA({
     `,
     $public: {
         row: {},
-        index: {}
+        index: {},
+        table: null
     },
     get host() {
-        return this.getRootNode?.()?.host;
+        return this.table || this.getRootNode?.()?.host;
     },
     get groupTitle() {
         const v = this.row?.value;
@@ -212,10 +213,11 @@ ODA({
     },
     odd: {
         $def: false,
+        $type: Boolean,
         $attr: true,
         get() {
             const host = this.host;
-            return host?.evenOdd ? oddAt(host?.screenTopRowIndex, this.index) : 0;
+            return Boolean(host?.evenOdd && oddAt(host?.screenTopRowIndex, this.index));
         }
     },
     colLines: {

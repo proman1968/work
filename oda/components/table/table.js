@@ -165,7 +165,7 @@ ODA({
         <div class="scroller" vertical flex ~style="gridVars" @scroll="onScroll($event)">
             <oda-table-header :layout="layout" :col-lines :row-lines></oda-table-header>
             <div class="v-spacer" ~if="topSpacerHeight" ~style="{height: topSpacerHeight + 'px'}"></div>
-            <oda-table-row ~for="rows" :row="$for.item" :index="$for.index"></oda-table-row>
+            <oda-table-row ~for="rows" :row="$for.item" :index="$for.index" :table="this"></oda-table-row>
             <div class="v-spacer" ~if="bottomSpacerHeight" ~style="{height: bottomSpacerHeight + 'px'}"></div>
         </div>
     `,
@@ -231,7 +231,7 @@ ODA({
         },
         /** зебра: соседние строки чередуются по фону */
         evenOdd: {
-            $def: false,
+            $def: true,
             $type: Boolean,
             $attr: true
         },
