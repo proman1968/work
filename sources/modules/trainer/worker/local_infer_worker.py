@@ -257,10 +257,71 @@ class LocalCausalLM:
         return int(sorted_indices[sampled_idx].item())
 
 
+_CPU_BF16_OK = None
+
+
+def _cpu_supports_bf16():
+    global _CPU_BF16_OK
+    if _CPU_BF16_OK is not None:
+        return _CPU_BF16_OK
+    if not HAS_TORCH:
+        _CPU_BF16_OK = False
+        return False
+    try:
+        a = torch.ones((2, 8), dtype=torch.bfloat16)
+        b = torch.ones((4, 8), dtype=torch.bfloat16)
+        _ = F.linear(a, b)
+        _CPU_BF16_OK = True
+    except Exception:
+        _CPU_BF16_OK = False
+    return _CPU_BF16_OK
+
+
 def _best_device_and_dtype():
     if torch.cuda.is_available():
         return "cuda", torch.bfloat16
-    return "cpu", torch.float32
+    return "cpu", (torch.bfloat16 if _cpu_supports_bf16() else torch.float32)
+
+
+def _find_onnx_file(weights_dir):
+    for sub in ("", "onnx"):
+        folder = os.path.join(weights_dir, sub) if sub else weights_dir
+        if not os.path.isdir(folder):
+            continue
+        preferred = os.path.join(folder, "model.onnx")
+        if os.path.isfile(preferred):
+            return preferred
+        found = sorted(glob.glob(os.path.join(folder, "*.onnx")))
+        if found:
+            return found[0]
+    return None
+
+
+def _has_safetensors(weights_dir):
+    return bool(glob.glob(os.path.join(weights_dir, "*.safetensors")))
+
+
+def _load_ort_session(onnx_path):
+    ort_pkg = "onnxruntime-directml" if sys.platform == "win32" else "onnxruntime"
+    try:
+        import onnxruntime as ort
+    except Exception as e:
+        raise RuntimeError(json.dumps(_missing_pkg_error(e, {"onnxruntime": ort_pkg})))
+    avail = set(ort.get_available_providers() or [])
+    ordered = [
+        p for p in (
+            "VitisAIExecutionProvider",
+            "QNNExecutionProvider",
+            "DmlExecutionProvider",
+            "CPUExecutionProvider",
+        ) if p in avail
+    ] or ["CPUExecutionProvider"]
+    opts = ort.SessionOptions()
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    try:
+        return ort.InferenceSession(onnx_path, sess_options=opts, providers=ordered)
+    except Exception:
+        return ort.InferenceSession(onnx_path, sess_options=opts, providers=["CPUExecutionProvider"])
 
 
 def _missing_pkg_error(exc, required_map):
@@ -278,6 +339,7 @@ def _missing_pkg_error(exc, required_map):
 
 
 def handle_check_deps():
+    ort_pkg = "onnxruntime-directml" if sys.platform == "win32" else "onnxruntime"
     mods = {
         "torch": "torch",
         "transformers": "transformers",
@@ -287,6 +349,7 @@ def handle_check_deps():
         "soundfile": "soundfile",
         "qwen_tts": "qwen-tts",
         "qwen_asr": "qwen-asr",
+        "onnxruntime": ort_pkg,
     }
     status = {}
     for mod, pkg in mods.items():
@@ -296,11 +359,18 @@ def handle_check_deps():
         except Exception:
             status[pkg] = False
     cuda = False
-    device_name = "CPU"
+    device_name = "CPU (BF16)" if _cpu_supports_bf16() else "CPU"
     try:
-        cuda = bool(torch.cuda.is_available())
+        cuda = bool(HAS_TORCH and torch.cuda.is_available())
         if cuda:
             device_name = torch.cuda.get_device_name(0)
+        elif status.get(ort_pkg):
+            import onnxruntime as ort
+            provs = set(ort.get_available_providers() or [])
+            if "VitisAIExecutionProvider" in provs or "QNNExecutionProvider" in provs:
+                device_name = f"NPU (ONNX) + {device_name}"
+            elif "DmlExecutionProvider" in provs:
+                device_name = f"DirectML + {device_name}"
     except Exception:
         pass
     return {
@@ -319,11 +389,25 @@ def _load_embed_model(weights_dir, cache):
         from transformers import AutoTokenizer, AutoModel
     except Exception as e:
         raise RuntimeError(json.dumps(_missing_pkg_error(e, {"transformers": "transformers"})))
-    device, dtype = _best_device_and_dtype()
     tok = AutoTokenizer.from_pretrained(weights_dir, local_files_only=True)
-    mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype if device == "cuda" else torch.float32)
-    mdl.to(device).eval()
-    cache[key] = (tok, mdl, device)
+    onnx_path = _find_onnx_file(weights_dir)
+    if onnx_path:
+        try:
+            sess = _load_ort_session(onnx_path)
+            cache[key] = ("onnx", tok, sess, "ort")
+            return cache[key]
+        except Exception:
+            if not _has_safetensors(weights_dir):
+                raise
+    device, dtype = _best_device_and_dtype()
+    try:
+        mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
+        mdl.to(device).eval()
+    except Exception:
+        mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=torch.float32)
+        mdl.to("cpu").eval()
+        device = "cpu"
+    cache[key] = ("torch", tok, mdl, device)
     return cache[key]
 
 
@@ -332,7 +416,23 @@ def handle_embed(req, cache):
     texts = req.get("input") or []
     if isinstance(texts, str):
         texts = [texts]
-    tok, mdl, device = _load_embed_model(weights_dir, cache)
+    kind, tok, mdl, device = _load_embed_model(weights_dir, cache)
+    if kind == "onnx":
+        import numpy as np
+        encoded = tok(texts, padding=True, truncation=True, max_length=int(req.get("maxLength", 2048)), return_tensors="np")
+        feed = {inp.name: encoded[inp.name].astype(np.int64) for inp in mdl.get_inputs() if inp.name in encoded}
+        outs = mdl.run(None, feed)
+        last_hidden = outs[0].astype(np.float32)
+        if last_hidden.ndim == 3:
+            mask = encoded["attention_mask"].astype(np.float32)[..., None]
+            summed = (last_hidden * mask).sum(axis=1)
+            counts = np.clip(mask.sum(axis=1), 1e-9, None)
+            vecs = summed / counts
+        else:
+            vecs = last_hidden
+        norms = np.clip(np.linalg.norm(vecs, axis=1, keepdims=True), 1e-12, None)
+        arr = (vecs / norms).tolist()
+        return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0}
     with torch.inference_mode():
         encoded = tok(texts, padding=True, truncation=True, max_length=int(req.get("maxLength", 2048)), return_tensors="pt")
         encoded = {k: v.to(device) for k, v in encoded.items()}
@@ -354,11 +454,25 @@ def _load_rerank_model(weights_dir, cache):
         from transformers import AutoTokenizer, AutoModelForSequenceClassification
     except Exception as e:
         raise RuntimeError(json.dumps(_missing_pkg_error(e, {"transformers": "transformers"})))
-    device, dtype = _best_device_and_dtype()
     tok = AutoTokenizer.from_pretrained(weights_dir, local_files_only=True)
-    mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype if device == "cuda" else torch.float32)
-    mdl.to(device).eval()
-    cache[key] = (tok, mdl, device)
+    onnx_path = _find_onnx_file(weights_dir)
+    if onnx_path:
+        try:
+            sess = _load_ort_session(onnx_path)
+            cache[key] = ("onnx", tok, sess, "ort")
+            return cache[key]
+        except Exception:
+            if not _has_safetensors(weights_dir):
+                raise
+    device, dtype = _best_device_and_dtype()
+    try:
+        mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
+        mdl.to(device).eval()
+    except Exception:
+        mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=torch.float32)
+        mdl.to("cpu").eval()
+        device = "cpu"
+    cache[key] = ("torch", tok, mdl, device)
     return cache[key]
 
 
@@ -368,13 +482,21 @@ def handle_rerank(req, cache):
     docs = req.get("documents") or []
     if not docs:
         return {"results": []}
-    tok, mdl, device = _load_rerank_model(weights_dir, cache)
+    kind, tok, mdl, device = _load_rerank_model(weights_dir, cache)
     pairs = [[query, str(d.get("text", d) if isinstance(d, dict) else d)] for d in docs]
-    with torch.inference_mode():
-        inputs = tok(pairs, padding=True, truncation=True, max_length=int(req.get("maxLength", 1024)), return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
-        logits = mdl(**inputs).logits.view(-1).float()
-        scores = torch.sigmoid(logits).cpu().tolist()
+    if kind == "onnx":
+        import math
+        import numpy as np
+        inputs = tok(pairs, padding=True, truncation=True, max_length=int(req.get("maxLength", 1024)), return_tensors="np")
+        feed = {inp.name: inputs[inp.name].astype(np.int64) for inp in mdl.get_inputs() if inp.name in inputs}
+        logits = mdl.run(None, feed)[0].reshape(-1).astype(np.float32).tolist()
+        scores = [1.0 / (1.0 + math.exp(-max(-40.0, min(40.0, float(x))))) for x in logits]
+    else:
+        with torch.inference_mode():
+            inputs = tok(pairs, padding=True, truncation=True, max_length=int(req.get("maxLength", 1024)), return_tensors="pt")
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            logits = mdl(**inputs).logits.view(-1).float()
+            scores = torch.sigmoid(logits).cpu().tolist()
     ranked = sorted(
         [{"index": i, "relevance_score": float(s), "document": docs[i]} for i, s in enumerate(scores)],
         key=lambda x: x["relevance_score"],
@@ -542,7 +664,7 @@ def main():
             if op == "check_deps":
                 print(json.dumps({"id": req_id, "event": "result", "data": handle_check_deps()}), flush=True)
                 continue
-            if not HAS_TORCH:
+            if not HAS_TORCH and not (op in ("embed", "rerank") and _find_onnx_file(str(req.get("weightsDir") or ""))):
                 needed = ["torch"]
                 if op in ("embed", "rerank"):
                     needed.append("transformers")

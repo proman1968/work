@@ -1,6 +1,9 @@
 /**
- * Спекулятивное декодирование встроенного движка Halowin Bubo:
- * разбор `--help`, сборка аргументов (MTP + Draft Head + Prompt Lookup), настройки и откат.
+ * Спекулятивное декодирование Halowin Bubo (v0.1.2) и автоподготовка локальных сред:
+ *  - профиль `default` + `--mtp-draft-vocab auto` (для кириллицы и кода);
+ *  - штатные флаги и переменные `GUFO_DENSE_TWIN_MODEL` / `GUFO_DRAFT_OUT_MODEL` без тихого отключения MTP;
+ *  - сигнатура запуска `#runtime/engine-state.json` и парсинг Prometheus-счётчиков `:8731/metrics`;
+ *  - автоматический подбор пакетов Python/ONNX по модальности и обновление системных UI-хендлеров.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,10 +17,15 @@ import {
     writeEngineSettings,
     startHalogenBackend,
     stopHalogenBackend,
+    parseHalogenPrometheusText,
+    computeHalogenMetricsDelta,
+    computeBuboLaunchSignature,
+    packagesForModality,
     DEFAULT_ENGINE_SETTINGS,
 } from '../sources/modules/trainer/index.js';
+import { isCoreEnginePath } from '../sources/host/auto-updater.js';
 
-const HELP_TEXT = `
+const BUBO_HELP_TEXT = `
 Usage: bubo serve llm [options]
 
 Options:
@@ -27,12 +35,16 @@ Options:
   --mtp-model <path>            MTP predictor weights
   --twin-model <path>           Dense twin weights
   --draft-head-model <path>     Draft head weights
-  --speculative <mode>          Speculative decoding mode: mtp | ngram | none
-  --draft-max <n>               Maximum draft tokens
-  --draft-min <n>               Minimum draft tokens
-  --draft-p-min <p>             Draft acceptance threshold
-  --lookup-cache-dynamic <file> Dynamic prompt lookup cache
+  --speculative <mode>          Speculative draft backend: mtp | off | dflash2 | dspark
+  --mtp-draft-vocab <mode>      MTP draft head vocabulary: auto | latin | full
+  --draft-tokens <n>            Maximum speculative draft length (default 7)
+  --prompt-lookup               Propose tokens from earlier conversation match
+  --no-prompt-lookup            Turn off prompt lookup proposals
+  --no-mtp                      Turn off MTP defaults and speculative decode
+  --no-twin                     Omit default dense twin
+  --no-draft-head               Omit default Q4_K draft head
   --npu-prefill <on|off>        Ryzen AI NPU prefill
+  --profile <name>              default | subagents | exact | stock
 `;
 
 const SIDECARS = {
@@ -42,130 +54,104 @@ const SIDECARS = {
     mmprojModel: 'C:/w/mmproj.gguf',
 };
 
-function capsFromHelp(text = HELP_TEXT) {
+function capsFromHelp(text = BUBO_HELP_TEXT) {
     const flags = parseEngineHelpFlags(text);
     return {
         flags,
         known: flags.length > 0,
         speculative: flags.includes('--speculative'),
-        draftMaxFlag: flags.includes('--draft-max'),
-        draftMinFlag: flags.includes('--draft-min'),
-        draftPMinFlag: flags.includes('--draft-p-min'),
-        lookupFlag: flags.includes('--lookup-cache-dynamic') ? '--lookup-cache-dynamic' : '',
+        mtpDraftVocabFlag: flags.includes('--mtp-draft-vocab'),
+        draftTokensFlag: flags.includes('--draft-tokens'),
+        promptLookupFlag: flags.includes('--prompt-lookup'),
+        noPromptLookupFlag: flags.includes('--no-prompt-lookup'),
+        draftMaxFlag: flags.includes('--draft-tokens'),
+        lookupFlag: flags.includes('--prompt-lookup') ? '--prompt-lookup' : '',
     };
 }
 
-describe('Спекулятивное декодирование Halowin Bubo (MTP + Draft Head)', () => {
-    it('1. Разбор флагов из --help движка', () => {
-        const flags = parseEngineHelpFlags(HELP_TEXT);
-        assert.ok(flags.includes('--speculative'));
-        assert.ok(flags.includes('--draft-max'));
-        assert.ok(flags.includes('--lookup-cache-dynamic'));
-        assert.ok(!flags.includes('--not-a-flag'));
-        assert.deepEqual(parseEngineHelpFlags(''), []);
+describe('Спекулятивное декодирование Halowin Bubo v0.1.2 и автоподготовка сред', () => {
+    it('1. По умолчанию выбран профиль default и словарь черновика auto (без latin-просадки на русском тексте)', () => {
+        assert.equal(DEFAULT_ENGINE_SETTINGS.profile, 'default');
+        assert.equal(DEFAULT_ENGINE_SETTINGS.mtpDraftVocab, 'auto');
+        assert.equal(DEFAULT_ENGINE_SETTINGS.draftMax, 7);
     });
 
-    it('2. Авто-режим: MTP передаётся весами, а поддерживаемый --speculative включает спекуляцию явно', () => {
+    it('2. Разбор флагов Bubo из --help и сборка полного плана спекуляции с GUFO_DENSE_TWIN_MODEL / GUFO_DRAFT_OUT_MODEL', () => {
+        const flags = parseEngineHelpFlags(BUBO_HELP_TEXT);
+        assert.ok(flags.includes('--speculative'));
+        assert.ok(flags.includes('--mtp-draft-vocab'));
+        assert.ok(flags.includes('--draft-tokens'));
+
         const plan = resolveSpeculationPlan({
-            settings: { speculation: 'auto', promptLookup: 'auto', draftMax: 8 },
+            settings: { speculation: 'auto', promptLookup: 'auto' },
             capabilities: capsFromHelp(),
             sidecars: SIDECARS,
-            lookupPath: 'C:/w/#cache/lookup.bin',
         });
         assert.equal(plan.mode, 'explicit');
         assert.equal(plan.enabled, true);
         assert.equal(plan.promptLookup, true);
-        assert.deepEqual(plan.args.slice(0, 2), ['--mtp-model', SIDECARS.mtpModel]);
-        assert.ok(plan.args.includes('--twin-model'));
-        assert.ok(plan.args.includes('--draft-head-model'));
-        assert.ok(plan.args.includes('--speculative'));
         assert.equal(plan.args[plan.args.indexOf('--speculative') + 1], 'mtp');
-        assert.ok(plan.args.includes('--lookup-cache-dynamic'));
-        assert.equal(plan.args[plan.args.indexOf('--lookup-cache-dynamic') + 1], 'C:/w/#cache/lookup.bin');
-        assert.equal(plan.sidecars.mtp, true);
+        assert.equal(plan.args[plan.args.indexOf('--mtp-draft-vocab') + 1], 'auto');
+        assert.equal(plan.envVars.GUFO_DENSE_TWIN_MODEL, SIDECARS.twinModel);
+        assert.equal(plan.envVars.GUFO_DRAFT_OUT_MODEL, SIDECARS.draftHeadModel);
+        assert.ok(!plan.args.includes('--lookup-cache-dynamic'), 'чужой флаг llama.cpp не передаётся в Bubo');
     });
 
-    it('3. Полное выключение: веса спекуляции не подключаются вовсе', () => {
+    it('3. Полное выключение спекуляции передаёт --no-mtp / --no-twin / --no-draft-head без подключения sidecar-весов', () => {
         const plan = resolveSpeculationPlan({
             settings: { speculation: 'off', promptLookup: 'off' },
             capabilities: capsFromHelp(),
             sidecars: SIDECARS,
-            lookupPath: 'C:/w/lookup.bin',
         });
         assert.equal(plan.mode, 'off');
         assert.equal(plan.enabled, false);
-        assert.equal(plan.promptLookup, false);
-        assert.deepEqual(plan.args, []);
+        assert.ok(plan.args.includes('--no-mtp'));
+        assert.ok(!plan.args.includes('--mtp-model'));
+        assert.deepEqual(plan.envVars, {});
     });
 
-    it('4. Без MTP-весов спекуляция недоступна, аргументы не добавляются', () => {
+    it('4. Без MTP-весов спекуляция помечается недоступной', () => {
         const plan = resolveSpeculationPlan({
             settings: { speculation: 'auto' },
             capabilities: capsFromHelp(),
             sidecars: { mmprojModel: SIDECARS.mmprojModel },
         });
         assert.equal(plan.mode, 'unavailable');
+        assert.equal(plan.enabled, false);
         assert.deepEqual(plan.args, []);
-        assert.ok(plan.reasons.some(r => /MTP-предсказателя/.test(r)));
     });
 
-    it('5. Неизвестные возможности движка: sidecar-веса передаются, новых флагов нет', () => {
+    it('5. Режим «Включено» передаёт штатный флаг Bubo --draft-tokens и --no-prompt-lookup при отключении кэша подсказок', () => {
         const plan = resolveSpeculationPlan({
-            settings: { speculation: 'auto' },
-            capabilities: { flags: [] },
-            sidecars: SIDECARS,
-        });
-        assert.equal(plan.mode, 'weights-only');
-        assert.equal(plan.capabilitiesKnown, false);
-        assert.ok(plan.args.includes('--mtp-model'));
-        assert.ok(!plan.args.includes('--speculative'));
-    });
-
-    it('6. Режим «Включено» передаёт глубину черновика и порог', () => {
-        const plan = resolveSpeculationPlan({
-            settings: { speculation: 'on', draftMax: 12, promptLookup: 'off' },
+            settings: { speculation: 'on', draftMax: 10, promptLookup: 'off' },
             capabilities: capsFromHelp(),
             sidecars: SIDECARS,
         });
         assert.equal(plan.enabled, true);
-        assert.equal(plan.args[plan.args.indexOf('--draft-max') + 1], '12');
-        assert.ok(plan.args.includes('--draft-min'));
-        assert.ok(plan.args.includes('--draft-p-min'));
-        assert.ok(!plan.args.includes('--lookup-cache-dynamic'));
+        assert.equal(plan.args[plan.args.indexOf('--draft-tokens') + 1], '10');
+        assert.ok(plan.args.includes('--no-prompt-lookup'));
     });
 
-    it('7. Готовый пакет (bubo-package.json) не смешивается с динамическим Prompt Lookup', () => {
-        const plan = resolveSpeculationPlan({
-            settings: { speculation: 'auto', promptLookup: 'auto' },
-            capabilities: capsFromHelp(),
-            sidecars: SIDECARS,
-            hasManifest: true,
-            lookupPath: 'C:/w/lookup.bin',
-        });
-        assert.equal(plan.promptLookup, false);
-        assert.ok(!plan.args.includes('--lookup-cache-dynamic'));
-    });
-
-    it('8. Настройки движка сохраняются и валидируются', async () => {
+    it('6. Настройки движка: автообновление старого неявного subagents → default и сохранение явного профиля', async () => {
         const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-engine-settings-'));
         try {
-            assert.equal(readEngineSettings(root).speculation, DEFAULT_ENGINE_SETTINGS.speculation);
-            const saved = writeEngineSettings(root, { speculation: 'on', draftMax: 99, promptLookup: 'off', npuPrefill: false });
-            assert.equal(saved.speculation, 'on');
-            assert.equal(saved.draftMax, 32, 'глубина черновика ограничена 32');
-            assert.equal(saved.promptLookup, 'off');
+            // Имитируем старый engine.json от 1.0.42 без profileExplicit
+            const rtDir = path.join(root, 'MODELS', 'Local', '$provider', '#runtime');
+            await fsp.mkdir(rtDir, { recursive: true });
+            await fsp.writeFile(path.join(rtDir, 'engine.json'), JSON.stringify({ profile: 'subagents', speculation: 'auto' }), 'utf8');
+            assert.equal(readEngineSettings(root).profile, 'default', 'неявный старый subagents автоматически обновляется до default');
+
+            const saved = writeEngineSettings(root, { profile: 'subagents', draftMax: 99, npuPrefill: false });
+            assert.equal(saved.profile, 'subagents', 'явно выбранный профиль сохраняется');
+            assert.equal(saved.draftMax, 32);
             assert.equal(saved.npuPrefill, false);
-            assert.ok(saved.updatedAt > 0);
-            assert.equal(readEngineSettings(root).speculation, 'on');
-            const invalid = writeEngineSettings(root, { speculation: 'fastest' });
-            assert.equal(invalid.speculation, DEFAULT_ENGINE_SETTINGS.speculation, 'неизвестный режим отбрасывается');
         }
         finally {
             await fsp.rm(root, { recursive: true, force: true });
         }
     });
 
-    it('9. startHalogenBackend передаёт --speculative mtp и автоматически откатывается при падении движка', async () => {
+    it('7. startHalogenBackend запускает bubo.exe с --profile default, --mtp-draft-vocab auto, env GUFO_* и НЕ отключает MTP тихо при выходе', async () => {
         const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-bubo-spec-'));
         try {
             const binDir = path.join(root, 'MODELS', 'Local', '$provider', '#runtime', 'bubo', 'bin');
@@ -176,8 +162,7 @@ describe('Спекулятивное декодирование Halowin Bubo (MT
             for (const sub of ['mtp', 'mmproj', 'twin', 'draft_head'])
                 await fsp.mkdir(path.join(weightsDir, sub), { recursive: true });
 
-            const exe = path.join(binDir, 'bubo.exe');
-            await fsp.writeFile(exe, 'MZ_FAKE');
+            await fsp.writeFile(path.join(binDir, 'bubo.exe'), 'MZ_FAKE');
             const files = {
                 main: path.join(weightsDir, 'Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf'),
                 mtp: path.join(weightsDir, 'mtp', 'mtp-Qwen3.8-Flash-Next-shared-Q8_0.gguf'),
@@ -189,10 +174,10 @@ describe('Спекулятивное декодирование Halowin Bubo (MT
                 await fsp.writeFile(p, 'GGUF');
 
             const spawned = [];
-            const mockSpawn = (cmd, args) => {
+            const mockSpawn = (cmd, args, opts) => {
                 const listeners = {};
                 const proc = {
-                    pid: 5150 + spawned.length,
+                    pid: 6150 + spawned.length,
                     stdout: { on: () => {} },
                     stderr: { on: () => {} },
                     on(ev, cb) { listeners[ev] = cb; },
@@ -200,7 +185,7 @@ describe('Спекулятивное декодирование Halowin Bubo (MT
                     kill: () => {},
                     emitExit(code) { listeners.exit?.(code, null); },
                 };
-                spawned.push({ cmd, args, proc });
+                spawned.push({ cmd, args, opts, proc });
                 return proc;
             };
 
@@ -212,25 +197,73 @@ describe('Спекулятивное декодирование Halowin Bubo (MT
             });
             assert.equal(started.mode, 'bubo-windows');
             assert.equal(started.speculation.enabled, true);
+            assert.ok(started.signature?.length >= 12);
             assert.equal(spawned.length, 1);
-            const args = spawned[0].args;
-            assert.ok(args.includes('--mtp-model'));
-            assert.ok(args.includes('--draft-head-model'));
-            assert.equal(args[args.indexOf('--speculative') + 1], 'mtp');
-            assert.ok(args.includes('--lookup-cache-dynamic'));
 
-            // Движок «упал» сразу после запуска с новым флагом — WORK перезапускает его без спекуляции
-            spawned[0].proc.emitExit(1);
-            await new Promise(resolve => setTimeout(resolve, 900));
-            assert.ok(spawned.length >= 2, 'движок перезапущен без спекулятивных флагов');
-            const retryArgs = spawned[1].args;
-            assert.ok(!retryArgs.includes('--speculative'), 'повторный запуск без --speculative');
-            assert.ok(!retryArgs.includes('--mtp-model'), 'повторный запуск без MTP-весов');
-            assert.ok(!retryArgs.includes('--lookup-cache-dynamic'), 'повторный запуск без Prompt Lookup');
+            const { args, opts } = spawned[0];
+            assert.equal(args[args.indexOf('--profile') + 1], 'default');
+            assert.equal(args[args.indexOf('--speculative') + 1], 'mtp');
+            assert.equal(args[args.indexOf('--mtp-draft-vocab') + 1], 'auto');
+            assert.equal(opts.env.GUFO_DENSE_TWIN_MODEL, files.twin);
+            assert.equal(opts.env.GUFO_DRAFT_OUT_MODEL, files.draft);
+
+            // При раннем выходе процесс НЕ перезапускается тихо без MTP (что маскировало бы ошибку скоростью 40 tok/s)
+            spawned[0].proc.emitExit(2);
+            await new Promise(r => setTimeout(r, 400));
+            assert.equal(spawned.length, 1, 'тихий перезапуск без MTP отключён');
+
+            const sigDefault = computeBuboLaunchSignature({ profile: 'default', mtpDraftVocab: 'auto' });
+            const sigSub = computeBuboLaunchSignature({ profile: 'subagents', mtpDraftVocab: 'latin' });
+            assert.notEqual(sigDefault, sigSub);
         }
         finally {
             stopHalogenBackend();
             await fsp.rm(root, { recursive: true, force: true });
         }
+    });
+
+    it('8. Парсинг счётчиков :8731/metrics считает чистый серверный tok/s и КПД спекуляции MTP', () => {
+        const before = parseHalogenPrometheusText(`
+llamacpp:tokens_predicted_total 100
+llamacpp:tokens_predicted_seconds_total 1.5
+llamacpp:prompt_tokens_total 500
+llamacpp:prompt_seconds_total 0.5
+llamacpp:spec_decode_num_drafts_total 25
+llamacpp:spec_decode_num_draft_tokens_total 150
+llamacpp:spec_decode_num_accepted_tokens_total 110
+`);
+        const after = parseHalogenPrometheusText(`
+llamacpp:tokens_predicted_total 240
+llamacpp:tokens_predicted_seconds_total 3.5
+llamacpp:prompt_tokens_total 1900
+llamacpp:prompt_seconds_total 1.5
+llamacpp:spec_decode_num_drafts_total 60
+llamacpp:spec_decode_num_draft_tokens_total 350
+llamacpp:spec_decode_num_accepted_tokens_total 266
+`);
+        const delta = computeHalogenMetricsDelta(before, after);
+        assert.equal(delta.decodeTokens, 140);
+        assert.equal(delta.serverDecodeTokPerSec, 70);
+        assert.equal(delta.serverPrefillTokPerSec, 1400);
+        assert.equal(delta.mtpAcceptPct, 78);
+        assert.ok(delta.mtpTokensPerStep > 5);
+    });
+
+    it('9. Пакеты Python по модальности (включая ONNX DirectML/NPU) и автообновление системных UI-хендлеров', async () => {
+        const tmpWeights = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-onnx-mod-'));
+        try {
+            assert.deepEqual(packagesForModality('rerank', tmpWeights), ['torch', 'transformers', 'safetensors', 'accelerate']);
+            await fsp.writeFile(path.join(tmpWeights, 'model.onnx'), 'ONNX');
+            const onnxPkgs = packagesForModality('rerank', tmpWeights);
+            assert.ok(onnxPkgs.some(p => p.startsWith('onnxruntime')), 'для ONNX-графа подбирается onnxruntime(-directml) без тяжёлого SDK');
+            assert.ok(!onnxPkgs.includes('torch'));
+        }
+        finally {
+            await fsp.rm(tmpWeights, { recursive: true, force: true });
+        }
+
+        assert.equal(isCoreEnginePath('MODELS/$ai/$folder/$class/$ai/handlers/pages/form/trainer/$handler/trainer.js'), true);
+        assert.equal(isCoreEnginePath('$server/$folder/handlers/pages/form/$handler/form.js'), true);
+        assert.equal(isCoreEnginePath('$server/$folder/class.js'), false, 'пользовательский class.js корня остаётся защищённым');
     });
 });

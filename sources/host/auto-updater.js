@@ -140,6 +140,11 @@ export function isCoreEnginePath(relPath) {
         return true;
     if (rel.startsWith('sources/') || rel.startsWith('oda/') || rel.startsWith('vendor/'))
         return true;
+    // Системные UI-хендлеры и базовые прототипы ИИ обновляются вместе с движком
+    if (/^models\/\$ai\//i.test(rel))
+        return true;
+    if (rel.startsWith('$server/$folder/handlers/') || rel.startsWith('$server/$folder/$file/') || rel.startsWith('$server/$folder/lib/'))
+        return true;
     return false;
 }
 
@@ -541,7 +546,13 @@ export function applyUpdateFromDirectory({
             }
 
             // 4. Классы, модули и файлы дерева: проверяем, менял ли их пользователь!
-            const baselineHash = oldManifest.files?.[rel];
+            let baselineHash = oldManifest.files?.[rel];
+            if (!baselineHash && process.platform === 'win32' && oldManifest.files) {
+                const relLow = rel.toLowerCase();
+                const matchKey = Object.keys(oldManifest.files).find(k => k.toLowerCase() === relLow);
+                if (matchKey)
+                    baselineHash = oldManifest.files[matchKey];
+            }
             const isModifiedByUser = !baselineHash || (diskHash !== baselineHash);
 
             if (isModifiedByUser) {

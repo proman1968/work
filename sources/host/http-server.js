@@ -646,7 +646,7 @@ export function createRequestHandler() {
                             || path.includes('/lib/mathjax')
                             || path.includes('/lib/highlight')
                             || path.includes('/lib/markdown-wasm');
-                        header["Cache-Control"] = (DEV_MODE && !isVendorStatic) ? DEV_CACHE : STATIC_CACHE;
+                        header["Cache-Control"] = isVendorStatic ? STATIC_CACHE : DEV_CACHE;
                     }
                 }
                 else

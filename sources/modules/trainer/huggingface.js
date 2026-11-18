@@ -1066,11 +1066,18 @@ export async function registerLocalModelNode({
     ])];
     const icon = customIcon || resolveModelIcon({ repoId: repoId || safeName, modality, capabilities: resolvedCaps });
 
+    const resolvedProtocol = protocol || (String(primaryFile || '').endsWith('.gguf') ? 'openai' : 'local');
+    const cleanBaseUrl = (baseUrl === null || baseUrl === 'null')
+        ? ''
+        : (typeof baseUrl === 'string' && baseUrl.trim()
+            ? baseUrl.trim()
+            : (resolvedProtocol === 'local' ? '' : 'http://127.0.0.1:8731/v1/chat/completions'));
+
     const meta = {
         label: String(label || safeName),
         icon,
-        protocol: protocol || (String(primaryFile || '').endsWith('.gguf') ? 'openai' : 'local'),
-        baseUrl,
+        protocol: resolvedProtocol,
+        baseUrl: cleanBaseUrl,
         model: model || repoId || safeName,
         modality,
         maxTokens: Number(maxTokens) || 16384,
@@ -1667,6 +1674,25 @@ export async function startHuggingFaceDownload({
             if (typeof onComplete === 'function') {
                 job.currentFile = 'Настройка встроенного движка…';
                 await onComplete({ job, weightsDir, filesRootDir, rootDir });
+            }
+            else if (
+                fetchImpl === globalThis.fetch
+                && process.env.WORK_DISABLE_AUTO_PYTHON !== '1'
+                && job.files.some(f => /\.(safetensors|onnx)$/i.test(String(f?.name || '')))
+            ) {
+                job.currentFile = 'Подготовка среды Python и библиотек…';
+                try {
+                    const capsLow = (Array.isArray(job.capabilities) ? job.capabilities : []).map(c => String(c).toLowerCase());
+                    const depMod = capsLow.includes('rerank') || /rerank/i.test(cleanId) ? 'rerank'
+                        : capsLow.includes('tts') ? 'tts'
+                        : (capsLow.includes('stt') || capsLow.includes('asr')) ? 'stt'
+                        : capsLow.includes('image') ? 'image'
+                        : (capsLow.includes('embeddings') || job.modality === 'embed') ? 'embed'
+                        : 'llm';
+                    const { ensurePythonForModality } = await import('./local-engine.js');
+                    await ensurePythonForModality(depMod, { weightsDir, rootDir });
+                }
+                catch { /* при отсутствии PyPI веса остаются готовыми и докачают пакеты при первом вызове */ }
             }
 
             job.progress = 100;

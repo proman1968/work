@@ -184,6 +184,11 @@ export default {
             gap: 10px;
             flex-wrap: wrap;
         }
+        .msg.info {
+            background: light-dark(#eff6ff, #172554);
+            color: light-dark(#1d4ed8, #bfdbfe);
+            border: 1px solid light-dark(#bfdbfe, #1e40af);
+        }
     </style>
 
     <div class="header-card" ~if="info">
@@ -216,17 +221,9 @@ export default {
         </button>
     </div>
 
-    <div class="msg warn" ~if="info?.needsRuntime && !info?.incompatibleOnPlatform">
-        <span>
-            <b>Движок Halowin Bubo не установлен:</b> веса модели готовы, но для запуска на Windows 11 требуется встроенный рантайм Bubo (ROCm 10.0 gfx1151).
-        </span>
-        <button type="button" class="btn primary" :disabled="busyAction" @tap="installWindowsRuntime()">
-            {{busyAction ? 'Установка…' : 'Установить встроенный движок'}}
-        </button>
-    </div>
-
     <div class="msg ok" ~if="notice">{{notice}}</div>
     <div class="msg err" ~if="error">{{error}}</div>
+    <div class="msg info" ~if="provisionBanner">{{provisionBanner}}</div>
 
     <div class="grid-2" ~if="info">
         <div class="card">
@@ -245,7 +242,11 @@ export default {
             </div>
             <div class="kv-row" ~if="resolvedProtocol === 'halogen'">
                 <span class="kv-label">Встроенный сервер (:8731):</span>
-                <span class="kv-val">{{info.halogenOnline ? (info.halogenModeLabel || 'Запущен') : 'Автозапуск по первому запросу'}}</span>
+                <span class="kv-val">{{halogenServerLine}}</span>
+            </div>
+            <div class="kv-row" ~if="resolvedProtocol === 'halogen' && halogenSpeculationLine">
+                <span class="kv-label">Спекуляция (MTP):</span>
+                <span class="kv-val">{{halogenSpeculationLine}}</span>
             </div>
             <div class="kv-row">
                 <span class="kv-label">Размер контекста (maxTokens):</span>
@@ -293,15 +294,12 @@ export default {
                 <button type="button" class="btn primary" :disabled="testing" @tap="runTestPrompt()">
                     {{testing ? 'Выполняю…' : testButtonLabel}}
                 </button>
+                <label class="toolbar" ~if="testModality === 'llm' && hasEffortCap" style="cursor:pointer;font-size:12px;opacity:0.85;">
+                    <input type="checkbox" :checked="testNoThinking" @change="testNoThinking = $event.target.checked">
+                    <span>Без рассуждений (чистый замер скорости)</span>
+                </label>
             </div>
-            <div class="msg warn" ~if="testPythonMissing || testMissingDeps.length">
-                <span ~if="testPythonMissing">На ПК не найден Python — WORK автоматически установит изолированный Python 3.11 и библиотеки: <code>{{testDepsToInstall.join(', ')}}</code></span>
-                <span ~if="!testPythonMissing">Не хватает Python-библиотек: <code>{{testMissingDeps.join(', ')}}</code></span>
-                <button type="button" class="btn primary" :disabled="installingDeps" @tap="installMissingDeps()">
-                    {{installingDeps ? 'Установка среды…' : (testPythonMissing ? 'Установить Python и пакеты' : 'Доустановить зависимости')}}
-                </button>
-            </div>
-            <div class="toolbar" ~if="testMetricsLine" style="font-size:12px;opacity:0.85;">
+            <div class="toolbar" ~if="testMetricsLine" style="font-size:12px;opacity:0.9;">
                 <span class="pill">{{testMetricsLine}}</span>
             </div>
             <div class="reply-box" ~if="testReply">{{testReply}}</div>
@@ -309,65 +307,12 @@ export default {
             <img ~if="testImageUrl" :src="testImageUrl" style="max-width:100%;max-height:360px;object-fit:contain;border-radius:6px;border:1px solid var(--border-color, #cbd5e1);">
         </div>
     </div>
-
-    <div class="card" ~if="resolvedProtocol === 'halogen' && engineConfig" style="margin-top:8px;">
-        <div class="section-title">Спекулятивное декодирование (MTP + Draft Head)</div>
-        <div class="kv-row">
-            <span class="kv-label">Веса спекуляции:</span>
-            <span class="kv-val">{{engineSidecarLine}}</span>
-        </div>
-        <div class="kv-row">
-            <span class="kv-label">Режим:</span>
-            <select :value="engineMode" @change="engineMode = $this.value">
-                <option value="auto">Авто (рекомендуется) — включить, если поддерживает движок</option>
-                <option value="on">Включено — с настройкой глубины черновика</option>
-                <option value="off">Выключено — только основная модель</option>
-            </select>
-        </div>
-        <div class="kv-row">
-            <span class="kv-label">Глубина черновика (draft-max):</span>
-            <input type="number" min="1" max="32" step="1" style="width:90px;" :value="engineDraftMax" @change="engineDraftMax = Number($this.value) || 8">
-        </div>
-        <div class="kv-row">
-            <span class="kv-label">Prompt Lookup (n-граммы):</span>
-            <label class="toolbar" style="cursor:pointer;">
-                <input type="checkbox" :checked="engineLookup" @change="engineLookup = $event.target.checked">
-                <span>Использовать кэш подсказок</span>
-            </label>
-        </div>
-        <div class="toolbar">
-            <button type="button" class="btn primary" :disabled="savingEngine" @tap="saveEngineConfig()">
-                {{savingEngine ? 'Применяю…' : 'Сохранить и перезапустить движок'}}
-            </button>
-            <button type="button" class="btn" :disabled="savingEngine" @tap="refreshEngineConfig()">Обновить диагностику</button>
-        </div>
-        <div class="msg" ~if="engineConfig.plan">
-            <b>Параметры запуска:</b> <code>{{engineArgsLine}}</code>
-            <div style="font-size:12px;opacity:0.8;margin-top:4px;">{{engineReasonsLine}}</div>
-        </div>
-        <div class="msg ok" ~if="engineConfig.running">
-            <b>Движок запущен:</b> {{engineRunLine}}
-        </div>
-        <div class="msg warn" ~if="engineConfig.fallback">
-            <b>Флаги спекуляции не приняты движком.</b> {{engineConfig.fallback.reason}} Работает режим без спекуляции.
-        </div>
-        <div class="msg warn" ~if="engineConfig.capabilities && !engineConfig.capabilities.known">
-            Возможности движка ещё не проверены. При первом запуске WORK сам прочитает <code>--help</code> и включит спекуляцию,
-            если движок её поддерживает; нажмите «Обновить диагностику», чтобы увидеть итоговые флаги заранее.
-        </div>
-        <div class="msg warn" ~if="!engineConfig.capabilities">
-            Движок Halowin Bubo не установлен — сначала нажмите «Установить встроенный движок».
-        </div>
-    </div>
     `,
     info: null,
     modelEnabled: true,
-    engineConfig: null,
-    engineMode: 'auto',
-    engineDraftMax: 8,
-    engineLookup: true,
-    savingEngine: false,
-    testPrompt: 'Привет! Представься коротко в одном предложении.',
+    testNoThinking: true,
+    provisionBanner: '',
+    testPrompt: 'Привет! Коротко в 3–4 предложениях расскажи, чем ты умеешь помогать в работе с документами, таблицами и кодом.',
     testTtsText: 'Привет! Локальный синтез речи платформы WORK работает.',
     testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
     testEmbedInput: 'Учётная система WORK\nОборотно-сальдовая ведомость',
@@ -378,26 +323,14 @@ export default {
     testAudioUrl: '',
     testImageUrl: '',
     testMetricsLine: '',
-    testMissingDeps: [],
-    testPythonMissing: false,
     testing: false,
-    installingDeps: false,
-    get testDepsToInstall() {
-        if (this.testMissingDeps?.length)
-            return this.testMissingDeps;
-        const map = {
-            llm: ['torch'],
-            embed: ['torch', 'transformers'],
-            rerank: ['torch', 'transformers'],
-            image: ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers'],
-            tts: ['torch', 'qwen-tts', 'soundfile', 'transformers'],
-            stt: ['torch', 'qwen-asr', 'soundfile', 'transformers'],
-        };
-        return map[this.testModality] || ['torch', 'transformers'];
-    },
     busyAction: false,
     notice: '',
     error: '',
+    get hasEffortCap() {
+        const caps = (this.capabilities || []).map(c => String(c).toLowerCase());
+        return caps.includes('effort') || caps.includes('thinking');
+    },
     get testModality() {
         const mod = String(this.info?.modality || this.info?.DATA?.modality || '').toLowerCase();
         const caps = (this.capabilities || []).map(c => String(c).toLowerCase());
@@ -450,88 +383,34 @@ export default {
         return this.info?.protocol || this.info?.DATA?.protocol || (this.isLocalModel ? 'local' : 'openai');
     },
     get resolvedBaseUrl() {
-        return this.info?.baseUrl || this.info?.DATA?.baseUrl || '';
+        if (this.resolvedProtocol === 'local')
+            return '';
+        const raw = this.info?.baseUrl ?? this.info?.DATA?.baseUrl ?? '';
+        if (!raw || raw === 'null' || raw === 'undefined')
+            return '';
+        return String(raw);
     },
     get capabilities() {
         const c = this.info?.capabilities || this.info?.DATA?.capabilities || ['chat', 'stream'];
         return Array.isArray(c) ? c : String(c).split(/[\s,]+/).filter(Boolean);
     },
-    get engineSidecarLine() {
-        const s = this.engineConfig?.sidecars || {};
-        const part = (label, key) => s[key] ? `${label}: ✓ ${s[key].sizeGb} ГБ` : `${label}: —`;
-        return [part('MTP-предсказатель', 'mtp'), part('Draft Head', 'draftHead'), part('Dense twin', 'twin')].join(' · ');
+    get halogenServerLine() {
+        const setup = this.info?.engineSetup;
+        const prof = setup?.running?.profile || setup?.settings?.profile || 'default';
+        const npu = (setup?.running?.npuPrefill || setup?.engine?.npuReady) ? ' · NPU prefill' : '';
+        if (this.info?.halogenOnline)
+            return `Запущен (профиль ${prof}${npu})`;
+        return `Автозапуск по первому запросу (профиль ${prof}${npu})`;
     },
-    get engineArgsLine() {
-        const args = this.engineConfig?.plan?.args || [];
-        return args.length ? args.join(' ') : 'штатный запуск (без дополнительных флагов)';
-    },
-    get engineReasonsLine() {
-        return (this.engineConfig?.plan?.reasons || []).join(' ');
-    },
-    get engineRunLine() {
-        const run = this.engineConfig?.running;
-        if (!run)
+    get halogenSpeculationLine() {
+        const setup = this.info?.engineSetup;
+        const plan = setup?.plan || this.info?.speculation;
+        if (!plan)
             return '';
-        const summary = run.speculation?.summary || 'без спекуляции';
-        const profile = run.profile ? ` · профиль ${run.profile}` : '';
-        return `${summary}${profile}`;
+        return plan.summary || (plan.enabled ? 'Активна (MTP + Draft Head)' : 'Отключена');
     },
     async attached() {
         await this.reload();
-        await this.loadEngineConfig().catch(() => {});
-    },
-    async loadEngineConfig(refresh = false) {
-        if (!this.$item || this.resolvedProtocol !== 'halogen') {
-            this.engineConfig = null;
-            return;
-        }
-        try {
-            const cfg = await this.$item.fetch('halogen_engine_config', refresh ? { refresh: 1 } : {});
-            this.engineConfig = cfg || null;
-            if (cfg?.settings) {
-                this.engineMode = cfg.settings.speculation || 'auto';
-                this.engineDraftMax = Number(cfg.settings.draftMax) || 8;
-                this.engineLookup = cfg.settings.promptLookup !== 'off';
-            }
-        }
-        catch {
-            this.engineConfig = null;
-        }
-    },
-    async refreshEngineConfig() {
-        this.notice = '';
-        await this.loadEngineConfig(true);
-    },
-    async saveEngineConfig() {
-        if (!this.$item || this.resolvedProtocol !== 'halogen')
-            return;
-        this.savingEngine = true;
-        this.error = '';
-        this.notice = '';
-        try {
-            const res = await this.$item.fetch('halogen_save_engine_config', {}, {
-                speculation: this.engineMode,
-                promptLookup: this.engineLookup ? 'auto' : 'off',
-                draftMax: Number(this.engineDraftMax) || 8,
-                restart: 1,
-                refresh: 1,
-            });
-            this.engineConfig = res || this.engineConfig;
-            if (res?.settings) {
-                this.engineMode = res.settings.speculation || 'auto';
-                this.engineDraftMax = Number(res.settings.draftMax) || 8;
-                this.engineLookup = res.settings.promptLookup !== 'off';
-            }
-            this.notice = 'Настройки спекулятивного декодирования сохранены, движок перезапущен. '
-                + (res?.plan?.summary || '');
-            await this.reload().catch(() => {});
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-        finally {
-            this.savingEngine = false;
-        }
     },
     async reload() {
         if (!this.$item)
@@ -546,6 +425,9 @@ export default {
             }
             this.info = inf;
             this.modelEnabled = inf?.enabled !== false && inf?.DATA?.enabled !== false;
+            if (inf?.pythonProvision?.active && inf.pythonProvision.stage) {
+                this.provisionBanner = inf.pythonProvision.stage + ' (выполняется один раз автоматически)';
+            }
         }
         catch (e) {
             this.error = String(e?.message || e);
@@ -564,30 +446,6 @@ export default {
             this.notice = res?.mode === 'deleted_model'
                 ? 'Несовместимая модель и её файлы удалены с диска. Откройте /MODELS/Local для установки Windows-версии.'
                 : 'Несовместимые файлы (.hgn/.hnpw) удалены с диска.';
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-        finally {
-            this.busyAction = false;
-        }
-    },
-    async installWindowsRuntime() {
-        if (!this.$item)
-            return;
-        this.busyAction = true;
-        this.error = '';
-        this.notice = '';
-        try {
-            const res = await this.$item.fetch('halogen_prepare_windows', { step: 'runtime' });
-            if (res?.ok) {
-                await this.reload();
-                this._refreshTree();
-                this.notice = 'Встроенный движок Halowin Bubo (ROCm 10.0.0 gfx1151) установлен и готов к запуску.';
-            }
-            else {
-                this.error = res?.error || 'Не удалось установить Halowin Bubo.';
-            }
         }
         catch (e) {
             this.error = String(e?.message || e);
@@ -658,32 +516,6 @@ export default {
         };
         reader.readAsDataURL(f);
     },
-    async installMissingDeps() {
-        const pkgs = this.testDepsToInstall;
-        if (!this.$item || !pkgs.length)
-            return;
-        this.installingDeps = true;
-        this.error = '';
-        this.notice = '';
-        try {
-            const res = await this.$item.fetch('trainer_install_python_deps', {}, { packages: pkgs });
-            if (res?.ok) {
-                this.testMissingDeps = [];
-                this.testPythonMissing = false;
-                this.notice = 'Среда готова, пакеты установлены: ' + (res.packages || []).join(', ') + '. Повторяем проверку…';
-                await this.runTestPrompt();
-            }
-            else {
-                this.error = res?.error || 'Не удалось установить Python-среду и пакеты.';
-            }
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-        finally {
-            this.installingDeps = false;
-        }
-    },
     async runTestPrompt() {
         if (!this.$item)
             return;
@@ -697,12 +529,29 @@ export default {
         this.testAudioUrl = '';
         this.testImageUrl = '';
         this.testMetricsLine = '';
-        this.testMissingDeps = [];
-        this.testPythonMissing = false;
+        this.provisionBanner = '';
+
+        const pollTimer = setInterval(async () => {
+            try {
+                const st = await this.$item?.fetch?.('trainer_provision_status');
+                if (st?.python?.active && st.python.stage) {
+                    this.provisionBanner = st.python.stage + ' (первичная подготовка среды, выполняется автоматически один раз)';
+                }
+                else if (st?.buboPrepare?.status === 'running' && st.buboPrepare.message) {
+                    this.provisionBanner = st.buboPrepare.message;
+                }
+            }
+            catch { /* ignore */ }
+        }, 1200);
+
         try {
             const body = { modality: m };
-            if (m === 'llm')
+            if (m === 'llm') {
                 body.messages = [{ role: 'user', content: this.testPrompt.trim() }];
+                body.maxOutput = 256;
+                if (this.hasEffortCap && this.testNoThinking)
+                    body.effort = 'off';
+            }
             else if (m === 'tts')
                 body.text = this.testTtsText.trim();
             else if (m === 'stt' && this.testSttBase64)
@@ -719,10 +568,6 @@ export default {
             const res = await this.$item.fetch('trainer_test_model', {}, body);
             if (!res?.ok) {
                 this.error = res?.error || 'Ошибка проверки модели.';
-                if (res?.pythonMissing)
-                    this.testPythonMissing = true;
-                if (Array.isArray(res?.missingDeps))
-                    this.testMissingDeps = res.missingDeps;
                 return;
             }
             const parts = [];
@@ -734,6 +579,9 @@ export default {
                 parts.push(`Скорость: ${res.tokPerSec} tok/s`);
             if (res.promptTokPerSec)
                 parts.push(`Prefill: ${res.promptTokPerSec} tok/s`);
+            if (res.mtpAcceptPct != null) {
+                parts.push(`MTP: ${res.mtpAcceptPct}%` + (res.mtpTokensPerStep ? ` (${res.mtpTokensPerStep} ток/шаг)` : ''));
+            }
             if (res.usage?.completion_tokens)
                 parts.push(`Токенов: ${res.usage.prompt_tokens || 0} → ${res.usage.completion_tokens}`);
             if (res.summary && m !== 'llm')
@@ -757,11 +605,14 @@ export default {
             else {
                 this.testReply = String(res.text ?? '');
             }
+            await this.reload().catch(() => {});
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
         finally {
+            clearInterval(pollTimer);
+            this.provisionBanner = '';
             this.testing = false;
         }
     },

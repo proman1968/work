@@ -1011,6 +1011,100 @@ function httpGetJson(urlStr, headers = {}, timeoutMs = 2500) {
 }
 
 /**
+ * Разобрать счётчики Prometheus из `GET /metrics` сервера `bubo.exe` / `gufo.exe` / `llama-server`.
+ */
+export function parseHalogenPrometheusText(rawText = '') {
+    const pick = (names) => {
+        for (const name of names) {
+            const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const m = new RegExp(`^${esc}(?:\\{[^}]*\\})?\\s+([+-]?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`, 'm').exec(rawText);
+            if (m) {
+                const v = Number(m[1]);
+                if (Number.isFinite(v))
+                    return v;
+            }
+        }
+        return null;
+    };
+    const decodeTokens = pick(['llamacpp:tokens_predicted_total', 'tokens_predicted_total']);
+    const decodeSeconds = pick(['llamacpp:tokens_predicted_seconds_total', 'tokens_predicted_seconds_total']);
+    const prefillTokens = pick(['llamacpp:prompt_tokens_total', 'prompt_tokens_total']);
+    const prefillSeconds = pick(['llamacpp:prompt_seconds_total', 'prompt_seconds_total']);
+    const cachedTokens = pick(['llamacpp:prompt_tokens_cached_total', 'prompt_tokens_cached_total']);
+    const draftRounds = pick(['llamacpp:spec_decode_num_drafts_total', 'spec_decode_num_drafts_total']);
+    const draftTokens = pick(['llamacpp:spec_decode_num_draft_tokens_total', 'spec_decode_num_draft_tokens_total']);
+    const acceptedTokens = pick(['llamacpp:spec_decode_num_accepted_tokens_total', 'spec_decode_num_accepted_tokens_total']);
+    if (decodeTokens === null && draftTokens === null && prefillTokens === null)
+        return null;
+    return {
+        decodeTokens: decodeTokens ?? 0,
+        decodeSeconds: decodeSeconds ?? 0,
+        prefillTokens: prefillTokens ?? 0,
+        prefillSeconds: prefillSeconds ?? 0,
+        cachedTokens: cachedTokens ?? 0,
+        draftRounds: draftRounds ?? 0,
+        draftTokens: draftTokens ?? 0,
+        acceptedTokens: acceptedTokens ?? 0,
+    };
+}
+
+/** Считать снимок счётчиков `:8731/metrics` (безопасно возвращает `null`, если эндпоинт недоступен). */
+export async function readHalogenMetrics(baseUrl = HALOGEN_DEFAULT_BASE_URL, { fetchJson = httpGetJson } = {}) {
+    let origin = `http://127.0.0.1:${HALOGEN_DEFAULT_PORT}`;
+    try { origin = new URL(baseUrl).origin; }
+    catch { /* default */ }
+    try {
+        const res = await fetchJson(`${origin}/metrics`, { Accept: 'text/plain' }, 2000);
+        const text = typeof res === 'string' ? res : String(res?.text || '');
+        return text ? parseHalogenPrometheusText(text) : null;
+    }
+    catch {
+        return null;
+    }
+}
+
+/** Вычислить дельту скорости декодирования и КПД спекуляции MTP между двумя снимками `/metrics`. */
+export function computeHalogenMetricsDelta(before, after) {
+    if (!after)
+        return null;
+    const b = before || {
+        decodeTokens: 0, decodeSeconds: 0, prefillTokens: 0, prefillSeconds: 0,
+        cachedTokens: 0, draftRounds: 0, draftTokens: 0, acceptedTokens: 0,
+    };
+    const dDecodeTokens = Math.max(0, after.decodeTokens - b.decodeTokens);
+    const dDecodeSeconds = Math.max(0, after.decodeSeconds - b.decodeSeconds);
+    const dPrefillTokens = Math.max(0, after.prefillTokens - b.prefillTokens);
+    const dPrefillSeconds = Math.max(0, after.prefillSeconds - b.prefillSeconds);
+    const dDraftRounds = Math.max(0, after.draftRounds - b.draftRounds);
+    const dDraftTokens = Math.max(0, after.draftTokens - b.draftTokens);
+    const dAccepted = Math.max(0, after.acceptedTokens - b.acceptedTokens);
+
+    const serverDecodeTokPerSec = (dDecodeTokens > 0 && dDecodeSeconds > 0.005)
+        ? +(dDecodeTokens / dDecodeSeconds).toFixed(1)
+        : 0;
+    const serverPrefillTokPerSec = (dPrefillTokens > 0 && dPrefillSeconds > 0.005)
+        ? +(dPrefillTokens / dPrefillSeconds).toFixed(1)
+        : 0;
+    const mtpAcceptPct = dDraftTokens > 0
+        ? Math.round((dAccepted / dDraftTokens) * 100)
+        : null;
+    const mtpTokensPerStep = dDraftRounds > 0
+        ? +((dDraftRounds + dAccepted) / dDraftRounds).toFixed(2)
+        : null;
+
+    return {
+        decodeTokens: dDecodeTokens,
+        serverDecodeTokPerSec,
+        serverPrefillTokPerSec,
+        draftRounds: dDraftRounds,
+        draftTokens: dDraftTokens,
+        acceptedTokens: dAccepted,
+        mtpAcceptPct,
+        mtpTokensPerStep,
+    };
+}
+
+/**
  * Опросить живой сервер на порту `:8731` (Linux `halogen-flash-server`, Windows `Halowin Bubo` / `Gufo` / `Strata`
  * или `llama-server`) по служебным маршрутам:
  * `GET /health`, `GET /ready`, `GET /cache`, `GET /v1/models`, `GET /halogen/handles`.
@@ -1414,18 +1508,23 @@ export async function prepareWindowsBuboRuntime({
 }
 
 /**
- * Настройки движка Halowin Bubo по умолчанию: спекулятивное декодирование (MTP + Draft Head),
- * Prompt Lookup (n-граммы), профиль KV-сессий и NPU-prefill.
+ * Настройки движка Halowin Bubo по умолчанию:
+ *  - `profile: 'default'` — 1 сессия, контекст 200K, 8.6 ГБ RAM-кэш снимков и максимальная скорость спекуляции;
+ *  - `mtpDraftVocab: 'auto'` — автопереключение словаря черновика MTP латиница ↔ кириллица (без просадки на русском тексте);
+ *  - `draftMax: 7` — штатная глубина черновика Bubo (`--draft-tokens 7`);
+ *  - `npuPrefill: true` — задействование Ryzen AI NPU для чтения длинных промптов (при наличии драйвера AMD XRT).
  */
 export const DEFAULT_ENGINE_SETTINGS = Object.freeze({
     speculation: 'auto',
-    draftMax: 8,
+    draftMax: 7,
     promptLookup: 'auto',
-    profile: 'subagents',
+    profile: 'default',
+    mtpDraftVocab: 'auto',
     npuPrefill: true,
 });
 
 const ENGINE_STATE_MODES = ['auto', 'on', 'off'];
+const ENGINE_PROFILES = ['default', 'subagents', 'exact', 'stock', 'vanilla'];
 
 function clampInt(value, min, max, fallback) {
     const n = Number(value);
@@ -1439,6 +1538,28 @@ export function engineSettingsFile(rootDir = process.cwd()) {
     return path.join(localRuntimeDir(rootDir), 'engine.json');
 }
 
+/** Файл состояния запущенного процесса движка (`MODELS/Local/$provider/#runtime/engine-state.json`). */
+export function engineStateFile(rootDir = process.cwd()) {
+    return path.join(localRuntimeDir(rootDir), 'engine-state.json');
+}
+
+export function readEngineStateSync(rootDir = process.cwd()) {
+    try {
+        return JSON.parse(fs.readFileSync(engineStateFile(rootDir), 'utf8')) || null;
+    }
+    catch {
+        return null;
+    }
+}
+
+export function writeEngineStateSync(rootDir = process.cwd(), state = {}) {
+    try {
+        fs.mkdirSync(localRuntimeDir(rootDir), { recursive: true });
+        fs.writeFileSync(engineStateFile(rootDir), JSON.stringify(state, null, 2), 'utf8');
+    }
+    catch { /* ignore */ }
+}
+
 /** Прочитать сохранённые настройки движка (с валидацией значений). */
 export function readEngineSettings(rootDir = process.cwd()) {
     let saved = {};
@@ -1447,11 +1568,15 @@ export function readEngineSettings(rootDir = process.cwd()) {
     }
     catch { saved = {}; }
     const mode = v => ENGINE_STATE_MODES.includes(String(v || '')) ? String(v) : '';
+    const savedProfile = ENGINE_PROFILES.includes(String(saved.profile || '')) ? String(saved.profile) : '';
+    const profile = (saved.profileExplicit && savedProfile) ? savedProfile : DEFAULT_ENGINE_SETTINGS.profile;
     return {
         speculation: mode(saved.speculation) || DEFAULT_ENGINE_SETTINGS.speculation,
         promptLookup: mode(saved.promptLookup) || DEFAULT_ENGINE_SETTINGS.promptLookup,
         draftMax: clampInt(saved.draftMax, 1, 32, DEFAULT_ENGINE_SETTINGS.draftMax),
-        profile: typeof saved.profile === 'string' && saved.profile ? saved.profile : DEFAULT_ENGINE_SETTINGS.profile,
+        profile,
+        profileExplicit: Boolean(saved.profileExplicit && savedProfile),
+        mtpDraftVocab: ['auto', 'latin', 'full'].includes(String(saved.mtpDraftVocab || '')) ? String(saved.mtpDraftVocab) : 'auto',
         npuPrefill: saved.npuPrefill !== false,
         updatedAt: Number(saved.updatedAt) || 0,
     };
@@ -1460,9 +1585,11 @@ export function readEngineSettings(rootDir = process.cwd()) {
 /** Сохранить настройки движка (частичное обновление). */
 export function writeEngineSettings(rootDir = process.cwd(), patch = {}) {
     const current = readEngineSettings(rootDir);
+    const hasExplicitProfile = Boolean(patch && typeof patch.profile === 'string' && ENGINE_PROFILES.includes(patch.profile));
     const merged = {
         ...current,
         ...(patch && typeof patch === 'object' ? patch : {}),
+        profileExplicit: hasExplicitProfile ? true : current.profileExplicit,
         updatedAt: Date.now(),
     };
     fs.mkdirSync(localRuntimeDir(rootDir), { recursive: true });
@@ -1521,9 +1648,7 @@ function captureProcessOutput(cmd, args, spawnImpl, timeoutMs) {
 }
 
 /**
- * Определить возможности `bubo.exe serve llm` по его же `--help` (с кэшем на 7 дней):
- * поддерживает ли движок `--speculative`, `--draft-max`/`--draft-min`/`--draft-p-min`
- * и динамический Prompt Lookup (`--lookup-cache-dynamic`).
+ * Определить возможности `bubo.exe serve llm` по его `--help` (с кэшем на 7 дней).
  */
 export async function inspectEngineCapabilities({
     rootDir = process.cwd(),
@@ -1551,12 +1676,14 @@ export async function inspectEngineCapabilities({
         flags,
         known: flags.length > 0,
         speculative: flags.includes('--speculative'),
-        draftMaxFlag: flags.includes('--draft-max'),
-        draftMinFlag: flags.includes('--draft-min'),
-        draftPMinFlag: flags.includes('--draft-p-min'),
-        lookupFlag: flags.includes('--lookup-cache-dynamic')
-            ? '--lookup-cache-dynamic'
-            : (flags.includes('--lookup-cache') ? '--lookup-cache' : ''),
+        mtpDraftVocabFlag: flags.includes('--mtp-draft-vocab'),
+        draftTokensFlag: flags.includes('--draft-tokens'),
+        promptLookupFlag: flags.includes('--prompt-lookup'),
+        noPromptLookupFlag: flags.includes('--no-prompt-lookup'),
+        draftMaxFlag: flags.includes('--draft-tokens') || flags.includes('--draft-max'),
+        lookupFlag: flags.includes('--prompt-lookup')
+            ? '--prompt-lookup'
+            : (flags.includes('--lookup-cache-dynamic') ? '--lookup-cache-dynamic' : ''),
         checkedAt: Date.now(),
         helpText: helpText.slice(-4000),
     };
@@ -1569,11 +1696,10 @@ export async function inspectEngineCapabilities({
 }
 
 /**
- * Собрать аргументы движка для спекулятивного декодирования (чистая функция — без побочных эффектов).
- *  - `mtp`-предсказатель + `Dense twin` + `Q4_K Draft Head` передаются как веса;
- *  - если движок объявляет `--speculative`, добавляется явный режим `mtp` (это и включает спекуляцию);
- *  - при режиме `on` дополнительно передаются параметры черновика (`--draft-max` и порог);
- *  - `promptLookup` включает n-граммный кэш подсказок там, где движок это поддерживает.
+ * Собрать аргументы и переменные окружения `bubo.exe` для спекулятивного декодирования (по спецификации Bubo v0.1.2):
+ *  - `--mtp-model` + `--twin-model` (`GUFO_DENSE_TWIN_MODEL`) + `--draft-head-model` (`GUFO_DRAFT_OUT_MODEL`);
+ *  - `--speculative mtp` и `--mtp-draft-vocab auto` (критично для русского текста и кода одновременно);
+ *  - `--prompt-lookup` включён в Bubo с MTP по умолчанию (или отключается через `--no-prompt-lookup`).
  */
 export function resolveSpeculationPlan({
     settings = {},
@@ -1589,64 +1715,78 @@ export function resolveSpeculationPlan({
     const twin = Boolean(sidecars?.twinModel);
     const draftHead = Boolean(sidecars?.draftHeadModel);
     const args = [];
+    const envVars = {};
     const reasons = [];
     let enabled = false;
+    let promptLookup = false;
 
     if (cfg.speculation === 'off') {
-        reasons.push('Спекулятивное декодирование выключено в настройках движка — веса MTP/Twin/Draft Head не подключаются.');
+        if (flags.has('--no-mtp'))
+            args.push('--no-mtp');
+        if (flags.has('--no-twin'))
+            args.push('--no-twin');
+        if (flags.has('--no-draft-head'))
+            args.push('--no-draft-head');
+        reasons.push('Спекулятивное декодирование отключено — используется только основная модель.');
     }
     else if (!mtp) {
         reasons.push('Файл MTP-предсказателя (mtp-*.gguf) не найден в $ai/#weights — спекуляция недоступна.');
     }
     else {
         args.push('--mtp-model', sidecars.mtpModel);
-        if (twin)
+        if (twin) {
             args.push('--twin-model', sidecars.twinModel);
-        if (draftHead)
-            args.push('--draft-head-model', sidecars.draftHeadModel);
-        if (flags.has('--speculative')) {
-            args.push('--speculative', 'mtp');
-            enabled = true;
-            reasons.push('Движок объявляет --speculative: передан режим «mtp».');
+            envVars.GUFO_DENSE_TWIN_MODEL = sidecars.twinModel;
         }
-        else if (capsKnown) {
-            reasons.push('Движок не объявляет --speculative: спекуляция включается самим флагом --mtp-model (поведение по умолчанию движка).');
+        if (draftHead) {
+            args.push('--draft-head-model', sidecars.draftHeadModel);
+            envVars.GUFO_DRAFT_OUT_MODEL = sidecars.draftHeadModel;
+        }
+        if (!capsKnown || flags.has('--speculative')) {
+            if (flags.has('--speculative'))
+                args.push('--speculative', 'mtp');
+            enabled = true;
+        }
+        // Автопереключение словаря черновика латиница ↔ кириллица снимает просадку скорости на русском языке
+        const vocabMode = cfg.mtpDraftVocab || 'auto';
+        if (!capsKnown || flags.has('--mtp-draft-vocab')) {
+            args.push('--mtp-draft-vocab', vocabMode);
+        }
+        if (cfg.speculation === 'on') {
+            const dTok = String(clampInt(cfg.draftMax, 1, 32, DEFAULT_ENGINE_SETTINGS.draftMax));
+            if (flags.has('--draft-tokens'))
+                args.push('--draft-tokens', dTok);
+            else if (flags.has('--draft-max'))
+                args.push('--draft-max', dTok);
+        }
+        if (cfg.promptLookup === 'off') {
+            if (flags.has('--no-prompt-lookup'))
+                args.push('--no-prompt-lookup');
         }
         else {
-            reasons.push('Возможности движка неизвестны (--help недоступен): дополнительные флаги спекуляции не передавались, работает режим по умолчанию.');
+            promptLookup = true;
+            if (!hasManifest && flags.has('--lookup-cache-dynamic') && !flags.has('--prompt-lookup') && lookupPath) {
+                args.push('--lookup-cache-dynamic', lookupPath);
+            }
         }
-        if (enabled) {
-            if (cfg.speculation === 'on' && flags.has('--draft-max'))
-                args.push('--draft-max', String(clampInt(cfg.draftMax, 1, 32, DEFAULT_ENGINE_SETTINGS.draftMax)));
-            if (cfg.speculation === 'on' && flags.has('--draft-min'))
-                args.push('--draft-min', '0');
-            if (cfg.speculation === 'on' && flags.has('--draft-p-min'))
-                args.push('--draft-p-min', '0.6');
-        }
-    }
-
-    let promptLookup = false;
-    if (cfg.promptLookup !== 'off' && cfg.speculation !== 'off' && !hasManifest && capabilities?.lookupFlag && lookupPath) {
-        args.push(capabilities.lookupFlag, lookupPath);
-        promptLookup = true;
-        reasons.push('Prompt Lookup (n-граммы) включён: ' + capabilities.lookupFlag + '.');
-    }
-    else if (cfg.promptLookup === 'on' && !capabilities?.lookupFlag) {
-        reasons.push('Prompt Lookup запрошен, но движок не объявляет поддерживаемого флага кэша подсказок.');
+        reasons.push(
+            `Активен полный стек спекуляции Bubo: MTP${twin ? ' + Dense Twin' : ''}${draftHead ? ' + Q4_K Draft Head' : ''} (словарь черновика: ${vocabMode}).`
+        );
     }
 
     const mode = cfg.speculation === 'off'
         ? 'off'
-        : (!mtp ? 'unavailable' : (enabled ? 'explicit' : 'weights-only'));
+        : (!mtp ? 'unavailable' : (capsKnown && flags.has('--speculative') ? 'explicit' : 'weights-only'));
     const parts = [
-        enabled ? 'MTP включён (--speculative mtp)' : (mtp && mode !== 'off' ? 'MTP передан весами' : 'MTP выключен'),
+        mtp && mode !== 'off'
+            ? `MTP${twin ? ' + Twin' : ''}${draftHead ? ' + Draft Head' : ''} (vocab: ${cfg.mtpDraftVocab || 'auto'})`
+            : 'MTP выключен',
         promptLookup ? 'Prompt Lookup вкл.' : 'Prompt Lookup выкл.',
-        cfg.speculation === 'on' && enabled ? `draft-max ${cfg.draftMax}` : '',
     ].filter(Boolean);
 
     return {
         mode,
-        enabled,
+        enabled: Boolean(mtp && mode !== 'off'),
         promptLookup,
         sidecars: {
             mtp: Boolean(mtp),
@@ -1655,10 +1795,61 @@ export function resolveSpeculationPlan({
         },
         capabilitiesKnown: capsKnown,
         args,
+        envVars,
         reasons,
         summary: parts.join(' · '),
         settings: { ...cfg },
     };
+}
+
+export function computeBuboLaunchSignature({
+    exePath = '',
+    port = HALOGEN_DEFAULT_PORT,
+    modelPath = '',
+    sidecars = null,
+    profile = 'default',
+    mtpDraftVocab = 'auto',
+    speculation = 'auto',
+    npuPrefill = false,
+} = {}) {
+    const raw = JSON.stringify({
+        schema: 'bubo-v2.1',
+        exePath,
+        port: Number(port) || HALOGEN_DEFAULT_PORT,
+        modelPath,
+        mtp: sidecars?.mtpModel || '',
+        twin: sidecars?.twinModel || '',
+        draftHead: sidecars?.draftHeadModel || '',
+        mmproj: sidecars?.mmprojModel || '',
+        profile,
+        mtpDraftVocab,
+        speculation,
+        npuPrefill: Boolean(npuPrefill),
+    });
+    return crypto.createHash('sha256').update(raw).digest('hex').slice(0, 16);
+}
+
+async function stopStaleBuboProcess({ rootDir = process.cwd(), port = HALOGEN_DEFAULT_PORT, winEnv = null } = {}) {
+    stopHalogenBackend();
+    const prevState = readEngineStateSync(rootDir);
+    if (prevState?.pid && Number.isInteger(prevState.pid) && prevState.pid > 0 && prevState.pid !== process.pid) {
+        try { process.kill(prevState.pid); } catch { /* уже завершён */ }
+    }
+    if (os.platform() === 'win32' && winEnv?.buboExePath && fs.existsSync(winEnv.buboExePath)) {
+        await captureProcessOutput(winEnv.buboExePath, ['stop'], spawn, 3000).catch(() => '');
+    }
+    // Если старый bubo.exe запущен другим экземпляром WORK на этом же порту — аккуратно завершаем именно bubo/gufo на нашем порту
+    if (os.platform() === 'win32') {
+        const psCmd = `$c = Get-NetTCPConnection -LocalPort ${Number(port)} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -match '^(bubo|gufo)$') { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } }`;
+        await captureProcessOutput('powershell.exe', ['-NoProfile', '-Command', psCmd], spawn, 4000).catch(() => '');
+    }
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+        const pr = await probeHalogenServer(`http://127.0.0.1:${port}/v1/chat/completions`, { rootDir }).catch(() => ({ online: false }));
+        if (!pr?.online)
+            break;
+        await new Promise(r => setTimeout(r, 250));
+    }
 }
 
 /**
@@ -1678,8 +1869,6 @@ export async function describeEngineSetup({
     const hasManifest = Boolean(gguf && fs.existsSync(path.join(path.dirname(gguf), 'bubo-package.json')));
     const cfg = { ...readEngineSettings(rootDir), ...(settings || {}) };
     const exePath = winEnv.buboExePath || winEnv.gufoExePath || '';
-    // Возможности читаем из кэша (быстро); принудительный опрос --help — только по кнопке «Обновить диагностику»
-    // и при самом запуске движка (`startHalogenBackend`), чтобы карточка открывалась мгновенно.
     const caps = capabilities !== undefined
         ? capabilities
         : (readEngineCapabilitiesSync(rootDir, exePath)
@@ -1699,6 +1888,7 @@ export async function describeEngineSetup({
         catch { /* ignore */ }
         return { path: p, name: path.basename(p), sizeGb };
     };
+    const stateOnDisk = readEngineStateSync(rootDir);
     return {
         settings: cfg,
         weightsDir,
@@ -1724,14 +1914,22 @@ export async function describeEngineSetup({
             installed: Boolean(winEnv.buboInstalled || winEnv.gufoInstalled),
             runtime: winEnv.buboInstalled ? 'bubo.exe' : (winEnv.gufoInstalled ? 'gufo.exe' : ''),
             exePath,
+            npuReady: Boolean(winEnv.npuDriverInstalled && winEnv.npuKernelsPresent),
         },
         running: _managedInfo ? {
             runtime: _managedInfo.runtime,
-            profile: _managedInfo.profile || '',
-            speculation: _managedInfo.speculation || null,
+            profile: _managedInfo.profile || cfg.profile,
+            npuPrefill: Boolean(_managedInfo.npuPrefill),
+            speculation: _managedInfo.speculation || plan,
             startedAt: _managedInfo.startedAt,
-        } : null,
-        fallback: _lastSpeculationFallback,
+        } : (stateOnDisk?.pid ? {
+            runtime: stateOnDisk.runtime || 'bubo',
+            profile: stateOnDisk.profile || cfg.profile,
+            npuPrefill: Boolean(stateOnDisk.npuPrefill),
+            speculation: plan,
+            startedAt: stateOnDisk.startedAt || 0,
+        } : null),
+        fallback: null,
     };
 }
 
@@ -1750,8 +1948,6 @@ export async function startHalogenBackend({
     spawnImpl = spawn,
     settings = null,
     capabilities = undefined,
-    retryWithoutSpeculation = true,
-    _speculationRetry = false,
 } = {}) {
     const probe = await probeHalogenServer(`http://127.0.0.1:${port}/v1/chat/completions`, { rootDir });
     if (probe.online) {
@@ -1788,15 +1984,14 @@ export async function startHalogenBackend({
     const manifestCandidate = ggufPath ? path.join(path.dirname(ggufPath), 'bubo-package.json') : '';
     const hasBuboManifest = Boolean(manifestCandidate && fs.existsSync(manifestCandidate));
 
-    // Настройки спекулятивного декодирования (MTP + Draft Head + Prompt Lookup) из #runtime/engine.json
     const engineSettings = { ...readEngineSettings(rootDir), ...(settings || {}) };
-    const activeProfile = profile || engineSettings.profile || 'subagents';
+    const activeProfile = profile || engineSettings.profile || DEFAULT_ENGINE_SETTINGS.profile;
     const prefillEnabled = npuPrefill === null ? engineSettings.npuPrefill !== false : Boolean(npuPrefill);
+    const effectiveNpuPrefill = Boolean(prefillEnabled && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent && activeProfile !== 'exact' && activeProfile !== 'stock' && activeProfile !== 'vanilla');
 
     // 1. Приоритет №1 на Windows: нативный движок Halowin Bubo (`bubo.exe serve llm` на ROCm 10.0.0 gfx1151 + Ryzen AI NPU)
     if (winEnv.buboInstalled && ggufPath && fs.existsSync(ggufPath)) {
         try {
-            // Возможности движка (--speculative, --draft-max, --lookup-cache-dynamic) определяются один раз по `--help`
             const caps = capabilities !== undefined
                 ? capabilities
                 : await inspectEngineCapabilities({ rootDir, exePath: winEnv.buboExePath, spawnImpl });
@@ -1818,12 +2013,23 @@ export async function startHalogenBackend({
                 '--served-model-name', 'halogen-qwen3.8-flash-next',
                 '--profile', activeProfile,
             ];
-            if (prefillEnabled && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent && activeProfile !== 'exact' && activeProfile !== 'stock') {
+            if (effectiveNpuPrefill) {
                 args.push('--npu-prefill', 'on');
             }
+            const signature = computeBuboLaunchSignature({
+                exePath: winEnv.buboExePath,
+                port,
+                modelPath: ggufPath,
+                sidecars: resolvedSidecars,
+                profile: activeProfile,
+                mtpDraftVocab: engineSettings.mtpDraftVocab || 'auto',
+                speculation: engineSettings.speculation || 'auto',
+                npuPrefill: effectiveNpuPrefill,
+            });
             const env = {
                 ...process.env,
                 ...(winEnv.rocmRuntimeDir ? { BUBO_RUNTIME_DIR: winEnv.rocmRuntimeDir } : {}),
+                ...(plan.envVars || {}),
             };
             const proc = spawnImpl(winEnv.buboExePath, args, {
                 cwd: path.dirname(winEnv.buboExePath),
@@ -1837,32 +2043,21 @@ export async function startHalogenBackend({
                 port,
                 modelPath: ggufPath,
                 runtime: 'bubo',
-                npuPrefill: Boolean(prefillEnabled && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent),
+                npuPrefill: effectiveNpuPrefill,
                 profile: activeProfile,
+                signature,
                 args,
                 speculation: plan,
-                onEarlyExit: retryWithoutSpeculation && !_speculationRetry && plan.args.length
-                    ? async (code) => {
-                        _lastSpeculationFallback = {
-                            at: Date.now(),
-                            reason: `движок завершился с кодом ${code} сразу после запуска со флагами спекуляции`,
-                            args: plan.args,
-                        };
-                        try {
-                            await startHalogenBackend({
-                                rootDir,
-                                port,
-                                modelPath: ggufPath,
-                                profile: activeProfile,
-                                npuPrefill,
-                                spawnImpl,
-                                settings: { ...engineSettings, speculation: 'off', promptLookup: 'off' },
-                                _speculationRetry: true,
-                            });
-                        }
-                        catch { /* останется автономный контур */ }
-                    }
-                    : null,
+            });
+            writeEngineStateSync(rootDir, {
+                pid: proc?.pid || null,
+                port,
+                runtime: 'bubo',
+                profile: activeProfile,
+                npuPrefill: effectiveNpuPrefill,
+                signature,
+                args,
+                startedAt: Date.now(),
             });
             return {
                 started: true,
@@ -1870,6 +2065,7 @@ export async function startHalogenBackend({
                 runtime: 'bubo.exe (AMD ROCm 10.0.0 gfx1151)',
                 pid: proc.pid,
                 port,
+                signature,
                 modelPath: ggufPath,
                 windowsEnv: winEnv,
                 speculation: {
@@ -2010,23 +2206,63 @@ export async function ensureHalogenBackendRunning({
     }
     catch { /* default */ }
 
-    const probe1 = await probeHalogenServer(baseUrl, { rootDir });
-    if (probe1.online) {
-        return {
-            ready: true,
-            alreadyRunning: true,
-            mode: probe1.mode,
-            origin: probe1.origin,
-        };
-    }
-
-    // Проверка на несовместимые Linux-веса (.hgn / .hnpw) на Windows
     const modelFolderName = String(ai?.id || ai?.path || '').split('/').filter(Boolean).pop() || '';
     const candidateWeightsDir = ai?.weightsDir
         ? path.resolve(rootDir, ai.weightsDir)
         : (modelFolderName ? modelWeightsDir(rootDir, modelFolderName, 'Local') : '');
     const wInsp = candidateWeightsDir ? inspectWeightsDirectorySync(candidateWeightsDir, platform) : null;
-    const winEnv = inspectWindowsHalogenEnvironment({ rootDir });
+    let winEnv = inspectWindowsHalogenEnvironment({ rootDir });
+
+    const explicitGguf = (wInsp?.hasGguf && candidateWeightsDir)
+        ? (resolveBuboModelFiles(candidateWeightsDir).mainModel || '')
+        : '';
+    const targetGguf = (explicitGguf && fs.existsSync(explicitGguf)) ? explicitGguf : findLocalGgufModel(rootDir);
+
+    const probe1 = await probeHalogenServer(baseUrl, { rootDir });
+    if (probe1.online) {
+        // Если на Windows запущен старый процесс bubo.exe с прежними параметрами (например, --profile subagents с latin-словарём),
+        // автоматически перезапускаем его с актуальной сигнатурой флагов.
+        if (
+            platform === 'win32'
+            && probe1.mode === 'bubo-windows'
+            && winEnv.buboInstalled
+            && targetGguf
+            && fs.existsSync(targetGguf)
+            && spawnImpl === spawn
+        ) {
+            const cfg = readEngineSettings(rootDir);
+            const activeProfile = cfg.profile || DEFAULT_ENGINE_SETTINGS.profile;
+            const effectiveNpu = Boolean(cfg.npuPrefill !== false && winEnv.npuDriverInstalled && winEnv.npuKernelsPresent && activeProfile !== 'exact' && activeProfile !== 'stock' && activeProfile !== 'vanilla');
+            const targetSig = computeBuboLaunchSignature({
+                exePath: winEnv.buboExePath,
+                port,
+                modelPath: targetGguf,
+                sidecars: resolveBuboModelFiles(path.dirname(targetGguf)),
+                profile: activeProfile,
+                mtpDraftVocab: cfg.mtpDraftVocab || 'auto',
+                speculation: cfg.speculation || 'auto',
+                npuPrefill: effectiveNpu,
+            });
+            const currentSig = _managedInfo?.signature || readEngineStateSync(rootDir)?.signature || '';
+            if (currentSig === targetSig) {
+                return {
+                    ready: true,
+                    alreadyRunning: true,
+                    mode: probe1.mode,
+                    origin: probe1.origin,
+                };
+            }
+            await stopStaleBuboProcess({ rootDir, port, winEnv });
+        }
+        else {
+            return {
+                ready: true,
+                alreadyRunning: true,
+                mode: probe1.mode,
+                origin: probe1.origin,
+            };
+        }
+    }
 
     if (platform === 'win32' && wInsp?.incompatibleOnPlatform) {
         return {
@@ -2042,9 +2278,27 @@ export async function ensureHalogenBackendRunning({
 
     _backendStartPromise = (async () => {
         try {
-            const explicitGguf = (wInsp?.hasGguf && candidateWeightsDir)
-                ? (resolveBuboModelFiles(candidateWeightsDir).mainModel || '')
-                : '';
+            // Автоматическая развёртка рантайма Halowin Bubo + ROCm 10.0, если веса GGUF уже лежат на диске
+            if (
+                platform === 'win32'
+                && targetGguf
+                && fs.existsSync(targetGguf)
+                && !winEnv.buboInstalled
+                && !winEnv.gufoInstalled
+                && spawnImpl === spawn
+                && process.env.WORK_DISABLE_AUTO_BUBO !== '1'
+            ) {
+                const prep = await prepareWindowsBuboRuntime({ rootDir, step: 'runtime', spawnImpl });
+                if (!prep.ok) {
+                    return {
+                        ready: false,
+                        code: 'RUNTIME_INSTALL_FAILED',
+                        reason: `Не удалось автоматически развернуть движок Halowin Bubo: ${prep.error || 'нет доступа к сети'}`,
+                        windowsEnv: prep.windowsEnv || winEnv,
+                    };
+                }
+                winEnv = prep.windowsEnv || inspectWindowsHalogenEnvironment({ rootDir });
+            }
 
             const startRes = await startHalogenBackend({
                 rootDir,

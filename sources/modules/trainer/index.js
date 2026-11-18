@@ -48,6 +48,10 @@ import {
     getLocalEngineStatus,
     releaseLocalEngineMemory,
     touchLocalEngineActivity,
+    getPythonProvisionState,
+    ensurePythonForModality,
+    packagesForModality,
+    _setAutoProvisionForTest,
 } from './local-engine.js';
 import {
     HALOGEN_DEFAULT_PORT,
@@ -72,6 +76,10 @@ import {
     QWEN_FLASH_NEXT_GGUF_FILES,
     BUBO_ORIGINAL_MODEL_FILES,
     probeHalogenServer,
+    readHalogenMetrics,
+    computeHalogenMetricsDelta,
+    parseHalogenPrometheusText,
+    computeBuboLaunchSignature,
     startHalogenBackend,
     stopHalogenBackend,
     ensureHalogenBackendRunning,
@@ -156,6 +164,10 @@ export const halogenFallback = Object.freeze({
 export {
     localStreamChat,
     localEngine,
+    getPythonProvisionState,
+    ensurePythonForModality,
+    packagesForModality,
+    _setAutoProvisionForTest,
     SOURCE_PRESETS,
     THREAD_OPTIONS,
     loadTrainerNetworkSettings,
@@ -194,6 +206,10 @@ export {
     QWEN_FLASH_NEXT_GGUF_FILES,
     BUBO_ORIGINAL_MODEL_FILES,
     probeHalogenServer,
+    readHalogenMetrics,
+    computeHalogenMetricsDelta,
+    parseHalogenPrometheusText,
+    computeBuboLaunchSignature,
     startHalogenBackend,
     stopHalogenBackend,
     ensureHalogenBackendRunning,
@@ -442,18 +458,36 @@ async function runSingleModelSmokeTest(ai, p = {}) {
         const messages = Array.isArray(p.messages) && p.messages.length
             ? p.messages
             : [{ role: 'user', content: String(p.prompt || 'Привет! Представься коротко в одном предложении.') }];
+        const isHalo = ai?.protocol === 'halogen' || ai?.DATA?.protocol === 'halogen';
+        const haloUrl = ai?.baseUrl || ai?.DATA?.baseUrl || HALOGEN_DEFAULT_BASE_URL;
+        const metricsBefore = isHalo ? await readHalogenMetrics(haloUrl).catch(() => null) : null;
+        const maxOut = Number(p.maxOutput || p.maxTokens) || 256;
+        const chatOpts = {
+            messages,
+            maxOutput: maxOut,
+            max_tokens: maxOut,
+            ...(p.effort != null && p.effort !== '' ? { effort: String(p.effort) } : {}),
+        };
         let text = '';
         let usage = null;
-        for await (const chunk of ai.streamChat({ messages, max_tokens: Number(p.maxTokens) || 192 }, {})) {
+        for await (const chunk of ai.streamChat(chatOpts, {})) {
             if (typeof chunk === 'string')
                 text += chunk;
             else if (chunk?.type === 'usage')
                 usage = chunk;
         }
         const durationMs = Math.max(1, Date.now() - t0);
+        const metricsAfter = isHalo ? await readHalogenMetrics(haloUrl).catch(() => null) : null;
+        const metricsDelta = isHalo ? computeHalogenMetricsDelta(metricsBefore, metricsAfter) : null;
+
         const ttftMs = Number(usage?.ttftMs) || 0;
-        const tokPerSec = Number(usage?.tokPerSec) || 0;
-        const promptTokPerSec = Number(usage?.promptTokPerSec) || 0;
+        const clientTokPerSec = Number(usage?.tokPerSec) || 0;
+        const serverTokPerSec = Number(metricsDelta?.serverDecodeTokPerSec) || 0;
+        const tokPerSec = serverTokPerSec > 0 ? serverTokPerSec : clientTokPerSec;
+        const promptTokPerSec = Number(metricsDelta?.serverPrefillTokPerSec || usage?.promptTokPerSec) || 0;
+        const mtpAcceptPct = metricsDelta?.mtpAcceptPct ?? null;
+        const mtpTokensPerStep = metricsDelta?.mtpTokensPerStep ?? null;
+
         return {
             ok: true,
             modality: 'llm',
@@ -461,11 +495,18 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             durationMs,
             ttftMs,
             tokPerSec,
+            clientTokPerSec,
+            serverDecodeTokPerSec: serverTokPerSec,
             promptTokPerSec,
+            mtpAcceptPct,
+            mtpTokensPerStep,
             usage,
             summary: [
                 tokPerSec > 0 ? `${tokPerSec} tok/s` : `${durationMs} мс`,
                 ttftMs > 0 ? `TTFT ${(ttftMs / 1000).toFixed(2)} с` : '',
+                mtpAcceptPct !== null
+                    ? `MTP ${mtpAcceptPct}%${mtpTokensPerStep ? ` (${mtpTokensPerStep} ток/шаг)` : ''}`
+                    : '',
             ].filter(Boolean).join(' · '),
         };
     }
@@ -476,6 +517,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             modality,
             durationMs,
             error: String(e?.message || e),
+            ...(e?.offline ? { offline: true } : {}),
             ...(e?.pythonMissing ? { pythonMissing: true } : {}),
             ...(Array.isArray(e?.missingDeps) && e.missingDeps.length ? { missingDeps: e.missingDeps } : {}),
         };
@@ -606,6 +648,13 @@ export const TRAINER_METHODS = Object.freeze({
                 }
             }
 
+            const resolvedProtocol = d.protocol || (isLocal ? 'local' : 'openai');
+            const rawBaseUrl = (d.baseUrl && d.baseUrl !== 'null') ? String(d.baseUrl) : '';
+            const cleanBaseUrl = resolvedProtocol === 'local' ? '' : rawBaseUrl;
+            const engineSetup = (resolvedProtocol === 'halogen' || weightInfo?.hasGguf)
+                ? await describeEngineSetup().catch(() => null)
+                : null;
+
             return {
                 id: this?.id || '',
                 label: d.label || this?.label || this?.id || '',
@@ -613,9 +662,9 @@ export const TRAINER_METHODS = Object.freeze({
                 path: itemPath,
                 providerName: providerId,
                 isLocal,
-                protocol: d.protocol || (isLocal ? 'local' : 'openai'),
+                protocol: resolvedProtocol,
                 model: d.model || this?.id || '',
-                baseUrl: d.baseUrl || '',
+                baseUrl: cleanBaseUrl,
                 modality: d.modality || 'llm',
                 maxTokens: Number(d.maxTokens || d.$public?.maxTokens) || 32768,
                 maxOutput: Number(d.maxOutput || d.$public?.maxOutput) || 8192,
@@ -630,14 +679,26 @@ export const TRAINER_METHODS = Object.freeze({
                 incompatibleOnPlatform: Boolean(act.incompatibleOnPlatform || weightInfo?.incompatibleOnPlatform),
                 incompatibleReason: act.incompatibleOnPlatform ? act.reason : (weightInfo?.incompatibleReason || ''),
                 sizeGb,
-                needsRuntime,
+                needsRuntime: false,
+                runtimeAutoInstall: needsRuntime,
                 halogenOnline: Boolean(halogenProbe?.online),
                 halogenMode: halogenProbe?.mode || '',
                 halogenModeLabel: halogenProbe?.modeLabel || '',
-                speculation: halogenProbe?.speculation || null,
-                speculationFallback: halogenProbe?.speculationFallback || null,
-                engineSettings: (d.protocol === 'halogen' || weightInfo?.hasGguf) ? readEngineSettings(process.cwd()) : null,
+                speculation: halogenProbe?.speculation || engineSetup?.plan || null,
+                engineSetup,
+                engineSettings: (resolvedProtocol === 'halogen' || weightInfo?.hasGguf) ? readEngineSettings(process.cwd()) : null,
+                pythonProvision: getPythonProvisionState(),
                 windowsEnv: halogenProbe?.windowsEnv || null,
+            };
+        },
+    },
+    trainer_provision_status: {
+        level: 'read',
+        fn: async function () {
+            const winEnv = inspectWindowsHalogenEnvironment();
+            return {
+                python: getPythonProvisionState(),
+                buboPrepare: winEnv?.prepareState || null,
             };
         },
     },

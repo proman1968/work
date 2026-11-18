@@ -174,7 +174,9 @@ export default {
             body = {
                 model: options.model || ai.model || '',
                 messages,
-                temperature: options.temperature ?? 0.7,
+                ...(options.temperature != null
+                    ? { temperature: options.temperature }
+                    : (isHalogenModel(ai) ? {} : { temperature: 0.7 })),
                 stream: true,
             };
             if (ai.protocol === 'yandex' && body.model && !/^(gpt|emb|ds):\/\//i.test(body.model)) {
@@ -182,7 +184,7 @@ export default {
                 if (folderId)
                     body.model = `gpt://${folderId}/${body.model}`;
             }
-            const cap = Number(options.maxOutput);
+            const cap = Number(options.maxOutput ?? options.max_tokens);
             if (Number.isFinite(cap) && cap > 0)
                 body.max_tokens = cap;
             if (options.stop)
@@ -335,12 +337,12 @@ export default {
                 e.args = appendFunctionArgs(e.args, args);
             return e;
         };
-        const buildSpeedMeta = (completionTokens, timings) => {
+        const buildSpeedMeta = (completionTokens, timings, gufoMeta = null) => {
             const now = Date.now();
             const ttftMs = tFirstToken ? Math.max(1, tFirstToken - tStart) : Math.max(1, now - tStart);
             const decodeMs = tFirstToken ? Math.max(1, now - tFirstToken) : ttftMs;
-            const predPerSec = Number(timings?.predicted_per_second) || 0;
-            const promptPerSec = Number(timings?.prompt_per_second) || 0;
+            const predPerSec = Number(timings?.predicted_per_second ?? gufoMeta?.decode_tokens_per_second ?? gufoMeta?.predicted_per_second) || 0;
+            const promptPerSec = Number(timings?.prompt_per_second ?? gufoMeta?.prefill_tokens_per_second ?? gufoMeta?.prompt_per_second) || 0;
             const estTok = completionTokens > 0 ? completionTokens : Math.round(streamedChars / 4);
             const tokPerSec = predPerSec > 0
                 ? +predPerSec.toFixed(1)
@@ -428,6 +430,7 @@ export default {
             if (json.usage) {
                 const u = json.usage;
                 const timings = json.timings || lastTimings || null;
+                const gufoMeta = u.gufo && typeof u.gufo === 'object' ? u.gufo : null;
                 // токены, прочитанные из кэша провайдера: OpenAI (prompt_tokens_details.cached_tokens), DeepSeek (prompt_cache_hit_tokens), Anthropic-поля, Halogen timings.cache_n
                 const cached = Number(u.prompt_tokens_details?.cached_tokens ?? u.cached_tokens ?? u.prompt_cache_hit_tokens ?? u.cache_read_input_tokens ?? timings?.cache_n ?? 0) || 0;
                 const cacheWrite = Number(u.cache_creation_input_tokens ?? 0) || 0;
@@ -445,9 +448,10 @@ export default {
                     completion_tokens: completionTokens,
                     total_tokens: totalTokens,
                     cached_tokens: cached,
-                    ...buildSpeedMeta(completionTokens, timings),
+                    ...buildSpeedMeta(completionTokens, timings, gufoMeta),
                     ...(u.completion_tokens_details ? { completion_tokens_details: u.completion_tokens_details } : {}),
                     ...(timings ? { timings } : {}),
+                    ...(gufoMeta ? { gufo: gufoMeta } : {}),
                     ...(halogenFromHeader ? { halogen_from: halogenFromHeader } : {}),
                 };
             }
@@ -972,8 +976,14 @@ function applyEffort(body, ai, options = {}) {
         body.think = off ? false : (effort === true ? true : effort);
     }
     else if (isHalogenModel(ai)) {
-        body.reasoning_effort = off ? 'none' : (effort === true ? 'medium' : effort);
-        body.enable_thinking = !off;
+        if (off) {
+            body.enable_thinking = false;
+            body.chat_template_kwargs = { ...(body.chat_template_kwargs || {}), enable_thinking: false };
+        }
+        else {
+            body.reasoning_effort = effort === true ? 'medium' : effort;
+            body.enable_thinking = true;
+        }
         if (Number(options.maxThinkingTokens) > 0)
             body.max_thinking_tokens = Math.trunc(Number(options.maxThinkingTokens));
     }

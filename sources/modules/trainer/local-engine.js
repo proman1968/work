@@ -17,6 +17,7 @@ import { classSchema } from '../../data/schema.js';
 import { trialBalance } from '../../data/reports.js';
 import { ensureHalogenBackendRunning, recordHalogenSessionHandle, stopHalogenBackend } from './halogen.js';
 import { inspectWeightsDirectorySync } from './paths.js';
+import { loadTrainerNetworkSettings, createNetworkFetch } from './downloader.js';
 
 const money = v => Number(v || 0).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -328,20 +329,74 @@ function resolvePythonCommandAsync(rootDir = process.cwd()) {
     return _pythonResolving;
 }
 
-function makePythonMissingError() {
-    const err = new Error('На этом ПК не найдена локальная среда Python. Нажмите «Установить Python и пакеты» — WORK автоматически развернёт изолированный Python 3.11 внутри MODELS/Local/$provider/#runtime/.');
+function hasOnnxModelSync(weightsDir) {
+    if (!weightsDir || !fs.existsSync(weightsDir))
+        return false;
+    for (const sub of ['', 'onnx']) {
+        const dir = sub ? path.join(weightsDir, sub) : weightsDir;
+        try {
+            if (fs.existsSync(dir) && fs.readdirSync(dir).some(f => f.toLowerCase().endsWith('.onnx') && !f.endsWith('.part')))
+                return true;
+        }
+        catch { /* ignore */ }
+    }
+    return false;
+}
+
+export function packagesForModality(modality = 'llm', weightsDir = '') {
+    const mod = String(modality || 'llm').toLowerCase();
+    const hasOnnx = hasOnnxModelSync(weightsDir);
+    if ((mod === 'embed' || mod === 'embedding' || mod === 'rerank') && hasOnnx) {
+        return [os.platform() === 'win32' ? 'onnxruntime-directml' : 'onnxruntime', 'transformers', 'numpy'];
+    }
+    if (mod === 'embed' || mod === 'embedding' || mod === 'rerank')
+        return ['torch', 'transformers', 'safetensors', 'accelerate'];
+    if (mod === 'image' || mod === 'text-to-image')
+        return ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers', 'safetensors'];
+    if (mod === 'tts' || mod === 'voice')
+        return ['torch', 'qwen-tts', 'soundfile', 'transformers', 'safetensors'];
+    if (mod === 'stt' || mod === 'asr' || mod === 'audio')
+        return ['torch', 'qwen-asr', 'soundfile', 'transformers', 'safetensors'];
+    return ['torch', 'safetensors'];
+}
+
+function makePythonMissingError(detail = '') {
+    const isOffline = /fetch failed|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNREFUSED|network|Не удалось скачать uv/i.test(String(detail || ''));
+    const msg = isOffline
+        ? 'Не удалось автоматически подготовить среду Python: нет доступа к сети для первичной загрузки изолированного рантайма (MODELS/Local/$provider/#runtime/). Подключите интернет один раз или перенесите готовую папку #runtime с другой машины.'
+        : ('Не удалось автоматически подготовить среду Python' + (detail ? `: ${detail}` : '.'));
+    const err = new Error(msg);
     err.pythonMissing = true;
+    err.offline = isOffline;
     err.missingDeps = ['torch', 'transformers', 'accelerate', 'safetensors'];
     return err;
 }
 
-async function ensureInferWorker() {
+let _autoProvisionOverride = null;
+/** Хук для детерминированных модульных тестов без реального выхода в PyPI/GitHub. */
+export function _setAutoProvisionForTest(fn) {
+    _autoProvisionOverride = typeof fn === 'function' ? fn : null;
+}
+
+async function ensureInferWorker(hint = {}) {
     if (_workerProc && !_workerProc.killed)
         return _workerProc;
 
-    const py = await resolvePythonCommandAsync();
-    if (!py)
-        throw makePythonMissingError();
+    let py = await resolvePythonCommandAsync();
+    if (!py) {
+        if (process.env.WORK_DISABLE_AUTO_PYTHON === '1' && !_autoProvisionOverride)
+            throw makePythonMissingError('автоустановка отключена (WORK_DISABLE_AUTO_PYTHON=1)');
+        const pkgs = packagesForModality(hint?.modality || 'llm', hint?.weightsDir || '');
+        const prov = await ensurePythonForModality(hint?.modality || 'llm', {
+            weightsDir: hint?.weightsDir || '',
+            extraPackages: pkgs,
+        });
+        if (!prov?.ok)
+            throw makePythonMissingError(prov?.error || '');
+        py = await resolvePythonCommandAsync();
+        if (!py)
+            throw makePythonMissingError('интерпретатор не обнаружен после установки');
+    }
 
     const scriptPath = path.resolve(import.meta.dirname, './worker/local_infer_worker.py');
     const proc = spawn(py.cmd, [...py.args, scriptPath], {
@@ -511,112 +566,134 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         const promptText = buildChatMlPrompt(turns.length ? turns : [{ role: 'user', content: 'Привет!' }], grounding, enableThinking);
         const inputIds = Array.from(tokenizer.encode(promptText), Number);
 
-        const proc = await ensureInferWorker();
-        proc.stdout?.ref?.();
-        const reqId = 'req_' + crypto.randomUUID().slice(0, 8);
+        const runOnce = async function* () {
+            const proc = await ensureInferWorker({ modality: 'llm', weightsDir });
+            proc.stdout?.ref?.();
+            const reqId = 'req_' + crypto.randomUUID().slice(0, 8);
 
-        const queue = [];
-        let notify = null;
-        let finished = false;
-        let workerErr = null;
+            const queue = [];
+            let notify = null;
+            let finished = false;
+            let workerErr = null;
+            let missingDeps = null;
 
-        _pendingRequests.set(reqId, {
-            onMessage(msg) {
-                if (msg.event === 'token') {
-                    queue.push(msg.token);
-                }
-                else if (msg.event === 'done') {
-                    finished = true;
-                }
-                else if (msg.event === 'error') {
-                    workerErr = msg.error || 'Ошибка локального инференса';
-                    finished = true;
-                }
-                if (notify) {
-                    const r = notify;
-                    notify = null;
-                    r();
-                }
-            },
-        });
+            _pendingRequests.set(reqId, {
+                onMessage(msg) {
+                    if (msg.event === 'token') {
+                        queue.push(msg.token);
+                    }
+                    else if (msg.event === 'done') {
+                        finished = true;
+                    }
+                    else if (msg.event === 'error') {
+                        workerErr = msg.error || 'Ошибка локального инференса';
+                        if (Array.isArray(msg.missingDeps) && msg.missingDeps.length)
+                            missingDeps = msg.missingDeps;
+                        finished = true;
+                    }
+                    if (notify) {
+                        const r = notify;
+                        notify = null;
+                        r();
+                    }
+                },
+            });
 
-        const payload = JSON.stringify({
-            id: reqId,
-            weightsDir,
-            inputIds,
-            maxNewTokens: Math.min(384, Number(body?.max_tokens) || 256),
-            temperature: Number(body?.temperature ?? 0.5),
-            eosTokenIds: [151645, 151643],
-        }) + '\n';
+            const payload = JSON.stringify({
+                id: reqId,
+                weightsDir,
+                inputIds,
+                maxNewTokens: Math.min(384, Number(body?.max_tokens) || 256),
+                temperature: Number(body?.temperature ?? 0.5),
+                eosTokenIds: [151645, 151643],
+            }) + '\n';
 
-        proc.stdin.write(payload);
+            proc.stdin.write(payload);
 
-        const tStart = Date.now();
-        let tFirstToken = 0;
-        const generatedIds = [];
-        let prevDecoded = '';
+            const tStart = Date.now();
+            let tFirstToken = 0;
+            const generatedIds = [];
+            let prevDecoded = '';
 
-        try {
-            while (!finished || queue.length > 0) {
-                if (queue.length === 0) {
-                    await new Promise(resolve => { notify = resolve; });
-                }
-                while (queue.length > 0) {
-                    tFirstToken ||= Date.now();
-                    const tokId = queue.shift();
-                    generatedIds.push(tokId);
-                    const fullDecoded = tokenizer.decode(generatedIds, { skip_special_tokens: true });
-                    // Не отдаём незаконченный суррогат UTF-8 (символ замены \uFFFD на границе байтового BPE)
-                    if (fullDecoded.endsWith('\uFFFD'))
-                        continue;
-                    if (fullDecoded.length > prevDecoded.length) {
-                        const delta = fullDecoded.slice(prevDecoded.length);
-                        prevDecoded = fullDecoded;
-                        yield delta;
+            try {
+                while (!finished || queue.length > 0) {
+                    if (queue.length === 0) {
+                        await new Promise(resolve => { notify = resolve; });
+                    }
+                    while (queue.length > 0) {
+                        tFirstToken ||= Date.now();
+                        const tokId = queue.shift();
+                        generatedIds.push(tokId);
+                        const fullDecoded = tokenizer.decode(generatedIds, { skip_special_tokens: true });
+                        if (fullDecoded.endsWith('\uFFFD'))
+                            continue;
+                        if (fullDecoded.length > prevDecoded.length) {
+                            const delta = fullDecoded.slice(prevDecoded.length);
+                            prevDecoded = fullDecoded;
+                            yield delta;
+                        }
                     }
                 }
+                if (workerErr) {
+                    const e = new Error(workerErr);
+                    if (missingDeps)
+                        e.missingDeps = missingDeps;
+                    throw e;
+                }
+                const finalDecoded = tokenizer.decode(generatedIds, { skip_special_tokens: true });
+                if (finalDecoded.length > prevDecoded.length)
+                    yield finalDecoded.slice(prevDecoded.length);
             }
-            if (workerErr)
-                throw new Error(workerErr);
-            // Досылаем остаток, если был задержан на границе токена
-            const finalDecoded = tokenizer.decode(generatedIds, { skip_special_tokens: true });
-            if (finalDecoded.length > prevDecoded.length)
-                yield finalDecoded.slice(prevDecoded.length);
-        }
-        finally {
-            _pendingRequests.delete(reqId);
-            if (_pendingRequests.size === 0)
-                proc.stdout?.unref?.();
-        }
+            finally {
+                _pendingRequests.delete(reqId);
+                if (_pendingRequests.size === 0)
+                    proc.stdout?.unref?.();
+            }
 
-        const sessionRes = recordHalogenSessionHandle({
-            keep: options?.halogenKeep || options?.sessionKeep,
-            from: options?.halogenFrom || options?.sessionFrom,
-            messages,
-            tokens: inputIds.length,
-        });
-        const cachedTokens = sessionRes.cachedTokens ? Math.min(inputIds.length, sessionRes.cachedTokens) : 0;
-        const now = Date.now();
-        const ttftMs = tFirstToken ? Math.max(1, tFirstToken - tStart) : Math.max(1, now - tStart);
-        const decodeMs = tFirstToken ? Math.max(1, now - tFirstToken) : ttftMs;
-        const tokPerSec = generatedIds.length > 0 && decodeMs > 0 ? +((generatedIds.length * 1000) / decodeMs).toFixed(1) : 0;
+            const sessionRes = recordHalogenSessionHandle({
+                keep: options?.halogenKeep || options?.sessionKeep,
+                from: options?.halogenFrom || options?.sessionFrom,
+                messages,
+                tokens: inputIds.length,
+            });
+            const cachedTokens = sessionRes.cachedTokens ? Math.min(inputIds.length, sessionRes.cachedTokens) : 0;
+            const now = Date.now();
+            const ttftMs = tFirstToken ? Math.max(1, tFirstToken - tStart) : Math.max(1, now - tStart);
+            const decodeMs = tFirstToken ? Math.max(1, now - tFirstToken) : ttftMs;
+            const tokPerSec = generatedIds.length > 0 && decodeMs > 0 ? +((generatedIds.length * 1000) / decodeMs).toFixed(1) : 0;
 
-        yield {
-            type: 'usage',
-            prompt_tokens: inputIds.length,
-            completion_tokens: generatedIds.length,
-            total_tokens: inputIds.length + generatedIds.length,
-            cached_tokens: cachedTokens,
-            ttftMs,
-            decodeMs,
-            ...(tokPerSec > 0 ? { tokPerSec } : {}),
-            ...(sessionRes.fromStatus ? { halogen_from: sessionRes.fromStatus } : {}),
+            yield {
+                type: 'usage',
+                prompt_tokens: inputIds.length,
+                completion_tokens: generatedIds.length,
+                total_tokens: inputIds.length + generatedIds.length,
+                cached_tokens: cachedTokens,
+                ttftMs,
+                decodeMs,
+                ...(tokPerSec > 0 ? { tokPerSec } : {}),
+                ...(sessionRes.fromStatus ? { halogen_from: sessionRes.fromStatus } : {}),
+            };
+            yield {
+                type: 'finish',
+                reason: 'stop',
+                done: true,
+            };
         };
-        yield {
-            type: 'finish',
-            reason: 'stop',
-            done: true,
-        };
+
+        try {
+            yield* runOnce();
+        }
+        catch (err) {
+            if (Array.isArray(err?.missingDeps) && err.missingDeps.length && (process.env.WORK_DISABLE_AUTO_PYTHON !== '1' || _autoProvisionOverride)) {
+                const prov = await ensurePythonForModality('llm', { weightsDir, extraPackages: err.missingDeps });
+                if (!prov?.ok)
+                    throw new Error(prov?.error || err.message);
+                yield* runOnce();
+            }
+            else {
+                throw err;
+            }
+        }
         return;
     }
 
@@ -647,9 +724,12 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
     throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights (откройте /MODELS/Local для установки).');
 }
 
-async function runWorkerOp(payload, timeoutMs = 120000) {
+async function runWorkerOpOnce(payload, timeoutMs = 120000) {
     touchLocalEngineActivity();
-    const proc = await ensureInferWorker();
+    const proc = await ensureInferWorker({
+        modality: payload?.op === 'check_deps' ? 'llm' : (payload?.op || 'llm'),
+        weightsDir: payload?.weightsDir || '',
+    });
     proc.stdout?.ref?.();
     const reqId = 'op_' + crypto.randomUUID().slice(0, 8);
     return new Promise((resolve, reject) => {
@@ -684,12 +764,34 @@ async function runWorkerOp(payload, timeoutMs = 120000) {
     });
 }
 
+async function runWorkerOp(payload, timeoutMs = 120000) {
+    try {
+        return await runWorkerOpOnce(payload, timeoutMs);
+    }
+    catch (err) {
+        if (
+            payload?.op !== 'check_deps'
+            && Array.isArray(err?.missingDeps) && err.missingDeps.length
+            && (process.env.WORK_DISABLE_AUTO_PYTHON !== '1' || _autoProvisionOverride)
+        ) {
+            const prov = await ensurePythonForModality(payload?.op || 'llm', {
+                weightsDir: payload?.weightsDir || '',
+                extraPackages: err.missingDeps,
+            });
+            if (!prov?.ok)
+                throw new Error(prov?.error || err.message);
+            return await runWorkerOpOnce(payload, timeoutMs);
+        }
+        throw err;
+    }
+}
+
 function assertLocalWeightsReady(ai) {
     const weightsDir = resolveWeightsDir(ai);
     const wInsp = inspectWeightsDirectorySync(weightsDir);
     if (wInsp.incompatibleOnPlatform)
         throw new Error(wInsp.incompatibleReason);
-    if (!wInsp.exists || (!wInsp.hasSafetensors && !wInsp.hasConfig))
+    if (!wInsp.exists || (!wInsp.hasSafetensors && !wInsp.hasConfig && !hasOnnxModelSync(weightsDir)))
         throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights.');
     return weightsDir;
 }
@@ -838,11 +940,26 @@ const ALLOWED_PYTHON_DEPS = new Set([
     'qwen-asr',
     'sentencepiece',
     'safetensors',
+    'onnxruntime',
+    'onnxruntime-directml',
+    'numpy',
 ]);
 
-function runSpawnCapture(cmd, args, timeoutMs = 900000) {
+function buildProxyEnv(rootDir = process.cwd()) {
+    const netCfg = loadTrainerNetworkSettings(rootDir);
+    const proxy = String(netCfg?.proxyUrl || '').trim();
+    return {
+        proxyUrl: proxy,
+        env: {
+            ...process.env,
+            ...(proxy ? { HTTPS_PROXY: proxy, HTTP_PROXY: proxy } : {}),
+        },
+    };
+}
+
+function runSpawnCapture(cmd, args, timeoutMs = 900000, env = process.env) {
     return new Promise((resolve) => {
-        const proc = spawn(cmd, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        const proc = spawn(cmd, args, { windowsHide: true, env, stdio: ['ignore', 'pipe', 'pipe'] });
         let out = '';
         let err = '';
         let timedOut = false;
@@ -871,28 +988,35 @@ async function ensureUvBinary(rootDir = process.cwd()) {
     if (first && fs.existsSync(first))
         return first;
 
-    if (os.platform() !== 'win32')
+    if (os.platform() !== 'win32' && os.platform() !== 'linux')
         return '';
 
-    const url = process.arch === 'arm64'
-        ? 'https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-pc-windows-msvc.zip'
-        : 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip';
+    const { proxyUrl } = buildProxyEnv(rootDir);
+    const netFetch = createNetworkFetch({ proxyUrl });
     fs.mkdirSync(uvDir, { recursive: true });
-    const resp = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(120000) });
-    if (!resp.ok)
-        throw new Error(`Не удалось скачать uv (${resp.status})`);
-    const zipBuf = Buffer.from(await resp.arrayBuffer());
-    const { default: AdmZip } = await import('adm-zip');
-    const zip = new AdmZip(zipBuf);
-    for (const entry of zip.getEntries()) {
-        if (!entry.isDirectory && /uv\.exe$/i.test(entry.entryName)) {
-            fs.writeFileSync(uvExe, entry.getData());
-            break;
+
+    if (os.platform() === 'win32') {
+        const url = process.arch === 'arm64'
+            ? 'https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-pc-windows-msvc.zip'
+            : 'https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip';
+        const resp = await netFetch(url, { redirect: 'follow', signal: AbortSignal.timeout(120000) });
+        if (!resp.ok)
+            throw new Error(`Не удалось скачать uv (${resp.status})`);
+        const zipBuf = Buffer.from(await resp.arrayBuffer());
+        const { default: AdmZip } = await import('adm-zip');
+        const zip = new AdmZip(zipBuf);
+        for (const entry of zip.getEntries()) {
+            if (!entry.isDirectory && /uv\.exe$/i.test(entry.entryName)) {
+                fs.writeFileSync(uvExe, entry.getData());
+                break;
+            }
         }
+        if (!fs.existsSync(uvExe))
+            throw new Error('Архив uv не содержит uv.exe');
+        return uvExe;
     }
-    if (!fs.existsSync(uvExe))
-        throw new Error('Архив uv не содержит uv.exe');
-    return uvExe;
+
+    return '';
 }
 
 /**
@@ -909,6 +1033,7 @@ export async function ensureLocalPythonRuntime(rootDir = process.cwd()) {
     const pyDir = path.join(rt, 'python');
     const venvDir = path.join(rt, 'venv');
     fs.mkdirSync(rt, { recursive: true });
+    const { env: proxyEnv } = buildProxyEnv(rootDir);
 
     let uv = '';
     try {
@@ -921,23 +1046,18 @@ export async function ensureLocalPythonRuntime(rootDir = process.cwd()) {
 
     if (uv) {
         if (!existing) {
-            const inst = await runSpawnCapture(uv, ['python', 'install', '3.11', '--install-dir', pyDir], 600000);
+            const inst = await runSpawnCapture(uv, ['python', 'install', '3.11', '--install-dir', pyDir], 600000, {
+                ...proxyEnv,
+                UV_PYTHON_INSTALL_DIR: pyDir,
+            });
             if (!inst.ok)
                 throw new Error('uv python install: ' + (inst.err || inst.out || `код ${inst.code}`));
         }
         const venvArgs = existing
             ? ['venv', venvDir, '--python', existing.cmd, '--seed', '--allow-existing']
             : ['venv', venvDir, '--python', '3.11', '--python-preference', 'only-managed', '--seed', '--allow-existing'];
-        const env = { ...process.env, UV_PYTHON_INSTALL_DIR: pyDir };
-        const venvRes = await new Promise((resolve) => {
-            const proc = spawn(uv, venvArgs, { windowsHide: true, env, stdio: ['ignore', 'pipe', 'pipe'] });
-            let out = '';
-            let err = '';
-            proc.stdout.on('data', d => { out += String(d); });
-            proc.stderr.on('data', d => { err += String(d); });
-            proc.on('error', e => resolve({ ok: false, err: String(e?.message || e) }));
-            proc.on('close', code => resolve({ ok: code === 0, out: out.trim(), err: err.trim(), code }));
-        });
+        const env = { ...proxyEnv, UV_PYTHON_INSTALL_DIR: pyDir };
+        const venvRes = await runSpawnCapture(uv, venvArgs, 180000, env);
         if (!venvRes.ok && !fs.existsSync(venvPy))
             throw new Error('uv venv: ' + (venvRes.err || venvRes.out || `код ${venvRes.code}`));
         resetPythonCache();
@@ -945,7 +1065,7 @@ export async function ensureLocalPythonRuntime(rootDir = process.cwd()) {
     }
 
     if (existing) {
-        const mk = await runSpawnCapture(existing.cmd, [...existing.args, '-m', 'venv', venvDir], 120000);
+        const mk = await runSpawnCapture(existing.cmd, [...existing.args, '-m', 'venv', venvDir], 120000, proxyEnv);
         if (mk.ok && fs.existsSync(venvPy)) {
             resetPythonCache();
             return { ok: true, python: venvPy, uv: '' };
@@ -956,53 +1076,142 @@ export async function ensureLocalPythonRuntime(rootDir = process.cwd()) {
     throw makePythonMissingError();
 }
 
-export async function installLocalPythonDeps(packages = []) {
+let _pythonProvisionPromise = null;
+let _pythonProvisionState = {
+    active: false,
+    stage: '',
+    packages: [],
+    startedAt: 0,
+    lastError: '',
+};
+
+export function getPythonProvisionState() {
+    return { ..._pythonProvisionState };
+}
+
+export async function installLocalPythonDeps(packages = [], { rootDir = process.cwd() } = {}) {
     let clean = [...new Set((Array.isArray(packages) ? packages : [packages])
         .map(s => String(s || '').trim().toLowerCase())
         .filter(p => ALLOWED_PYTHON_DEPS.has(p)))];
-    let py = await resolvePythonCommandAsync();
-    let uv = '';
 
-    if (!py) {
+    // Всегда разворачиваем изолированный #runtime/venv, чтобы не зависеть от системного Python и прав администратора
+    let uv = '';
+    const venvPy = runtimeVenvPython(rootDir);
+    if (!fs.existsSync(venvPy)) {
         try {
-            const rt = await ensureLocalPythonRuntime();
+            _pythonProvisionState = {
+                active: true,
+                stage: 'Развёртывание изолированной среды Python 3.11…',
+                packages: clean,
+                startedAt: _pythonProvisionState.startedAt || Date.now(),
+                lastError: '',
+            };
+            const rt = await ensureLocalPythonRuntime(rootDir);
             uv = rt.uv || '';
-            py = await resolvePythonCommandAsync();
         }
         catch (e) {
-            return { ok: false, error: 'Не удалось развернуть Python: ' + String(e?.message || e) };
+            const msg = makePythonMissingError(String(e?.message || e)).message;
+            _pythonProvisionState = { active: false, stage: '', packages: [], startedAt: 0, lastError: msg };
+            return { ok: false, error: msg };
         }
-        if (!clean.length)
-            clean = ['torch', 'transformers', 'accelerate', 'safetensors'];
     }
-    if (!py)
-        return { ok: false, error: 'Python не найден и не удалось установить.' };
-    if (!clean.length)
-        return { ok: false, error: 'Не указаны разрешённые Python-пакеты.' };
 
-    // Если установка запущена для любой модели без torch — доставляем torch вместе с ней
-    if (!clean.includes('torch') && clean.some(p => p !== 'safetensors'))
+    const py = await resolvePythonCommandAsync(rootDir);
+    if (!py)
+        return { ok: false, error: makePythonMissingError().message };
+
+    if (!clean.length)
+        clean = ['torch', 'transformers', 'accelerate', 'safetensors'];
+
+    const usesOnnxOnly = clean.some(p => p.startsWith('onnxruntime')) && !clean.includes('torch');
+    if (!usesOnnxOnly && !clean.includes('torch') && clean.some(p => p !== 'safetensors' && p !== 'numpy'))
         clean.unshift('torch');
 
     if (!uv) {
-        const localUv = path.join(runtimeRoot(), 'uv', os.platform() === 'win32' ? 'uv.exe' : 'uv');
+        const localUv = path.join(runtimeRoot(rootDir), 'uv', os.platform() === 'win32' ? 'uv.exe' : 'uv');
         if (fs.existsSync(localUv))
             uv = localUv;
     }
 
+    const { env: proxyEnv } = buildProxyEnv(rootDir);
+    // На Linux без явного индекса PyPI тянет 2.8 ГБ NVIDIA CUDA; фиксируем лёгкий CPU-индекс PyTorch
+    const extraIndexArgs = (os.platform() === 'linux' && clean.includes('torch'))
+        ? ['--extra-index-url', 'https://download.pytorch.org/whl/cpu']
+        : [];
+
+    _pythonProvisionState = {
+        active: true,
+        stage: `Автоматическая установка пакетов (${clean.join(', ')})…`,
+        packages: clean,
+        startedAt: _pythonProvisionState.startedAt || Date.now(),
+        lastError: '',
+    };
+
     let res;
-    if (uv && fs.existsSync(runtimeVenvPython())) {
-        res = await runSpawnCapture(uv, ['pip', 'install', '--python', runtimeVenvPython(), '--upgrade', ...clean], 900000);
+    if (uv && fs.existsSync(venvPy)) {
+        res = await runSpawnCapture(uv, ['pip', 'install', '--python', venvPy, '--upgrade', ...extraIndexArgs, ...clean], 600000, proxyEnv);
     }
     else {
-        res = await runSpawnCapture(py.cmd, [...py.args, '-m', 'pip', 'install', '--upgrade', ...clean], 900000);
+        res = await runSpawnCapture(py.cmd, [...py.args, '-m', 'pip', 'install', '--upgrade', ...extraIndexArgs, ...clean], 600000, proxyEnv);
     }
     if (res.ok) {
         closeInferWorker();
         resetPythonCache();
+        _pythonProvisionState = { active: false, stage: '', packages: [], startedAt: 0, lastError: '' };
         return { ok: true, packages: clean, log: res.out };
     }
-    return { ok: false, packages: clean, error: (res.err || res.out || `Установка завершилась с кодом ${res.code}`).trim() };
+    const rawErr = (res.err || res.out || `Установка завершилась с кодом ${res.code}`).trim();
+    const isOffline = /Failed to fetch|Temporary failure|ConnectionError|ConnectTimeout|ENOTFOUND|network/i.test(rawErr);
+    const finalErr = isOffline
+        ? `Нет доступа к сети для автоматической установки пакетов (${clean.join(', ')}). Подключите интернет один раз или перенесите готовую папку MODELS/Local/$provider/#runtime/.`
+        : rawErr;
+    _pythonProvisionState = { active: false, stage: '', packages: [], startedAt: 0, lastError: finalErr };
+    return { ok: false, packages: clean, error: finalErr };
+}
+
+/**
+ * Единая сериализованная точка автоподготовки Python 3.11 + нужных библиотек под модальность модели.
+ * Если параллельно пришло несколько вызовов — все они ждут одну общую установку (до 10 минут).
+ */
+export async function ensurePythonForModality(modality = 'llm', { weightsDir = '', extraPackages = [], rootDir = process.cwd() } = {}) {
+    if (_autoProvisionOverride)
+        return _autoProvisionOverride(modality, { weightsDir, extraPackages, rootDir });
+
+    const targetPkgs = [...new Set([
+        ...packagesForModality(modality, weightsDir),
+        ...(Array.isArray(extraPackages) ? extraPackages : []),
+    ])];
+
+    const runTask = async () => {
+        _pythonProvisionState = {
+            active: true,
+            stage: `Подготовка среды Python (${targetPkgs.join(', ')})…`,
+            packages: targetPkgs,
+            startedAt: Date.now(),
+            lastError: '',
+        };
+        try {
+            return await installLocalPythonDeps(targetPkgs, { rootDir });
+        }
+        finally {
+            if (_pythonProvisionState.active) {
+                _pythonProvisionState = { ..._pythonProvisionState, active: false, stage: '' };
+            }
+        }
+    };
+
+    if (_pythonProvisionPromise) {
+        await _pythonProvisionPromise.catch(() => null);
+    }
+    const p = runTask();
+    _pythonProvisionPromise = p;
+    try {
+        return await p;
+    }
+    finally {
+        if (_pythonProvisionPromise === p)
+            _pythonProvisionPromise = null;
+    }
 }
 
 export const localEngine = Object.freeze({
@@ -1015,4 +1224,6 @@ export const localEngine = Object.freeze({
     decide: localDecide,
     checkDeps: checkLocalPythonDeps,
     installDeps: installLocalPythonDeps,
+    ensureForModality: ensurePythonForModality,
+    getProvisionState: getPythonProvisionState,
 });

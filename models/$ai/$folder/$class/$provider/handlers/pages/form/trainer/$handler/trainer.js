@@ -5,7 +5,7 @@
  *  - вкладка «Дообучение»: двухшаговый мастер (1. Собрать данные организации → 2. Дообучить модель LoRA).
  */
 export default {
-    imports: 'oda//button, oda//icon',
+    imports: 'oda//button, oda//icon, oda//tabs',
     template: /*html*/`
     <style>
         :host {
@@ -81,33 +81,6 @@ export default {
         .dot.on { background: #22c55e; }
         .dot.warn { background: #f59e0b; }
         .dot.off { background: #94a3b8; }
-
-        /* Спокойные вкладки */
-        .tabs-bar {
-            @apply --horizontal;
-            gap: 4px;
-            border-bottom: 1px solid var(--border-color, #cbd5e1);
-        }
-        .tab-btn {
-            appearance: none;
-            border: none;
-            border-bottom: 2px solid transparent;
-            background: transparent;
-            color: inherit;
-            opacity: 0.7;
-            padding: 8px 16px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-        .tab-btn:hover {
-            opacity: 1;
-        }
-        .tab-btn.tab-active {
-            opacity: 1;
-            color: var(--accent-color, #2563eb);
-            border-bottom-color: var(--accent-color, #2563eb);
-        }
 
         .card {
             @apply --vertical;
@@ -346,15 +319,8 @@ export default {
     <div class="msg ok" ~if="notice">{{notice}}</div>
     <div class="msg err" ~if="error">{{error}}</div>
 
-    <!-- Две чистые вкладки -->
-    <div class="tabs-bar">
-        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'models'}" @tap="activeTab = 'models'">
-            Модели ({{localModels.length}})
-        </button>
-        <button type="button" class="tab-btn" ~class="{'tab-active': activeTab === 'train'}" @tap="activeTab = 'train'">
-            Дообучение ({{adapters.length}})
-        </button>
-    </div>
+    <!-- Единые капсульные вкладки -->
+    <oda-tabs variant="pills" :allow-list="false" :items="trainerTabItems" :focused-index="trainerTabIndex" @tab-select="onTrainerTabSelect($event)"></oda-tabs>
 
     <!-- ВКЛАДКА 1: ЕДИНЫЙ СПИСОК МОДЕЛЕЙ (УСТАНОВЛЕННЫЕ, ЗАГРУЖАЕМЫЕ, НЕДОКАЧАННЫЕ И КАТАЛОГ) -->
     <div ~if="activeTab === 'models'" class="vertical" style="gap:14px;">
@@ -413,10 +379,7 @@ export default {
                 <div class="model-main" style="margin-bottom:6px;">
                     <strong>Диагностика локальных моделей (/MODELS/Local)</strong>
                     <div class="toolbar">
-                        <span class="status-chip" ~class="checkAllResult.pythonDeps?.pythonMissing ? 'err' : 'ok'" ~if="checkAllResult.pythonDeps?.deviceName">Python: {{checkAllResult.pythonDeps.deviceName}}</span>
-                        <button type="button" class="btn primary" ~if="missingPythonPkgs.length" :disabled="installingPythonDeps" @tap="installMissingPythonDeps()">
-                            {{installingPythonDeps ? 'Установка среды (это займёт 1–3 мин)…' : (checkAllResult.pythonDeps?.pythonMissing ? 'Установить Python 3.11 и все библиотеки' : ('Доустановить пакеты (' + missingPythonPkgs.join(', ') + ')'))}}
-                        </button>
+                        <span class="status-chip" ~class="checkAllResult.pythonDeps?.pythonMissing ? 'warn' : 'ok'" ~if="checkAllResult.pythonDeps?.deviceName">Python: {{checkAllResult.pythonDeps.pythonMissing ? 'авторазвёртывание по первому запросу' : checkAllResult.pythonDeps.deviceName}}</span>
                     </div>
                 </div>
                 <div class="model-row" ~for="checkAllResult.results || []" style="padding:6px 0;">
@@ -707,6 +670,21 @@ export default {
     </div>
     `,
     activeTab: 'models',
+    get trainerTabItems() {
+        return [
+            { id: 'models', label: 'Модели', icon: 'carbon:machine-learning-model', count: this.localModels?.length || 0, showZeroCount: true },
+            { id: 'train', label: 'Дообучение', icon: 'carbon:education', count: this.adapters?.length || 0, showZeroCount: true },
+        ];
+    },
+    get trainerTabIndex() {
+        const idx = this.trainerTabItems.findIndex(t => t.id === this.activeTab);
+        return idx >= 0 ? idx : 0;
+    },
+    onTrainerTabSelect(e) {
+        const id = e?.detail?.item?.id;
+        if (id)
+            this.activeTab = id;
+    },
     hardware: null,
     runtime: null,
     localModels: [],
