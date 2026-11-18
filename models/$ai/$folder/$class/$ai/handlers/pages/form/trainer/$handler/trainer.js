@@ -277,10 +277,10 @@ export default {
             <div class="vertical" style="gap:8px;" ~if="testModality === 'tts'">
                 <textarea rows="2" :value="testTtsText" placeholder="Текст для озвучивания…" @input="testTtsText = $this.value"></textarea>
                 <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base'">
-                    <button type="button" class="btn" ~for="p of ttsVoicePresets"
-                        :style="testTtsInstructions === p.value ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
-                        @tap="selectTtsPreset(p)">
-                        {{p.label}}
+                    <button type="button" class="btn" ~for="ttsVoicePresets"
+                        :style="testTtsInstructions === $for.item.value ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
+                        @tap="selectTtsPreset($for.item)">
+                        {{$for.item.label}}
                     </button>
                 </div>
                 <textarea rows="2" :value="testTtsInstructions" placeholder="Описание голоса и манеры (instruct): например «Мужской баритон, спокойная деловая интонация»…" @input="testTtsInstructions = $this.value"></textarea>

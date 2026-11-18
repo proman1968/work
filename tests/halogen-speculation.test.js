@@ -453,5 +453,14 @@ print(json.dumps({
         assert.equal(out.sttText, 'проверка распознана');
         assert.equal(out.sttLang, 'Russian');
         assert.equal(out.sttUnknownLang, 'Auto');
+
+        // Шаблоны ODA используют ~for="items" + $for.item (а не JS-синтаксис `p of items`)
+        for (const rel of [
+            'MODELS/$ai/$folder/$class/$ai/handlers/pages/form/trainer/$handler/trainer.js',
+            'MODELS/$ai/$folder/$class/$provider/handlers/pages/form/trainer/$handler/trainer.js',
+        ]) {
+            const src = await fsp.readFile(path.resolve(process.cwd(), rel), 'utf8');
+            assert.ok(!/~for="[^"]+\b(of|in)\b/.test(src), `${rel} не должен содержать ~for="... of/in ..."`);
+        }
     });
 });
