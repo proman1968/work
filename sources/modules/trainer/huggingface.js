@@ -387,6 +387,22 @@ export const CURATED_HF_MODELS = Object.freeze([
         likes: 620,
     },
     {
+        id: 'Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice',
+        author: 'Qwen',
+        modelName: 'Qwen3-TTS-0.6B CustomVoice (Быстрый синтез речи, 9 голосов)',
+        modality: 'audio',
+        format: 'safetensors',
+        paramsB: 0.6,
+        ramRequiredGb: 1.2,
+        trainRamGb: 2.8,
+        capabilities: ['tts', 'voice'],
+        whatItDoes: 'Быстрый синтез русской и английской речи с 9 готовыми фиксированными мужскими и женскими голосами (Ryan, Aiden, Dylan, Serena, Vivian)',
+        recommendedFor: 'Быстрая озвучка на CPU с фиксированным диктором (в 2.5–3 раза быстрее 1.7B, от 2 ГБ памяти)',
+        tags: ['audio', 'tts', 'text-to-speech', 'voice', 'qwen3-tts', 'customvoice'],
+        downloads: 64000,
+        likes: 510,
+    },
+    {
         id: 'hexgrad/Kokoro-82M',
         author: 'hexgrad',
         modelName: 'Kokoro-82M (Ультралёгкий TTS)',
@@ -2258,7 +2274,7 @@ export function detectBrokenWeightsLayout(weightsDir) {
             reasons.push('config.json повреждён (некорректный JSON)');
         }
     }
-    const hasShards = files.some(f => /(^|\/)[\w.-]+-\d{5}-of-\d{5}\.safetensors$/i.test(f));
+    const hasShards = files.some(f => /(^|\/)[\w.-]+-\d{5}-of-(?!00001\.)\d{5}\.safetensors$/i.test(f));
     if (hasShards && !files.some(f => /\.safetensors\.index\.json$/i.test(f)))
         reasons.push('есть шарды весов, но нет индекса *.safetensors.index.json');
     const onnxFiles = files.filter(f => /\.onnx$/i.test(f));
@@ -2279,6 +2295,32 @@ export function detectBrokenWeightsLayout(weightsDir) {
         .filter(d => fs.existsSync(path.join(weightsDir, d)));
     if (componentDirs.length >= 2 && !hasRel('model_index.json'))
         reasons.push('нет model_index.json при наличии компонентов Diffusers');
+
+    // Проверка полноты подпапок Diffusers (Z-Image-Turbo и др.): если model_index.json уже есть,
+    // но веса компонентов (transformer/, text_encoder/, vae/) всё ещё лежат в корне или не разложены.
+    const modelIndexPath = path.join(weightsDir, 'model_index.json');
+    if (fs.existsSync(modelIndexPath)) {
+        try {
+            const idx = JSON.parse(fs.readFileSync(modelIndexPath, 'utf-8')) || {};
+            const weightComponents = new Set(['transformer', 'vae', 'text_encoder', 'text_encoder_2', 'unet']);
+            for (const [comp, spec] of Object.entries(idx)) {
+                if (comp.startsWith('_') || !Array.isArray(spec))
+                    continue;
+                const compPrefix = `${comp}/`;
+                const compFiles = files.filter(f => f.startsWith(compPrefix));
+                if (!compFiles.length) {
+                    reasons.push(`нет файлов компонента Diffusers ${comp}/`);
+                    continue;
+                }
+                if (weightComponents.has(comp) && !compFiles.some(f => /\.(safetensors|bin)$/i.test(f))) {
+                    reasons.push(`в подпапке ${comp}/ отсутствуют веса (.safetensors)`);
+                }
+            }
+        }
+        catch {
+            reasons.push('model_index.json повреждён');
+        }
+    }
     return { broken: reasons.length > 0, reasons, files };
 }
 
@@ -2303,10 +2345,10 @@ export function getWeightsRepairState(folderName) {
 
 /**
  * Автоматическая самопочинка уже скачанной папки `$ai/#weights`:
- * докачивает недостающие файлы строго по их относительным путям репозитория
- * (`speech_tokenizer/`, `transformer/`, `vae/`, `onnx/`, индексы шардов, `*.onnx_data`)
- * и убирает сплющенные в корень дубликаты, если их место — в подпапке.
- * Запускается фоново, один раз на модель, с кулдауном — без блокировки UI.
+ * 1) мгновенно (`fs.renameSync`) раскладывает уже скачанные в корень гигабайтные файлы
+ *    по их целевым подпапкам репозитория (`transformer/`, `text_encoder/`, `vae/`, `tokenizer/`, `scheduler/`, `speech_tokenizer/`, `onnx/`);
+ * 2) удаляет чужой корневой `config.json`, если в репозитории на его месте `model_index.json`;
+ * 3) докачивает из сети только реально недостающие файлы (индексы шардов, конфиги компонентов).
  */
 export async function repairLocalModelWeightsIfNeeded({
     rootDir = process.cwd(),
@@ -2321,8 +2363,14 @@ export async function repairLocalModelWeightsIfNeeded({
     if (!safeName)
         return { repaired: false, reason: 'no_folder' };
     const existing = _weightsRepairs.get(safeName);
-    if (existing?.active)
+    if (existing?.active) {
+        if (waitForCompletion && existing.promise) {
+            try { await existing.promise; }
+            catch { /* ignore */ }
+            return { repaired: existing.status === 'repaired', reason: 'awaited_active', state: getWeightsRepairState(safeName) };
+        }
         return { repaired: false, reason: 'in_progress', state: getWeightsRepairState(safeName) };
+    }
     const last = _weightsRepairCooldown.get(safeName) || 0;
     if (!force && Date.now() - last < WEIGHTS_REPAIR_COOLDOWN_MS)
         return { repaired: false, reason: 'cooldown' };
@@ -2335,9 +2383,9 @@ export async function repairLocalModelWeightsIfNeeded({
     if (!quick.broken && !force)
         return { repaired: false, reason: 'layout_ok' };
 
-    // Не мешаем активной загрузке этой же модели.
+    // Не мешаем активной загрузке этой же модели (если пользователь сам не ждёт завершения).
     for (const [, entry] of _downloads.entries()) {
-        if (entry.job?.folderName === safeName && entry.job.status === 'downloading')
+        if (entry.job?.folderName === safeName && entry.job.status === 'downloading' && !force)
             return { repaired: false, reason: 'download_active' };
     }
 
@@ -2348,6 +2396,7 @@ export async function repairLocalModelWeightsIfNeeded({
         status: 'checking',
         progress: 0,
         error: '',
+        promise: null,
     };
     _weightsRepairs.set(safeName, state);
 
@@ -2365,16 +2414,86 @@ export async function repairLocalModelWeightsIfNeeded({
 
             const repoPaths = new Set(selected.map(f => safeRepoDestRel(f.name)));
             const repoByBasename = new Map();
-            for (const rel of repoPaths) {
+            for (const f of selected) {
+                const rel = safeRepoDestRel(f.name);
                 const base = path.basename(rel);
                 if (!repoByBasename.has(base))
                     repoByBasename.set(base, []);
-                repoByBasename.get(base).push(rel);
+                repoByBasename.get(base).push({ rel, size: Number(f.size) || 0 });
             }
             const sizeOf = (rel) => {
                 try { return fs.statSync(path.join(weightsDir, rel)).size; }
                 catch { return -1; }
             };
+
+            // Шаг 1. Мгновенно раскладываем уже скачанные в корень файлы по их подпапкам
+            // (чтобы не качать заново 32.8 ГБ весов Z-Image-Turbo или шардов из интернета).
+            const moved = [];
+            for (const f of selected) {
+                const rel = safeRepoDestRel(f.name);
+                if (!rel.includes('/'))
+                    continue;
+                const expSize = Number(f.size) || 0;
+                const curNestedSize = sizeOf(rel);
+                if (curNestedSize > 0 && (!expSize || curNestedSize === expSize))
+                    continue;
+                const base = path.basename(rel);
+                const rootSize = sizeOf(base);
+                if (rootSize <= 0)
+                    continue;
+                const candidates = repoByBasename.get(base) || [];
+                const uniqueInRepo = !repoPaths.has(base) && candidates.length === 1;
+                const exactSizeMatch = expSize > 0 && rootSize === expSize;
+                // Если в корне лежит чужой config.json (от компонента), переносим его только при точном совпадении размера
+                // и отсутствии в корне валидного корневого конфига.
+                let canMoveFromRoot = false;
+                if (uniqueInRepo && (!expSize || rootSize === expSize)) {
+                    canMoveFromRoot = true;
+                }
+                else if (exactSizeMatch && !repoPaths.has(base)) {
+                    canMoveFromRoot = true;
+                }
+                else if (exactSizeMatch && base === 'config.json') {
+                    try {
+                        const cfg = JSON.parse(fs.readFileSync(path.join(weightsDir, 'config.json'), 'utf-8') || '{}');
+                        const mt = String(cfg?.model_type || '');
+                        if (/_tokenizer|speech_tokenizer/i.test(mt) || cfg?._class_name || cfg?._diffusers_version)
+                            canMoveFromRoot = true;
+                    }
+                    catch { /* ignore */ }
+                }
+                if (canMoveFromRoot) {
+                    try {
+                        const dstAbs = path.join(weightsDir, rel);
+                        fs.mkdirSync(path.dirname(dstAbs), { recursive: true });
+                        fs.renameSync(path.join(weightsDir, base), dstAbs);
+                        moved.push(`${base} -> ${rel}`);
+                    }
+                    catch { /* ignore */ }
+                }
+            }
+
+            // Шаг 2. Удаляем из корня сплющенные файлы, которых вообще не должно быть в корне репозитория
+            // (например, чужой config.json в корне Diffusers-модели, где в корне только model_index.json).
+            const removed = [];
+            for (const [base, entries] of repoByBasename) {
+                if (repoPaths.has(base))
+                    continue;
+                const localRootSize = sizeOf(base);
+                if (localRootSize < 0)
+                    continue;
+                const isBogusRootConfig = base === 'config.json';
+                const nestedMatch = entries.find(e => e.rel !== base && sizeOf(e.rel) === localRootSize);
+                if (isBogusRootConfig || nestedMatch) {
+                    try {
+                        fs.rmSync(path.join(weightsDir, base), { force: true });
+                        removed.push(base);
+                    }
+                    catch { /* ignore */ }
+                }
+            }
+
+            // Шаг 3. Определяем, какие файлы всё ещё отсутствуют или имеют неверный размер, и докачиваем только их.
             const wanted = [];
             for (const f of selected) {
                 const rel = safeRepoDestRel(f.name);
@@ -2387,44 +2506,29 @@ export async function repairLocalModelWeightsIfNeeded({
                     wanted.push(f.name);
                     continue;
                 }
-                // Уже существующий, но «чужой» конфиг в корне (перезаписан токенизатором/Diffusers).
                 if (/\.json$/i.test(rel) && rel === 'config.json') {
-                    const cfg = JSON.parse(fs.readFileSync(path.join(weightsDir, rel), 'utf-8') || '{}');
-                    const mt = String(cfg?.model_type || '');
-                    if (/_tokenizer|speech_tokenizer/i.test(mt) || cfg?._class_name || cfg?._diffusers_version)
+                    try {
+                        const cfg = JSON.parse(fs.readFileSync(path.join(weightsDir, rel), 'utf-8') || '{}');
+                        const mt = String(cfg?.model_type || '');
+                        if (/_tokenizer|speech_tokenizer/i.test(mt) || cfg?._class_name || cfg?._diffusers_version)
+                            wanted.push(f.name);
+                    }
+                    catch {
                         wanted.push(f.name);
+                    }
                 }
             }
 
-            // Убираем сплющенные дубликаты: корневой файл, которого нет в репозитории в корне,
-            // но такой же по имени и размеру файл лежит в подпапке.
-            const removed = [];
-            for (const [base, rels] of repoByBasename) {
-                if (rels.length < 2 || rels.includes(base))
-                    continue;
-                const localSize = sizeOf(base);
-                if (localSize < 0)
-                    continue;
-                const nestedMatch = rels.find(rel => rel !== base && sizeOf(rel) === localSize);
-                if (!nestedMatch)
-                    continue;
-                try {
-                    fs.rmSync(path.join(weightsDir, base), { force: true });
-                    removed.push(base);
-                }
-                catch { /* ignore */ }
-            }
-
-            if (!wanted.length && !removed.length) {
+            if (!wanted.length) {
                 state.active = false;
-                state.status = 'ok';
+                state.status = (moved.length || removed.length) ? 'repaired' : 'ok';
                 state.progress = 100;
                 _weightsRepairCooldown.set(safeName, Date.now());
-                return { repaired: false, reason: 'nothing_to_do' };
+                return { repaired: Boolean(moved.length || removed.length), moved, removed, reason: (moved.length || removed.length) ? 'relocated_locally' : 'nothing_to_do' };
             }
 
             state.status = 'downloading';
-            state.reasons = [...new Set([...quick.reasons, ...(wanted.length ? [`докачка ${wanted.length} файл(ов)`] : [])])];
+            state.reasons = [...new Set([...quick.reasons, ...(moved.length ? [`перенесено в подпапки: ${moved.length}`] : []), ...(wanted.length ? [`докачка ${wanted.length} файл(ов)`] : [])])];
             const job = await startHuggingFaceDownload({
                 repoId: meta.hfRepo,
                 files: wanted,
@@ -2482,7 +2586,7 @@ export async function repairLocalModelWeightsIfNeeded({
                 }, 1500);
                 timer.unref?.();
             }
-            return { repaired: Boolean(wanted.length || removed.length), job, removed, reasons: state.reasons };
+            return { repaired: Boolean(wanted.length || moved.length || removed.length), job, moved, removed, reasons: state.reasons };
         }
         catch (err) {
             state.active = false;
@@ -2493,6 +2597,7 @@ export async function repairLocalModelWeightsIfNeeded({
         }
     })();
 
+    state.promise = run;
     // Фоновый режим: не держим HTTP-запрос карточки, докачка видна в общем списке загрузок.
     if (!waitForCompletion)
         run.catch(() => {});

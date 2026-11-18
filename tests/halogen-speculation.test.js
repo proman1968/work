@@ -388,4 +388,70 @@ print(json.dumps([
         assert.equal(cvNoInstruct.calls.length, 2, 'при отказе instruct повторяем без него');
         assert.equal(cvNoInstruct.calls[1][2], null);
     });
+
+    it('13. TTS/ASR: русские описания голоса переводятся в английский профиль с мужским баритоном по умолчанию, а язык Ru нормализуется в Russian', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const py = `
+import base64, json, os, runpy, tempfile
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+norm_voice = ns['_normalize_voice_design_instruct']
+norm_asr = ns['_asr_language']
+
+class StrictASR:
+    SUPPORTED = set(ns['SUPPORTED_ASR_LANGUAGES'].values())
+    def __init__(self):
+        self.calls = []
+    def transcribe(self, audio, language=None):
+        self.calls.append(language)
+        if language is not None and language not in self.SUPPORTED:
+            raise ValueError(f"Unsupported language: {language}")
+        return [type('R', (), {'text': 'проверка распознана'})()]
+
+d = tempfile.mkdtemp()
+asr_model = StrictASR()
+res_ru = ns['handle_stt']({
+    'weightsDir': d,
+    'audioBase64': base64.b64encode(b'RIFF....WAVE').decode('ascii'),
+    'language': 'Ru',
+}, {('stt', d): ('qwen_asr', asr_model)})
+
+res_unknown = ns['handle_stt']({
+    'weightsDir': d,
+    'audioBase64': base64.b64encode(b'RIFF....WAVE').decode('ascii'),
+    'language': 'klingon',
+}, {('stt', d): ('qwen_asr', asr_model)})
+
+print(json.dumps({
+    'defaultVoice': norm_voice(''),
+    'maleVoice': norm_voice('мужской голос'),
+    'femaleVoice': norm_voice('женский спокойный голос'),
+    'announcerVoice': norm_voice('мужской диктор, бас'),
+    'asrRu': norm_asr('Ru'),
+    'asrRusWord': norm_asr('русский'),
+    'asrAuto': norm_asr('auto'),
+    'asrUnknown': norm_asr('xx-YY'),
+    'sttCalls': asr_model.calls,
+    'sttText': res_ru.get('text'),
+    'sttLang': res_ru.get('language'),
+    'sttUnknownLang': res_unknown.get('language'),
+}))
+`;
+        const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 30000 });
+        assert.equal(res.status, 0, res.stderr || '');
+        const out = JSON.parse(String(res.stdout || '').trim());
+        assert.match(out.defaultVoice, /^Male,.*baritone/i, 'голос по умолчанию — мужской баритон');
+        assert.match(out.maleVoice, /^Male,.*baritone/i, '«мужской голос» переведён в английский профиль Male baritone');
+        assert.match(out.femaleVoice, /^Female,.*female voice/i, '«женский спокойный голос» переведён в Female');
+        assert.match(out.announcerVoice, /^Male,.*bass-baritone.*announcer/i, '«мужской диктор, бас» переведён в bass-baritone announcer');
+        assert.equal(out.asrRu, 'Russian');
+        assert.equal(out.asrRusWord, 'Russian');
+        assert.equal(out.asrAuto, null);
+        assert.equal(out.asrUnknown, null);
+        assert.deepEqual(out.sttCalls, ['Russian', null]);
+        assert.equal(out.sttText, 'проверка распознана');
+        assert.equal(out.sttLang, 'Russian');
+        assert.equal(out.sttUnknownLang, 'Auto');
+    });
 });

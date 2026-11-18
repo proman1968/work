@@ -16,6 +16,7 @@ import {
     safeRepoDestRel,
     selectFilesToDownload,
     detectBrokenWeightsLayout,
+    repairLocalModelWeightsIfNeeded,
     startHuggingFaceDownload,
 } from '../sources/modules/trainer/huggingface.js';
 import { inspectWeightsDirectorySync } from '../sources/modules/trainer/paths.js';
@@ -257,6 +258,126 @@ describe('trainer-weights-layout: структура репозитория, ф�
             assert.equal(inspectWeightsDirectorySync(fresh, 'win32').hasReadyWeights, false);
         }
         finally {
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    it('9. Автопочинка Z-Image-Turbo: мгновенно переносит уже скачанные в корень шарды по подпапкам без их повторного скачивания', async () => {
+        const repoFiles = {
+            'model_index.json': Buffer.from(JSON.stringify({
+                _class_name: 'ZImagePipeline',
+                _diffusers_version: '0.33.0',
+                transformer: ['diffusers', 'ZImageTransformer2DModel'],
+                text_encoder: ['transformers', 'Qwen3Model'],
+                vae: ['diffusers', 'AutoencoderKL'],
+                tokenizer: ['transformers', 'Qwen2Tokenizer'],
+                scheduler: ['diffusers', 'FlowMatchEulerDiscreteScheduler'],
+            })),
+            'transformer/config.json': Buffer.from(JSON.stringify({ _class_name: 'ZImageTransformer2DModel', hidden_size: 3072 })),
+            'transformer/diffusion_pytorch_model.safetensors.index.json': Buffer.from(JSON.stringify({ weight_map: {} })),
+            'transformer/diffusion_pytorch_model-00001-of-00001.safetensors': Buffer.from('BIG_TRANSFORMER_WEIGHTS_1234567890'),
+            'text_encoder/config.json': Buffer.from(JSON.stringify({ model_type: 'qwen3', hidden_size: 2560 })),
+            'text_encoder/model.safetensors.index.json': Buffer.from(JSON.stringify({ weight_map: {} })),
+            'text_encoder/model-00001-of-00001.safetensors': Buffer.from('BIG_TEXT_ENCODER_WEIGHTS_0987654321'),
+            'vae/config.json': Buffer.from(JSON.stringify({ _class_name: 'AutoencoderKL', latent_channels: 16, extra_pad: true })),
+            'vae/diffusion_pytorch_model.safetensors': Buffer.from('BIG_VAE_WEIGHTS_ABCDEF'),
+            'tokenizer/tokenizer.json': Buffer.from('{"version":"1.0"}'),
+            'scheduler/scheduler_config.json': Buffer.from('{"num_train_timesteps":1000}'),
+        };
+        const downloadedOverHttp = [];
+        const server = http.createServer((req, res) => {
+            if (req.url.startsWith('/api/models/')) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    id: 'Tongyi-MAI/Z-Image-Turbo',
+                    pipeline_tag: 'text-to-image',
+                    siblings: Object.keys(repoFiles).map(name => ({ rfilename: name, size: repoFiles[name].length })),
+                }));
+                return;
+            }
+            const rel = decodeURIComponent((req.url.split('/resolve/main/')[1] || '').split('?')[0]);
+            downloadedOverHttp.push(rel);
+            const body = repoFiles[rel];
+            if (!body) {
+                res.writeHead(404);
+                res.end('not found');
+                return;
+            }
+            res.writeHead(200, {
+                'Content-Type': 'application/octet-stream',
+                'Content-Length': String(body.length),
+                'Accept-Ranges': 'bytes',
+            });
+            res.end(body);
+        });
+        await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+        const srvUrl = `http://127.0.0.1:${server.address().port}`;
+        const root = tmpDir();
+        try {
+            const aiDir = path.join(root, 'MODELS', 'Local', 'Z-Image-Turbo', '$ai');
+            const weightsDir = path.join(aiDir, '#weights');
+            fs.mkdirSync(weightsDir, { recursive: true });
+            fs.writeFileSync(path.join(aiDir, 'class.js'), `export default ${JSON.stringify({
+                label: 'Z-Image-Turbo 6B (Картинки)',
+                protocol: 'local',
+                modality: 'image',
+                capabilities: ['image', 'text-to-image'],
+                hfRepo: 'Tongyi-MAI/Z-Image-Turbo',
+            }, null, 2)};\n`);
+
+            // Имитируем старую «сплющенную» раскладку: все тяжёлые веса уже лежат в корне #weights/,
+            // а корневой config.json перезаписан конфигом vae/config.json.
+            fs.writeFileSync(path.join(weightsDir, 'config.json'), repoFiles['vae/config.json']);
+            fs.writeFileSync(
+                path.join(weightsDir, 'diffusion_pytorch_model-00001-of-00001.safetensors'),
+                repoFiles['transformer/diffusion_pytorch_model-00001-of-00001.safetensors'],
+            );
+            fs.writeFileSync(
+                path.join(weightsDir, 'model-00001-of-00001.safetensors'),
+                repoFiles['text_encoder/model-00001-of-00001.safetensors'],
+            );
+            fs.writeFileSync(
+                path.join(weightsDir, 'diffusion_pytorch_model.safetensors'),
+                repoFiles['vae/diffusion_pytorch_model.safetensors'],
+            );
+            fs.writeFileSync(path.join(weightsDir, 'tokenizer.json'), repoFiles['tokenizer/tokenizer.json']);
+            fs.writeFileSync(path.join(weightsDir, 'scheduler_config.json'), repoFiles['scheduler/scheduler_config.json']);
+
+            assert.equal(detectBrokenWeightsLayout(weightsDir).broken, true);
+
+            const rep = await repairLocalModelWeightsIfNeeded({
+                rootDir: root,
+                folderName: 'Z-Image-Turbo',
+                force: true,
+                waitForCompletion: true,
+                fetchImpl: (url, opts) => globalThis.fetch(String(url).replace(/^https:\/\/huggingface\.co/i, srvUrl), opts),
+            });
+            assert.equal(rep.repaired, true);
+
+            // Ни один из тяжёлых .safetensors не должен был скачиваться по сети — они перенесены локально!
+            const safetensorsDownloaded = downloadedOverHttp.filter(f => f.endsWith('.safetensors'));
+            assert.deepEqual(safetensorsDownloaded, [], 'тяжёлые веса перенесены через renameSync без повторного скачивания');
+
+            // Проверяем, что все подпапки собраны, а лишний корневой config.json удалён
+            assert.equal(fs.existsSync(path.join(weightsDir, 'config.json')), false, 'чужой корневой config.json удалён');
+            assert.equal(fs.existsSync(path.join(weightsDir, 'model_index.json')), true, 'model_index.json в корне');
+            assert.equal(
+                fs.readFileSync(path.join(weightsDir, 'transformer', 'diffusion_pytorch_model-00001-of-00001.safetensors'), 'utf8'),
+                'BIG_TRANSFORMER_WEIGHTS_1234567890',
+            );
+            assert.equal(
+                fs.readFileSync(path.join(weightsDir, 'text_encoder', 'model-00001-of-00001.safetensors'), 'utf8'),
+                'BIG_TEXT_ENCODER_WEIGHTS_0987654321',
+            );
+            assert.equal(
+                fs.readFileSync(path.join(weightsDir, 'vae', 'diffusion_pytorch_model.safetensors'), 'utf8'),
+                'BIG_VAE_WEIGHTS_ABCDEF',
+            );
+            const afterCheck = detectBrokenWeightsLayout(weightsDir);
+            assert.equal(afterCheck.broken, false, `раскладка полностью здорова: ${afterCheck.reasons.join('; ')}`);
+        }
+        finally {
+            await new Promise(resolve => server.close(resolve));
             fs.rmSync(root, { recursive: true, force: true });
         }
     });

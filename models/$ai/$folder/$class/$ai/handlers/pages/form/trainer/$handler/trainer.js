@@ -276,8 +276,15 @@ export default {
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'tts'">
                 <textarea rows="2" :value="testTtsText" placeholder="Текст для озвучивания…" @input="testTtsText = $this.value"></textarea>
-                <textarea rows="2" :value="testTtsInstructions" placeholder="Описание голоса и манеры (instruct): например «спокойный женский голос, деловая интонация, чёткая дикция»…" @input="testTtsInstructions = $this.value"></textarea>
-                <input ~if="ttsKind === 'custom_voice'" :value="testTtsVoice" placeholder="Голос (speaker): Serena, Vivian, Ryan, Aiden…" @input="testTtsVoice = $this.value">
+                <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base'">
+                    <button type="button" class="btn" ~for="p of ttsVoicePresets"
+                        :style="testTtsInstructions === p.value ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
+                        @tap="selectTtsPreset(p)">
+                        {{p.label}}
+                    </button>
+                </div>
+                <textarea rows="2" :value="testTtsInstructions" placeholder="Описание голоса и манеры (instruct): например «Мужской баритон, спокойная деловая интонация»…" @input="testTtsInstructions = $this.value"></textarea>
+                <input ~if="ttsKind === 'custom_voice'" :value="testTtsVoice" placeholder="Голос (speaker): Ryan, Aiden, Dylan, Serena, Vivian…" @input="testTtsVoice = $this.value">
                 <div ~if="ttsKind === 'base'" style="font-size:12px;opacity:0.8;">Модель Base клонирует голос: для синтеза нужна эталонная запись (WAV) и её текст. Без эталона используйте VoiceDesign или CustomVoice.</div>
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'stt'">
@@ -319,8 +326,14 @@ export default {
     weightsRepair: null,
     testPrompt: 'Привет! Коротко в 3–4 предложениях расскажи, чем ты умеешь помогать в работе с документами, таблицами и кодом.',
     testTtsText: 'Привет! Локальный синтез речи платформы WORK работает.',
-    testTtsInstructions: '',
-    testTtsVoice: 'Serena',
+    testTtsInstructions: 'Мужской баритон, спокойная деловая интонация',
+    testTtsVoice: 'Ryan',
+    ttsVoicePresets: [
+        { label: 'Мужской баритон', value: 'Мужской баритон, спокойная деловая интонация', speaker: 'Ryan' },
+        { label: 'Мужской диктор', value: 'Мужской дикторский голос, глубокий уверенный тембр, чёткая дикция', speaker: 'Aiden' },
+        { label: 'Женский спокойный', value: 'Женский спокойный тёплый голос, мягкая естественная интонация', speaker: 'Serena' },
+        { label: 'Женский живой', value: 'Женский живой энергичный голос, доброжелательная выразительная подача', speaker: 'Vivian' },
+    ],
     testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
     testEmbedInput: 'Учётная система WORK\nОборотно-сальдовая ведомость',
     testRerankQuery: 'остатки на расчётном счёте 51',
@@ -365,6 +378,13 @@ export default {
         if (/(^|[^a-z])base([^a-z]|$)/.test(hay))
             return 'base';
         return 'voice_design';
+    },
+    selectTtsPreset(p) {
+        if (!p)
+            return;
+        this.testTtsInstructions = p.value || '';
+        if (p.speaker)
+            this.testTtsVoice = p.speaker;
     },
     get testModalityLabel() {
         const map = {
@@ -618,11 +638,20 @@ export default {
                 this.error = res?.error || 'Ошибка проверки модели.';
                 return;
             }
+            this.weightsRepair = null;
+            if (this.info?.weightsRepair)
+                this.info = { ...this.info, weightsRepair: null };
             const parts = [];
             if (res.engineStartMs > 500)
                 parts.push(`Старт движка: ${(res.engineStartMs / 1000).toFixed(1)} с`);
-            if (res.durationMs)
-                parts.push(`${res.engineStartMs > 500 ? 'Генерация' : 'Время'}: ${(res.durationMs / 1000).toFixed(2)} с`);
+            if (res.loadMs > 500)
+                parts.push(`Загрузка модели: ${(res.loadMs / 1000).toFixed(1)} с`);
+            if (res.durationMs) {
+                const label = (res.engineStartMs > 500 || res.loadMs > 500)
+                    ? (m === 'tts' ? 'Синтез' : 'Генерация')
+                    : 'Время';
+                parts.push(`${label}: ${(res.durationMs / 1000).toFixed(2)} с`);
+            }
             if (res.ttftMs)
                 parts.push(`TTFT: ${(res.ttftMs / 1000).toFixed(2)} с`);
             if (res.tokPerSec)

@@ -394,14 +394,12 @@ async function runSingleModelSmokeTest(ai, p = {}) {
         try {
             const layout = detectBrokenWeightsLayout(modelWeightsDir(process.cwd(), modelFolder, 'Local'));
             if (layout.broken && process.env.WORK_DISABLE_AUTO_REPAIR !== '1') {
-                await repairLocalModelWeightsIfNeeded({ rootDir: process.cwd(), folderName: modelFolder, waitForCompletion: false });
-                const deadline = Date.now() + 90000;
-                while (Date.now() < deadline) {
-                    const st = getWeightsRepairState(modelFolder);
-                    if (!st?.active)
-                        break;
-                    await new Promise(r => setTimeout(r, 1000));
-                }
+                await repairLocalModelWeightsIfNeeded({
+                    rootDir: process.cwd(),
+                    folderName: modelFolder,
+                    force: true,
+                    waitForCompletion: true,
+                });
                 const st = getWeightsRepairState(modelFolder);
                 if (st?.active) {
                     return {
@@ -432,14 +430,19 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 language: p.language,
                 instructions: p.instructions,
                 voice: p.voice,
+                seed: p.seed,
                 refAudioBase64: p.refAudioBase64,
                 refText: p.refText,
             });
-            const durationMs = Math.max(1, Date.now() - t0);
+            const totalMs = Math.max(1, Date.now() - t0);
+            const loadMs = Number(buf?.loadMs) || 0;
+            const durationMs = Number(buf?.genMs) || Math.max(1, totalMs - loadMs);
             return {
                 ok: true,
                 modality,
+                loadMs,
                 durationMs,
+                totalMs,
                 bytes: buf.length,
                 audioBase64: buf.toString('base64'),
                 summary: `WAV ${(buf.length / 1024).toFixed(1)} КБ за ${(durationMs / 1000).toFixed(2)} с`,
@@ -451,12 +454,16 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 audio = Buffer.from(String(p.audioBase64), 'base64');
             else
                 audio = synthesizeFallbackWav('проверка');
-            const res = await ai.transcribe({ audio, language: p.language || 'ru' });
-            const durationMs = Math.max(1, Date.now() - t0);
+            const res = await ai.transcribe({ audio, language: p.language || 'Russian' });
+            const totalMs = Math.max(1, Date.now() - t0);
+            const loadMs = Number(res?.loadMs) || 0;
+            const durationMs = Number(res?.genMs || res?.durationMs) || Math.max(1, totalMs - loadMs);
             return {
                 ok: true,
                 modality,
+                loadMs,
                 durationMs,
+                totalMs,
                 text: res?.text || '',
                 summary: res?.text ? `«${res.text.slice(0, 60)}» (${durationMs} мс)` : `Обработано за ${durationMs} мс`,
             };
@@ -464,11 +471,15 @@ async function runSingleModelSmokeTest(ai, p = {}) {
         if (modality === 'image') {
             const prompt = String(p.prompt || 'Минималистичная 3D-иконка офисного здания на светлом фоне').trim();
             const pic = await ai.generateImage({ prompt, size: p.size || '512x512', steps: p.steps ? Number(p.steps) : undefined });
-            const durationMs = Math.max(1, Date.now() - t0);
+            const totalMs = Math.max(1, Date.now() - t0);
+            const loadMs = Number(pic?.loadMs) || 0;
+            const durationMs = Number(pic?.genMs || pic?.durationMs) || Math.max(1, totalMs - loadMs);
             return {
                 ok: true,
                 modality,
+                loadMs,
                 durationMs,
+                totalMs,
                 mime: pic?.mime || 'image/png',
                 base64: pic?.base64 || '',
                 summary: `Картинка ${pic?.mime || 'image/png'} за ${(durationMs / 1000).toFixed(1)} с`,
@@ -479,13 +490,17 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 ? p.input
                 : String(p.prompt || 'Учётная система WORK\nОборотно-сальдовая ведомость').split(/\r?\n/).filter(Boolean);
             const res = await ai.embed({ input });
-            const durationMs = Math.max(1, Date.now() - t0);
+            const totalMs = Math.max(1, Date.now() - t0);
+            const loadMs = Number(res?.loadMs) || 0;
+            const durationMs = Number(res?.genMs || res?.durationMs) || Math.max(1, totalMs - loadMs);
             const list = res?.data || [];
             const dims = list[0]?.embedding?.length || res?.dimensions || 0;
             return {
                 ok: true,
                 modality,
+                loadMs,
                 durationMs,
+                totalMs,
                 count: list.length,
                 dimensions: dims,
                 summary: `${list.length} вект. × ${dims}d за ${durationMs} мс`,
@@ -497,12 +512,16 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 ? p.documents
                 : ['Счёт 51 «Расчётные счета»: обороты и остатки денежных средств', 'Договор аренды офиса и коммунальные услуги'];
             const res = await ai.rerank({ query, documents, top_n: documents.length });
-            const durationMs = Math.max(1, Date.now() - t0);
+            const totalMs = Math.max(1, Date.now() - t0);
+            const loadMs = Number(res?.loadMs) || 0;
+            const durationMs = Number(res?.genMs || res?.durationMs) || Math.max(1, totalMs - loadMs);
             const top = res?.results?.[0];
             return {
                 ok: true,
                 modality,
+                loadMs,
                 durationMs,
+                totalMs,
                 results: res?.results || [],
                 summary: `Топ #${(top?.index ?? 0) + 1} (${((top?.relevance_score ?? 0) * 100).toFixed(1)}%) за ${durationMs} мс`,
             };
@@ -747,9 +766,9 @@ export const TRAINER_METHODS = Object.freeze({
             if (isLocal && modelFolder) {
                 try {
                     const layout = detectBrokenWeightsLayout(modelWeightsDir(process.cwd(), modelFolder, 'Local'));
-                    weightsRepair = { broken: layout.broken, reasons: layout.reasons, ...(getWeightsRepairState(modelFolder) || {}) };
                     if (layout.broken && process.env.WORK_DISABLE_AUTO_REPAIR !== '1')
                         repairLocalModelWeightsIfNeeded({ rootDir: process.cwd(), folderName: modelFolder }).catch(() => {});
+                    weightsRepair = { broken: layout.broken, reasons: layout.reasons, ...(getWeightsRepairState(modelFolder) || {}) };
                 }
                 catch { weightsRepair = null; }
             }

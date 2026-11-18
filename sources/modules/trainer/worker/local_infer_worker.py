@@ -22,7 +22,11 @@ try:
     import torch
     import torch.nn.functional as F
     HAS_TORCH = True
-    torch.set_num_threads(max(1, (os.cpu_count() or 4) // 2))
+    torch.set_num_threads(max(4, min(16, (os.cpu_count() or 8))))
+    try:
+        torch.backends.mkldnn.enabled = True
+    except Exception:
+        pass
     DTYPE_MAP = {
         "BF16": torch.bfloat16,
         "F16": torch.float16,
@@ -440,7 +444,10 @@ def _load_embed_model(weights_dir, cache):
                 raise
     device, dtype = _best_device_and_dtype()
     try:
-        mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
+        try:
+            mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype, attn_implementation="sdpa")
+        except Exception:
+            mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
         mdl.to(device).eval()
     except Exception:
         mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=torch.float32)
@@ -455,7 +462,11 @@ def handle_embed(req, cache):
     texts = req.get("input") or []
     if isinstance(texts, str):
         texts = [texts]
+    was_cached = ("embed", weights_dir) in cache
+    t_load0 = time.time()
     kind, tok, mdl, device = _load_embed_model(weights_dir, cache)
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+    t_gen0 = time.time()
     if kind == "onnx":
         import numpy as np
         encoded = tok(texts, padding=True, truncation=True, max_length=int(req.get("maxLength", 2048)), return_tensors="np")
@@ -476,7 +487,8 @@ def handle_embed(req, cache):
             vecs = last_hidden
         norms = np.clip(np.linalg.norm(vecs, axis=1, keepdims=True), 1e-12, None)
         arr = (vecs / norms).tolist()
-        return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0}
+        gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+        return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0, "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
     with torch.inference_mode():
         encoded = tok(texts, padding=True, truncation=True, max_length=int(req.get("maxLength", 2048)), return_tensors="pt")
         encoded = {k: v.to(device) for k, v in encoded.items()}
@@ -487,7 +499,8 @@ def handle_embed(req, cache):
         counts = torch.clamp(mask.sum(dim=1), min=1e-9)
         vecs = F.normalize(summed / counts, p=2, dim=1)
         arr = vecs.cpu().tolist()
-    return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0}
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0, "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def _load_rerank_model(weights_dir, cache):
@@ -510,7 +523,10 @@ def _load_rerank_model(weights_dir, cache):
                 raise
     device, dtype = _best_device_and_dtype()
     try:
-        mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
+        try:
+            mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype, attn_implementation="sdpa")
+        except Exception:
+            mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
         mdl.to(device).eval()
     except Exception:
         mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=torch.float32)
@@ -525,8 +541,12 @@ def handle_rerank(req, cache):
     query = str(req.get("query", ""))
     docs = req.get("documents") or []
     if not docs:
-        return {"results": []}
+        return {"results": [], "loadMs": 0, "genMs": 0, "durationMs": 0}
+    was_cached = ("rerank", weights_dir) in cache
+    t_load0 = time.time()
     kind, tok, mdl, device = _load_rerank_model(weights_dir, cache)
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+    t_gen0 = time.time()
     pairs = [[query, str(d.get("text", d) if isinstance(d, dict) else d)] for d in docs]
     if kind == "onnx":
         import math
@@ -554,7 +574,8 @@ def handle_rerank(req, cache):
     top_n = int(req.get("topN") or 0)
     if top_n > 0:
         ranked = ranked[:top_n]
-    return {"results": ranked}
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {"results": ranked, "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def _load_image_pipeline(weights_dir, cache):
@@ -593,19 +614,25 @@ def handle_image(req, cache):
         w, h = [max(256, min(1536, int(v))) for v in size_str.lower().split("x")[:2]]
     except Exception:
         w, h = 512, 512
-    steps = int(req.get("steps") or 8)
+    is_turbo = "z-image" in weights_dir.lower() or "turbo" in weights_dir.lower()
+    steps = int(req.get("steps") or (4 if is_turbo else 8))
     seed = int(req.get("seed") if req.get("seed") is not None else 42)
+    was_cached = ("image", weights_dir) in cache
+    t_load0 = time.time()
     pipe, device = _load_image_pipeline(weights_dir, cache)
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+    t_gen0 = time.time()
     gen = torch.Generator(device=device).manual_seed(seed)
     kwargs = {"prompt": prompt, "width": w, "height": h, "num_inference_steps": steps, "generator": gen}
-    if "z-image" in weights_dir.lower() or "turbo" in weights_dir.lower():
+    if is_turbo:
         kwargs["guidance_scale"] = 0.0
     with torch.inference_mode():
         out = pipe(**kwargs)
         img = out.images[0]
     buf = io.BytesIO()
     img.save(buf, format="PNG")
-    return {"mime": "image/png", "base64": base64.b64encode(buf.getvalue()).decode("ascii")}
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {"mime": "image/png", "base64": base64.b64encode(buf.getvalue()).decode("ascii"), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def _pcm_to_wav_base64(samples, sample_rate):
@@ -625,13 +652,54 @@ def _pcm_to_wav_base64(samples, sample_rate):
 
 
 DEFAULT_VOICE_DESIGN_INSTRUCT = (
-    "A warm, clear adult voice with calm professional intonation, natural pacing and clean articulation."
+    "Male, 35 years old, deep warm baritone voice, calm confident professional tone, "
+    "natural pacing and clear articulation."
 )
 
+SUPPORTED_ASR_LANGUAGES = {
+    "chinese": "Chinese", "english": "English", "cantonese": "Cantonese",
+    "arabic": "Arabic", "german": "German", "french": "French",
+    "spanish": "Spanish", "portuguese": "Portuguese", "indonesian": "Indonesian",
+    "italian": "Italian", "korean": "Korean", "russian": "Russian",
+    "thai": "Thai", "vietnamese": "Vietnamese", "japanese": "Japanese",
+    "turkish": "Turkish", "hindi": "Hindi", "malay": "Malay",
+    "dutch": "Dutch", "swedish": "Swedish", "danish": "Danish",
+    "finnish": "Finnish", "polish": "Polish", "czech": "Czech",
+    "filipino": "Filipino", "persian": "Persian", "greek": "Greek",
+    "romanian": "Romanian", "hungarian": "Hungarian", "macedonian": "Macedonian",
+}
+
 TTS_LANGUAGE_ALIASES = {
-    "ru": "Russian", "rus": "Russian", "russian": "Russian",
-    "en": "English", "eng": "English", "english": "English",
-    "zh": "Chinese", "chinese": "Chinese",
+    "ru": "Russian", "rus": "Russian", "russian": "Russian", "русский": "Russian", "рус": "Russian",
+    "en": "English", "eng": "English", "english": "English", "английский": "English",
+    "zh": "Chinese", "cn": "Chinese", "zho": "Chinese", "chinese": "Chinese", "китайский": "Chinese",
+    "yue": "Cantonese", "cantonese": "Cantonese",
+    "de": "German", "deu": "German", "ger": "German", "german": "German", "немецкий": "German",
+    "fr": "French", "fra": "French", "fre": "French", "french": "French", "французский": "French",
+    "es": "Spanish", "spa": "Spanish", "spanish": "Spanish", "испанский": "Spanish",
+    "pt": "Portuguese", "por": "Portuguese", "portuguese": "Portuguese", "португальский": "Portuguese",
+    "it": "Italian", "ita": "Italian", "italian": "Italian", "итальянский": "Italian",
+    "ja": "Japanese", "jp": "Japanese", "jpn": "Japanese", "japanese": "Japanese", "японский": "Japanese",
+    "ko": "Korean", "kor": "Korean", "korean": "Korean", "корейский": "Korean",
+    "ar": "Arabic", "ara": "Arabic", "arabic": "Arabic", "арабский": "Arabic",
+    "tr": "Turkish", "tur": "Turkish", "turkish": "Turkish", "турецкий": "Turkish",
+    "hi": "Hindi", "hin": "Hindi", "hindi": "Hindi",
+    "pl": "Polish", "pol": "Polish", "polish": "Polish",
+    "cs": "Czech", "cze": "Czech", "ces": "Czech", "czech": "Czech",
+    "nl": "Dutch", "nld": "Dutch", "dut": "Dutch", "dutch": "Dutch",
+    "sv": "Swedish", "swe": "Swedish", "swedish": "Swedish",
+    "da": "Danish", "dan": "Danish", "danish": "Danish",
+    "fi": "Finnish", "fin": "Finnish", "finnish": "Finnish",
+    "el": "Greek", "ell": "Greek", "gre": "Greek", "greek": "Greek",
+    "ro": "Romanian", "ron": "Romanian", "rum": "Romanian", "romanian": "Romanian",
+    "hu": "Hungarian", "hun": "Hungarian", "hungarian": "Hungarian",
+    "mk": "Macedonian", "mkd": "Macedonian", "macedonian": "Macedonian",
+    "th": "Thai", "tha": "Thai", "thai": "Thai",
+    "vi": "Vietnamese", "vie": "Vietnamese", "vietnamese": "Vietnamese",
+    "id": "Indonesian", "ind": "Indonesian", "indonesian": "Indonesian",
+    "ms": "Malay", "msa": "Malay", "malay": "Malay",
+    "fa": "Persian", "fas": "Persian", "per": "Persian", "persian": "Persian",
+    "tl": "Filipino", "fil": "Filipino", "filipino": "Filipino",
     "auto": "Auto", "": "Auto",
 }
 
@@ -646,7 +714,96 @@ def _read_json_file(path):
 
 def _tts_language(value):
     raw = str(value or "").strip()
-    return TTS_LANGUAGE_ALIASES.get(raw.lower(), raw or "Auto")
+    key = raw.lower().split("-")[0].split("_")[0]
+    if raw.lower() in TTS_LANGUAGE_ALIASES:
+        return TTS_LANGUAGE_ALIASES[raw.lower()]
+    if key in TTS_LANGUAGE_ALIASES:
+        return TTS_LANGUAGE_ALIASES[key]
+    if raw.lower() in SUPPORTED_ASR_LANGUAGES:
+        return SUPPORTED_ASR_LANGUAGES[raw.lower()]
+    return raw or "Auto"
+
+
+def _asr_language(value):
+    """Нормализация языка для Qwen3-ASR: поддерживаются 30 полных английских названий или None (автоопределение)."""
+    raw = str(value or "").strip()
+    if not raw or raw.lower() in ("auto", "none", "null", "default"):
+        return None
+    norm = _tts_language(raw)
+    if norm == "Auto":
+        return None
+    canonical = SUPPORTED_ASR_LANGUAGES.get(norm.lower())
+    return canonical
+
+
+def _normalize_voice_design_instruct(raw_instruct):
+    """Преобразовать русские и короткие описания голоса в детальный английский акустический профиль для Qwen3-TTS VoiceDesign.
+
+    Энкодер инструкций Qwen3-TTS-VoiceDesign обучен на развёрнутых английских/китайских описаниях
+    (пол, возраст, тембр, подача, темп). Короткая русская фраза («мужской голос») без перевода
+    даёт слабый сигнал и случайный тембр.
+    """
+    txt = str(raw_instruct or "").strip()
+    if not txt:
+        return DEFAULT_VOICE_DESIGN_INSTRUCT
+    low = txt.lower()
+    has_cyrillic = any("а" <= ch <= "я" or ch in "ёіїєґ" for ch in low)
+    if not has_cyrillic and len(txt) >= 32:
+        return txt
+
+    is_female = any(w in low for w in (
+        "женск", "женщин", "девушк", "девочк", "сопрано", "альт", "леди",
+        "female", "woman", "girl", "lady", "soprano", "alto",
+    ))
+    is_male = any(w in low for w in (
+        "мужск", "мужчин", "парен", "парн", "мальчик", "баритон", "бас", "тенор", "диктор",
+        "male", "man", "boy", "baritone", "bass", "tenor",
+    ))
+    if not is_female and not is_male:
+        is_male = True
+
+    if any(w in low for w in ("молод", "юный", "юная", "парен", "девушк", "young", "youth")):
+        age_part = "23 years old, youthful"
+    elif any(w in low for w in ("зрел", "стар", "взросл", "опытн", "mature", "older", "seasoned")):
+        age_part = "45 years old, mature seasoned"
+    else:
+        age_part = "30 years old, adult" if is_female else "35 years old, adult"
+
+    if is_female:
+        if any(w in low for w in ("низк", "альт", "глубок", "бархат", "alto", "deep", "warm")):
+            timbre = "warm rich alto female voice"
+        elif any(w in low for w in ("высок", "звонк", "нежных", "нежн", "сопрано", "soprano", "bright")):
+            timbre = "bright clear soprano female voice"
+        else:
+            timbre = "warm, clear, natural female voice"
+        gender_tag = "Female"
+    else:
+        if any(w in low for w in ("бас", "низк", "глубок", "густ", "bass", "deep")):
+            timbre = "deep resonant bass-baritone male voice"
+        elif any(w in low for w in ("тенор", "высок", "светл", "tenor")):
+            timbre = "clear expressive tenor male voice"
+        else:
+            timbre = "deep warm baritone male voice"
+        gender_tag = "Male"
+
+    style_parts = []
+    if any(w in low for w in ("диктор", "новост", "официальн", "делов", "презентац", "announcer", "broadcast", "professional")):
+        style_parts.append("authoritative professional broadcast announcer delivery with crystal-clear diction")
+    if any(w in low for w in ("энергич", "жив", "бодр", "весел", "радост", "эмоцион", "energetic", "lively", "happy", "upbeat")):
+        style_parts.append("energetic, lively, upbeat and expressive intonation")
+    elif any(w in low for w in ("строг", "серьез", "уверен", "тверд", "serious", "stern", "confident")):
+        style_parts.append("confident, composed, serious tone")
+    else:
+        style_parts.append("calm, confident, friendly and natural professional tone")
+
+    if any(w in low for w in ("быстр", "динамич", "fast", "brisk")):
+        pace_part = "brisk dynamic speaking pace"
+    elif any(w in low for w in ("медлен", "размерен", "неспеш", "slow", "measured")):
+        pace_part = "measured unhurried speaking pace"
+    else:
+        pace_part = "natural steady pacing and clean articulation"
+
+    return f"{gender_tag}, {age_part}, {timbre}, {', '.join(style_parts)}, {pace_part}."
 
 
 def _tts_model_kind(weights_dir, mdl, instructions=""):
@@ -702,13 +859,37 @@ def _resolve_tts_speaker(mdl, requested):
     return speakers[0]
 
 
+def _seed_torch_deterministic(seed_val):
+    if not HAS_TORCH or torch is None:
+        return
+    try:
+        s = int(seed_val if seed_val is not None else 42)
+        torch.manual_seed(s)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(s)
+    except Exception:
+        pass
+
+
+def _call_tts_gen(fn, max_new_tokens, **kwargs):
+    try:
+        return fn(max_new_tokens=max_new_tokens, **kwargs)
+    except TypeError:
+        return fn(**kwargs)
+
+
 def handle_tts(req, cache):
     weights_dir = req["weightsDir"]
     text = str(req.get("text", "")).strip()
     language = _tts_language(req.get("language") or "Russian")
     instructions = str(req.get("instructions") or "").strip()
+    seed = int(req.get("seed") if req.get("seed") is not None else 42)
+    # 12 Гц аудио-токенизатор: динамический потолок шагов декодера под реальную длину текста
+    max_new_tokens = max(128, min(1024, int(len(text) * 4.5) + 96))
     key = ("tts", weights_dir)
-    if key not in cache:
+    was_cached = key in cache
+    t_load0 = time.time()
+    if not was_cached:
         try:
             from qwen_tts import Qwen3TTSModel
         except Exception as e:
@@ -718,7 +899,15 @@ def handle_tts(req, cache):
             })))
         device, dtype = _best_device_and_dtype()
         try:
-            mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=device, dtype=dtype)
+            try:
+                mdl = Qwen3TTSModel.from_pretrained(
+                    weights_dir,
+                    device_map=device,
+                    dtype=dtype,
+                    attn_implementation="sdpa",
+                )
+            except Exception:
+                mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=device, dtype=dtype)
         except Exception as e:
             # Пакет установлен, но веса/конфиг не читаются — отдаём реальную причину,
             # а не ложное «нет пакетов», из-за которого раньше шёл бесконечный переустанов.
@@ -726,16 +915,23 @@ def handle_tts(req, cache):
                 "error": f"Не удалось загрузить модель синтеза речи из {weights_dir}: {e}",
             }))
         cache[key] = mdl
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
     mdl = cache[key]
     kind = _tts_model_kind(weights_dir, mdl, instructions)
+    _seed_torch_deterministic(seed)
+    t_gen0 = time.time()
+    instruct_used = ""
     try:
         if kind == "voice_design":
-            # VoiceDesign синтезирует голос по текстовому описанию (`instruct`),
-            # метод generate_custom_voice для этой разновидности не поддерживается.
-            wavs, sr = mdl.generate_voice_design(
+            # VoiceDesign синтезирует голос по текстовому описанию (`instruct`);
+            # переводим русские и короткие описания в полный акустический профиль на английском.
+            instruct_used = _normalize_voice_design_instruct(instructions)
+            wavs, sr = _call_tts_gen(
+                mdl.generate_voice_design,
+                max_new_tokens,
                 text=text,
                 language=language,
-                instruct=instructions or DEFAULT_VOICE_DESIGN_INSTRUCT,
+                instruct=instruct_used,
             )
         elif kind == "custom_voice":
             kwargs = {
@@ -745,13 +941,15 @@ def handle_tts(req, cache):
             }
             if instructions:
                 kwargs["instruct"] = instructions
+                instruct_used = instructions
             try:
-                wavs, sr = mdl.generate_custom_voice(**kwargs)
+                wavs, sr = _call_tts_gen(mdl.generate_custom_voice, max_new_tokens, **kwargs)
             except Exception as e:
                 # CustomVoice 0.6B не принимает instruct — повторяем без него.
                 if "instruct" in kwargs and "instruct" in str(e).lower():
                     kwargs.pop("instruct")
-                    wavs, sr = mdl.generate_custom_voice(**kwargs)
+                    instruct_used = ""
+                    wavs, sr = _call_tts_gen(mdl.generate_custom_voice, max_new_tokens, **kwargs)
                 else:
                     raise
         else:
@@ -768,7 +966,9 @@ def handle_tts(req, cache):
                 ref_path = tf.name
             ref_text = str(req.get("refText") or "").strip()
             try:
-                wavs, sr = mdl.generate_voice_clone(
+                wavs, sr = _call_tts_gen(
+                    mdl.generate_voice_clone,
+                    max_new_tokens,
                     text=text,
                     language=language,
                     ref_audio=ref_path,
@@ -786,23 +986,38 @@ def handle_tts(req, cache):
         raise RuntimeError(json.dumps({
             "error": f"Синтез речи Qwen3-TTS ({kind}) не удался: {e}",
         }))
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
     audio = wavs[0] if isinstance(wavs, (list, tuple)) else wavs
-    return {"audioBase64": _pcm_to_wav_base64(audio, sr), "sampleRate": int(sr), "ttsKind": kind}
+    return {
+        "audioBase64": _pcm_to_wav_base64(audio, sr),
+        "sampleRate": int(sr),
+        "ttsKind": kind,
+        "instructUsed": instruct_used,
+        "loadMs": load_ms,
+        "genMs": gen_ms,
+        "durationMs": gen_ms,
+    }
 
 
 def handle_stt(req, cache):
     weights_dir = req["weightsDir"]
     audio_b64 = req.get("audioBase64", "")
-    language = str(req.get("language") or "Russian")
+    language = _asr_language(req.get("language"))
     raw = base64.b64decode(audio_b64)
     key = ("stt", weights_dir)
-    if key not in cache:
+    was_cached = key in cache
+    t_load0 = time.time()
+    if not was_cached:
         device, dtype = _best_device_and_dtype()
         errors = []
         try:
             from qwen_asr import Qwen3ASRModel
             try:
-                cache[key] = ("qwen_asr", Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device))
+                try:
+                    loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device, attn_implementation="sdpa")
+                except Exception:
+                    loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device)
+                cache[key] = ("qwen_asr", loaded)
             except Exception as e:
                 errors.append(f"qwen-asr: {e}")
         except Exception as e:
@@ -832,14 +1047,22 @@ def handle_stt(req, cache):
             raise RuntimeError(json.dumps({
                 "error": f"Не удалось загрузить модель распознавания речи из {weights_dir}: {msg}",
             }))
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
     kind, mdl = cache[key]
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
         tf.write(raw)
         tmp_path = tf.name
+    t_gen0 = time.time()
     try:
         if kind == "qwen_asr":
-            res = mdl.transcribe(audio=tmp_path, language=language)
+            try:
+                res = mdl.transcribe(audio=tmp_path, language=language)
+            except Exception as e:
+                if "unsupported language" in str(e).lower() and language is not None:
+                    res = mdl.transcribe(audio=tmp_path, language=None)
+                else:
+                    raise
             txt = res[0].text if isinstance(res, list) and res else getattr(res, "text", str(res))
         else:
             res = mdl(tmp_path)
@@ -849,7 +1072,8 @@ def handle_stt(req, cache):
             os.remove(tmp_path)
         except Exception:
             pass
-    return {"text": str(txt or "").strip()}
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {"text": str(txt or "").strip(), "language": language or "Auto", "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def main():
@@ -887,34 +1111,18 @@ def main():
                     "missingDeps": needed,
                 }), flush=True)
                 continue
-            if op == "embed":
+            if op in ("embed", "rerank", "image", "tts", "stt"):
                 t0 = time.time()
-                res = handle_embed(req, mod_cache)
-                res["durationMs"] = int((time.time() - t0) * 1000)
-                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
-                continue
-            if op == "rerank":
-                t0 = time.time()
-                res = handle_rerank(req, mod_cache)
-                res["durationMs"] = int((time.time() - t0) * 1000)
-                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
-                continue
-            if op == "image":
-                t0 = time.time()
-                res = handle_image(req, mod_cache)
-                res["durationMs"] = int((time.time() - t0) * 1000)
-                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
-                continue
-            if op == "tts":
-                t0 = time.time()
-                res = handle_tts(req, mod_cache)
-                res["durationMs"] = int((time.time() - t0) * 1000)
-                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
-                continue
-            if op == "stt":
-                t0 = time.time()
-                res = handle_stt(req, mod_cache)
-                res["durationMs"] = int((time.time() - t0) * 1000)
+                fn = {
+                    "embed": handle_embed,
+                    "rerank": handle_rerank,
+                    "image": handle_image,
+                    "tts": handle_tts,
+                    "stt": handle_stt,
+                }[op]
+                res = fn(req, mod_cache)
+                if "durationMs" not in res:
+                    res["durationMs"] = int((time.time() - t0) * 1000)
                 print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
                 continue
 

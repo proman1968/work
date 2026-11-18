@@ -823,7 +823,9 @@ export async function localEmbed(ai, params = {}) {
         model: String(ai?.model || ai?.id || 'local-embed'),
         data: (res.embeddings || []).map((embedding, index) => ({ object: 'embedding', index, embedding })),
         dimensions: res.dimensions || 0,
-        durationMs: res.durationMs || 0,
+        loadMs: Number(res.loadMs) || 0,
+        genMs: Number(res.genMs || res.durationMs) || 0,
+        durationMs: Number(res.genMs || res.durationMs) || 0,
     };
 }
 
@@ -841,7 +843,9 @@ export async function localRerank(ai, params = {}) {
     return {
         model: String(ai?.model || ai?.id || 'local-rerank'),
         results: res.results || [],
-        durationMs: res.durationMs || 0,
+        loadMs: Number(res.loadMs) || 0,
+        genMs: Number(res.genMs || res.durationMs) || 0,
+        durationMs: Number(res.genMs || res.durationMs) || 0,
     };
 }
 
@@ -850,19 +854,23 @@ export async function localGenerateImage(ai, params = {}) {
     const prompt = String(params.prompt || params.post || '').trim();
     if (!prompt)
         throw new Error('generateImage: пустой prompt');
+    const isTurbo = /z-image|turbo/i.test(weightsDir) || /z-image|turbo/i.test(String(ai?.model || ai?.id || ''));
+    const defaultSteps = isTurbo ? 4 : 8;
     const res = await runWorkerOp({
         op: 'image',
         weightsDir,
         prompt,
         size: String(params.size || '512x512'),
-        steps: Number(params.steps) || 8,
+        steps: Number(params.steps) || defaultSteps,
         seed: params.seed != null ? Number(params.seed) : 42,
     }, 360000);
     return {
         mime: res.mime || 'image/png',
         base64: res.base64,
         model: String(ai?.model || ai?.id || 'local-image'),
-        durationMs: res.durationMs || 0,
+        loadMs: Number(res.loadMs) || 0,
+        genMs: Number(res.genMs || res.durationMs) || 0,
+        durationMs: Number(res.genMs || res.durationMs) || 0,
     };
 }
 
@@ -878,10 +886,16 @@ export async function localSpeak(ai, params = {}) {
         language: String(params.language || ai?.language || 'Russian'),
         instructions: String(params.instructions || ai?.instructions || '').trim(),
         voice: String(params.voice || ai?.voice || 'serena'),
+        ...(params.seed != null ? { seed: Number(params.seed) } : {}),
         ...(params.refAudioBase64 ? { refAudioBase64: String(params.refAudioBase64) } : {}),
         ...(params.refText ? { refText: String(params.refText) } : {}),
     }, 240000);
-    return Buffer.from(res.audioBase64 || '', 'base64');
+    const buf = Buffer.from(res.audioBase64 || '', 'base64');
+    buf.loadMs = Number(res.loadMs) || 0;
+    buf.genMs = Number(res.genMs || res.durationMs) || 0;
+    buf.ttsKind = res.ttsKind || '';
+    buf.instructUsed = res.instructUsed || '';
+    return buf;
 }
 
 export async function localTranscribe(ai, params = {}) {
@@ -898,7 +912,9 @@ export async function localTranscribe(ai, params = {}) {
     return {
         text: String(res.text || '').trim(),
         model: String(ai?.model || ai?.id || 'local-stt'),
-        durationMs: res.durationMs || 0,
+        loadMs: Number(res.loadMs) || 0,
+        genMs: Number(res.genMs || res.durationMs) || 0,
+        durationMs: Number(res.genMs || res.durationMs) || 0,
     };
 }
 
