@@ -354,9 +354,9 @@ export function packagesForModality(modality = 'llm', weightsDir = '') {
     if (mod === 'image' || mod === 'text-to-image')
         return ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers', 'safetensors'];
     if (mod === 'tts' || mod === 'voice')
-        return ['torch', 'qwen-tts', 'soundfile', 'transformers', 'safetensors'];
+        return ['torch', 'qwen-tts', 'soundfile', 'transformers', 'accelerate', 'safetensors'];
     if (mod === 'stt' || mod === 'asr' || mod === 'audio')
-        return ['torch', 'qwen-asr', 'soundfile', 'transformers', 'safetensors'];
+        return ['torch', 'qwen-asr', 'soundfile', 'transformers', 'accelerate', 'safetensors'];
     return ['torch', 'safetensors'];
 }
 
@@ -401,6 +401,7 @@ async function ensureInferWorker(hint = {}) {
     const scriptPath = path.resolve(import.meta.dirname, './worker/local_infer_worker.py');
     const proc = spawn(py.cmd, [...py.args, scriptPath], {
         windowsHide: true,
+        env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
         stdio: ['pipe', 'pipe', 'pipe'],
     });
     proc.unref?.();
@@ -800,7 +801,7 @@ export async function localEmbed(ai, params = {}) {
     const weightsDir = assertLocalWeightsReady(ai);
     const raw = params.input ?? params.text ?? params.post ?? '';
     const input = Array.isArray(raw) ? raw.map(String) : [String(raw)];
-    const res = await runWorkerOp({ op: 'embed', weightsDir, input }, 60000);
+    const res = await runWorkerOp({ op: 'embed', weightsDir, input }, 180000);
     return {
         object: 'list',
         model: String(ai?.model || ai?.id || 'local-embed'),
@@ -820,7 +821,7 @@ export async function localRerank(ai, params = {}) {
         query,
         documents,
         topN: Number(params.top_n || params.topN) || 0,
-    }, 60000);
+    }, 180000);
     return {
         model: String(ai?.model || ai?.id || 'local-rerank'),
         results: res.results || [],
@@ -840,7 +841,7 @@ export async function localGenerateImage(ai, params = {}) {
         size: String(params.size || '512x512'),
         steps: Number(params.steps) || 8,
         seed: params.seed != null ? Number(params.seed) : 42,
-    }, 240000);
+    }, 360000);
     return {
         mime: res.mime || 'image/png',
         base64: res.base64,
@@ -861,7 +862,7 @@ export async function localSpeak(ai, params = {}) {
         language: String(params.language || ai?.language || 'Russian'),
         instructions: String(params.instructions || ai?.instructions || '').trim(),
         voice: String(params.voice || ai?.voice || 'serena'),
-    }, 120000);
+    }, 240000);
     return Buffer.from(res.audioBase64 || '', 'base64');
 }
 
@@ -875,7 +876,7 @@ export async function localTranscribe(ai, params = {}) {
         weightsDir,
         audioBase64: audio.toString('base64'),
         language: String(params.language || ai?.language || 'Russian'),
-    }, 120000);
+    }, 240000);
     return {
         text: String(res.text || '').trim(),
         model: String(ai?.model || ai?.id || 'local-stt'),
@@ -952,6 +953,8 @@ function buildProxyEnv(rootDir = process.cwd()) {
         proxyUrl: proxy,
         env: {
             ...process.env,
+            PYTHONUTF8: '1',
+            PYTHONIOENCODING: 'utf-8',
             ...(proxy ? { HTTPS_PROXY: proxy, HTTP_PROXY: proxy } : {}),
         },
     };
@@ -1045,21 +1048,38 @@ export async function ensureLocalPythonRuntime(rootDir = process.cwd()) {
     }
 
     if (uv) {
-        if (!existing) {
+        // Всегда предпочитаем управляемый изолированный Python 3.11 (совместим со всеми AI-колесами: torch, onnxruntime-directml, qwen-tts, diffusers),
+        // чтобы не зависеть от системного Python 3.13/3.14 или лаунчера `py.exe`.
+        let managedOk = false;
+        try {
+            if (fs.existsSync(pyDir) && fs.readdirSync(pyDir).some(d => /^cpython-3\.11/i.test(d)))
+                managedOk = true;
+        }
+        catch { /* ignore */ }
+        if (!managedOk) {
             const inst = await runSpawnCapture(uv, ['python', 'install', '3.11', '--install-dir', pyDir], 600000, {
                 ...proxyEnv,
                 UV_PYTHON_INSTALL_DIR: pyDir,
             });
-            if (!inst.ok)
+            managedOk = inst.ok;
+            if (!managedOk && !existing)
                 throw new Error('uv python install: ' + (inst.err || inst.out || `код ${inst.code}`));
         }
-        const venvArgs = existing
-            ? ['venv', venvDir, '--python', existing.cmd, '--seed', '--allow-existing']
-            : ['venv', venvDir, '--python', '3.11', '--python-preference', 'only-managed', '--seed', '--allow-existing'];
-        const env = { ...proxyEnv, UV_PYTHON_INSTALL_DIR: pyDir };
-        const venvRes = await runSpawnCapture(uv, venvArgs, 180000, env);
-        if (!venvRes.ok && !fs.existsSync(venvPy))
-            throw new Error('uv venv: ' + (venvRes.err || venvRes.out || `код ${venvRes.code}`));
+
+        let venvOk = false;
+        if (managedOk) {
+            const env = { ...proxyEnv, UV_PYTHON_INSTALL_DIR: pyDir };
+            const venvRes = await runSpawnCapture(uv, ['venv', venvDir, '--python', '3.11', '--python-preference', 'only-managed', '--seed', '--allow-existing'], 180000, env);
+            venvOk = venvRes.ok || fs.existsSync(venvPy);
+            if (!venvOk && !existing)
+                throw new Error('uv venv: ' + (venvRes.err || venvRes.out || `код ${venvRes.code}`));
+        }
+        if (!venvOk && existing) {
+            const realExe = (await execText(existing.cmd, [...existing.args, '-c', 'import sys; print(sys.executable)'], 5000)).trim() || existing.cmd;
+            const venvRes = await runSpawnCapture(uv, ['venv', venvDir, '--python', realExe, '--seed', '--allow-existing'], 180000, proxyEnv);
+            if (!venvRes.ok && !fs.existsSync(venvPy))
+                throw new Error('uv venv: ' + (venvRes.err || venvRes.out || `код ${venvRes.code}`));
+        }
         resetPythonCache();
         return { ok: true, python: venvPy, uv };
     }
@@ -1131,6 +1151,8 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
         const localUv = path.join(runtimeRoot(rootDir), 'uv', os.platform() === 'win32' ? 'uv.exe' : 'uv');
         if (fs.existsSync(localUv))
             uv = localUv;
+        else
+            uv = await ensureUvBinary(rootDir).catch(() => '');
     }
 
     const { env: proxyEnv } = buildProxyEnv(rootDir);

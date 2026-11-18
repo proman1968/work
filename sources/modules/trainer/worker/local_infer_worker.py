@@ -37,6 +37,12 @@ except Exception:
     DTYPE_MAP = {}
 
 
+def _inference_mode_dec():
+    if HAS_TORCH and hasattr(torch, "inference_mode"):
+        return torch.inference_mode()
+    return lambda fn: fn
+
+
 class SafetensorsStore:
     """Zero-copy загрузчик .safetensors (одиночных и шардированных) через mmap."""
 
@@ -158,7 +164,7 @@ class LocalCausalLM:
         sin = emb.sin().to(dtype).unsqueeze(0).unsqueeze(0)
         return cos, sin
 
-    @torch.inference_mode()
+    @_inference_mode_dec()
     def forward_step(self, input_ids, kv_cache, start_pos):
         seq_len = input_ids.shape[1]
         x = F.embedding(input_ids, self.embed_tokens)  # [1, seq, hidden]
@@ -212,7 +218,7 @@ class LocalCausalLM:
         logits = F.linear(last_hidden[:, 0, :], self.lm_head)  # [1, vocab]
         return logits[0]
 
-    @torch.inference_mode()
+    @_inference_mode_dec()
     def generate_stream(self, req_id, prompt_ids, max_new_tokens=384, temperature=0.6, top_p=0.9, repetition_penalty=1.08, eos_ids=None):
         eos_set = set(eos_ids or [151645, 151643])
         kv_cache = [None] * self.num_layers
@@ -278,6 +284,11 @@ def _cpu_supports_bf16():
 
 
 def _best_device_and_dtype():
+    if not HAS_TORCH:
+        raise RuntimeError(json.dumps({
+            "error": "В Python-окружении не установлен PyTorch (torch).",
+            "missingDeps": ["torch"],
+        }))
     if torch.cuda.is_available():
         return "cuda", torch.bfloat16
     return "cpu", (torch.bfloat16 if _cpu_supports_bf16() else torch.float32)
@@ -397,7 +408,7 @@ def _load_embed_model(weights_dir, cache):
             cache[key] = ("onnx", tok, sess, "ort")
             return cache[key]
         except Exception:
-            if not _has_safetensors(weights_dir):
+            if not _has_safetensors(weights_dir) or not HAS_TORCH:
                 raise
     device, dtype = _best_device_and_dtype()
     try:
@@ -420,7 +431,12 @@ def handle_embed(req, cache):
     if kind == "onnx":
         import numpy as np
         encoded = tok(texts, padding=True, truncation=True, max_length=int(req.get("maxLength", 2048)), return_tensors="np")
-        feed = {inp.name: encoded[inp.name].astype(np.int64) for inp in mdl.get_inputs() if inp.name in encoded}
+        feed = {}
+        for inp in mdl.get_inputs():
+            if inp.name in encoded:
+                feed[inp.name] = encoded[inp.name].astype(np.int64)
+            elif inp.name == "token_type_ids" and "input_ids" in encoded:
+                feed[inp.name] = np.zeros_like(encoded["input_ids"], dtype=np.int64)
         outs = mdl.run(None, feed)
         last_hidden = outs[0].astype(np.float32)
         if last_hidden.ndim == 3:
@@ -462,7 +478,7 @@ def _load_rerank_model(weights_dir, cache):
             cache[key] = ("onnx", tok, sess, "ort")
             return cache[key]
         except Exception:
-            if not _has_safetensors(weights_dir):
+            if not _has_safetensors(weights_dir) or not HAS_TORCH:
                 raise
     device, dtype = _best_device_and_dtype()
     try:
@@ -488,7 +504,12 @@ def handle_rerank(req, cache):
         import math
         import numpy as np
         inputs = tok(pairs, padding=True, truncation=True, max_length=int(req.get("maxLength", 1024)), return_tensors="np")
-        feed = {inp.name: inputs[inp.name].astype(np.int64) for inp in mdl.get_inputs() if inp.name in inputs}
+        feed = {}
+        for inp in mdl.get_inputs():
+            if inp.name in inputs:
+                feed[inp.name] = inputs[inp.name].astype(np.int64)
+            elif inp.name == "token_type_ids" and "input_ids" in inputs:
+                feed[inp.name] = np.zeros_like(inputs["input_ids"], dtype=np.int64)
         logits = mdl.run(None, feed)[0].reshape(-1).astype(np.float32).tolist()
         scores = [1.0 / (1.0 + math.exp(-max(-40.0, min(40.0, float(x))))) for x in logits]
     else:

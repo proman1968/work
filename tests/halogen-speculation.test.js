@@ -266,4 +266,29 @@ llamacpp:spec_decode_num_accepted_tokens_total 266
         assert.equal(isCoreEnginePath('$server/$folder/handlers/pages/form/$handler/form.js'), true);
         assert.equal(isCoreEnginePath('$server/$folder/class.js'), false, 'пользовательский class.js корня остаётся защищённым');
     });
+
+    it('10. local_infer_worker.py без установленного torch не падает на @torch.inference_mode() и отдаёт missingDeps', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const pyRunner = [
+            'import sys, runpy',
+            "sys.modules['torch'] = None",
+            "sys.modules['torch.nn'] = None",
+            "sys.modules['torch.nn.functional'] = None",
+            `runpy.run_path(${JSON.stringify(workerPath)}, run_name='__main__')`,
+        ].join('; ');
+        const res = spawnSync('python', ['-c', pyRunner], {
+            input: '{"id":"t1","op":"check_deps"}\n{"id":"t2","weightsDir":".","inputIds":[1,2]}\n',
+            encoding: 'utf8',
+            timeout: 15000,
+        });
+        assert.equal(res.status, 0, 'воркер завершается штатно без AttributeError: ' + (res.stderr || ''));
+        const events = String(res.stdout || '').trim().split(/\r?\n/).filter(Boolean).map(l => JSON.parse(l));
+        assert.equal(events[0]?.event, 'ready');
+        assert.equal(events[1]?.id, 't1');
+        assert.equal(events[1]?.data?.packages?.torch, false);
+        assert.equal(events[2]?.id, 't2');
+        assert.equal(events[2]?.event, 'error');
+        assert.deepEqual(events[2]?.missingDeps, ['torch']);
+    });
 });
