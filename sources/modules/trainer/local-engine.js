@@ -781,7 +781,79 @@ async function runWorkerOpOnce(payload, timeoutMs = 120000) {
     });
 }
 
+export const AMD_ROCM_GFX1151_WHL_INDEX = 'https://repo.amd.com/rocm/whl/gfx1151/';
+export const ROCM_GFX1151_TORCH_VERSION = '2.10.0+rocm7.13.0';
+export const ROCM_GFX1151_SDK_VERSION = '7.13.0';
+
+let _rocmUpgradeCooldownUntil = 0;
+
+/**
+ * Определить, работает ли сервер на машине AMD Strix Halo (`gfx1151` — Ryzen AI Max+ 395 / 495, Radeon 8060S / 8065S).
+ */
+export function isStrixHaloGfx1151Host(rootDir = process.cwd()) {
+    if (process.env.WORK_ROCM_GFX1151 === '1')
+        return true;
+    if (process.env.WORK_ROCM_GFX1151 === '0' || process.env.WORK_DISABLE_AUTO_PYTHON === '1' || process.env.NODE_TEST_CONTEXT)
+        return false;
+    const platform = os.platform();
+    if (platform !== 'win32' && platform !== 'linux')
+        return false;
+    try {
+        const cpuModel = String(os.cpus()?.[0]?.model || '');
+        if (/Ryzen\s+AI\s+Max|\b(395|495|390|385)\b|Strix\s+Halo|Radeon\s+80[56]0S/i.test(cpuModel))
+            return true;
+        const rt = runtimeRoot(rootDir);
+        if (
+            fs.existsSync(path.join(rt, 'bubo', 'bubo.exe'))
+            || fs.existsSync(path.join(rt, 'bubo', 'runtime', 'rocm-10.0.0-gfx1151'))
+        ) {
+            return true;
+        }
+        if (/AMD|Ryzen/i.test(cpuModel) && os.totalmem() >= 90 * (1024 ** 3))
+            return true;
+    }
+    catch { /* ignore */ }
+    return false;
+}
+
+/**
+ * Проверить, установлены ли уже в `#runtime/venv` GPU-библиотеки AMD ROCm для `gfx1151`.
+ */
+export function hasRocmGfx1151InVenvSync(rootDir = process.cwd()) {
+    const rt = runtimeRoot(rootDir);
+    const venvDir = path.join(rt, 'venv');
+    if (!fs.existsSync(venvDir))
+        return false;
+    if (fs.existsSync(path.join(venvDir, '.rocm-gfx1151-ok')))
+        return true;
+    const sitePkgs = os.platform() === 'win32'
+        ? path.join(venvDir, 'Lib', 'site-packages')
+        : path.join(venvDir, 'lib', 'python3.11', 'site-packages');
+    return (
+        fs.existsSync(path.join(sitePkgs, '_rocm_sdk_libraries_gfx1151'))
+        || fs.existsSync(path.join(sitePkgs, 'rocm_sdk_libraries_gfx1151'))
+    );
+}
+
 async function runWorkerOp(payload, timeoutMs = 120000) {
+    // На машинах Strix Halo (gfx1151) автоматически апгрейдим CPU-only torch до GPU ROCm 7.13 (Radeon 8060S/8065S),
+    // чтобы Qwen3-TTS 1.7B, Qwen3-ASR 1.7B, Z-Image-Turbo 6B и локальные LLM работали на iGPU в 5–10 раз быстрее.
+    const op = String(payload?.op || 'llm');
+    const usesOnnxFastPath = (op === 'embed' || op === 'rerank') && hasOnnxModelSync(payload?.weightsDir || '');
+    if (
+        op !== 'check_deps'
+        && !usesOnnxFastPath
+        && !_autoProvisionOverride
+        && Date.now() > _rocmUpgradeCooldownUntil
+        && isStrixHaloGfx1151Host()
+        && !hasRocmGfx1151InVenvSync()
+    ) {
+        await ensurePythonForModality(op, {
+            weightsDir: payload?.weightsDir || '',
+            upgradeRocmGfx1151: true,
+        }).catch(() => null);
+    }
+
     try {
         return await runWorkerOpOnce(payload, timeoutMs);
     }
@@ -823,6 +895,7 @@ export async function localEmbed(ai, params = {}) {
         model: String(ai?.model || ai?.id || 'local-embed'),
         data: (res.embeddings || []).map((embedding, index) => ({ object: 'embedding', index, embedding })),
         dimensions: res.dimensions || 0,
+        device: res.device || '',
         loadMs: Number(res.loadMs) || 0,
         genMs: Number(res.genMs || res.durationMs) || 0,
         durationMs: Number(res.genMs || res.durationMs) || 0,
@@ -843,6 +916,7 @@ export async function localRerank(ai, params = {}) {
     return {
         model: String(ai?.model || ai?.id || 'local-rerank'),
         results: res.results || [],
+        device: res.device || '',
         loadMs: Number(res.loadMs) || 0,
         genMs: Number(res.genMs || res.durationMs) || 0,
         durationMs: Number(res.genMs || res.durationMs) || 0,
@@ -868,6 +942,7 @@ export async function localGenerateImage(ai, params = {}) {
         mime: res.mime || 'image/png',
         base64: res.base64,
         model: String(ai?.model || ai?.id || 'local-image'),
+        device: res.device || '',
         loadMs: Number(res.loadMs) || 0,
         genMs: Number(res.genMs || res.durationMs) || 0,
         durationMs: Number(res.genMs || res.durationMs) || 0,
@@ -895,6 +970,7 @@ export async function localSpeak(ai, params = {}) {
     buf.genMs = Number(res.genMs || res.durationMs) || 0;
     buf.ttsKind = res.ttsKind || '';
     buf.instructUsed = res.instructUsed || '';
+    buf.device = res.device || '';
     return buf;
 }
 
@@ -912,6 +988,7 @@ export async function localTranscribe(ai, params = {}) {
     return {
         text: String(res.text || '').trim(),
         model: String(ai?.model || ai?.id || 'local-stt'),
+        device: res.device || '',
         loadMs: Number(res.loadMs) || 0,
         genMs: Number(res.genMs || res.durationMs) || 0,
         durationMs: Number(res.genMs || res.durationMs) || 0,
@@ -966,6 +1043,9 @@ export async function checkLocalPythonDeps() {
 
 const ALLOWED_PYTHON_DEPS = new Set([
     'torch',
+    'torchaudio',
+    'rocm-sdk-core',
+    'rocm-sdk-libraries-gfx1151',
     'transformers',
     'diffusers',
     'accelerate',
@@ -1143,7 +1223,7 @@ export function getPythonProvisionState() {
     return { ..._pythonProvisionState };
 }
 
-export async function installLocalPythonDeps(packages = [], { rootDir = process.cwd() } = {}) {
+export async function installLocalPythonDeps(packages = [], { rootDir = process.cwd(), upgradeRocmGfx1151 = false } = {}) {
     let clean = [...new Set((Array.isArray(packages) ? packages : [packages])
         .map(s => String(s || '').trim().toLowerCase())
         .filter(p => ALLOWED_PYTHON_DEPS.has(p)))];
@@ -1177,7 +1257,7 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
     if (!clean.length)
         clean = ['torch', 'transformers', 'accelerate', 'safetensors'];
 
-    const usesOnnxOnly = clean.some(p => p.startsWith('onnxruntime')) && !clean.includes('torch');
+    const usesOnnxOnly = clean.some(p => p.startsWith('onnxruntime')) && !clean.includes('torch') && !upgradeRocmGfx1151;
     if (!usesOnnxOnly && !clean.includes('torch') && clean.some(p => p !== 'safetensors' && p !== 'numpy'))
         clean.unshift('torch');
 
@@ -1190,31 +1270,84 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
     }
 
     const { env: proxyEnv } = buildProxyEnv(rootDir);
-    // На Linux без явного индекса PyPI тянет 2.8 ГБ NVIDIA CUDA; фиксируем лёгкий CPU-индекс PyTorch
-    const extraIndexArgs = (os.platform() === 'linux' && clean.includes('torch'))
-        ? ['--extra-index-url', 'https://download.pytorch.org/whl/cpu']
-        : [];
+    const rtDir = runtimeRoot(rootDir);
+    fs.mkdirSync(rtDir, { recursive: true });
+    const ovrFile = path.join(rtDir, 'uv-overrides.txt');
 
-    _pythonProvisionState = {
-        active: true,
-        stage: `Автоматическая установка пакетов (${clean.join(', ')})…`,
-        packages: clean,
-        startedAt: _pythonProvisionState.startedAt || Date.now(),
-        lastError: '',
+    const wantRocmGfx1151 = (upgradeRocmGfx1151 || isStrixHaloGfx1151Host(rootDir))
+        && clean.includes('torch')
+        && Date.now() > _rocmUpgradeCooldownUntil;
+
+    const runInstallAttempt = async (useRocm) => {
+        const overrides = [
+            'transformers>=4.57.3,<4.58.0',
+            'accelerate>=1.12.0',
+        ];
+        let installList = [...clean];
+        let indexArgs = [];
+        if (useRocm) {
+            overrides.push(
+                `torch==${ROCM_GFX1151_TORCH_VERSION}`,
+                `torchaudio==${ROCM_GFX1151_TORCH_VERSION}`,
+            );
+            installList = installList.flatMap(p => p === 'torch'
+                ? [
+                    `torch==${ROCM_GFX1151_TORCH_VERSION}`,
+                    `torchaudio==${ROCM_GFX1151_TORCH_VERSION}`,
+                    `rocm-sdk-core==${ROCM_GFX1151_SDK_VERSION}`,
+                    `rocm-sdk-libraries-gfx1151==${ROCM_GFX1151_SDK_VERSION}`,
+                ]
+                : [p]);
+            indexArgs = [
+                '--extra-index-url', AMD_ROCM_GFX1151_WHL_INDEX,
+                '--index-strategy', 'unsafe-best-match',
+            ];
+        }
+        else if (os.platform() === 'linux' && clean.includes('torch')) {
+            // На обычном Linux без GPU-индекса фиксируем лёгкий CPU-индекс PyTorch (вместо 2.8 ГБ NVIDIA CUDA)
+            indexArgs = ['--extra-index-url', 'https://download.pytorch.org/whl/cpu'];
+        }
+        try { fs.writeFileSync(ovrFile, overrides.join('\n') + '\n', 'utf-8'); }
+        catch { /* ignore */ }
+
+        _pythonProvisionState = {
+            active: true,
+            stage: useRocm
+                ? `Установка GPU-ускорения AMD ROCm (gfx1151 iGPU) и пакетов (${clean.join(', ')})…`
+                : `Автоматическая установка пакетов (${clean.join(', ')})…`,
+            packages: clean,
+            startedAt: _pythonProvisionState.startedAt || Date.now(),
+            lastError: '',
+        };
+
+        if (uv && fs.existsSync(venvPy)) {
+            const ovrArgs = fs.existsSync(ovrFile) ? ['--override', ovrFile] : [];
+            return await runSpawnCapture(uv, ['pip', 'install', '--python', venvPy, '--upgrade', ...ovrArgs, ...indexArgs, ...installList], 900000, proxyEnv);
+        }
+        const pipIndexArgs = useRocm ? ['--extra-index-url', AMD_ROCM_GFX1151_WHL_INDEX] : indexArgs;
+        return await runSpawnCapture(py.cmd, [...py.args, '-m', 'pip', 'install', '--upgrade', ...pipIndexArgs, ...installList], 900000, proxyEnv);
     };
 
-    let res;
-    if (uv && fs.existsSync(venvPy)) {
-        res = await runSpawnCapture(uv, ['pip', 'install', '--python', venvPy, '--upgrade', ...extraIndexArgs, ...clean], 600000, proxyEnv);
+    let res = await runInstallAttempt(wantRocmGfx1151);
+    if (!res.ok && wantRocmGfx1151) {
+        // Если индекс AMD ROCm временно недоступен — ставим кулдаун и прозрачно откатываемся на стандартный PyPI,
+        // чтобы модель гарантированно заработала без блокировки пользователя.
+        _rocmUpgradeCooldownUntil = Date.now() + 30 * 60 * 1000;
+        if (!upgradeRocmGfx1151)
+            res = await runInstallAttempt(false);
     }
-    else {
-        res = await runSpawnCapture(py.cmd, [...py.args, '-m', 'pip', 'install', '--upgrade', ...extraIndexArgs, ...clean], 600000, proxyEnv);
-    }
+
     if (res.ok) {
+        if (wantRocmGfx1151 && Date.now() > _rocmUpgradeCooldownUntil) {
+            try {
+                fs.writeFileSync(path.join(rtDir, 'venv', '.rocm-gfx1151-ok'), ROCM_GFX1151_TORCH_VERSION, 'utf-8');
+            }
+            catch { /* ignore */ }
+        }
         closeInferWorker();
         resetPythonCache();
         _pythonProvisionState = { active: false, stage: '', packages: [], startedAt: 0, lastError: '' };
-        return { ok: true, packages: clean, log: res.out };
+        return { ok: true, packages: clean, rocmGfx1151: wantRocmGfx1151 && Date.now() > _rocmUpgradeCooldownUntil, log: res.out };
     }
     const rawErr = (res.err || res.out || `Установка завершилась с кодом ${res.code}`).trim();
     const isOffline = /Failed to fetch|Temporary failure|ConnectionError|ConnectTimeout|ENOTFOUND|network/i.test(rawErr);
@@ -1229,9 +1362,9 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
  * Единая сериализованная точка автоподготовки Python 3.11 + нужных библиотек под модальность модели.
  * Если параллельно пришло несколько вызовов — все они ждут одну общую установку (до 10 минут).
  */
-export async function ensurePythonForModality(modality = 'llm', { weightsDir = '', extraPackages = [], rootDir = process.cwd() } = {}) {
+export async function ensurePythonForModality(modality = 'llm', { weightsDir = '', extraPackages = [], upgradeRocmGfx1151 = false, rootDir = process.cwd() } = {}) {
     if (_autoProvisionOverride)
-        return _autoProvisionOverride(modality, { weightsDir, extraPackages, rootDir });
+        return _autoProvisionOverride(modality, { weightsDir, extraPackages, upgradeRocmGfx1151, rootDir });
 
     const targetPkgs = [...new Set([
         ...packagesForModality(modality, weightsDir),
@@ -1241,13 +1374,15 @@ export async function ensurePythonForModality(modality = 'llm', { weightsDir = '
     const runTask = async () => {
         _pythonProvisionState = {
             active: true,
-            stage: `Подготовка среды Python (${targetPkgs.join(', ')})…`,
+            stage: upgradeRocmGfx1151
+                ? 'Установка GPU-ускорения AMD ROCm (gfx1151 iGPU) для PyTorch…'
+                : `Подготовка среды Python (${targetPkgs.join(', ')})…`,
             packages: targetPkgs,
             startedAt: Date.now(),
             lastError: '',
         };
         try {
-            return await installLocalPythonDeps(targetPkgs, { rootDir });
+            return await installLocalPythonDeps(targetPkgs, { rootDir, upgradeRocmGfx1151 });
         }
         finally {
             if (_pythonProvisionState.active) {

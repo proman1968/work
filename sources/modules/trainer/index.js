@@ -55,6 +55,10 @@ import {
     getPythonProvisionState,
     ensurePythonForModality,
     packagesForModality,
+    isStrixHaloGfx1151Host,
+    hasRocmGfx1151InVenvSync,
+    AMD_ROCM_GFX1151_WHL_INDEX,
+    ROCM_GFX1151_TORCH_VERSION,
     _setAutoProvisionForTest,
 } from './local-engine.js';
 import {
@@ -171,6 +175,10 @@ export {
     getPythonProvisionState,
     ensurePythonForModality,
     packagesForModality,
+    isStrixHaloGfx1151Host,
+    hasRocmGfx1151InVenvSync,
+    AMD_ROCM_GFX1151_WHL_INDEX,
+    ROCM_GFX1151_TORCH_VERSION,
     _setAutoProvisionForTest,
     SOURCE_PRESETS,
     THREAD_OPTIONS,
@@ -440,6 +448,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             return {
                 ok: true,
                 modality,
+                device: buf?.device || '',
                 loadMs,
                 durationMs,
                 totalMs,
@@ -461,6 +470,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             return {
                 ok: true,
                 modality,
+                device: res?.device || '',
                 loadMs,
                 durationMs,
                 totalMs,
@@ -477,6 +487,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             return {
                 ok: true,
                 modality,
+                device: pic?.device || '',
                 loadMs,
                 durationMs,
                 totalMs,
@@ -498,6 +509,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             return {
                 ok: true,
                 modality,
+                device: res?.device || '',
                 loadMs,
                 durationMs,
                 totalMs,
@@ -519,6 +531,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             return {
                 ok: true,
                 modality,
+                device: res?.device || '',
                 loadMs,
                 durationMs,
                 totalMs,

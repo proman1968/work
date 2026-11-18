@@ -463,4 +463,63 @@ print(json.dumps({
             assert.ok(!/~for="[^"]+\b(of|in)\b/.test(src), `${rel} не должен содержать ~for="... of/in ..."`);
         }
     });
+
+    it('14. Ускорение Qwen3-TTS: прямой 15-шаговый цикл _install_fast_qwen_tts_code_predictor и детектор ROCm gfx1151', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const {
+            isStrixHaloGfx1151Host,
+            hasRocmGfx1151InVenvSync,
+            AMD_ROCM_GFX1151_WHL_INDEX,
+            ROCM_GFX1151_TORCH_VERSION,
+        } = await import('../sources/modules/trainer/index.js');
+
+        assert.equal(AMD_ROCM_GFX1151_WHL_INDEX, 'https://repo.amd.com/rocm/whl/gfx1151/');
+        assert.match(ROCM_GFX1151_TORCH_VERSION, /\+rocm7\.\d+/);
+
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-rocm-venv-'));
+        try {
+            assert.equal(hasRocmGfx1151InVenvSync(tmp), false);
+            const venvDir = path.join(tmp, 'MODELS', 'Local', '$provider', '#runtime', 'venv');
+            await fsp.mkdir(venvDir, { recursive: true });
+            await fsp.writeFile(path.join(venvDir, '.rocm-gfx1151-ok'), ROCM_GFX1151_TORCH_VERSION);
+            assert.equal(hasRocmGfx1151InVenvSync(tmp), true);
+            assert.equal(typeof isStrixHaloGfx1151Host, 'function');
+        }
+        finally {
+            await fsp.rm(tmp, { recursive: true, force: true });
+        }
+
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const py = `
+import json, runpy
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+class DummyModel:
+    def __init__(self):
+        class CP:
+            class cfg:
+                num_code_groups = 16
+            config = cfg()
+            def generate(self, **kw):
+                return 'orig_called'
+        class Talker:
+            code_predictor = CP()
+        class M:
+            talker = Talker()
+        self.model = M()
+
+m = DummyModel()
+ns['_install_fast_qwen_tts_code_predictor'](m)
+cp = m.model.talker.code_predictor
+print(json.dumps({
+    'patched': bool(getattr(cp, '_work_fast_patched', False)),
+    'fallbackNone': cp.generate(inputs_embeds=None),
+}))
+`;
+        const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+        assert.equal(res.status, 0, res.stderr || '');
+        const out = JSON.parse(String(res.stdout || '').trim());
+        assert.equal(out.patched, true);
+        assert.equal(out.fallbackNone, 'orig_called');
+    });
 });

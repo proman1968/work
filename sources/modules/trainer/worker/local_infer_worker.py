@@ -294,8 +294,21 @@ def _best_device_and_dtype():
             "missingDeps": ["torch"],
         }))
     if torch.cuda.is_available():
-        return "cuda", torch.bfloat16
+        return "cuda:0", torch.bfloat16
     return "cpu", (torch.bfloat16 if _cpu_supports_bf16() else torch.float32)
+
+
+def _describe_torch_device(device="cpu"):
+    dev_str = str(device or "cpu")
+    if HAS_TORCH and dev_str.startswith("cuda") and torch.cuda.is_available():
+        try:
+            name = str(torch.cuda.get_device_name(0) or "").strip()
+            return f"GPU ({name})" if name else "GPU"
+        except Exception:
+            return "GPU"
+    if dev_str == "ort":
+        return "ONNX (DirectML/NPU)"
+    return "CPU (BF16)" if _cpu_supports_bf16() else "CPU"
 
 
 def _onnx_external_data_ok(onnx_path):
@@ -488,7 +501,7 @@ def handle_embed(req, cache):
         norms = np.clip(np.linalg.norm(vecs, axis=1, keepdims=True), 1e-12, None)
         arr = (vecs / norms).tolist()
         gen_ms = max(1, int((time.time() - t_gen0) * 1000))
-        return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0, "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
+        return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0, "device": _describe_torch_device(device), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
     with torch.inference_mode():
         encoded = tok(texts, padding=True, truncation=True, max_length=int(req.get("maxLength", 2048)), return_tensors="pt")
         encoded = {k: v.to(device) for k, v in encoded.items()}
@@ -500,7 +513,7 @@ def handle_embed(req, cache):
         vecs = F.normalize(summed / counts, p=2, dim=1)
         arr = vecs.cpu().tolist()
     gen_ms = max(1, int((time.time() - t_gen0) * 1000))
-    return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0, "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
+    return {"embeddings": arr, "dimensions": len(arr[0]) if arr else 0, "device": _describe_torch_device(device), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def _load_rerank_model(weights_dir, cache):
@@ -575,7 +588,7 @@ def handle_rerank(req, cache):
     if top_n > 0:
         ranked = ranked[:top_n]
     gen_ms = max(1, int((time.time() - t_gen0) * 1000))
-    return {"results": ranked, "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
+    return {"results": ranked, "device": _describe_torch_device(device), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def _load_image_pipeline(weights_dir, cache):
@@ -601,7 +614,16 @@ def _load_image_pipeline(weights_dir, cache):
             pipe = None
     if pipe is None:
         pipe = diffusers.AutoPipelineForText2Image.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
-    pipe.to(device)
+    try:
+        pipe.to(device)
+    except Exception:
+        if str(device).startswith("cuda") and HAS_TORCH:
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        device = "cpu"
+        pipe.to(device)
     cache[key] = (pipe, device)
     return cache[key]
 
@@ -632,7 +654,7 @@ def handle_image(req, cache):
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     gen_ms = max(1, int((time.time() - t_gen0) * 1000))
-    return {"mime": "image/png", "base64": base64.b64encode(buf.getvalue()).decode("ascii"), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
+    return {"mime": "image/png", "base64": base64.b64encode(buf.getvalue()).decode("ascii"), "device": _describe_torch_device(device), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def _pcm_to_wav_base64(samples, sample_rate):
@@ -871,11 +893,138 @@ def _seed_torch_deterministic(seed_val):
         pass
 
 
+def _install_fast_qwen_tts_code_predictor(mdl):
+    """Ускоряет внутренний 15-шаговый цикл `code_predictor` в Qwen3-TTS (вызывается на каждом 12 Гц кадре).
+
+    Штатный `qwen_tts` на каждом 12 Гц шаге вызывает полный `GenerationMixin.generate()`,
+    делая `deepcopy(generation_config)`, `torch.sort` по всему словарю и сохраняя 75 неиспользуемых
+    тензоров `output_hidden_states=True`. Прямой цикл по 15 головам `lm_head[step]` делает ту же
+    математику без обвязки `GenerationMixin` и лишних аллокаций.
+    """
+    cp = getattr(getattr(getattr(mdl, "model", None), "talker", None), "code_predictor", None)
+    if cp is None or getattr(cp, "_work_fast_patched", False):
+        return
+    orig_generate = cp.generate
+
+    class _FastPredictorOut:
+        __slots__ = ("sequences", "hidden_states")
+
+        def __init__(self, sequences):
+            self.sequences = sequences
+            self.hidden_states = None
+
+    def _fast_generate(
+        inputs_embeds=None,
+        max_new_tokens=None,
+        do_sample=False,
+        top_p=1.0,
+        top_k=50,
+        temperature=0.9,
+        **kwargs,
+    ):
+        if inputs_embeds is None:
+            return orig_generate(
+                inputs_embeds=inputs_embeds,
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                top_p=top_p,
+                top_k=top_k,
+                temperature=temperature,
+                **kwargs,
+            )
+        try:
+            from transformers.cache_utils import DynamicCache
+            steps = int(max_new_tokens or (cp.config.num_code_groups - 1))
+            past_kv = DynamicCache()
+            cur_embeds = cp.small_to_mtp_projection(inputs_embeds)
+            embs = cp.model.get_input_embeddings()
+            heads = cp.lm_head
+            tokens = []
+            temp = float(temperature) if (temperature and float(temperature) > 0) else 1.0
+            k = int(top_k) if top_k else 0
+            for step in range(steps):
+                out = cp.model(
+                    input_ids=None,
+                    inputs_embeds=cur_embeds,
+                    past_key_values=past_kv,
+                    use_cache=True,
+                    output_attentions=False,
+                    output_hidden_states=False,
+                )
+                last_h = out.last_hidden_state[:, -1, :]
+                logits = heads[step](last_h)
+                if not do_sample:
+                    next_tok = torch.argmax(logits, dim=-1, keepdim=True)
+                else:
+                    if temp != 1.0:
+                        logits = logits / temp
+                    if 0 < k < logits.size(-1):
+                        top_vals, top_idx = torch.topk(logits, k, dim=-1)
+                        probs = F.softmax(top_vals, dim=-1)
+                        pick = torch.multinomial(probs, num_samples=1)
+                        next_tok = top_idx.gather(-1, pick)
+                    else:
+                        probs = F.softmax(logits, dim=-1)
+                        next_tok = torch.multinomial(probs, num_samples=1)
+                tokens.append(next_tok)
+                if step + 1 < steps:
+                    cur_embeds = cp.small_to_mtp_projection(embs[step](next_tok))
+            return _FastPredictorOut(torch.cat(tokens, dim=-1))
+        except Exception:
+            return orig_generate(
+                inputs_embeds=inputs_embeds,
+                max_new_tokens=max_new_tokens,
+                do_sample=do_sample,
+                top_p=top_p,
+                top_k=top_k,
+                temperature=temperature,
+                **kwargs,
+            )
+
+    cp.generate = _fast_generate
+    cp._work_fast_patched = True
+
+
 def _call_tts_gen(fn, max_new_tokens, **kwargs):
     try:
-        return fn(max_new_tokens=max_new_tokens, **kwargs)
+        return fn(max_new_tokens=max_new_tokens, subtalker_dosample=False, **kwargs)
     except TypeError:
-        return fn(**kwargs)
+        try:
+            return fn(max_new_tokens=max_new_tokens, **kwargs)
+        except TypeError:
+            return fn(**kwargs)
+
+
+def _load_qwen_tts_model(weights_dir):
+    from qwen_tts import Qwen3TTSModel
+    device, dtype = _best_device_and_dtype()
+    candidates = [(device, dtype)]
+    if str(device).startswith("cuda"):
+        cpu_dtype = torch.bfloat16 if _cpu_supports_bf16() else torch.float32
+        candidates.append(("cpu", cpu_dtype))
+    last_err = None
+    for dev, dt in candidates:
+        try:
+            try:
+                mdl = Qwen3TTSModel.from_pretrained(
+                    weights_dir,
+                    device_map=dev,
+                    dtype=dt,
+                    attn_implementation="sdpa",
+                )
+            except Exception:
+                mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=dev, dtype=dt)
+            _install_fast_qwen_tts_code_predictor(mdl)
+            mdl._work_device = dev
+            return mdl
+        except Exception as e:
+            last_err = e
+            if str(dev).startswith("cuda") and HAS_TORCH:
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+    raise last_err
 
 
 def handle_tts(req, cache):
@@ -884,39 +1033,31 @@ def handle_tts(req, cache):
     language = _tts_language(req.get("language") or "Russian")
     instructions = str(req.get("instructions") or "").strip()
     seed = int(req.get("seed") if req.get("seed") is not None else 42)
-    # 12 Гц аудио-токенизатор: динамический потолок шагов декодера под реальную длину текста
-    max_new_tokens = max(128, min(1024, int(len(text) * 4.5) + 96))
+    # 12.5 Гц аудио-токенизатор (~0.93 кадра на символ речи): компактный потолок без холостых хвостов
+    max_new_tokens = max(72, min(768, int(len(text) * 2.0) + 48))
     key = ("tts", weights_dir)
     was_cached = key in cache
     t_load0 = time.time()
     if not was_cached:
         try:
-            from qwen_tts import Qwen3TTSModel
+            from qwen_tts import Qwen3TTSModel  # noqa: F401
         except Exception as e:
             raise RuntimeError(json.dumps(_missing_pkg_error(e, {
                 "qwen_tts": "qwen-tts",
                 "soundfile": "soundfile",
             })))
-        device, dtype = _best_device_and_dtype()
         try:
-            try:
-                mdl = Qwen3TTSModel.from_pretrained(
-                    weights_dir,
-                    device_map=device,
-                    dtype=dtype,
-                    attn_implementation="sdpa",
-                )
-            except Exception:
-                mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=device, dtype=dtype)
+            cache[key] = _load_qwen_tts_model(weights_dir)
         except Exception as e:
             # Пакет установлен, но веса/конфиг не читаются — отдаём реальную причину,
             # а не ложное «нет пакетов», из-за которого раньше шёл бесконечный переустанов.
             raise RuntimeError(json.dumps({
                 "error": f"Не удалось загрузить модель синтеза речи из {weights_dir}: {e}",
             }))
-        cache[key] = mdl
     load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
     mdl = cache[key]
+    _install_fast_qwen_tts_code_predictor(mdl)
+    active_dev = getattr(mdl, "_work_device", None) or str(getattr(mdl, "device", "cpu"))
     kind = _tts_model_kind(weights_dir, mdl, instructions)
     _seed_torch_deterministic(seed)
     t_gen0 = time.time()
@@ -993,6 +1134,7 @@ def handle_tts(req, cache):
         "sampleRate": int(sr),
         "ttsKind": kind,
         "instructUsed": instruct_used,
+        "device": _describe_torch_device(active_dev),
         "loadMs": load_ms,
         "genMs": gen_ms,
         "durationMs": gen_ms,
@@ -1009,31 +1151,47 @@ def handle_stt(req, cache):
     t_load0 = time.time()
     if not was_cached:
         device, dtype = _best_device_and_dtype()
+        candidates = [(device, dtype)]
+        if str(device).startswith("cuda"):
+            cpu_dtype = torch.bfloat16 if _cpu_supports_bf16() else torch.float32
+            candidates.append(("cpu", cpu_dtype))
         errors = []
         try:
             from qwen_asr import Qwen3ASRModel
-            try:
+            for dev, dt in candidates:
                 try:
-                    loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device, attn_implementation="sdpa")
-                except Exception:
-                    loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device)
-                cache[key] = ("qwen_asr", loaded)
-            except Exception as e:
-                errors.append(f"qwen-asr: {e}")
+                    try:
+                        loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dt, device_map=dev, attn_implementation="sdpa")
+                    except Exception:
+                        loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dt, device_map=dev)
+                    loaded._work_device = dev
+                    cache[key] = ("qwen_asr", loaded)
+                    break
+                except Exception as e:
+                    errors.append(f"qwen-asr ({dev}): {e}")
+                    if str(dev).startswith("cuda") and HAS_TORCH:
+                        try:
+                            torch.cuda.empty_cache()
+                        except Exception:
+                            pass
         except Exception as e:
             errors.append(f"qwen-asr (нет пакета): {e}")
         if key not in cache:
             try:
                 from transformers import pipeline
-                try:
-                    cache[key] = ("hf_asr", pipeline(
-                        "automatic-speech-recognition",
-                        model=weights_dir,
-                        device=0 if device == "cuda" else -1,
-                        torch_dtype=dtype,
-                    ))
-                except Exception as e:
-                    errors.append(f"transformers: {e}")
+                for dev, dt in candidates:
+                    try:
+                        p_obj = pipeline(
+                            "automatic-speech-recognition",
+                            model=weights_dir,
+                            device=0 if str(dev).startswith("cuda") else -1,
+                            torch_dtype=dt,
+                        )
+                        p_obj._work_device = dev
+                        cache[key] = ("hf_asr", p_obj)
+                        break
+                    except Exception as e:
+                        errors.append(f"transformers ({dev}): {e}")
             except Exception as e:
                 errors.append(f"transformers (нет пакета): {e}")
         if key not in cache:
@@ -1049,6 +1207,7 @@ def handle_stt(req, cache):
             }))
     load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
     kind, mdl = cache[key]
+    active_dev = getattr(mdl, "_work_device", None) or str(getattr(mdl, "device", "cpu"))
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
         tf.write(raw)
@@ -1073,7 +1232,7 @@ def handle_stt(req, cache):
         except Exception:
             pass
     gen_ms = max(1, int((time.time() - t_gen0) * 1000))
-    return {"text": str(txt or "").strip(), "language": language or "Auto", "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
+    return {"text": str(txt or "").strip(), "language": language or "Auto", "device": _describe_torch_device(active_dev), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
 def main():

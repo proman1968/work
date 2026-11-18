@@ -642,6 +642,8 @@ export default {
             if (this.info?.weightsRepair)
                 this.info = { ...this.info, weightsRepair: null };
             const parts = [];
+            if (res.device)
+                parts.push(`Вычислитель: ${res.device}`);
             if (res.engineStartMs > 500)
                 parts.push(`Старт движка: ${(res.engineStartMs / 1000).toFixed(1)} с`);
             if (res.loadMs > 500)
