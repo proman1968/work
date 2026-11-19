@@ -384,6 +384,8 @@ function inferTestModality(ai) {
         return 'tts';
     if (caps.includes('stt') || caps.includes('asr') || mod === 'stt' || mod === 'asr')
         return 'stt';
+    if (caps.includes('music') || mod === 'music' || /musicgen|audioldm/i.test(String(ai?.id || ai?.model || '')))
+        return 'music';
     if (caps.includes('video') || caps.includes('text-to-video') || mod === 'video')
         return 'video';
     if (caps.includes('image') || caps.includes('text-to-image') || mod === 'image')
@@ -524,6 +526,33 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 frames: vid?.frames || 0,
                 fps: vid?.fps || 16,
                 summary: `Видео ${vid?.frames || 17} кадр. (${vid?.mime || 'video/mp4'}) за ${(durationMs / 1000).toFixed(1)} с`,
+            };
+        }
+        if (modality === 'music') {
+            const prompt = String(p.prompt || 'Спокойная современная корпоративная фоновая мелодия, мягкое пианино и лёгкий ритм').trim();
+            const rawCaps = Array.isArray(ai?.capabilities) ? ai.capabilities : (Array.isArray(ai?.DATA?.capabilities) ? ai.DATA.capabilities : []);
+            const patchedAi = rawCaps.map(c => String(c).toLowerCase()).includes('music')
+                ? ai
+                : Object.assign(Object.create(Object.getPrototypeOf(ai)), ai, { capabilities: ['music'] });
+            const mus = await patchedAi.generateMusic({
+                prompt,
+                durationSec: p.durationSec ? Number(p.durationSec) : (p.duration ? Number(p.duration) : undefined),
+                seed: p.seed,
+            });
+            const totalMs = Math.max(1, Date.now() - t0);
+            const loadMs = Number(mus?.loadMs) || 0;
+            const durationMs = Number(mus?.genMs || mus?.durationMs) || Math.max(1, totalMs - loadMs);
+            return {
+                ok: true,
+                modality,
+                device: mus?.device || '',
+                loadMs,
+                durationMs,
+                totalMs,
+                mime: mus?.mime || 'audio/wav',
+                audioBase64: mus?.audioBase64 || '',
+                sampleRate: mus?.sampleRate || 32000,
+                summary: `Аудио WAV (${Math.round((mus?.audioBase64?.length || 0) * 0.75 / 1024)} КБ) за ${(durationMs / 1000).toFixed(1)} с`,
             };
         }
         if (modality === 'embed') {
@@ -826,6 +855,42 @@ export const TRAINER_METHODS = Object.freeze({
             const resolvedProtocol = d.protocol || (isLocal ? 'local' : 'openai');
             const rawBaseUrl = (d.baseUrl && d.baseUrl !== 'null') ? String(d.baseUrl) : '';
             const cleanBaseUrl = resolvedProtocol === 'local' ? '' : rawBaseUrl;
+
+            // Автоисправление устаревших метаданных для известных не-LLM моделей
+            // (например, если ранняя версия зарегистрировала musicgen-medium с `['chat', 'stream']`).
+            let effModality = d.modality || 'llm';
+            let effCaps = Array.isArray(d.capabilities) ? d.capabilities : (d.$public?.capabilities || ['chat', 'stream']);
+            if (isLocal) {
+                const lookupKey = String(d.hfRepo || d.model || this?.id || '').trim();
+                const curated = CURATED_HF_MODELS.find(m =>
+                    m.id.toLowerCase() === lookupKey.toLowerCase()
+                    || String(m.folderName || '').toLowerCase() === String(this?.id || '').toLowerCase()
+                    || m.id.split('/').pop().toLowerCase() === String(this?.id || '').toLowerCase()
+                );
+                const inferred = curated || (lookupKey ? inferModalityAndCapabilities({ id: lookupKey }) : null);
+                const capsLow = effCaps.map(c => String(c).toLowerCase());
+                const looksLikeDefaultChat = capsLow.length === 0 || capsLow.every(c => c === 'chat' || c === 'stream' || c === 'functions');
+                if (inferred && inferred.modality && inferred.modality !== 'llm' && looksLikeDefaultChat && !(inferred.capabilities || []).includes('chat')) {
+                    effModality = inferred.modality;
+                    effCaps = [...inferred.capabilities];
+                    try {
+                        const clsPath = path.join(process.cwd(), 'MODELS', 'Local', this?.id || '', '$ai', 'class.js');
+                        if (fs.existsSync(clsPath)) {
+                            const rawCls = fs.readFileSync(clsPath, 'utf-8');
+                            const mJson = rawCls.match(/export\s+default\s+(\{[\s\S]*\})\s*;?\s*$/);
+                            if (mJson) {
+                                const parsed = JSON.parse(mJson[1]);
+                                parsed.modality = effModality;
+                                parsed.capabilities = effCaps;
+                                fs.writeFileSync(clsPath, `/**\n * Локальная модель ИИ: ${parsed.label || this?.id} (${effModality})\n * Репозиторий Hugging Face: ${parsed.hfRepo || 'локальный'}\n */\nexport default ${JSON.stringify(parsed, null, 4)};\n`, 'utf-8');
+                                this?.reset?.();
+                            }
+                        }
+                    }
+                    catch { /* ignore */ }
+                }
+            }
+
             const engineSetup = (resolvedProtocol === 'halogen' || weightInfo?.hasGguf)
                 ? await describeEngineSetup().catch(() => null)
                 : null;
@@ -855,10 +920,10 @@ export const TRAINER_METHODS = Object.freeze({
                 protocol: resolvedProtocol,
                 model: d.model || this?.id || '',
                 baseUrl: cleanBaseUrl,
-                modality: d.modality || 'llm',
+                modality: effModality,
                 maxTokens: Number(d.maxTokens || d.$public?.maxTokens) || 32768,
                 maxOutput: Number(d.maxOutput || d.$public?.maxOutput) || 8192,
-                capabilities: Array.isArray(d.capabilities) ? d.capabilities : (d.$public?.capabilities || ['chat', 'stream']),
+                capabilities: effCaps,
                 efforts: Array.isArray(d.efforts) ? d.efforts : [],
                 weightsDir: resolvedWeightsRel,
                 primaryFile: resolvedPrimaryFile,

@@ -321,6 +321,17 @@ export default {
                     </select>
                 </div>
             </div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'music'">
+                <textarea rows="2" :value="testMusicPrompt" placeholder="Опишите мелодию или звуковой эффект (лучше на английском)…" @input="testMusicPrompt = $this.value"></textarea>
+                <div class="toolbar" style="font-size:12px;">
+                    <span style="opacity:0.75;">Длительность:</span>
+                    <select @change="testMusicDuration = Number($this.value)" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border-color,#cbd5e1);background:var(--content-background,#fff);color:inherit;">
+                        <option value="4" :selected="testMusicDuration === 4">Короткий фрагмент (4 с)</option>
+                        <option value="8" :selected="testMusicDuration === 8">Стандартный фрагмент (8 с)</option>
+                        <option value="12" :selected="testMusicDuration === 12">Длинный фрагмент (12 с)</option>
+                    </select>
+                </div>
+            </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'embed'">
                 <textarea rows="3" :value="testEmbedInput" placeholder="Строки для векторизации (по одной в строке)…" @input="testEmbedInput = $this.value"></textarea>
             </div>
@@ -376,6 +387,8 @@ export default {
     testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
     testVideoPrompt: 'Камера плавно облетает современный светлый офис с панорамными окнами, мягкий утренний свет',
     testVideoFrames: 17,
+    testMusicPrompt: 'Calm modern corporate background music, warm acoustic piano and soft electronic rhythm',
+    testMusicDuration: 6,
     testEmbedInput: 'Учётная система WORK\nОборотно-сальдовая ведомость',
     testRerankQuery: 'остатки на расчётном счёте 51',
     testRerankDocs: 'Счёт 51 «Расчётные счета»: обороты и остатки денежных средств\nДоговор аренды офиса и коммунальные услуги',
@@ -402,6 +415,8 @@ export default {
             return 'tts';
         if (caps.includes('stt') || caps.includes('asr') || mod === 'stt' || mod === 'asr')
             return 'stt';
+        if (caps.includes('music') || mod === 'music' || id.includes('musicgen') || id.includes('audioldm'))
+            return 'music';
         if (caps.includes('video') || caps.includes('text-to-video') || mod === 'video')
             return 'video';
         if (caps.includes('image') || caps.includes('text-to-image') || mod === 'image')
@@ -446,6 +461,7 @@ export default {
             stt: 'Распознавание речи (STT)',
             image: 'Генерация изображений',
             video: 'Генерация видео',
+            music: 'Генерация музыки и звука',
             embed: 'Эмбеддинги (RAG)',
             rerank: 'Реранкинг (RAG)',
         };
@@ -458,6 +474,7 @@ export default {
             stt: 'Проверить распознавание',
             image: 'Сгенерировать картинку',
             video: 'Сгенерировать видео',
+            music: 'Сгенерировать музыку',
             embed: 'Проверить эмбеддинги',
             rerank: 'Проверить реранкинг',
         };
@@ -702,6 +719,10 @@ export default {
                 body.prompt = this.testVideoPrompt.trim();
                 body.numFrames = Number(this.testVideoFrames) || 17;
             }
+            else if (m === 'music') {
+                body.prompt = this.testMusicPrompt.trim();
+                body.durationSec = Number(this.testMusicDuration) || 6;
+            }
             else if (m === 'embed')
                 body.input = this.testEmbedInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
             else if (m === 'rerank') {
@@ -745,7 +766,7 @@ export default {
                 parts.push(res.summary);
             this.testMetricsLine = parts.join(' · ');
 
-            if (m === 'tts' && res.audioBase64) {
+            if ((m === 'tts' || m === 'music') && res.audioBase64) {
                 this.testAudioUrl = 'data:audio/wav;base64,' + res.audioBase64;
             }
             else if (m === 'image' && res.base64) {

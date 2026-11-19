@@ -386,6 +386,8 @@ export function packagesForModality(modality = 'llm', weightsDir = '') {
         return ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers', 'safetensors'];
     if ((mod === 'tts' || mod === 'voice') && isPiperOnnxDirSync(weightsDir))
         return ['piper-tts', 'onnxruntime'];
+    if (mod === 'music' || mod === 'text-to-audio')
+        return ['torch', 'transformers', 'accelerate', 'safetensors', 'soundfile'];
     if (mod === 'tts' || mod === 'voice')
         return ['torch', 'qwen-tts', 'soundfile', 'transformers', 'accelerate', 'safetensors'];
     if (mod === 'stt' || mod === 'asr' || mod === 'audio')
@@ -767,8 +769,19 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         throw new Error('Загрузка весов модели ещё не завершена (проверьте вкладку «Модели» в /MODELS/Local).');
     }
 
-    if (wInsp.hasSafetensors && !wInsp.hasConfig) {
-        throw new Error('В папке весов модели отсутствует config.json или tokenizer.json.');
+    const aiCaps = (Array.isArray(ai?.capabilities || ai?.DATA?.capabilities)
+        ? (ai?.capabilities || ai?.DATA?.capabilities)
+        : []).map(c => String(c).toLowerCase());
+    const aiMod = String(ai?.modality || ai?.DATA?.modality || '').toLowerCase();
+    const nonChatCap = aiCaps.find(c => ['music', 'tts', 'stt', 'asr', 'image', 'video', 'embeddings', 'rerank'].includes(c));
+    if (wInsp.hasReadyWeights) {
+        if ((nonChatCap && !aiCaps.includes('chat')) || ['image', 'video', 'embed', 'rerank', 'tts', 'stt', 'music'].includes(aiMod)) {
+            throw new Error(`Эта модель (${nonChatCap || aiMod}) не предназначена для текстового чата — используйте соответствующий режим в её карточке.`);
+        }
+        if (!wInsp.hasSafetensors) {
+            throw new Error(`Веса модели уже скачаны (формат: ${wInsp.weightFormat || 'other'}), но для локального текстового чата требуются .safetensors + tokenizer.json.`);
+        }
+        throw new Error('Веса модели (.safetensors) скачаны, но в $ai/#weights отсутствует config.json или tokenizer.json.');
     }
 
     throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights (откройте /MODELS/Local для установки).');
@@ -914,7 +927,7 @@ function assertLocalWeightsReady(ai) {
     const wInsp = inspectWeightsDirectorySync(weightsDir);
     if (wInsp.incompatibleOnPlatform)
         throw new Error(wInsp.incompatibleReason);
-    if (!wInsp.exists || (!wInsp.hasSafetensors && !wInsp.hasConfig && !hasOnnxModelSync(weightsDir)))
+    if (!wInsp.exists || (!wInsp.hasReadyWeights && !wInsp.hasSafetensors && !wInsp.hasConfig && !hasOnnxModelSync(weightsDir)))
         throw new Error('Файлы весов модели ещё не скачаны в $ai/#weights.');
     return weightsDir;
 }
@@ -962,7 +975,7 @@ export async function localGenerateImage(ai, params = {}) {
     const prompt = String(params.prompt || params.post || '').trim();
     if (!prompt)
         throw new Error('generateImage: пустой prompt');
-    const isTurbo = /z-image|turbo/i.test(weightsDir) || /z-image|turbo/i.test(String(ai?.model || ai?.id || ''));
+    const isTurbo = /z-image|turbo|schnell/i.test(weightsDir) || /z-image|turbo|schnell/i.test(String(ai?.model || ai?.id || ''));
     const defaultSteps = isTurbo ? 4 : 8;
     const res = await runWorkerOp({
         op: 'image',
@@ -1005,6 +1018,31 @@ export async function localGenerateVideo(ai, params = {}) {
         frames: Number(res.frames) || 0,
         fps: Number(res.fps) || 16,
         model: String(ai?.model || ai?.id || 'local-video'),
+        device: res.device || '',
+        loadMs: Number(res.loadMs) || 0,
+        genMs: Number(res.genMs || res.durationMs) || 0,
+        durationMs: Number(res.genMs || res.durationMs) || 0,
+    };
+}
+
+export async function localGenerateMusic(ai, params = {}) {
+    const weightsDir = assertLocalWeightsReady(ai);
+    const prompt = String(params.prompt || params.post || '').trim();
+    if (!prompt)
+        throw new Error('generateMusic: пустой prompt');
+    const durationSec = Math.max(2, Math.min(30, Number(params.durationSec || params.duration) || 8));
+    const res = await runWorkerOp({
+        op: 'music',
+        weightsDir,
+        prompt,
+        durationSec,
+        ...(params.seed != null ? { seed: Number(params.seed) } : {}),
+    }, 360000);
+    return {
+        mime: res.mime || 'audio/wav',
+        audioBase64: res.audioBase64,
+        sampleRate: Number(res.sampleRate) || 32000,
+        model: String(ai?.model || ai?.id || 'local-music'),
         device: res.device || '',
         loadMs: Number(res.loadMs) || 0,
         genMs: Number(res.genMs || res.durationMs) || 0,
@@ -1348,14 +1386,15 @@ export function collectPackagesForAllInstalledModelsSync(rootDir = process.cwd()
             if (!fs.existsSync(weightsDir))
                 continue;
             const wInsp = inspectWeightsDirectorySync(weightsDir);
-            if (!wInsp.hasSafetensors && !hasOnnxModelSync(weightsDir))
+            if (!wInsp.hasReadyWeights)
                 continue;
             let mod = '';
             const classFile = path.join(aiDir, 'class.js');
             if (fs.existsSync(classFile)) {
                 try {
                     const raw = fs.readFileSync(classFile, 'utf-8');
-                    if (/"tts"/i.test(raw)) mod = 'tts';
+                    if (/"music"/i.test(raw)) mod = 'music';
+                    else if (/"tts"/i.test(raw)) mod = 'tts';
                     else if (/"(stt|asr)"/i.test(raw)) mod = 'stt';
                     else if (/"video"/i.test(raw)) mod = 'video';
                     else if (/"(image|text-to-image)"/i.test(raw)) mod = 'image';
@@ -1366,7 +1405,8 @@ export function collectPackagesForAllInstalledModelsSync(rootDir = process.cwd()
             }
             if (!mod) {
                 const low = ent.name.toLowerCase();
-                if (low.includes('tts') || low.includes('piper')) mod = 'tts';
+                if (low.includes('musicgen') || low.includes('audioldm')) mod = 'music';
+                else if (low.includes('tts') || low.includes('piper')) mod = 'tts';
                 else if (low.includes('asr') || low.includes('whisper')) mod = 'stt';
                 else if (low.includes('video') || low.includes('wan') || low.includes('ltx')) mod = 'video';
                 else if (low.includes('image') || low.includes('flux') || low.includes('sd')) mod = 'image';
@@ -1594,6 +1634,7 @@ export const localEngine = Object.freeze({
     rerank: localRerank,
     generateImage: localGenerateImage,
     generateVideo: localGenerateVideo,
+    generateMusic: localGenerateMusic,
     speak: localSpeak,
     transcribe: localTranscribe,
     decide: localDecide,

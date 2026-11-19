@@ -683,7 +683,7 @@ export function evaluateModelFit(model, usableMemoryGb = 16) {
     if (!infGb) {
         return {
             fit: 'unknown',
-            fitLabel: 'Размер уточняется при инспекции',
+            fitLabel: 'Число параметров не указано в названии — размер уточнится при установке',
             canInfer: true,
             canTrain: true,
         };
@@ -730,7 +730,7 @@ export function resolveModelIcon({ repoId = '', modality = 'llm', capabilities =
     const caps = Array.isArray(capabilities) ? capabilities : [];
     if (caps.includes('stt'))
         return 'carbon:microphone';
-    if (caps.includes('tts'))
+    if (caps.includes('tts') || caps.includes('music'))
         return 'carbon:volume-up';
     if (modality === 'video' || caps.includes('video'))
         return 'av:videocam';
@@ -1174,10 +1174,12 @@ export async function registerLocalModelNode({
     const aiDir = path.join(rootDir, 'MODELS', 'Local', safeName, '$ai');
     await fsp.mkdir(aiDir, { recursive: true });
 
+    const inferred = inferModalityAndCapabilities({ id: repoId || safeName });
     const defaultCaps = modality === 'image' ? ['image']
         : modality === 'video' ? ['video']
         : modality === 'embed' ? ['embeddings']
         : modality === 'vlm' ? ['chat', 'stream', 'vision', 'functions']
+        : modality === 'audio' ? (inferred.capabilities?.length ? inferred.capabilities : ['tts'])
         : ['chat', 'stream', 'functions'];
     const rawCaps = Array.isArray(capabilities) && capabilities.length ? capabilities : defaultCaps;
     const resolvedCaps = [...new Set([
@@ -1801,12 +1803,13 @@ export async function startHuggingFaceDownload({
             else if (
                 fetchImpl === globalThis.fetch
                 && process.env.WORK_DISABLE_AUTO_PYTHON !== '1'
-                && job.files.some(f => /\.(safetensors|onnx)$/i.test(String(f?.name || '')))
+                && job.files.some(f => /\.(safetensors|onnx|bin|pt|pth)$/i.test(String(f?.name || '')))
             ) {
                 job.currentFile = 'Подготовка среды Python и библиотек…';
                 try {
                     const capsLow = (Array.isArray(job.capabilities) ? job.capabilities : []).map(c => String(c).toLowerCase());
                     const depMod = capsLow.includes('rerank') || /rerank/i.test(cleanId) ? 'rerank'
+                        : capsLow.includes('music') ? 'music'
                         : capsLow.includes('tts') ? 'tts'
                         : (capsLow.includes('stt') || capsLow.includes('asr')) ? 'stt'
                         : (capsLow.includes('video') || job.modality === 'video') ? 'video'

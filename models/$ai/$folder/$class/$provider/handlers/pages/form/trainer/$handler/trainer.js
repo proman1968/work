@@ -545,9 +545,10 @@ export default {
 
                         <!-- Состояние: доступна к установке -->
                         <div class="toolbar" ~if="$for.item.state === 'available'">
-                            <span class="mem-tag" :title="$for.item.fit === 'too_large' ? 'Требуется больше памяти, чем доступно на этом ПК' : 'Подходит по памяти'">
-                                <span class="dot" ~class="$for.item.fit === 'too_large' ? 'off' : ($for.item.fit === 'optimal' ? 'on' : 'warn')"></span>
-                                <span><span ~if="$for.item.device">{{$for.item.device}} · </span>~{{$for.item.ramGb || 4}} ГБ</span>
+                            <span class="mem-tag" :title="$for.item.fitLabel || ($for.item.fit === 'too_large' ? 'Требуется больше памяти, чем доступно на этом ПК' : ($for.item.fit === 'unknown' ? 'Число параметров не указано в названии — размер уточнится при установке' : 'Подходит по памяти'))">
+                                <span class="dot" ~class="$for.item.fit === 'optimal' ? 'on' : ($for.item.fit === 'inference_only' ? 'warn' : 'off')"></span>
+                                <span ~if="$for.item.ramGb"><span ~if="$for.item.device">{{$for.item.device}} · </span>~{{$for.item.ramGb}} ГБ</span>
+                                <span ~if="!$for.item.ramGb">размер не указан</span>
                             </span>
                             <button type="button" class="btn primary" @tap="installUnifiedModel($for.item)">Установить</button>
                         </div>
@@ -950,8 +951,9 @@ export default {
                 haloNodeName: item.haloNodeName || '',
                 state: 'available',
                 dotClass: 'off',
-                ramGb: item.ramRequiredGb || 4,
-                fit: item.fit || 'optimal',
+                ramGb: Number(item.ramRequiredGb) || 0,
+                fit: item.fit || 'unknown',
+                fitLabel: item.fitLabel || '',
                 device: '',
                 download: null,
                 progressPct: 0,

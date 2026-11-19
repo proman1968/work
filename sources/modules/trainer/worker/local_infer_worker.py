@@ -1633,6 +1633,85 @@ def handle_tts(req, cache):
     }
 
 
+def _load_music_pipeline(weights_dir, cache):
+    key = ("music", weights_dir)
+    if key in cache:
+        return cache[key]
+    try:
+        from transformers import AutoProcessor, MusicgenForConditionalGeneration
+    except Exception as e:
+        raise RuntimeError(json.dumps(_missing_pkg_error(e, {"transformers": "transformers"})))
+    device, dtype = _best_device_and_dtype()
+    proc = AutoProcessor.from_pretrained(weights_dir, local_files_only=True)
+    # MusicGen в float16/bfloat16 на ROCm/CUDA заметно быстрее, при сбое — откат на CPU float32
+    load_dtype = dtype if str(device).startswith("cuda") else torch.float32
+    try:
+        mdl = MusicgenForConditionalGeneration.from_pretrained(
+            weights_dir, local_files_only=True, torch_dtype=load_dtype
+        )
+        mdl.to(device)
+    except Exception:
+        if str(device).startswith("cuda") and HAS_TORCH:
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        device = "cpu"
+        mdl = MusicgenForConditionalGeneration.from_pretrained(
+            weights_dir, local_files_only=True, torch_dtype=torch.float32
+        )
+        mdl.to("cpu")
+    cache[key] = (mdl, proc, device)
+    return cache[key]
+
+
+def handle_music(req, cache):
+    weights_dir = req["weightsDir"]
+    prompt = str(req.get("prompt", "")).strip() or "upbeat modern ambient corporate piano melody"
+    duration_sec = max(2.0, min(30.0, float(req.get("durationSec") or 8.0)))
+    seed = int(req.get("seed") if req.get("seed") is not None else 42)
+    was_cached = ("music", weights_dir) in cache
+    t_load0 = time.time()
+    mdl, proc, device = _load_music_pipeline(weights_dir, cache)
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+    _seed_torch_deterministic(seed)
+    t_gen0 = time.time()
+    # MusicGen ~50 аудио-токенов на секунду
+    frame_rate = int(getattr(getattr(mdl.config, "audio_encoder", None), "frame_rate", 50) or 50)
+    max_new_tokens = max(50, min(1500, int(duration_sec * frame_rate)))
+    inputs = proc(text=[prompt], padding=True, return_tensors="pt")
+    try:
+        inputs_dev = {k: (v.to(device) if hasattr(v, "to") else v) for k, v in inputs.items()}
+        with torch.inference_mode():
+            audio_values = mdl.generate(**inputs_dev, max_new_tokens=max_new_tokens)
+    except Exception as e:
+        if str(device).startswith("cuda") and _is_recoverable_gpu_error(e):
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            device = "cpu"
+            mdl = mdl.float().to("cpu")
+            cache[("music", weights_dir)] = (mdl, proc, "cpu")
+            inputs_cpu = {k: (v.to("cpu") if hasattr(v, "to") else v) for k, v in inputs.items()}
+            with torch.inference_mode():
+                audio_values = mdl.generate(**inputs_cpu, max_new_tokens=max_new_tokens)
+        else:
+            raise
+    sr = int(getattr(getattr(mdl.config, "audio_encoder", None), "sampling_rate", 32000) or 32000)
+    wav_tensor = audio_values[0, 0] if getattr(audio_values, "ndim", 0) >= 3 else audio_values[0]
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {
+        "mime": "audio/wav",
+        "audioBase64": _pcm_to_wav_base64(wav_tensor, sr),
+        "sampleRate": sr,
+        "device": _describe_torch_device(device),
+        "loadMs": load_ms,
+        "genMs": gen_ms,
+        "durationMs": gen_ms,
+    }
+
+
 def handle_stt(req, cache):
     weights_dir = req["weightsDir"]
     audio_b64 = req.get("audioBase64", "")
@@ -1800,7 +1879,7 @@ def _evict_memory_if_needed(
     def _do():
         low_mem = free_gb is not None and free_gb < min_free_gb
         for k in list(mod_cache.keys()):
-            if not (isinstance(k, tuple) and len(k) >= 1 and k[0] in ("image", "video")):
+            if not (isinstance(k, tuple) and len(k) >= 1 and k[0] in ("image", "video", "music")):
                 continue
             if k == keep_mod_key:
                 continue
@@ -1905,6 +1984,8 @@ def main():
                     needed.extend(["diffusers", "accelerate", "pillow", "transformers", "imageio", "imageio-ffmpeg"])
                 elif op == "tts":
                     needed.extend(["qwen-tts", "soundfile", "transformers"])
+                elif op == "music":
+                    needed.extend(["transformers", "accelerate", "soundfile"])
                 elif op == "stt":
                     needed.extend(["qwen-asr", "soundfile", "transformers"])
                 print(json.dumps({
@@ -1914,7 +1995,7 @@ def main():
                     "missingDeps": needed,
                 }), flush=True)
                 continue
-            if op in ("embed", "rerank", "image", "video", "tts", "stt"):
+            if op in ("embed", "rerank", "image", "video", "music", "tts", "stt"):
                 t0 = time.time()
                 mod_key = (op, str(req.get("weightsDir") or ""))
                 _evict_memory_if_needed(
@@ -1926,13 +2007,14 @@ def main():
                     "rerank": handle_rerank,
                     "image": handle_image,
                     "video": handle_video,
+                    "music": handle_music,
                     "tts": handle_tts,
                     "stt": handle_stt,
                 }[op]
                 with cache_lock:
                     res = fn(req, mod_cache)
                     mod_last_used[mod_key] = time.time()
-                if op in ("image", "video"):
+                if op in ("image", "video", "music"):
                     _schedule_image_idle_eviction()
                 if "durationMs" not in res:
                     res["durationMs"] = int((time.time() - t0) * 1000)

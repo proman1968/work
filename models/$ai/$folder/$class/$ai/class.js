@@ -598,6 +598,21 @@ export default {
     },
 
     /**
+     * Генерация музыки и звуковых эффектов по текстовому описанию (capabilities `music`).
+     * @param {object} [params]
+     * @param {string} params.prompt Описание мелодии или звука
+     * @returns {Promise<{ mime: string, audioBase64: string, sampleRate?: number, model?: string }>}
+     */
+    async generateMusic(params = {}) {
+        const ai = params.$ai || this;
+        if (!hasCap(ai, 'music'))
+            throw new Error('generateMusic: у модели нет capabilities music');
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.generateMusic === 'function')
+            return WORK.localEngine.generateMusic(ai, params);
+        throw new Error('generateMusic: поддерживается только локальными музыкальными моделями в /MODELS/Local');
+    },
+
+    /**
      * Синтез речи (capabilities `tts`): OpenAI-совместимый POST {origin}/v1/audio/speech → WAV (Buffer).
      * Поля модели: voice ('default'), ttsTask ('VoiceDesign' | 'CustomVoice' | 'Base'), instructions (описание голоса),
      * language ('Russian'). Через шлюз Bifrost task_type/language проходят только с заголовком passthrough.

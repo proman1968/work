@@ -836,4 +836,82 @@ print(json.dumps({
             await fsp.rm(tmp, { recursive: true, force: true });
         }
     });
+
+    it('20. MusicGen (.bin): генерация музыки, честные ошибки чата и неизвестный fit без фейковых 4 ГБ', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const { evaluateModelFit, estimateModelMemoryFromId } = await import('../sources/modules/trainer/huggingface.js');
+        const { packagesForModality, localStreamChat } = await import('../sources/modules/trainer/local-engine.js');
+        const { TRAINER_METHODS } = await import('../sources/modules/trainer/index.js');
+
+        // 1. Модели без числа параметров в имени (MiniMax-H3, LTX-2.5) дают fit='unknown' и null размер
+        const est = estimateModelMemoryFromId('MiniMaxAI/MiniMax-H3', 'safetensors');
+        assert.equal(est.ramRequiredGb, null);
+        const fitUnk = evaluateModelFit({ ramRequiredGb: est.ramRequiredGb }, 160);
+        assert.equal(fitUnk.fit, 'unknown');
+
+        // 2. Пакеты для music и честная ошибка localStreamChat при наличии .bin весов на диске
+        const musicPkgs = packagesForModality('music', '');
+        assert.ok(musicPkgs.includes('transformers') && musicPkgs.includes('soundfile'));
+
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-musicgen-'));
+        try {
+            await fsp.writeFile(path.join(tmp, 'pytorch_model.bin'), Buffer.alloc(1024, 3));
+            await fsp.writeFile(path.join(tmp, 'config.json'), '{"model_type":"musicgen"}');
+
+            let chatErr = '';
+            try {
+                const it = localStreamChat({
+                    id: 'musicgen-medium',
+                    protocol: 'local',
+                    weightsDir: tmp,
+                    capabilities: ['chat', 'stream'],
+                }, { messages: [{ role: 'user', content: 'hi' }] });
+                await it.next();
+            }
+            catch (e) {
+                chatErr = String(e?.message || e);
+            }
+            assert.ok(chatErr, 'должна вернуться ошибка при попытке чата на .bin');
+            assert.ok(!chatErr.includes('ещё не скачаны'), `не должно врать что веса не скачаны: ${chatErr}`);
+            assert.ok(chatErr.includes('уже скачаны'), `должно подтверждать наличие весов: ${chatErr}`);
+
+            // 3. trainer_model_info автоматически чинит устаревшие chat/stream у musicgen-medium
+            const infoRes = await TRAINER_METHODS.trainer_model_info.fn.call({
+                id: 'musicgen-medium',
+                path: '/MODELS/Local/musicgen-medium',
+                DATA: {
+                    protocol: 'local',
+                    hfRepo: 'facebook/musicgen-medium',
+                    model: 'facebook/musicgen-medium',
+                    weightsDir: tmp,
+                    capabilities: ['chat', 'stream'],
+                    modality: 'llm',
+                },
+            });
+            assert.equal(infoRes.modality, 'audio');
+            assert.deepEqual(infoRes.capabilities, ['music']);
+            assert.equal(infoRes.weightFormat, 'other');
+
+            // 4. Воркер выгружает тяжёлый ('music', ...) по простою так же, как image/video
+            const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+            const py = `
+import json, runpy
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+evict_fn = ns['_evict_memory_if_needed']
+evict_fn.__globals__['_get_free_ram_gb'] = lambda: 64.0
+now = 30000.0
+mod_cache = {('music', '/tmp/musicgen'): ('m', 'p', 'cuda:0')}
+mod_last = {('music', '/tmp/musicgen'): now - 700.0}
+evicted = evict_fn(mod_cache, mod_last, {}, {}, now_ts=now)
+print(json.dumps({'musicEvicted': ('music', '/tmp/musicgen') not in mod_cache, 'evictedLen': len(evicted)}))
+`;
+            const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+            assert.equal(res.status, 0, res.stderr || '');
+            const out = JSON.parse(String(res.stdout || '').trim());
+            assert.equal(out.musicEvicted, true);
+        }
+        finally {
+            await fsp.rm(tmp, { recursive: true, force: true });
+        }
+    });
 });
