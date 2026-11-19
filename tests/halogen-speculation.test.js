@@ -522,4 +522,90 @@ print(json.dumps({
         assert.equal(out.patched, true);
         assert.equal(out.fallbackNone, 'orig_called');
     });
+
+    it('15. Прозрачный перехват miopenStatusInternalError на GPU ROCm и сбор пакетов под все установленные модели', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const { collectPackagesForAllInstalledModelsSync } = await import('../sources/modules/trainer/index.js');
+
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-all-pkgs-'));
+        try {
+            for (const [name, cap] of [
+                ['Qwen3-TTS-12Hz-1.7B-VoiceDesign', 'tts'],
+                ['Qwen3-ASR-1.7B', 'stt'],
+                ['Z-Image-Turbo', 'image'],
+            ]) {
+                const aiDir = path.join(tmp, 'MODELS', 'Local', name, '$ai');
+                const wDir = path.join(aiDir, '#weights');
+                await fsp.mkdir(wDir, { recursive: true });
+                await fsp.writeFile(path.join(aiDir, 'class.js'), `export default { capabilities: ["${cap}"] };\n`);
+                await fsp.writeFile(path.join(wDir, 'model.safetensors'), 'w');
+            }
+            const pkgs = collectPackagesForAllInstalledModelsSync(tmp);
+            for (const expected of ['torch', 'qwen-tts', 'qwen-asr', 'diffusers', 'pillow', 'soundfile', 'accelerate', 'transformers', 'safetensors']) {
+                assert.ok(pkgs.includes(expected), `пакет ${expected} включён в единый проход подготовки`);
+            }
+        }
+        finally {
+            await fsp.rm(tmp, { recursive: true, force: true });
+        }
+
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const py = `
+import json, runpy
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+class FakeTensor:
+    def __init__(self, device='cuda:0', dtype='bfloat16', val=1):
+        self.device = device
+        self.dtype = dtype
+        self.val = val
+    @property
+    def is_cuda(self):
+        return str(self.device).startswith('cuda')
+    def to(self, device=None, dtype=None):
+        return FakeTensor(device or self.device, dtype or self.dtype, self.val)
+
+class FakeTorch:
+    Tensor = FakeTensor
+    float16 = 'float16'
+    float32 = 'float32'
+    class backends:
+        class cudnn:
+            benchmark = True
+
+class FakeF:
+    gpu_attempts = 0
+    cpu_attempts = 0
+    @classmethod
+    def conv2d(cls, x, w, b=None):
+        if x.is_cuda:
+            cls.gpu_attempts += 1
+            raise RuntimeError('miopenStatusInternalError')
+        cls.cpu_attempts += 1
+        return FakeTensor('cpu', x.dtype, x.val + w.val)
+
+ns['_install_rocm_miopen_fallback'](FakeF, FakeTorch)
+out1 = FakeF.conv2d(FakeTensor('cuda:0', 'bfloat16', 10), FakeTensor('cuda:0', 'bfloat16', 5))
+out2 = FakeF.conv2d(FakeTensor('cuda:0', 'bfloat16', 20), FakeTensor('cuda:0', 'bfloat16', 7))
+print(json.dumps({
+    'wrapped': bool(getattr(FakeF, '_work_miopen_wrapped', False)),
+    'out1Device': out1.device,
+    'out1Val': out1.val,
+    'out2Device': out2.device,
+    'out2Val': out2.val,
+    'gpuAttempts': FakeF.gpu_attempts,
+    'cpuAttempts': FakeF.cpu_attempts,
+}))
+`;
+        const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+        assert.equal(res.status, 0, res.stderr || '');
+        const out = JSON.parse(String(res.stdout || '').trim());
+        assert.equal(out.wrapped, true);
+        assert.equal(out.out1Device, 'cuda:0', 'результат свёртки возвращается обратно на GPU');
+        assert.equal(out.out1Val, 15);
+        assert.equal(out.out2Device, 'cuda:0');
+        assert.equal(out.out2Val, 27);
+        assert.equal(out.gpuAttempts, 1, 'после первого сбоя MIOpen повторные свёртки того же типа не тратят время на падающий вызов');
+        assert.equal(out.cpuAttempts, 2);
+    });
 });

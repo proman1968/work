@@ -1074,18 +1074,37 @@ function buildProxyEnv(rootDir = process.cwd()) {
     };
 }
 
-function runSpawnCapture(cmd, args, timeoutMs = 900000, env = process.env) {
+function runSpawnCapture(cmd, args, timeoutMs = 900000, env = process.env, onLine = null) {
     return new Promise((resolve) => {
         const proc = spawn(cmd, args, { windowsHide: true, env, stdio: ['ignore', 'pipe', 'pipe'] });
         let out = '';
         let err = '';
         let timedOut = false;
+        const emitChunk = (chunk) => {
+            if (typeof onLine !== 'function')
+                return;
+            const lines = String(chunk || '').split(/[\r\n]+/);
+            for (const line of lines) {
+                const clean = line.replace(/\u001b\[[0-9;]*m/g, '').trim();
+                if (clean) {
+                    try { onLine(clean); } catch { /* ignore */ }
+                }
+            }
+        };
         const t = setTimeout(() => {
             timedOut = true;
             proc.kill();
         }, timeoutMs);
-        proc.stdout?.on('data', d => { out += String(d); if (out.length > 12000) out = out.slice(-12000); });
-        proc.stderr?.on('data', d => { err += String(d); if (err.length > 12000) err = err.slice(-12000); });
+        proc.stdout?.on('data', d => {
+            out += String(d);
+            if (out.length > 12000) out = out.slice(-12000);
+            emitChunk(d);
+        });
+        proc.stderr?.on('data', d => {
+            err += String(d);
+            if (err.length > 12000) err = err.slice(-12000);
+            emitChunk(d);
+        });
         proc.on('error', e => { clearTimeout(t); resolve({ ok: false, code: -1, out, err: String(e?.message || e) }); });
         proc.on('close', code => {
             clearTimeout(t);
@@ -1223,6 +1242,78 @@ export function getPythonProvisionState() {
     return { ..._pythonProvisionState };
 }
 
+function summarizeInstallActivityLine(line = '') {
+    const s = String(line || '').trim();
+    if (!s)
+        return '';
+    let m = /^(?:Downloading|Getting|Fetching)\s+([a-zA-Z0-9_.-]+)(?:\s*\(([^)]+)\))?/i.exec(s);
+    if (m)
+        return `скачивание ${m[1]}${m[2] ? ' (' + m[2] + ')' : ''}`;
+    m = /^(?:Prepared|Building)\s+(.+)$/i.exec(s);
+    if (m)
+        return `распаковка (${m[1]})`;
+    m = /^(?:Installed|Installing)\s+(.+)$/i.exec(s);
+    if (m)
+        return `установка (${m[1]})`;
+    m = /^Resolved\s+(.+)$/i.exec(s);
+    if (m)
+        return `проверены зависимости (${m[1]})`;
+    m = /^Collecting\s+([a-zA-Z0-9_.-]+)/i.exec(s);
+    if (m)
+        return `загрузка ${m[1]}`;
+    return '';
+}
+
+/**
+ * Собрать полный набор Python-пакетов сразу для ВСЕХ уже скачанных локальных моделей в `MODELS/Local/*`,
+ * чтобы в продакшене первичная подготовка среды ставила всё за один проход без повторных пауз при переключении моделей.
+ */
+export function collectPackagesForAllInstalledModelsSync(rootDir = process.cwd()) {
+    const out = new Set();
+    const localDir = path.join(rootDir, 'MODELS', 'Local');
+    if (!fs.existsSync(localDir))
+        return [];
+    try {
+        for (const ent of fs.readdirSync(localDir, { withFileTypes: true })) {
+            if (!ent.isDirectory() || ent.name.startsWith('$') || ent.name.startsWith('#') || ent.name.startsWith('.'))
+                continue;
+            const aiDir = path.join(localDir, ent.name, '$ai');
+            const weightsDir = path.join(aiDir, '#weights');
+            if (!fs.existsSync(weightsDir))
+                continue;
+            const wInsp = inspectWeightsDirectorySync(weightsDir);
+            if (!wInsp.hasSafetensors && !hasOnnxModelSync(weightsDir))
+                continue;
+            let mod = '';
+            const classFile = path.join(aiDir, 'class.js');
+            if (fs.existsSync(classFile)) {
+                try {
+                    const raw = fs.readFileSync(classFile, 'utf-8');
+                    if (/"tts"/i.test(raw)) mod = 'tts';
+                    else if (/"(stt|asr)"/i.test(raw)) mod = 'stt';
+                    else if (/"(image|text-to-image)"/i.test(raw)) mod = 'image';
+                    else if (/"rerank"/i.test(raw)) mod = 'rerank';
+                    else if (/"(embeddings|embed)"/i.test(raw)) mod = 'embed';
+                }
+                catch { /* ignore */ }
+            }
+            if (!mod) {
+                const low = ent.name.toLowerCase();
+                if (low.includes('tts')) mod = 'tts';
+                else if (low.includes('asr') || low.includes('whisper')) mod = 'stt';
+                else if (low.includes('image') || low.includes('flux') || low.includes('sd')) mod = 'image';
+                else if (low.includes('rerank')) mod = 'rerank';
+                else if (low.includes('bge') || low.includes('embed')) mod = 'embed';
+                else mod = 'llm';
+            }
+            for (const pkg of packagesForModality(mod, weightsDir))
+                out.add(pkg);
+        }
+    }
+    catch { /* ignore */ }
+    return [...out];
+}
+
 export async function installLocalPythonDeps(packages = [], { rootDir = process.cwd(), upgradeRocmGfx1151 = false } = {}) {
     let clean = [...new Set((Array.isArray(packages) ? packages : [packages])
         .map(s => String(s || '').trim().toLowerCase())
@@ -1310,22 +1401,42 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
         try { fs.writeFileSync(ovrFile, overrides.join('\n') + '\n', 'utf-8'); }
         catch { /* ignore */ }
 
-        _pythonProvisionState = {
-            active: true,
-            stage: useRocm
-                ? `Установка GPU-ускорения AMD ROCm (gfx1151 iGPU) и пакетов (${clean.join(', ')})…`
-                : `Автоматическая установка пакетов (${clean.join(', ')})…`,
-            packages: clean,
-            startedAt: _pythonProvisionState.startedAt || Date.now(),
-            lastError: '',
+        const baseStage = useRocm
+            ? `Установка GPU-ускорения AMD ROCm (gfx1151 iGPU) и пакетов (${clean.join(', ')})`
+            : `Автоматическая установка пакетов (${clean.join(', ')})`;
+        const attemptStart = Date.now();
+        let currentDetail = 'подключение к репозиторию пакетов…';
+        const updateLiveStage = () => {
+            const elapsedSec = Math.max(1, Math.round((Date.now() - attemptStart) / 1000));
+            _pythonProvisionState = {
+                ..._pythonProvisionState,
+                active: true,
+                stage: `${baseStage} — ${currentDetail} (⏱ ${elapsedSec} с)`,
+                packages: clean,
+            };
+        };
+        updateLiveStage();
+        const liveTimer = setInterval(updateLiveStage, 1000);
+        liveTimer.unref?.();
+        const onLine = (line) => {
+            const summary = summarizeInstallActivityLine(line);
+            if (summary) {
+                currentDetail = summary;
+                updateLiveStage();
+            }
         };
 
-        if (uv && fs.existsSync(venvPy)) {
-            const ovrArgs = fs.existsSync(ovrFile) ? ['--override', ovrFile] : [];
-            return await runSpawnCapture(uv, ['pip', 'install', '--python', venvPy, '--upgrade', ...ovrArgs, ...indexArgs, ...installList], 900000, proxyEnv);
+        try {
+            if (uv && fs.existsSync(venvPy)) {
+                const ovrArgs = fs.existsSync(ovrFile) ? ['--override', ovrFile] : [];
+                return await runSpawnCapture(uv, ['pip', 'install', '--python', venvPy, '--upgrade', '--verbose', ...ovrArgs, ...indexArgs, ...installList], 900000, proxyEnv, onLine);
+            }
+            const pipIndexArgs = useRocm ? ['--extra-index-url', AMD_ROCM_GFX1151_WHL_INDEX] : indexArgs;
+            return await runSpawnCapture(py.cmd, [...py.args, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'off', ...pipIndexArgs, ...installList], 900000, proxyEnv, onLine);
         }
-        const pipIndexArgs = useRocm ? ['--extra-index-url', AMD_ROCM_GFX1151_WHL_INDEX] : indexArgs;
-        return await runSpawnCapture(py.cmd, [...py.args, '-m', 'pip', 'install', '--upgrade', ...pipIndexArgs, ...installList], 900000, proxyEnv);
+        finally {
+            clearInterval(liveTimer);
+        }
     };
 
     let res = await runInstallAttempt(wantRocmGfx1151);
@@ -1366,8 +1477,12 @@ export async function ensurePythonForModality(modality = 'llm', { weightsDir = '
     if (_autoProvisionOverride)
         return _autoProvisionOverride(modality, { weightsDir, extraPackages, upgradeRocmGfx1151, rootDir });
 
+    const allInstalledPkgs = (!process.env.NODE_TEST_CONTEXT && !_autoProvisionOverride)
+        ? collectPackagesForAllInstalledModelsSync(rootDir)
+        : [];
     const targetPkgs = [...new Set([
         ...packagesForModality(modality, weightsDir),
+        ...allInstalledPkgs,
         ...(Array.isArray(extraPackages) ? extraPackages : []),
     ])];
 

@@ -70,8 +70,35 @@ WORK.get_item = function (path = '/', method = 'info', params = {}){
     });
 }
 let fetches = {};
-let loaderTimerId;
+const SILENT_LOADER_METHODS = new Set([
+    'trainer_provision_status',
+    'trainer_hf_downloads',
+    'trainer_transfer_jobs',
+    'trainer_jobs',
+]);
+function getTopLoaderState() {
+    try {
+        return top.__workLoaderState ??= { activeCount: 0, timerId: undefined };
+    }
+    catch {
+        return (globalThis.__workLoaderState ??= { activeCount: 0, timerId: undefined });
+    }
+}
+function ensureTopLoaderElement() {
+    try {
+        if (!top.loader || top.loader.ownerDocument !== top.document) {
+            const creator = top.ODA?.createElement ? top.ODA : ODA;
+            top.loader = creator.createElement('work-loader');
+        }
+        return top.loader;
+    }
+    catch {
+        return (globalThis.loader ??= ODA.createElement('work-loader'));
+    }
+}
 WORK.fetch = function (url, method = '', params = {}, postObject) {
+    const rawMethod = String(method || '').split('&')[0];
+    const trackInLoader = !SILENT_LOADER_METHODS.has(rawMethod);
     let {contentType} = params;
     url = encodeURI(url + (method ? '?' + method : ''));
     url += Object.keys(params).reduce((res, p) => {
@@ -107,14 +134,19 @@ WORK.fetch = function (url, method = '', params = {}, postObject) {
 
     return fetches[url] ??= new Promise((resolve, reject) => {
         queueMicrotask(async ()=>{
-            try {
-                loaderTimerId ??= setTimeout(()=>{
-                    loaderTimerId = undefined;
-                    if(!top.document.body.contains(top.loader) && Object.keys(fetches).length){
-                        top.document.body.appendChild(top.loader);
-                        top.loader.render();
+            const loaderState = getTopLoaderState();
+            if (trackInLoader) {
+                loaderState.activeCount++;
+                loaderState.timerId ??= setTimeout(() => {
+                    loaderState.timerId = undefined;
+                    const el = ensureTopLoaderElement();
+                    if (loaderState.activeCount > 0 && el && !top.document.body.contains(el)) {
+                        top.document.body.appendChild(el);
+                        el.render?.();
                     }
-                }, 500)
+                }, 500);
+            }
+            try {
 
                 let response = await fetch(url, options);
                 switch (response.status) {
@@ -170,16 +202,18 @@ WORK.fetch = function (url, method = '', params = {}, postObject) {
             finally{
                 fetches[url] = undefined;
                 delete fetches[url];
-                setTimeout(()=>{
-                    if(!Object.keys(fetches).length){
-                        if (loaderTimerId) {
-                            clearTimeout(loaderTimerId);
-                            loaderTimerId = undefined;
+                if (trackInLoader) {
+                    loaderState.activeCount = Math.max(0, loaderState.activeCount - 1);
+                    setTimeout(() => {
+                        if (loaderState.activeCount <= 0) {
+                            if (loaderState.timerId) {
+                                clearTimeout(loaderState.timerId);
+                                loaderState.timerId = undefined;
+                            }
+                            try { top.loader?.remove?.(); } catch { /* ignore */ }
                         }
-                        top.loader.remove();
-                    }
-
-                }, 100)
+                    }, 100);
+                }
             }
         })
     })
@@ -190,42 +224,44 @@ ODA({is: 'work-loader',
             :host{
                 @apply --rainbow;
                 position: fixed !important;
-                top: 50%;
-                left: 50%;
-                z-index: 10000;
-                transform: translate3d(-50%, -50%, 0);
-                pointer-events: none;
+                top: 50% !important;
+                left: 50% !important;
+                z-index: 10000 !important;
+                transform: translate3d(-50%, -50%, 0) !important;
+                pointer-events: none !important;
                 filter: drop-shadow(2px 2px 5px rgba(0,0,0,0.5));
                 border-radius: 50%;
                 overflow: hidden;
                 align-self: center;
                 width: 64px;
+                height: 64px;
                 aspect-ratio: 1/1;
                 @apply --vertical;
-
                 background-color: transparent;
-
             }
             img{
                 background-color: transparent;
                 padding: 8px;
                 border-radius: 50%;
-                animation: spin 2s linear infinite;
-
+                width: 48px;
+                height: 48px;
+                box-sizing: content-box;
+                animation: spin 1.6s linear infinite !important;
             }
             @keyframes spin {
                 0% { transform: rotate(0deg) scale(1); }
-                50% { transform: rotate(180deg) scale(.9); }
+                50% { transform: rotate(180deg) scale(.92); }
                 100% { transform: rotate(360deg) scale(1); }
             }
         </style>
         <img flex src="/sources/odant.png"></img>
     `,
     attached(){
+        this.style.cssText = 'position:fixed !important;top:50% !important;left:50% !important;transform:translate3d(-50%,-50%,0) !important;z-index:10000 !important;width:64px;height:64px;pointer-events:none;border-radius:50%;overflow:hidden;';
         this.render();
     }
 });
-top.loader ??= ODA.createElement('work-loader');
+ensureTopLoaderElement();
 
 WORK.__bind = function (data, path = '') {
     if (typeof data === 'object' && data !== null) {

@@ -151,6 +151,47 @@ await test('oda-tabs: тёмная тема и кнопки закрытия н�
     tabs.remove();
 });
 
+await test('oda-tabs: шеврон ▾ открывает список открытых вкладок (oda-menu-list, а не пустое item-menu)', async () => {
+    const selected = [];
+    const tabs = await makeTabs({
+        variant: 'rail',
+        allowClose: true,
+        items: [
+            { label: 'Журнал проводок', icon: 'icons:journal' },
+            { label: 'Qwen3.8-Flash-Next', icon: 'icons:dashboard', dirty: true },
+            { label: 'Z-Image-Turbo 6B', icon: 'icons:image' },
+        ],
+        focusedIndex: 1,
+    });
+    tabs.addEventListener('tab-select', e => selected.push(e.detail.index));
+
+    const btn = tabs.$('.list-btn');
+    assert(!!btn, 'кнопка списка вкладок есть');
+    btn.click();
+    await tick(500);
+
+    const pop = document.querySelector('item-popover');
+    assert(!!pop, 'окно меню открыто');
+    assert(pop.getAttribute('visible') === 'true' || pop.visible === true, 'окно меню видимо (иначе затемняется только фон)');
+    const rect = pop.getBoundingClientRect();
+    assert(rect.height > 20 && rect.width > 20, `у меню есть размер (${Math.round(rect.width)}x${Math.round(rect.height)})`);
+    eq(getComputedStyle(pop).visibility, 'visible', 'меню не скрыто стилями');
+    assert(!pop.querySelector('item-menu'), 'меню вкладок рисует oda-menu-list, а не контекстное item-menu');
+    const menu = pop.querySelector('oda-menu-list');
+    assert(!!menu, 'в окне есть oda-menu-list');
+    const items = [...menu.$$('.item')];
+    eq(items.length, 4, 'три вкладки + «Закрыть все»');
+    assert(items[0].textContent.includes('Журнал проводок'), 'пункты подписаны названиями вкладок');
+    assert(items[0].classList.contains('current') === false && items[1].classList.contains('current'), 'текущая вкладка отмечена');
+
+    items[2].click();
+    await tick(120);
+    eq(selected.at(-1), 2, 'выбор пункта переключает вкладку');
+    ODA.dismissToModal?.();
+    await tick(80);
+    tabs.remove();
+});
+
 await test('work-form: кнопка #classTreeToggleBtn видна и #formTabsBar на фоне --main-color', async () => {
     const formUrl = '/$server/$folder/handlers/pages/form/$handler/form.js';
     const formMod = await import(formUrl);

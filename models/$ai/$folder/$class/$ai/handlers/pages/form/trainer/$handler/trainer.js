@@ -223,7 +223,12 @@ export default {
 
     <div class="msg ok" ~if="notice">{{notice}}</div>
     <div class="msg err" ~if="error">{{error}}</div>
-    <div class="msg info" ~if="provisionBanner">{{provisionBanner}}</div>
+    <div class="msg info" ~if="provisionBanner">
+        <span class="toolbar" style="gap:8px;">
+            <oda-icon icon="spinners:3-dots-scale" :icon-size="18"></oda-icon>
+            <span>{{provisionBanner}}</span>
+        </span>
+    </div>
     <div class="msg warn" ~if="weightsRepairLine">{{weightsRepairLine}}</div>
 
     <div class="grid-2" ~if="info">

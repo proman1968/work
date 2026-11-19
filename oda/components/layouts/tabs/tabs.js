@@ -271,6 +271,14 @@ ODA({is: 'oda-tabs', imports: 'oda//button, oda//icon, oda//menu-list',
                 this.requestCloseTab(idx);
         }
     },
+    /**
+     * Показать список пунктов меню. Содержимое — всегда oda-menu-list: ODA.menuTag
+     * в приложении подменён на item-menu (контекстное меню WORK), которое items не рисует —
+     * иначе открывалось бы пустое окно с одним затемнённым фоном.
+     */
+    _itemsMenu(params, anchor) {
+        return ODA.showMenu({ menu: ODA.createComponent('oda-menu-list', params) }, anchor);
+    },
     async openTabsMenu(e) {
         const list = this.items || [];
         if (!list.length)
@@ -293,7 +301,7 @@ ODA({is: 'oda-tabs', imports: 'oda//button, oda//icon, oda//menu-list',
             });
         }
         try {
-            await ODA.showMenu({ items: menuItems, value: this.focusedIndex }, anchor);
+            await this._itemsMenu({ items: menuItems, value: this.focusedIndex }, anchor);
         }
         catch { /* отмена */ }
     },
@@ -344,7 +352,7 @@ ODA({is: 'oda-tabs', imports: 'oda//button, oda//icon, oda//menu-list',
             },
         ];
         try {
-            await ODA.showMenu({ items: menuItems }, e);
+            await this._itemsMenu({ items: menuItems }, e);
         }
         catch { /* отмена */ }
     },

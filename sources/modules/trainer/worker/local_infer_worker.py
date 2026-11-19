@@ -41,6 +41,106 @@ except Exception:
     DTYPE_MAP = {}
 
 
+_MIOPEN_CPU_FALLBACK_OPS = set()
+
+
+def _install_rocm_miopen_fallback(target_f=None, target_torch=None):
+    """На Windows ROCm (gfx1151) матричные ядра трансформеров (nn.Linear / SDPA) работают на GPU через hipBLASLt,
+    но свёрточные ядра MIOpen (Conv1d/Conv2d/ConvTranspose в VAE Z-Image-Turbo и вокодере Qwen3-TTS)
+    без компилятора rocm-sdk-devel падают с `miopenStatusInternalError`.
+    Прозрачно перехватываем сбойные свёртки MIOpen и выполняем само свёрточное ядро на CPU (Unified Memory),
+    возвращая тензор обратно на GPU (`cuda:0`).
+    """
+    f_mod = target_f if target_f is not None else F
+    t_mod = target_torch if target_torch is not None else torch
+    if f_mod is None or t_mod is None:
+        return False
+    if getattr(f_mod, "_work_miopen_wrapped", False):
+        return True
+    try:
+        t_mod.backends.cudnn.benchmark = False
+    except Exception:
+        pass
+
+    tensor_cls = getattr(t_mod, "Tensor", None)
+    f16_dt = getattr(t_mod, "float16", None)
+    f32_dt = getattr(t_mod, "float32", None)
+
+    def _to_cpu(val):
+        if tensor_cls is not None and isinstance(val, tensor_cls):
+            dt = f32_dt if (f16_dt is not None and val.dtype == f16_dt and f32_dt is not None) else val.dtype
+            return val.to(device="cpu", dtype=dt)
+        return val
+
+    def _wrap_conv(op_name):
+        orig_fn = getattr(f_mod, op_name, None)
+        if not callable(orig_fn):
+            return
+
+        def _safe_op(*args, **kwargs):
+            x = args[0] if args else kwargs.get("input")
+            is_cuda = bool(getattr(x, "is_cuda", False))
+            if not is_cuda:
+                return orig_fn(*args, **kwargs)
+            orig_dev = x.device
+            orig_dt = getattr(x, "dtype", None)
+            key = (op_name, str(orig_dt))
+            if key not in _MIOPEN_CPU_FALLBACK_OPS:
+                try:
+                    return orig_fn(*args, **kwargs)
+                except Exception as e:
+                    msg = str(e).lower()
+                    if "miopen" not in msg and "cudnn" not in msg and "hip" not in msg:
+                        raise
+                    _MIOPEN_CPU_FALLBACK_OPS.add(key)
+            cpu_args = tuple(_to_cpu(a) for a in args)
+            cpu_kwargs = {k: _to_cpu(v) for k, v in kwargs.items()}
+            out = orig_fn(*cpu_args, **cpu_kwargs)
+            return out.to(device=orig_dev, dtype=orig_dt) if hasattr(out, "to") else out
+
+        try:
+            setattr(f_mod, op_name, _safe_op)
+        except Exception:
+            pass
+        try:
+            if hasattr(t_mod, op_name):
+                setattr(t_mod, op_name, _safe_op)
+        except Exception:
+            pass
+
+    for name in (
+        "conv1d",
+        "conv2d",
+        "conv3d",
+        "conv_transpose1d",
+        "conv_transpose2d",
+        "conv_transpose3d",
+    ):
+        _wrap_conv(name)
+    try:
+        f_mod._work_miopen_wrapped = True
+    except Exception:
+        pass
+    return True
+
+
+if HAS_TORCH:
+    _install_rocm_miopen_fallback()
+
+
+def _is_recoverable_gpu_error(exc):
+    msg = str(exc or "").lower()
+    return any(tok in msg for tok in (
+        "miopen",
+        "hip out of memory",
+        "cuda out of memory",
+        "out of memory",
+        "hiperror",
+        "cudnn",
+        "invalid device function",
+    ))
+
+
 def _inference_mode_dec():
     if HAS_TORCH and hasattr(torch, "inference_mode"):
         return torch.inference_mode()
@@ -648,9 +748,25 @@ def handle_image(req, cache):
     kwargs = {"prompt": prompt, "width": w, "height": h, "num_inference_steps": steps, "generator": gen}
     if is_turbo:
         kwargs["guidance_scale"] = 0.0
-    with torch.inference_mode():
-        out = pipe(**kwargs)
-        img = out.images[0]
+    try:
+        with torch.inference_mode():
+            out = pipe(**kwargs)
+            img = out.images[0]
+    except Exception as e:
+        if str(device).startswith("cuda") and _is_recoverable_gpu_error(e):
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            device = "cpu"
+            pipe.to("cpu")
+            cache[("image", weights_dir)] = (pipe, "cpu")
+            kwargs["generator"] = torch.Generator(device="cpu").manual_seed(seed)
+            with torch.inference_mode():
+                out = pipe(**kwargs)
+                img = out.images[0]
+        else:
+            raise
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     gen_ms = max(1, int((time.time() - t_gen0) * 1000))
