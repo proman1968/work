@@ -1329,14 +1329,14 @@ def handle_tts(req, cache):
                 "language": language,
                 "speaker": _resolve_tts_speaker(mdl, req.get("voice")),
             }
-            if instructions:
+            if instructions and "0.6b" not in weights_dir.lower():
                 kwargs["instruct"] = instructions
                 instruct_used = instructions
             try:
                 wavs, sr = _call_tts_gen(mdl.generate_custom_voice, max_new_tokens, **kwargs)
             except Exception as e:
                 # CustomVoice 0.6B не принимает instruct — повторяем без него.
-                if "instruct" in kwargs and "instruct" in str(e).lower():
+                if "instruct" in kwargs and ("instruct" in str(e).lower() or "0.6b" in weights_dir.lower()):
                     kwargs.pop("instruct")
                     instruct_used = ""
                     wavs, sr = _call_tts_gen(mdl.generate_custom_voice, max_new_tokens, **kwargs)

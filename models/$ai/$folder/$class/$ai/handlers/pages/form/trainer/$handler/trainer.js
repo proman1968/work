@@ -287,12 +287,12 @@ export default {
                 <textarea rows="2" :value="testTtsText" placeholder="Текст для озвучивания…" @input="testTtsText = $this.value"></textarea>
                 <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base'">
                     <button type="button" class="btn" ~for="ttsVoicePresets"
-                        :style="testTtsInstructions === $for.item.value ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
+                        :style="(isCustomVoice06B ? testTtsVoice === $for.item.speaker : testTtsInstructions === $for.item.value) ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
                         @tap="selectTtsPreset($for.item)">
                         {{$for.item.label}}
                     </button>
                 </div>
-                <textarea rows="2" :value="testTtsInstructions" placeholder="Описание голоса и манеры (instruct): например «Мужской баритон, спокойная деловая интонация»…" @input="testTtsInstructions = $this.value"></textarea>
+                <textarea ~if="ttsKind === 'voice_design' || (ttsKind === 'custom_voice' && !isCustomVoice06B)" rows="2" :value="testTtsInstructions" placeholder="Описание голоса и манеры (instruct): например «Мужской баритон, спокойная деловая интонация»…" @input="testTtsInstructions = $this.value"></textarea>
                 <input ~if="ttsKind === 'custom_voice'" :value="testTtsVoice" placeholder="Голос (speaker): Ryan, Aiden, Dylan, Serena, Vivian…" @input="testTtsVoice = $this.value">
                 <div ~if="ttsKind === 'base'" style="font-size:12px;opacity:0.8;">Модель Base клонирует голос: для синтеза нужна эталонная запись (WAV) и её текст. Без эталона используйте VoiceDesign или CustomVoice.</div>
             </div>
@@ -392,6 +392,12 @@ export default {
         if (/(^|[^a-z])base([^a-z]|$)/.test(hay))
             return 'base';
         return 'voice_design';
+    },
+    get isCustomVoice06B() {
+        if (this.ttsKind !== 'custom_voice')
+            return false;
+        const id = String(this.info?.id || this.resolvedModelId || '').toLowerCase();
+        return id.includes('0.6b');
     },
     selectTtsPreset(p) {
         if (!p)
@@ -500,6 +506,9 @@ export default {
             }
             catch {
                 inf = await this.$item.fetch('info');
+            }
+            if (inf && typeof inf === 'object' && inf.DATA && !inf.engineSetup && !inf.weightFormat && (inf.DATA.engineSetup || inf.DATA.weightFormat || inf.DATA.speculation)) {
+                inf = { ...inf.DATA, id: inf.id || inf.DATA.id, label: inf.label || inf.DATA.label, path: inf.path || inf.DATA.path };
             }
             this.info = inf;
             if (inf?.weightsRepair)
@@ -638,7 +647,7 @@ export default {
             }
             else if (m === 'tts') {
                 body.text = this.testTtsText.trim();
-                if (this.testTtsInstructions.trim())
+                if (!this.isCustomVoice06B && this.testTtsInstructions.trim())
                     body.instructions = this.testTtsInstructions.trim();
                 if (this.ttsKind === 'custom_voice' && this.testTtsVoice.trim())
                     body.voice = this.testTtsVoice.trim();

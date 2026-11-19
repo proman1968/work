@@ -267,7 +267,13 @@ export class $folder extends $item {
             || method === 'save_files'
             || method === 'state'
             || method === 'delete_log_entry'
-            || (typeof method === 'string' && method.startsWith('sql_'))
+            || (typeof method === 'string' && (
+                method.startsWith('sql_')
+                || method.startsWith('trainer_')
+                || method.startsWith('provider_')
+                || method.startsWith('license_')
+                || method.startsWith('messenger_')
+            ))
             || (method === 'logs' && params.mode && params.mode !== 'folder' && params.mode !== 'files');
         return WORK.fetch?.(this.short || '/', method, params, post_data).then(res => {
             return isRawLogPayload ? res : WORK.__bind(res);

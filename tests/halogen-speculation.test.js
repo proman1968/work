@@ -718,4 +718,50 @@ print(json.dumps({
             await fsp.rm(tmp, { recursive: true, force: true });
         }
     });
+
+    it('18. trainer_model_info не подменяется WORK.__bind на $class и сохраняет engineSetup/weightFormat/MTP', async () => {
+        await import('../sources/reactor.js');
+        const { $folder } = await import('../sources/client/folder.js');
+        const prevWork = globalThis.WORK;
+        const prevLoc = globalThis.location;
+        let boundCalled = 0;
+        const rawDto = {
+            id: 'Qwen3.8-Flash-Next',
+            path: '/MODELS/Local/Qwen3.8-Flash-Next',
+            weightFormat: 'gguf',
+            sizeGb: 108.6,
+            halogenOnline: true,
+            speculation: { enabled: true, mode: 'explicit', summary: 'MTP + Twin + Draft Head (vocab: auto) · Prompt Lookup вкл.' },
+            engineSetup: {
+                plan: { enabled: true, mode: 'explicit', summary: 'MTP + Twin + Draft Head (vocab: auto) · Prompt Lookup вкл.' },
+                engine: { npuStatusText: 'Не включён: не найден драйвер AMD XRT NPU' },
+            },
+        };
+        globalThis.location = { origin: 'http://127.0.0.1:8001' };
+        globalThis.WORK = {
+            fetch: async () => rawDto,
+            __bind: (x) => {
+                boundCalled++;
+                return { wrappedByBind: true, DATA: x };
+            },
+        };
+        try {
+            const folder = new $folder({ id: 'Qwen3.8-Flash-Next', path: '/MODELS/Local/Qwen3.8-Flash-Next', type: '$ai' });
+            const res = await folder.fetch('trainer_model_info');
+            assert.equal(boundCalled, 0, 'trainer_* не должен прогоняться через WORK.__bind');
+            assert.equal(res.weightFormat, 'gguf');
+            assert.equal(res.halogenOnline, true);
+            assert.equal(res.engineSetup.engine.npuStatusText, 'Не включён: не найден драйвер AMD XRT NPU');
+            assert.equal(res.speculation.summary, 'MTP + Twin + Draft Head (vocab: auto) · Prompt Lookup вкл.');
+
+            // А обычные методы вроде 'info' по-прежнему проходят через WORK.__bind
+            const infoRes = await folder.fetch('info');
+            assert.equal(boundCalled, 1);
+            assert.equal(infoRes.wrappedByBind, true);
+        }
+        finally {
+            globalThis.WORK = prevWork;
+            globalThis.location = prevLoc;
+        }
+    });
 });
