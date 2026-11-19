@@ -292,7 +292,15 @@ export default {
                         {{$for.item.label}}
                     </button>
                 </div>
-                <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base' && ttsKind !== 'piper'">
+                <div class="chips" style="gap:6px;" ~if="ttsKind === 'kokoro'">
+                    <button type="button" class="btn" ~for="kokoroVoicePresets"
+                        :style="testKokoroVoice === $for.item.speaker ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
+                        @tap="testKokoroVoice = $for.item.speaker">
+                        {{$for.item.label}}
+                    </button>
+                </div>
+                <div ~if="ttsKind === 'kokoro'" style="font-size:12px;opacity:0.8;">Kokoro-82M работает с EN/FR/ES/IT/PT/JA/ZH (для русского языка используйте Piper TTS RU или Qwen3-TTS).</div>
+                <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base' && ttsKind !== 'piper' && ttsKind !== 'kokoro'">
                     <button type="button" class="btn" ~for="ttsVoicePresets"
                         :style="(isCustomVoice06B ? testTtsVoice === $for.item.speaker : testTtsInstructions === $for.item.value) ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
                         @tap="selectTtsPreset($for.item)">
@@ -378,6 +386,15 @@ export default {
         { label: 'Мужской (Дмитрий)', speaker: 'dmitri' },
         { label: 'Женский (Ирина)', speaker: 'irina' },
     ],
+    testKokoroVoice: 'af_heart',
+    kokoroVoicePresets: [
+        { label: 'EN Женский (Heart)', speaker: 'af_heart' },
+        { label: 'EN Женский (Bella)', speaker: 'af_bella' },
+        { label: 'EN Мужской (Adam)', speaker: 'am_adam' },
+        { label: 'EN Мужской (Michael)', speaker: 'am_michael' },
+        { label: 'UK Женский (Emma)', speaker: 'bf_emma' },
+        { label: 'UK Мужской (George)', speaker: 'bm_george' },
+    ],
     ttsVoicePresets: [
         { label: 'Мужской баритон', value: 'Мужской баритон, спокойная деловая интонация', speaker: 'Ryan' },
         { label: 'Мужской диктор', value: 'Мужской дикторский голос, глубокий уверенный тембр, чёткая дикция', speaker: 'Aiden' },
@@ -433,6 +450,8 @@ export default {
         const hay = `${id} ${task}`;
         if (hay.includes('piper'))
             return 'piper';
+        if (hay.includes('kokoro'))
+            return 'kokoro';
         if (hay.includes('voicedesign') || hay.includes('voice_design'))
             return 'voice_design';
         if (hay.includes('customvoice') || hay.includes('custom_voice'))
@@ -563,6 +582,9 @@ export default {
                 inf = { ...inf.DATA, id: inf.id || inf.DATA.id, label: inf.label || inf.DATA.label, path: inf.path || inf.DATA.path };
             }
             this.info = inf;
+            if (this.ttsKind === 'kokoro' && this.testTtsText === 'Привет! Локальный синтез речи платформы WORK работает.') {
+                this.testTtsText = 'Hello! Local Kokoro-82M text-to-speech in WORK is working smoothly.';
+            }
             if (inf?.weightsRepair)
                 this.weightsRepair = inf.weightsRepair;
             this.modelEnabled = inf?.enabled !== false && inf?.DATA?.enabled !== false;
@@ -703,6 +725,9 @@ export default {
                 body.text = this.testTtsText.trim();
                 if (this.ttsKind === 'piper') {
                     body.voice = this.testPiperVoice || 'dmitri';
+                }
+                else if (this.ttsKind === 'kokoro') {
+                    body.voice = this.testKokoroVoice || 'af_heart';
                 }
                 else {
                     if (!this.isCustomVoice06B && this.testTtsInstructions.trim())

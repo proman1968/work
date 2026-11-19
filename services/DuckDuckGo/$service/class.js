@@ -264,8 +264,9 @@ async function searchHtml(query) {
 }
 
 export default {
-    icon: 'carbon:search',
-    description: 'Поиск информации в интернете через DuckDuckGo',
+    icon: 'carbon:earth',
+    label: 'DuckDuckGo (Веб-поиск)',
+    description: 'Поиск информации в интернете и чтение веб-страниц через DuckDuckGo',
 
     capabilities: ['search'],
 

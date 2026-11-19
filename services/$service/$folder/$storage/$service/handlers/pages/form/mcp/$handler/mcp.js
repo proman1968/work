@@ -434,7 +434,7 @@ ODA({
             <!-- Встроенные коннекторы /SERVICES -->
             <div class="section-card">
                 <div class="section-head">
-                    <h3>🌐 Встроенные сервисы-коннекторы /SERVICES ({{connectors.length}})</h3>
+                    <h3>🇷🇺 Предустановленные сервисы и бизнес-коннекторы /SERVICES ({{connectors.length}})</h3>
                 </div>
                 <div class="cards-grid">
                     <div class="srv-card" ~for="connectors">
@@ -446,10 +446,16 @@ ODA({
                                 </div>
                                 <div class="srv-sub">{{$for.item.description}}</div>
                             </div>
-                            <span class="status-pill status-on">Встроенный</span>
+                            <span class="status-pill" :class="$for.item.enabled ? 'status-on' : 'status-off'">
+                                {{$for.item.enabled ? 'Включён' : 'Выключен'}}
+                            </span>
                         </div>
                         <div ~if="$for.item.tools?.length" style="font-size:12px;">
-                            Методы: <span class="code-chip">{{$for.item.tools.join(', ')}}</span>
+                            Инструменты ИИ: <span class="code-chip">{{$for.item.tools.join(', ')}}</span>
+                        </div>
+                        <div class="btn-row">
+                            <button class="btn" @tap="openConnector($for.item)">⚙ Открыть сервис</button>
+                            <button class="btn" @tap="toggleMcp($for.item)">{{$for.item.enabled ? '⏸ Выключить' : '▶ Включить'}}</button>
                         </div>
                     </div>
                 </div>
@@ -594,9 +600,21 @@ ODA({
     },
     get mcpTabItems() {
         return [
-            { id: 'mcp', label: 'MCP-серверы и Сервисы', icon: 'carbon:plug', count: this.mcpServers?.length || 0, showZeroCount: true },
+            { id: 'mcp', label: 'Сервисы и MCP', icon: 'carbon:plug', count: (this.mcpServers?.length || 0) + (this.connectors?.length || 0), showZeroCount: true },
             { id: 'skills', label: 'Навыки ИИ (Skills)', icon: 'carbon:skill-level', count: this.skills?.length || 0, showZeroCount: true },
         ];
+    },
+    async openConnector(srv) {
+        if (!srv?.path)
+            return;
+        try {
+            const item = await WORK.get_item(srv.path);
+            if (item && typeof window?.execute === 'function')
+                window.execute(item, { view: 'builder' });
+        }
+        catch (e) {
+            this.showNotice(e?.message || String(e), true);
+        }
     },
     get mcpTabIndex() {
         const idx = this.mcpTabItems.findIndex(t => t.id === this.activeTab);

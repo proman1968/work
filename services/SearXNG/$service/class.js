@@ -11,10 +11,12 @@ const MAX_RESULTS = 8;
 
 export default {
     icon: 'carbon:search',
-    description: 'Поиск через инстанс SearXNG',
+    label: 'SearXNG (Метапоиск)',
+    description: 'Метапоиск в интернете через инстанс SearXNG (работает без API-ключа)',
     baseUrl: DEFAULT_BASE,
 
     capabilities: ['search'],
+    enabled: true,
 
     SCHEMA: {
         search: {

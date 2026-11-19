@@ -6,9 +6,11 @@
  */
 export default {
     icon: 'carbon:weather',
-    description: 'Прогноз погоды через wttr.in',
+    label: 'Погода (wttr.in)',
+    description: 'Прогноз погоды по городам и координатам России и мира через wttr.in (без ключа)',
 
     capabilities: ['weather'],
+    enabled: true,
 
     SCHEMA: {
         get_weather: {

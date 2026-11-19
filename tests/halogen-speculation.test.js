@@ -914,4 +914,256 @@ print(json.dumps({'musicEvicted': ('music', '/tmp/musicgen') not in mod_cache, '
             await fsp.rm(tmp, { recursive: true, force: true });
         }
     });
+
+    it('21. LTX-2.5-GGUF и FLUX.2-klein-4b-fp8: авто-исправление видео/ComfyUI single-file без запуска bubo.exe', async () => {
+        const {
+            inferModalityAndCapabilities,
+            assessDiffusionRepoCompatibility,
+            registerLocalModelNode,
+        } = await import('../sources/modules/trainer/huggingface.js');
+        const { evaluateAiNodeActivitySync } = await import('../sources/modules/trainer/providers.js');
+        const { localStreamChat, localGenerateImage } = await import('../sources/modules/trainer/local-engine.js');
+        const { TRAINER_METHODS } = await import('../sources/modules/trainer/index.js');
+
+        // 1. LTX-2.5-GGUF распознаётся как video (а не llm), но помечается как несовместимый single-file/ComfyUI
+        const ltxInf = inferModalityAndCapabilities({ id: 'unsloth/LTX-2.5-GGUF' });
+        assert.equal(ltxInf.modality, 'video');
+        assert.deepEqual(ltxInf.capabilities, ['video']);
+
+        const ltxCompat = assessDiffusionRepoCompatibility({
+            id: 'unsloth/LTX-2.5-GGUF',
+            modality: 'video',
+            format: 'gguf',
+            tags: ['gguf', 'comfyui', 'ltx-2.5'],
+        });
+        assert.equal(ltxCompat.diffusersCompatible, false);
+
+        const fluxCompat = assessDiffusionRepoCompatibility({
+            id: 'black-forest-labs/FLUX.2-klein-4b-fp8',
+            modality: 'image',
+            format: 'safetensors',
+            library_name: 'diffusion-single-file',
+            tags: ['diffusion-single-file', 'flux'],
+            files: [{ name: 'flux-2-klein-4b-fp8.safetensors', kind: 'safetensors', size: 3790000000 }],
+        });
+        assert.equal(fluxCompat.diffusersCompatible, false);
+
+        const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-singlefile-'));
+        const prevCwd = process.cwd();
+        try {
+            // 2. registerLocalModelNode для видео-GGUF не ставит openai / :8731
+            const reg = await registerLocalModelNode({
+                rootDir: tmpRoot,
+                folderName: 'LTX-2.5-GGUF-Q8_0',
+                label: 'LTX-2.5-GGUF (Q8_0)',
+                repoId: 'unsloth/LTX-2.5-GGUF',
+                modality: 'video',
+                capabilities: ['video'],
+                primaryFile: 'ltx-2.5-22b-dev-Q8_0.gguf',
+            });
+            assert.equal(reg.meta.protocol, 'local');
+            assert.equal(reg.meta.baseUrl, '');
+            assert.equal(reg.meta.icon, 'av:videocam');
+
+            // 3. Уже зарегистрированный по-старому LTX-2.5-GGUF (openai + chat,stream) чинится в trainer_model_info
+            const ltxWeights = path.join(tmpRoot, 'MODELS', 'Local', 'LTX-2.5-GGUF-Q8_0', '$ai', '#weights');
+            await fsp.mkdir(ltxWeights, { recursive: true });
+            await fsp.writeFile(path.join(ltxWeights, 'ltx-2.5-22b-dev-Q8_0.gguf'), Buffer.alloc(64, 7));
+
+            const ltxCls = path.join(tmpRoot, 'MODELS', 'Local', 'LTX-2.5-GGUF-Q8_0', '$ai', 'class.js');
+            await fsp.writeFile(ltxCls, `export default ${JSON.stringify({
+                label: 'LTX-2.5-GGUF (Q8_0)',
+                icon: 'ai:ollama',
+                protocol: 'openai',
+                baseUrl: 'http://127.0.0.1:8731/v1/chat/completions',
+                model: 'unsloth/LTX-2.5-GGUF',
+                hfRepo: 'unsloth/LTX-2.5-GGUF',
+                modality: 'llm',
+                capabilities: ['chat', 'stream'],
+                weightsDir: 'MODELS/Local/LTX-2.5-GGUF-Q8_0/$ai/#weights',
+                primaryFile: 'ltx-2.5-22b-dev-Q8_0.gguf',
+            }, null, 4)};\n`, 'utf8');
+
+            process.chdir(tmpRoot);
+            const infoLtx = await TRAINER_METHODS.trainer_model_info.fn.call({
+                type: '$ai',
+                id: 'LTX-2.5-GGUF-Q8_0',
+                path: '/MODELS/Local/LTX-2.5-GGUF-Q8_0',
+                DATA: {
+                    protocol: 'openai',
+                    baseUrl: 'http://127.0.0.1:8731/v1/chat/completions',
+                    hfRepo: 'unsloth/LTX-2.5-GGUF',
+                    model: 'unsloth/LTX-2.5-GGUF',
+                    modality: 'llm',
+                    capabilities: ['chat', 'stream'],
+                    weightsDir: 'MODELS/Local/LTX-2.5-GGUF-Q8_0/$ai/#weights',
+                    primaryFile: 'ltx-2.5-22b-dev-Q8_0.gguf',
+                },
+            });
+            assert.equal(infoLtx.modality, 'video');
+            assert.equal(infoLtx.protocol, 'local');
+            assert.equal(infoLtx.baseUrl, '');
+            assert.equal(infoLtx.icon, 'av:videocam');
+            assert.deepEqual(infoLtx.capabilities, ['video']);
+            assert.equal(infoLtx.engineSetup, null);
+            assert.equal(infoLtx.incompatibleOnPlatform, true);
+            assert.match(infoLtx.incompatibleReason, /model_index\.json/i);
+
+            // 4. localStreamChat сразу отклоняет видео-GGUF без попытки запуска bubo.exe
+            let chatErr = '';
+            try {
+                const it = localStreamChat({
+                    id: 'LTX-2.5-GGUF-Q8_0',
+                    protocol: 'local',
+                    modality: 'video',
+                    capabilities: ['video'],
+                    weightsDir: ltxWeights,
+                }, { messages: [{ role: 'user', content: 'hi' }] });
+                await it.next();
+            }
+            catch (e) {
+                chatErr = String(e?.message || e);
+            }
+            assert.match(chatErr, /не предназначена для текстового чата/i);
+
+            // 5. FLUX.2-klein-4b-fp8 без model_index.json: неактивна + честная ошибка при generateImage
+            const fluxWeights = path.join(tmpRoot, 'MODELS', 'Local', 'FLUX.2-klein-4b-fp8', '$ai', '#weights');
+            await fsp.mkdir(fluxWeights, { recursive: true });
+            await fsp.writeFile(path.join(fluxWeights, 'flux-2-klein-4b-fp8.safetensors'), Buffer.alloc(64, 5));
+
+            const fluxAct = evaluateAiNodeActivitySync({
+                type: '$ai',
+                id: 'FLUX.2-klein-4b-fp8',
+                path: '/MODELS/Local/FLUX.2-klein-4b-fp8',
+                DATA: {
+                    protocol: 'local',
+                    hfRepo: 'black-forest-labs/FLUX.2-klein-4b-fp8',
+                    model: 'black-forest-labs/FLUX.2-klein-4b-fp8',
+                    modality: 'image',
+                    capabilities: ['image', 'lora'],
+                    weightsDir: fluxWeights,
+                },
+            }, tmpRoot);
+            assert.equal(fluxAct.active, false);
+            assert.equal(fluxAct.incompatibleOnPlatform, true);
+            assert.match(fluxAct.reason, /model_index\.json/i);
+
+            let imgErr = '';
+            try {
+                await localGenerateImage({
+                    id: 'FLUX.2-klein-4b-fp8',
+                    protocol: 'local',
+                    modality: 'image',
+                    weightsDir: fluxWeights,
+                }, { prompt: 'office building' });
+            }
+            catch (e) {
+                imgErr = String(e?.message || e);
+            }
+            assert.match(imgErr, /model_index\.json/i);
+        }
+        finally {
+            process.chdir(prevCwd);
+            await fsp.rm(tmpRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('22. Kokoro-82M: пакеты kokoro + синтез речи из локальных kokoro-v1_0.pth + voices/*.pt без сети', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const { packagesForModality } = await import('../sources/modules/trainer/local-engine.js');
+
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-kokoro-'));
+        try {
+            await fsp.mkdir(path.join(tmp, 'voices'), { recursive: true });
+            await fsp.writeFile(path.join(tmp, 'config.json'), JSON.stringify({ istftnet: {}, plbert: {} }));
+            await fsp.writeFile(path.join(tmp, 'kokoro-v1_0.pth'), Buffer.from('stub-pth'));
+            await fsp.writeFile(path.join(tmp, 'voices', 'af_heart.pt'), Buffer.from('stub-voice'));
+
+            const pkgs = packagesForModality('tts', tmp);
+            assert.deepEqual(pkgs, ['torch', 'kokoro', 'soundfile']);
+
+            const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+            const py = `
+import base64, json, runpy, sys, types
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+# Мокаем kokoro, torch и numpy чтобы проверить оффлайн-ветку _handle_tts_kokoro без реальных весов
+class FakeArr:
+    def __init__(self, vals):
+        self._vals = list(vals)
+    def detach(self):
+        return self
+    def cpu(self):
+        return self
+    def float(self):
+        return self
+    def numpy(self):
+        return self
+    def flatten(self):
+        return self
+    def tolist(self):
+        return self._vals
+
+fake_np = types.SimpleNamespace(concatenate=lambda parts: FakeArr([x for p in parts for x in p._vals]))
+sys.modules['numpy'] = fake_np
+
+calls = []
+class FakeKModel:
+    def __init__(self, **kw):
+        calls.append(('KModel', kw))
+    def to(self, dev):
+        return self
+    def eval(self):
+        return self
+
+class FakeKPipeline:
+    def __init__(self, **kw):
+        calls.append(('KPipeline', kw))
+    def __call__(self, text, voice=None, speed=1.0):
+        calls.append(('synth', text, type(voice).__name__, speed))
+        yield ('gs', 'ps', FakeArr([0.0, 0.25, -0.25, 0.1]))
+
+sys.modules['kokoro'] = types.SimpleNamespace(KModel=FakeKModel, KPipeline=FakeKPipeline)
+
+fn = ns['handle_tts']
+class NoGrad:
+    def __enter__(self): return None
+    def __exit__(self, *a): return False
+fake_torch = types.SimpleNamespace(
+    load=lambda p, map_location='cpu', weights_only=True: {'voice_path': p},
+    inference_mode=lambda: NoGrad(),
+    cuda=types.SimpleNamespace(is_available=lambda: False),
+)
+fn.__globals__['torch'] = fake_torch
+ns['_handle_tts_kokoro'].__globals__['torch'] = fake_torch
+ns['_handle_tts_kokoro'].__globals__['_best_device_and_dtype'] = lambda: ('cpu', 'float32')
+
+cache = {}
+res = fn({'weightsDir': ${JSON.stringify(tmp)}, 'text': 'Hello WORK!', 'voice': 'af_heart'}, cache)
+wav = base64.b64decode(res['audioBase64'])
+print(json.dumps({
+    'ttsKind': res['ttsKind'],
+    'voiceUsed': res['voiceUsed'],
+    'sampleRate': res['sampleRate'],
+    'isWav': wav[:4] == b'RIFF',
+    'calls': calls,
+}, default=str))
+`;
+            const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+            assert.equal(res.status, 0, res.stderr || '');
+            const out = JSON.parse(String(res.stdout || '').trim());
+            assert.equal(out.ttsKind, 'kokoro');
+            assert.equal(out.voiceUsed, 'af_heart');
+            assert.equal(out.sampleRate, 24000);
+            assert.equal(out.isWav, true);
+            assert.equal(out.calls[0][0], 'KModel');
+            assert.equal(out.calls[1][0], 'KPipeline');
+            assert.equal(out.calls[1][1].lang_code, 'a');
+            assert.equal(out.calls[2][0], 'synth');
+            assert.equal(out.calls[2][2], 'dict');
+        }
+        finally {
+            await fsp.rm(tmp, { recursive: true, force: true });
+        }
+    });
 });

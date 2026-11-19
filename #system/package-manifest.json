@@ -2,7 +2,7 @@
   "packageName": "odant-work",
   "version": "1.0.56",
   "createdAt": 1795100682741,
-  "updatedAt": 1795100682741,
+  "updatedAt": 1795100975087,
   "files": {
     "run.mjs": "f8918c612e8641e9beee06221be6680aa6fd21f25468451f2ac857fd51772266",
     "package.json": "6a9a1f4b7a249f8a15411240a190195f1741dbe7c6ae35b1acab65ff354c61ec",
@@ -178,7 +178,7 @@
     "sources/modules/trainer/downloader.js": "d9e96cb07e7bf64386558be8c2265c482af35a513f42954250add6d5fc87bdc4",
     "sources/modules/trainer/halogen.js": "bd08cb4a5475e6b6f0d13fdf3458f2b3ef49e1997eb275c85dfd0ca9e6848457",
     "sources/modules/trainer/huggingface.js": "b9fa410fa1f5c09e2ebf17bf0e8885d12439d07a6b40670d8bca090eb3f22e29",
-    "sources/modules/trainer/index.js": "f1e8a2e64d6f7c9969c511552d18ffa4efacae94a0beff049d947912b9fb6033",
+    "sources/modules/trainer/index.js": "d4075162f3501a3d9e1d299ae0bcc7360486e878cb3255fbfd971b058122026e",
     "sources/modules/trainer/local-engine.js": "94cdb6d99e12fb4e6e7c1ca8ae8532d7ec0c73dc6aba089bedf8b07c232623ba",
     "sources/modules/trainer/paths.js": "4d3e2503889ef2cdb6feb5979576ac2b289974cdb407a40e1bef797ce421e45c",
     "sources/modules/trainer/providers.js": "190ca237108ee386fd7f27c66ea4be60411b2823b1c027fc6e44dfdcb419ec86",

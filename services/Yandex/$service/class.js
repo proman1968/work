@@ -55,11 +55,13 @@ function parseYandexXml(xml = '') {
 }
 
 export default {
-    icon: 'carbon:search',
-    description: 'Поиск в интернете через Yandex Search API',
+    icon: 'carbon:search-locate',
+    label: 'Яндекс.Поиск (Yandex Cloud)',
+    description: 'Официальный поиск в Рунете и мире через Yandex Cloud Search API v2',
     baseUrl: DEFAULT_BASE,
     folderId: '',
     capabilities: ['search'],
+    enabled: true,
 
     SCHEMA: {
         search: {
