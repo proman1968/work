@@ -582,18 +582,28 @@ export function inferModalityAndCapabilities(row = {}) {
     const ptag = String(row.pipeline_tag || '').toLowerCase();
     const tags = (Array.isArray(row.tags) ? row.tags : []).map(t => String(t).toLowerCase());
     const joined = `${id.toLowerCase()} ${ptag} ${tags.join(' ')}`;
+    const isGgufRepo = tags.includes('gguf') || /gguf/i.test(id);
 
-    if (ptag.includes('video') || /\b(t2v|i2v|wan2|ltx-video|hunyuanvideo|cogvideo)\b/.test(joined)) {
+    if (
+        ptag.includes('video')
+        || tags.some(t => /text-to-video|image-to-video|text-to-audio-video|image-to-audio-video|video-generation/i.test(t))
+        || /\b(t2v|i2v|t2av|i2av|wan2(?:\.\d+)?|ltx(?:[-_.]?(?:video|2(?:\.\d+)?|v))?|hunyuan[-_.]?video|cogvideox?|mochi[-_.]?1|skyreels|framepack|animatediff)\b/.test(joined)
+    ) {
         return {
             modality: 'video',
-            capabilities: ['video', 'lora'],
+            capabilities: isGgufRepo ? ['video'] : ['video', 'lora'],
             whatItDoes: 'Генерация и обработка видеороликов по текстовому описанию или кадру',
         };
     }
-    if (ptag === 'text-to-image' || ptag === 'image-to-image' || /\b(flux|sdxl|stable-diffusion|z-image)\b/.test(joined)) {
+    if (
+        ptag === 'text-to-image'
+        || ptag === 'image-to-image'
+        || tags.some(t => /text-to-image|image-to-image|diffusion-single-file/i.test(t))
+        || /\b(flux|sdxl|stable-diffusion|z-image|qwen-image|sd3\.5|hidream|chroma)\b/.test(joined)
+    ) {
         return {
             modality: 'image',
-            capabilities: ['image', 'lora'],
+            capabilities: isGgufRepo ? ['image'] : ['image', 'lora'],
             whatItDoes: 'Генерация и редактирование иллюстраций, фотографий и графики по тексту',
         };
     }
@@ -755,18 +765,51 @@ export function resolveModelIcon({ repoId = '', modality = 'llm', capabilities =
     return 'ai:ollama';
 }
 
+export function assessDiffusionRepoCompatibility({ id = '', modality = 'llm', format = '', tags = [], library_name = '', files = null } = {}) {
+    const mod = String(modality || '').toLowerCase();
+    if (mod !== 'image' && mod !== 'video')
+        return { diffusersCompatible: true, compatibilityNote: '' };
+    const lowTags = (Array.isArray(tags) ? tags : []).map(t => String(t).toLowerCase());
+    const lib = String(library_name || '').toLowerCase();
+    const isGguf = format === 'gguf' || lowTags.includes('gguf') || /gguf/i.test(String(id || ''));
+
+    if (Array.isArray(files) && files.length) {
+        const hasModelIndex = files.some(f => String(f?.name || '').toLowerCase() === 'model_index.json');
+        const hasWeights = files.some(f => f?.kind === 'gguf' || f?.kind === 'safetensors');
+        if (hasWeights && !hasModelIndex) {
+            return {
+                diffusersCompatible: false,
+                compatibilityNote: 'Чекпоинт формата ComfyUI / single-file / GGUF без model_index.json (пайплайна Diffusers) — не запускается автономно в WORK. Выберите полноценную модель Diffusers (Z-Image-Turbo, Lightricks/LTX-Video, Wan2.1-T2V).',
+            };
+        }
+        return { diffusersCompatible: true, compatibilityNote: '' };
+    }
+
+    if (lib === 'diffusion-single-file' || lowTags.includes('diffusion-single-file') || lowTags.includes('comfyui') || isGguf) {
+        return {
+            diffusersCompatible: false,
+            compatibilityNote: 'Чекпоинт формата ComfyUI / single-file / GGUF без пайплайна Diffusers — не запускается автономно в WORK. Выберите полноценную модель Diffusers (Z-Image-Turbo, Lightricks/LTX-Video, Wan2.1-T2V).',
+        };
+    }
+    return { diffusersCompatible: true, compatibilityNote: '' };
+}
+
 function decorateModelCard(m, usableMemoryGb) {
     const fitInfo = evaluateModelFit(m, usableMemoryGb);
     const modDef = MODEL_MODALITIES.find(x => x.id === m.modality) || MODEL_MODALITIES[1];
     const capabilityBadges = (m.capabilities || []).map(cid => MODEL_CAPABILITIES[cid] || { id: cid, label: cid, desc: '' });
     const icon = m.icon || resolveModelIcon({ repoId: m.id, modality: m.modality, capabilities: m.capabilities });
+    const diffCompat = m.curated
+        ? { diffusersCompatible: true, compatibilityNote: '' }
+        : assessDiffusionRepoCompatibility(m);
     return {
         ...m,
         icon,
         modalityLabel: modDef.shortLabel,
         capabilityBadges,
         ...fitInfo,
-        recommendedForHost: fitInfo.fit === 'optimal',
+        ...diffCompat,
+        recommendedForHost: fitInfo.fit === 'optimal' && diffCompat.diffusersCompatible,
     };
 }
 
@@ -881,11 +924,12 @@ export async function searchHuggingFaceModels({
                 capabilities: inferred.capabilities,
                 whatItDoes: inferred.whatItDoes,
                 format,
+                library_name: row.library_name || '',
                 paramsB: est.paramsB,
                 ramRequiredGb: est.ramRequiredGb,
                 trainRamGb: est.trainRamGb,
                 recommendedFor: row.pipeline_tag || inferred.whatItDoes,
-                tags: tags.slice(0, 8),
+                tags: tags.slice(0, 12),
                 downloads: Number(row.downloads) || 0,
                 likes: Number(row.likes) || 0,
                 curated: false,
@@ -966,6 +1010,16 @@ export async function inspectHuggingFaceRepo(repoId, {
                 const fitInfo = evaluateModelFit({ ramRequiredGb: totalWeightGb, trainRamGb: +(totalWeightGb * 1.5).toFixed(1) }, usableMemoryGb);
                 const capabilityBadges = (inferred.capabilities || []).map(cid => MODEL_CAPABILITIES[cid] || { id: cid, label: cid, desc: '' });
                 const icon = resolveModelIcon({ repoId: info.id || cleanId, modality: inferred.modality, capabilities: inferred.capabilities });
+                const diffCompat = curated
+                    ? { diffusersCompatible: true, compatibilityNote: '' }
+                    : assessDiffusionRepoCompatibility({
+                        id: info.id || cleanId,
+                        modality: inferred.modality,
+                        format: quants.length ? 'gguf' : 'safetensors',
+                        tags: info.tags || [],
+                        library_name: info.library_name || '',
+                        files,
+                    });
 
                 return {
                     id: info.id || cleanId,
@@ -982,6 +1036,7 @@ export async function inspectHuggingFaceRepo(repoId, {
                     quants,
                     totalWeightGb,
                     ...fitInfo,
+                    ...diffCompat,
                     curated,
                 };
             }
@@ -1189,12 +1244,16 @@ export async function registerLocalModelNode({
     ])];
     const icon = customIcon || resolveModelIcon({ repoId: repoId || safeName, modality, capabilities: resolvedCaps });
 
-    const resolvedProtocol = protocol || (String(primaryFile || '').endsWith('.gguf') ? 'openai' : 'local');
-    const cleanBaseUrl = (baseUrl === null || baseUrl === 'null')
+    const effModLow = String(modality || 'llm').toLowerCase();
+    const supportsGgufChat = !['video', 'image', 'audio', 'embed'].includes(effModLow);
+    const resolvedProtocol = protocol || (supportsGgufChat && String(primaryFile || '').endsWith('.gguf') ? 'openai' : 'local');
+    const cleanBaseUrl = resolvedProtocol === 'local'
         ? ''
-        : (typeof baseUrl === 'string' && baseUrl.trim()
-            ? baseUrl.trim()
-            : (resolvedProtocol === 'local' ? '' : 'http://127.0.0.1:8731/v1/chat/completions'));
+        : ((baseUrl === null || baseUrl === 'null')
+            ? ''
+            : (typeof baseUrl === 'string' && baseUrl.trim()
+                ? baseUrl.trim()
+                : 'http://127.0.0.1:8731/v1/chat/completions'));
 
     const meta = {
         label: String(label || safeName),
@@ -1412,6 +1471,9 @@ export async function startHuggingFaceDownload({
             proxyUrl: effProxy,
             fetchImpl,
         });
+        if (repoMeta.diffusersCompatible === false && !files?.length) {
+            throw new Error(repoMeta.compatibilityNote || `Репозиторий ${cleanId} содержит single-file/ComfyUI веса без пайплайна Diffusers.`);
+        }
         selected = selectFilesToDownload(repoMeta, { files, quant, modality: nodeMeta?.modality || repoMeta.modality });
     }
     if (!selected.length)

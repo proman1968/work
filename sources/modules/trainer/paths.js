@@ -127,6 +127,8 @@ export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
         hasHnpw: false,
         hasConfig: false,
         hasTokenizer: false,
+        hasModelIndex: false,
+        hasDiffusersDirs: false,
         incompatibleOnPlatform: false,
         incompatibleReason: '',
     };
@@ -159,6 +161,10 @@ export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
         const hasOther = files.some(f => /\.(bin|onnx|onnx_data|pt|pth)$/i.test(f));
         const hasConfig = files.includes('config.json');
         const hasTokenizer = files.includes('tokenizer.json');
+        const hasModelIndex = files.includes('model_index.json');
+        const hasDiffusersDirs = ['transformer', 'unet', 'vae', 'text_encoder'].some(d =>
+            files.some(f => f.startsWith(`${d}/`)) || fs.existsSync(path.join(dirPath, d))
+        );
         const pendingDownload = hasParts || pendingState;
         // Основные веса уже на диске — модель работоспособна, даже если в фоне докачиваются
         // недостающие конфиги/подпапки (speech_tokenizer/, onnx/, индексы шардов).
@@ -210,6 +216,8 @@ export function inspectWeightsDirectorySync(dirPath, platform = os.platform()) {
             hasHnpw,
             hasConfig,
             hasTokenizer,
+            hasModelIndex,
+            hasDiffusersDirs,
             incompatibleOnPlatform,
             incompatibleReason,
         };

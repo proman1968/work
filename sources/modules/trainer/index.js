@@ -28,6 +28,7 @@ import {
     repairLocalModelWeightsIfNeeded,
     getWeightsRepairState,
     readLocalModelMetaSync,
+    resolveModelIcon,
 } from './huggingface.js';
 import {
     buildWorkDataset,
@@ -386,7 +387,7 @@ function inferTestModality(ai) {
         return 'stt';
     if (caps.includes('music') || mod === 'music' || /musicgen|audioldm/i.test(String(ai?.id || ai?.model || '')))
         return 'music';
-    if (caps.includes('video') || caps.includes('text-to-video') || mod === 'video')
+    if (caps.includes('video') || caps.includes('text-to-video') || mod === 'video' || /\b(ltx(?:[-_.]?(?:video|2(?:\.\d+)?|v))?|wan2(?:\.\d+)?|hunyuan[-_.]?video|cogvideo)\b/i.test(String(ai?.id || ai?.model || d.hfRepo || '')))
         return 'video';
     if (caps.includes('image') || caps.includes('text-to-image') || mod === 'image')
         return 'image';
@@ -438,12 +439,15 @@ async function runSingleModelSmokeTest(ai, p = {}) {
     const t0 = Date.now();
     try {
         if (modality === 'tts') {
-            const text = String(p.text || p.prompt || 'Привет! Проверка локального синтеза речи WORK.').trim();
+            const isKokoro = /kokoro/i.test(`${ai?.id || ''} ${ai?.model || ''} ${ai?.DATA?.hfRepo || ''}`);
+            const text = String(p.text || p.prompt || (isKokoro
+                ? 'Hello! Local Kokoro-82M speech synthesis in WORK is working smoothly.'
+                : 'Привет! Проверка локального синтеза речи WORK.')).trim();
             const buf = await ai.speak({
                 text,
                 language: p.language,
                 instructions: p.instructions,
-                voice: p.voice,
+                voice: p.voice || (isKokoro ? 'af_heart' : undefined),
                 seed: p.seed,
                 refAudioBase64: p.refAudioBase64,
                 refText: p.refText,
@@ -839,27 +843,15 @@ export const TRAINER_METHODS = Object.freeze({
                     if (ext)
                         weightInfo = { ...(weightInfo || {}), weightFormat: ext };
                 }
-                if (d.protocol === 'halogen' || weightInfo?.hasGguf || weightInfo?.hasBuboManifest) {
-                    halogenProbe = await probeHalogenServer(d.baseUrl || HALOGEN_DEFAULT_BASE_URL).catch(() => null);
-                    let winEnv = halogenProbe?.windowsEnv || null;
-                    if (!winEnv) {
-                        try { winEnv = inspectWindowsHalogenEnvironment(); }
-                        catch { winEnv = null; }
-                    }
-                    if (os.platform() === 'win32' && !halogenProbe?.online && winEnv && !winEnv.buboInstalled && !winEnv.gufoInstalled) {
-                        needsRuntime = true;
-                    }
-                }
             }
-
-            const resolvedProtocol = d.protocol || (isLocal ? 'local' : 'openai');
-            const rawBaseUrl = (d.baseUrl && d.baseUrl !== 'null') ? String(d.baseUrl) : '';
-            const cleanBaseUrl = resolvedProtocol === 'local' ? '' : rawBaseUrl;
-
             // Автоисправление устаревших метаданных для известных не-LLM моделей
-            // (например, если ранняя версия зарегистрировала musicgen-medium с `['chat', 'stream']`).
+            // (например, если ранняя версия зарегистрировала musicgen-medium или LTX-2.5-GGUF с `['chat', 'stream']` / `openai`).
             let effModality = d.modality || 'llm';
             let effCaps = Array.isArray(d.capabilities) ? d.capabilities : (d.$public?.capabilities || ['chat', 'stream']);
+            let resolvedProtocol = d.protocol || (isLocal ? 'local' : 'openai');
+            let rawBaseUrl = (d.baseUrl && d.baseUrl !== 'null') ? String(d.baseUrl) : '';
+            let effIcon = d.icon || this?.icon || 'carbon:machine-learning-model';
+            let effFnCalling = d.functionCalling;
             if (isLocal) {
                 const lookupKey = String(d.hfRepo || d.model || this?.id || '').trim();
                 const curated = CURATED_HF_MODELS.find(m =>
@@ -870,9 +862,14 @@ export const TRAINER_METHODS = Object.freeze({
                 const inferred = curated || (lookupKey ? inferModalityAndCapabilities({ id: lookupKey }) : null);
                 const capsLow = effCaps.map(c => String(c).toLowerCase());
                 const looksLikeDefaultChat = capsLow.length === 0 || capsLow.every(c => c === 'chat' || c === 'stream' || c === 'functions');
-                if (inferred && inferred.modality && inferred.modality !== 'llm' && looksLikeDefaultChat && !(inferred.capabilities || []).includes('chat')) {
+                const inferredNonLlm = inferred && inferred.modality && inferred.modality !== 'llm' && !(inferred.capabilities || []).includes('chat');
+                if (inferredNonLlm && (looksLikeDefaultChat || resolvedProtocol === 'openai')) {
                     effModality = inferred.modality;
                     effCaps = [...inferred.capabilities];
+                    resolvedProtocol = 'local';
+                    rawBaseUrl = '';
+                    effFnCalling = false;
+                    effIcon = resolveModelIcon({ repoId: lookupKey, modality: effModality, capabilities: effCaps });
                     try {
                         const clsPath = path.join(process.cwd(), 'MODELS', 'Local', this?.id || '', '$ai', 'class.js');
                         if (fs.existsSync(clsPath)) {
@@ -882,7 +879,19 @@ export const TRAINER_METHODS = Object.freeze({
                                 const parsed = JSON.parse(mJson[1]);
                                 parsed.modality = effModality;
                                 parsed.capabilities = effCaps;
+                                parsed.protocol = 'local';
+                                parsed.baseUrl = '';
+                                parsed.functionCalling = false;
+                                parsed.icon = effIcon;
                                 fs.writeFileSync(clsPath, `/**\n * Локальная модель ИИ: ${parsed.label || this?.id} (${effModality})\n * Репозиторий Hugging Face: ${parsed.hfRepo || 'локальный'}\n */\nexport default ${JSON.stringify(parsed, null, 4)};\n`, 'utf-8');
+                                if (this?.DATA) {
+                                    this.DATA.modality = effModality;
+                                    this.DATA.capabilities = effCaps;
+                                    this.DATA.protocol = 'local';
+                                    this.DATA.baseUrl = '';
+                                    this.DATA.functionCalling = false;
+                                    this.DATA.icon = effIcon;
+                                }
                                 this?.reset?.();
                             }
                         }
@@ -890,8 +899,25 @@ export const TRAINER_METHODS = Object.freeze({
                     catch { /* ignore */ }
                 }
             }
+            const cleanBaseUrl = resolvedProtocol === 'local' ? '' : rawBaseUrl;
+            const isGgufLlm = Boolean(weightInfo?.hasGguf && !['video', 'image', 'audio', 'embed'].includes(String(effModality || '').toLowerCase()));
 
-            const engineSetup = (resolvedProtocol === 'halogen' || weightInfo?.hasGguf)
+            if (isLocal && (resolvedProtocol === 'halogen' || isGgufLlm || weightInfo?.hasBuboManifest)) {
+                halogenProbe = await probeHalogenServer(cleanBaseUrl || d.baseUrl || HALOGEN_DEFAULT_BASE_URL).catch(() => null);
+                let winEnv = halogenProbe?.windowsEnv || null;
+                if (!winEnv) {
+                    try { winEnv = inspectWindowsHalogenEnvironment(); }
+                    catch { winEnv = null; }
+                }
+                if (os.platform() === 'win32' && !halogenProbe?.online && winEnv && !winEnv.buboInstalled && !winEnv.gufoInstalled) {
+                    needsRuntime = true;
+                }
+            }
+
+            const actReeval = (effFnCalling === false && !act.active && act.incompatibleOnPlatform)
+                ? act
+                : evaluateAiNodeActivitySync(this);
+            const engineSetup = (resolvedProtocol === 'halogen' || isGgufLlm)
                 ? await describeEngineSetup().catch(() => null)
                 : null;
 
@@ -913,7 +939,7 @@ export const TRAINER_METHODS = Object.freeze({
             return {
                 id: this?.id || '',
                 label: d.label || this?.label || this?.id || '',
-                icon: d.icon || this?.icon || 'carbon:machine-learning-model',
+                icon: effIcon,
                 path: itemPath,
                 providerName: providerId,
                 isLocal,
@@ -928,11 +954,11 @@ export const TRAINER_METHODS = Object.freeze({
                 weightsDir: resolvedWeightsRel,
                 primaryFile: resolvedPrimaryFile,
                 enabled: d.enabled !== false,
-                aiActive: act.active,
-                aiStatusReason: act.reason,
+                aiActive: actReeval.active,
+                aiStatusReason: actReeval.reason,
                 weightFormat: weightInfo?.weightFormat || '',
-                incompatibleOnPlatform: Boolean(act.incompatibleOnPlatform || weightInfo?.incompatibleOnPlatform),
-                incompatibleReason: act.incompatibleOnPlatform ? act.reason : (weightInfo?.incompatibleReason || ''),
+                incompatibleOnPlatform: Boolean(actReeval.incompatibleOnPlatform || weightInfo?.incompatibleOnPlatform),
+                incompatibleReason: actReeval.incompatibleOnPlatform ? actReeval.reason : (weightInfo?.incompatibleReason || ''),
                 sizeGb,
                 needsRuntime: false,
                 runtimeAutoInstall: needsRuntime,
@@ -942,7 +968,7 @@ export const TRAINER_METHODS = Object.freeze({
                 speculation: engineSetup?.plan || halogenProbe?.speculation || null,
                 weightsRepair,
                 engineSetup,
-                engineSettings: (resolvedProtocol === 'halogen' || weightInfo?.hasGguf) ? readEngineSettings(process.cwd()) : null,
+                engineSettings: (resolvedProtocol === 'halogen' || isGgufLlm) ? readEngineSettings(process.cwd()) : null,
                 pythonProvision: getPythonProvisionState(),
                 windowsEnv: halogenProbe?.windowsEnv || (() => { try { return inspectWindowsHalogenEnvironment(); } catch { return null; } })(),
             };

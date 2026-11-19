@@ -914,6 +914,20 @@ export function evaluateAiNodeActivitySync(item, rootDir = process.cwd()) {
             };
         }
         if (check.ready) {
+            const rawMod = String(data.modality || '').toLowerCase();
+            const capsArr = (Array.isArray(data.capabilities) ? data.capabilities : []).map(c => String(c).toLowerCase());
+            const modelIdent = `${data.hfRepo || ''} ${data.model || ''} ${modelName}`.toLowerCase();
+            const isDiffusionModel = rawMod === 'image' || rawMod === 'video'
+                || capsArr.includes('image') || capsArr.includes('video')
+                || /\b(ltx(?:[-_.]?(?:video|2(?:\.\d+)?|v))?|wan2(?:\.\d+)?|hunyuan[-_.]?video|cogvideo|flux|sdxl|z-image|qwen-image|sd3\.5|hidream|chroma)\b/.test(modelIdent);
+            if (isDiffusionModel && !check.info?.hasModelIndex && (check.info?.hasGguf || !check.info?.hasDiffusersDirs)) {
+                return {
+                    active: false,
+                    reason: 'Single-file / ComfyUI чекпоинт без model_index.json (пайплайна Diffusers) — не может запускаться автономно',
+                    incompatibleOnPlatform: true,
+                    configuredKey: false,
+                };
+            }
             return { active: true, reason: 'Активна (веса модели на диске)', configuredKey: true };
         }
         if (check.incompatible) {

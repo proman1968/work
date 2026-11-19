@@ -763,6 +763,15 @@ def _load_image_pipeline(weights_dir, cache):
     key = ("image", weights_dir)
     if key in cache:
         return cache[key]
+    if not os.path.isfile(os.path.join(weights_dir, "model_index.json")):
+        raise RuntimeError(json.dumps({
+            "error": (
+                "В папке весов модели отсутствует model_index.json (конфигурация пайплайна Diffusers). "
+                "Скачанный файл является одиночным чекпоинтом (ComfyUI / single-file / GGUF) без VAE и текстового энкодера "
+                "и не может запускаться автономно. Установите полноценную Diffusers-модель из каталога "
+                "(например Z-Image-Turbo)."
+            )
+        }))
     try:
         import diffusers
         import accelerate  # noqa: F401
@@ -849,6 +858,16 @@ def _load_video_pipeline(weights_dir, cache):
     key = ("video", weights_dir)
     if key in cache:
         return cache[key]
+    idx_path = os.path.join(weights_dir, "model_index.json")
+    if not os.path.isfile(idx_path):
+        raise RuntimeError(json.dumps({
+            "error": (
+                "В папке весов модели отсутствует model_index.json (конфигурация пайплайна Diffusers). "
+                "Скачанный файл является одиночным чекпоинтом (ComfyUI / single-file / GGUF) без VAE и текстового энкодера "
+                "и не может запускаться автономно. Установите полноценную Diffusers-модель из каталога "
+                "(например Lightricks/LTX-Video или Wan2.1-T2V)."
+            )
+        }))
     try:
         import diffusers
         import accelerate  # noqa: F401
@@ -1516,11 +1535,148 @@ def _handle_tts_piper(req, cache, piper_files):
     }
 
 
+def _find_kokoro_files(weights_dir):
+    if not weights_dir or not os.path.isdir(weights_dir):
+        return None
+    cfg_p = os.path.join(weights_dir, "config.json")
+    if not os.path.isfile(cfg_p):
+        return None
+    pth_p = None
+    try:
+        for fn in sorted(os.listdir(weights_dir)):
+            low = fn.lower()
+            if low.startswith("kokoro") and low.endswith(".pth") and not low.endswith(".part"):
+                pth_p = os.path.join(weights_dir, fn)
+                break
+    except Exception:
+        return None
+    if not pth_p:
+        return None
+    voices_dir = os.path.join(weights_dir, "voices")
+    return pth_p, cfg_p, (voices_dir if os.path.isdir(voices_dir) else "")
+
+
+def _kokoro_lang_for_voice(voice_name):
+    v = str(voice_name or "af_heart").strip().lower()
+    if v.startswith(("bf_", "bm_")):
+        return "b"
+    if v.startswith(("ef_", "em_")):
+        return "e"
+    if v.startswith(("ff_", "fm_")):
+        return "f"
+    if v.startswith(("hf_", "hm_")):
+        return "h"
+    if v.startswith(("if_", "im_")):
+        return "i"
+    if v.startswith(("jf_", "jm_")):
+        return "j"
+    if v.startswith(("pf_", "pm_")):
+        return "p"
+    if v.startswith(("zf_", "zm_")):
+        return "z"
+    return "a"
+
+
+def _handle_tts_kokoro(req, cache, kokoro_files):
+    pth_p, cfg_p, voices_dir = kokoro_files
+    weights_dir = req["weightsDir"]
+    text = str(req.get("text", "")).strip() or "Hello! Local Kokoro-82M speech synthesis in WORK is working."
+    voice_name = str(req.get("voice") or "af_heart").strip() or "af_heart"
+    lang_code = _kokoro_lang_for_voice(voice_name)
+
+    m_key = ("tts_kokoro_model", weights_dir)
+    p_key = ("tts_kokoro_pipe", weights_dir, lang_code)
+    was_cached = (m_key in cache) and (p_key in cache)
+    t_load0 = time.time()
+    try:
+        from kokoro import KModel, KPipeline
+        import numpy as np
+    except Exception as e:
+        raise RuntimeError(json.dumps(_missing_pkg_error(e, {
+            "kokoro": "kokoro",
+            "soundfile": "soundfile",
+        })))
+
+    if m_key not in cache:
+        device, _ = _best_device_and_dtype()
+        try:
+            kmodel = KModel(config=cfg_p, model=pth_p, repo_id="hexgrad/Kokoro-82M").to(device).eval()
+        except Exception:
+            device = "cpu"
+            kmodel = KModel(config=cfg_p, model=pth_p, repo_id="hexgrad/Kokoro-82M").to("cpu").eval()
+        cache[m_key] = (kmodel, device)
+    kmodel, device = cache[m_key]
+
+    if p_key not in cache:
+        cache[p_key] = KPipeline(lang_code=lang_code, repo_id="hexgrad/Kokoro-82M", model=kmodel)
+    pipe = cache[p_key]
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+
+    voice_arg = voice_name
+    if voices_dir:
+        cand = os.path.join(voices_dir, f"{voice_name}.pt")
+        if not os.path.isfile(cand):
+            pts = sorted(f for f in os.listdir(voices_dir) if f.endswith(".pt"))
+            if pts:
+                cand = os.path.join(voices_dir, pts[0])
+                voice_name = os.path.splitext(pts[0])[0]
+        if os.path.isfile(cand):
+            voice_arg = torch.load(cand, map_location="cpu", weights_only=True)
+
+    t_gen0 = time.time()
+
+    def _run_kokoro():
+        chunks = []
+        with torch.inference_mode():
+            for _, _, audio in pipe(text, voice=voice_arg, speed=1.0):
+                if audio is not None:
+                    if hasattr(audio, "detach"):
+                        audio = audio.detach().cpu().float().numpy()
+                    chunks.append(audio)
+        return chunks
+
+    try:
+        chunks = _run_kokoro()
+    except Exception as e:
+        if str(device).startswith("cuda") and _is_recoverable_gpu_error(e):
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            device = "cpu"
+            kmodel = kmodel.to("cpu").eval()
+            cache[m_key] = (kmodel, "cpu")
+            chunks = _run_kokoro()
+        else:
+            raise
+
+    if not chunks:
+        raise RuntimeError(json.dumps({
+            "error": "Kokoro-82M не смог синтезировать этот текст (модель поддерживает EN/FR/ES/IT/PT/JA/ZH; для русского языка используйте Piper TTS RU или Qwen3-TTS)."
+        }))
+    full_audio = np.concatenate(chunks) if len(chunks) > 1 else chunks[0]
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {
+        "audioBase64": _pcm_to_wav_base64(full_audio, 24000),
+        "sampleRate": 24000,
+        "ttsKind": "kokoro",
+        "voiceUsed": voice_name,
+        "instructUsed": "",
+        "device": _describe_torch_device(device),
+        "loadMs": load_ms,
+        "genMs": gen_ms,
+        "durationMs": gen_ms,
+    }
+
+
 def handle_tts(req, cache):
     weights_dir = req["weightsDir"]
     piper_files = _find_piper_onnx_files(weights_dir)
     if piper_files:
         return _handle_tts_piper(req, cache, piper_files)
+    kokoro_files = _find_kokoro_files(weights_dir)
+    if kokoro_files:
+        return _handle_tts_kokoro(req, cache, kokoro_files)
     text = str(req.get("text", "")).strip()
     language = _tts_language(req.get("language") or "Russian")
     instructions = str(req.get("instructions") or "").strip()
@@ -1983,7 +2139,10 @@ def main():
                 elif op == "video":
                     needed.extend(["diffusers", "accelerate", "pillow", "transformers", "imageio", "imageio-ffmpeg"])
                 elif op == "tts":
-                    needed.extend(["qwen-tts", "soundfile", "transformers"])
+                    if _find_kokoro_files(str(req.get("weightsDir") or "")):
+                        needed.extend(["kokoro", "soundfile"])
+                    else:
+                        needed.extend(["qwen-tts", "soundfile", "transformers"])
                 elif op == "music":
                     needed.extend(["transformers", "accelerate", "soundfile"])
                 elif op == "stt":

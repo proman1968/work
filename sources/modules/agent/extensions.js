@@ -22,11 +22,80 @@ import { ENGINE_AI, loadDocs } from './resources.js';
 export const SKILL_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const SECRET_KEY_NAME = /(key|token|secret|auth|password|bearer|credential)/i;
 
-/** Пресеты популярных MCP-серверов для быстрой установки в /SERVICES. */
+/** Пресеты популярных MCP-серверов для быстрой установки в /SERVICES (с фокусом на РФ и локальную инфраструктуру). */
 export const MCP_PRESETS = [
     {
+        id: '1c-mcp',
+        label: '1С:Предприятие MCP (OData / HTTP)',
+        description: 'Подключение внешнего или корпоративного MCP-шлюза 1С:Предприятие 8.3 (Бухгалтерия, УНФ, УТ, ERP)',
+        icon: 'carbon:data-share',
+        transport: 'http',
+        mcp: {
+            url: 'http://localhost:8090/mcp/1c',
+            headers: { Authorization: 'secret:onec_mcp_token' },
+        },
+    },
+    {
+        id: 'yandex-tracker',
+        label: 'Яндекс.Трекер / Yandex Cloud MCP',
+        description: 'Управление задачами, очередями и спринтами в Яндекс.Трекере и ресурсами Yandex Cloud',
+        icon: 'carbon:task-complete',
+        transport: 'http',
+        mcp: {
+            url: 'https://mcp.cloud.yandex.net/tracker/mcp',
+            headers: {
+                Authorization: 'secret:yandex_oauth_token',
+                'X-Org-ID': 'secret:yandex_org_id',
+            },
+        },
+    },
+    {
+        id: 'gitverse',
+        label: 'GitVerse / GitFlic MCP (РФ)',
+        description: 'Работа с российскими хостингами Git-репозиториев, запросами на слияние и задачами (GitVerse Сбер / GitFlic)',
+        icon: 'carbon:branch',
+        transport: 'http',
+        mcp: {
+            url: 'https://api.gitverse.ru/mcp',
+            headers: { Authorization: 'secret:gitverse_token' },
+        },
+    },
+    {
+        id: 'diadoc-edo',
+        label: 'Контур.Диадок / СБИС (ЭДО MCP)',
+        description: 'Проверка статуса УПД, актов, счетов-фактур и формализованных документов ЭДО',
+        icon: 'carbon:document-signed',
+        transport: 'http',
+        mcp: {
+            url: 'http://localhost:8091/mcp/diadoc',
+            headers: { Authorization: 'secret:diadoc_token' },
+        },
+    },
+    {
+        id: 'marketplaces-ru',
+        label: 'Wildberries и Ozon Seller MCP',
+        description: 'Остатки на складах, карточки товаров, заказы и финансовые отчёты селлера WB / Ozon',
+        icon: 'carbon:shopping-cart',
+        transport: 'http',
+        mcp: {
+            url: 'http://localhost:8092/mcp/marketplaces',
+            headers: { Authorization: 'secret:marketplace_api_key' },
+        },
+    },
+    {
+        id: 'postgres',
+        label: 'PostgreSQL / PostgresPro MCP',
+        description: 'Инспекция схемы и безопасные SQL-запросы к корпоративным БД PostgreSQL и PostgresPro',
+        icon: 'carbon:data-base',
+        transport: 'stdio',
+        mcp: {
+            command: 'npx',
+            args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/mydb'],
+        },
+    },
+    {
         id: 'filesystem',
-        label: 'Filesystem MCP',
+        label: 'Filesystem MCP (Локальные файлы)',
         description: 'Доступ к разрешённым локальным каталогам через официальный @modelcontextprotocol/server-filesystem',
         icon: 'carbon:folder-details',
         transport: 'stdio',
@@ -36,25 +105,25 @@ export const MCP_PRESETS = [
         },
     },
     {
+        id: 'playwright',
+        label: 'Playwright Browser MCP (Браузер)',
+        description: 'Управление браузером, снапшоты DOM и автоматизация веб-интерфейсов (@playwright/mcp)',
+        icon: 'carbon:application-web',
+        transport: 'stdio',
+        mcp: {
+            command: 'npx',
+            args: ['-y', '@playwright/mcp@latest'],
+        },
+    },
+    {
         id: 'git',
-        label: 'Git MCP',
-        description: 'Чтение истории, веток, diff и коммитов репозитория через mcp-server-git',
+        label: 'Git MCP (Репозиторий)',
+        description: 'Чтение истории, веток, diff и коммитов локального репозитория через mcp-server-git',
         icon: 'carbon:branch',
         transport: 'stdio',
         mcp: {
             command: 'uvx',
             args: ['mcp-server-git', '--repository', '.'],
-        },
-    },
-    {
-        id: 'fetch',
-        label: 'Fetch MCP',
-        description: 'Загрузка веб-страниц и конвертация HTML в Markdown для ИИ-агентов',
-        icon: 'carbon:earth',
-        transport: 'stdio',
-        mcp: {
-            command: 'uvx',
-            args: ['mcp-server-fetch'],
         },
     },
     {
@@ -69,25 +138,14 @@ export const MCP_PRESETS = [
         },
     },
     {
-        id: 'playwright',
-        label: 'Playwright Browser MCP',
-        description: 'Управление браузером, снапшоты DOM и автоматизация веб-интерфейсов (@playwright/mcp)',
-        icon: 'carbon:application-web',
+        id: 'fetch',
+        label: 'Fetch MCP',
+        description: 'Загрузка веб-страниц и конвертация HTML в Markdown для ИИ-агентов',
+        icon: 'carbon:earth',
         transport: 'stdio',
         mcp: {
-            command: 'npx',
-            args: ['-y', '@playwright/mcp@latest'],
-        },
-    },
-    {
-        id: 'postgres',
-        label: 'PostgreSQL MCP',
-        description: 'Инспекция схемы и безопасные SQL-запросы к БД PostgreSQL',
-        icon: 'carbon:data-base',
-        transport: 'stdio',
-        mcp: {
-            command: 'npx',
-            args: ['-y', '@modelcontextprotocol/server-postgres', 'postgresql://localhost/mydb'],
+            command: 'uvx',
+            args: ['mcp-server-fetch'],
         },
     },
     {
@@ -105,7 +163,7 @@ export const MCP_PRESETS = [
     {
         id: 'remote-http',
         label: 'Remote HTTP MCP',
-        description: 'Подключение внешнего MCP-сервера по протоколу Streamable HTTP / SSE',
+        description: 'Подключение любого внешнего MCP-сервера по протоколу Streamable HTTP / SSE',
         icon: 'carbon:cloud-service-management',
         transport: 'http',
         mcp: {
@@ -817,16 +875,24 @@ export async function listMcpCatalog() {
             catch { /* fallback to reading class.js */ }
 
             if (!data) {
-                try {
-                    const clsFile = path.join(servicesDir, e.name, '$service', 'class.js');
-                    if (fs.existsSync(clsFile)) {
+                const clsFile = path.join(servicesDir, e.name, '$service', 'class.js');
+                if (fs.existsSync(clsFile)) {
+                    try {
                         const raw = await fsp.readFile(clsFile, 'utf-8');
                         const m = raw.match(/export\s+default\s+(\{[\s\S]*\})\s*;?\s*$/);
                         if (m)
                             data = JSON.parse(m[1]);
                     }
+                    catch { /* fallback to dynamic import */ }
+                    if (!data) {
+                        try {
+                            const { pathToFileURL } = await import('node:url');
+                            const mod = await import(pathToFileURL(clsFile).href + '?t=' + Date.now());
+                            data = mod?.default || null;
+                        }
+                        catch { /* ignore */ }
+                    }
                 }
-                catch { /* ignore */ }
             }
 
             if (!data || typeof data !== 'object')
@@ -926,22 +992,35 @@ export async function installMcpServers(input = {}, ctx = {}) {
     return { installed };
 }
 
-/** Включить или выключить MCP-сервер в `/SERVICES/<id>`. */
+/** Включить или выключить сервис / MCP-сервер в `/SERVICES/<id>`. */
 export async function setMcpServerEnabled({ id, enabled }, ctx = {}) {
     if (ctx?.session && !(await isAdmin(ctx.session)))
-        throw new Error('Доступ запрещён: управлять MCP-серверами может только руководитель (BOSS)');
+        throw new Error('Доступ запрещён: управлять сервисами и MCP может только руководитель (BOSS)');
     const cleanId = normalizeMcpServerId(id);
     const clsFile = path.join(process.cwd(), 'SERVICES', cleanId, '$service', 'class.js');
     if (!fs.existsSync(clsFile))
-        throw new Error(`MCP-сервер /SERVICES/${cleanId} не найден`);
+        throw new Error(`Сервис /SERVICES/${cleanId} не найден`);
 
     const item = await globalThis.WORK?.get_item?.('/SERVICES/' + cleanId).catch(() => null);
     const current = (item && typeof item.import === 'function' ? await item.import().catch(() => null) : null) || {};
+    const flag = Boolean(enabled);
+
+    if (!current.mcp) {
+        const rawText = await fsp.readFile(clsFile, 'utf-8');
+        const nextText = /\benabled\s*:\s*(true|false)\b/.test(rawText)
+            ? rawText.replace(/\benabled\s*:\s*(true|false)\b/, `enabled: ${flag}`)
+            : rawText.replace(/export\s+default\s*\{/, `export default {\n    enabled: ${flag},`);
+        await fsp.writeFile(clsFile, nextText, 'utf-8');
+        resetServiceRegistry();
+        item?.reset?.();
+        return { id: cleanId, enabled: flag };
+    }
+
     const updated = {
         icon: current.icon || 'carbon:plug',
         label: current.label || cleanId,
         description: current.description || `MCP-сервер ${cleanId}`,
-        enabled: Boolean(enabled),
+        enabled: flag,
         mcp: current.mcp || {},
     };
     await fsp.writeFile(clsFile, `/** MCP-сервер ${updated.label} (/SERVICES/${cleanId}). */\nexport default ${JSON.stringify(updated, null, 4)};\n`, 'utf-8');

@@ -55,7 +55,7 @@ async function localVoiceModel(cap) {
             const piper = matches.find(m => /piper/i.test(String(m.id || m.model || m.path || '')));
             if (piper)
                 return piper;
-            const fast = matches.find(m => /0\.6b|customvoice|kokoro/i.test(String(m.id || m.model || m.path || '')));
+            const fast = matches.find(m => /0\.6b|customvoice/i.test(String(m.id || m.model || m.path || '')));
             if (fast)
                 return fast;
         }

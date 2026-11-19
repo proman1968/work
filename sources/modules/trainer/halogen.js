@@ -1271,8 +1271,26 @@ export function resolveBuboModelFiles(weightsDir) {
     return { mainModel, mtpModel, mmprojModel, twinModel, draftHeadModel };
 }
 
+function isNonLlmModelDir(modelDir, folderName = '', mainFile = '') {
+    const joined = `${folderName} ${path.basename(mainFile || '')}`.toLowerCase();
+    if (/\b(ltx(?:[-_.]?(?:video|2(?:\.\d+)?|v))?|wan2(?:\.\d+)?|hunyuan[-_.]?video|cogvideo|flux|sdxl|z-image|qwen-image|sd3\.5|hidream|chroma|musicgen|audioldm|kokoro|piper)\b/.test(joined))
+        return true;
+    try {
+        const clsPath = path.join(modelDir, '$ai', 'class.js');
+        if (fs.existsSync(clsPath)) {
+            const raw = fs.readFileSync(clsPath, 'utf-8');
+            const m = raw.match(/"modality"\s*:\s*"([^"]+)"/i);
+            if (m && ['video', 'image', 'audio', 'embed'].includes(m[1].toLowerCase()))
+                return true;
+        }
+    }
+    catch { /* ignore */ }
+    return false;
+}
+
 /**
- * Найти локальный GGUF-файл модели в метапапках моделей `/MODELS/Local/<Модель>/$ai/#weights`.
+ * Найти локальный GGUF-файл LLM-модели в метапапках моделей `/MODELS/Local/<Модель>/$ai/#weights`.
+ * Пропускает диффузионные и аудио-модели (LTX, Flux, Wan и т.д.), которые не запускаются через LLM-движок `bubo.exe`.
  */
 function findLocalGgufModel(rootDir = process.cwd()) {
     const preferred = resolveBuboModelFiles(modelWeightsDir(rootDir, 'Qwen3.8-Flash-Next', 'Local'));
@@ -1286,9 +1304,12 @@ function findLocalGgufModel(rootDir = process.cwd()) {
         for (const entry of fs.readdirSync(localRoot, { withFileTypes: true })) {
             if (!entry.isDirectory() || entry.name.startsWith('$') || entry.name.startsWith('#') || entry.name === 'models')
                 continue;
-            for (const dir of [modelWeightsDir(rootDir, entry.name, 'Local'), path.join(localRoot, entry.name, '#weights')]) {
+            const modelDir = path.join(localRoot, entry.name);
+            if (isNonLlmModelDir(modelDir, entry.name))
+                continue;
+            for (const dir of [modelWeightsDir(rootDir, entry.name, 'Local'), path.join(modelDir, '#weights')]) {
                 const resolved = resolveBuboModelFiles(dir);
-                if (resolved.mainModel)
+                if (resolved.mainModel && !isNonLlmModelDir(modelDir, entry.name, resolved.mainModel))
                     return resolved.mainModel;
             }
         }

@@ -220,3 +220,64 @@ test('3. Создание автономного дистрибутива (па�
         fs.rmSync(tmpRoot, { recursive: true, force: true });
     }
 });
+
+test('4. Вызов distro_info через шлюз безопасности GATEWAY.invoke (без ошибки 400 not exposed)', async () => {
+    const GATEWAY = await import('../sources/server/access/gateway.js');
+    await WORK.init;
+    const member = GATEWAY.resolveMember(WORK, 'distro_info');
+    assert.ok(member, 'distro_info должен быть зарегистрирован в GATEWAY.MEMBERS');
+    const expMember = GATEWAY.resolveMember(WORK, 'export_distro');
+    assert.ok(expMember, 'export_distro должен быть зарегистрирован в GATEWAY.MEMBERS');
+
+    const info = await GATEWAY.invoke(WORK, 'distro_info', { session: { $user: WORK } });
+    assert.ok(info && typeof info.coreBytes === 'number' && info.coreFiles > 0, 'GATEWAY.invoke(WORK, "distro_info") должен возвращать статистику дистрибутива');
+});
+
+test('5. Предустановленный набор российских Сервисов и MCP в /SERVICES (ЦБ РФ, DaData/ЕГРЮЛ/БИК, Производственный календарь РФ, 1С, Битрикс24, Яндекс.Диск)', async () => {
+    const { listMcpCatalog } = await import('../sources/modules/agent/extensions.js');
+    const catalog = await listMcpCatalog();
+    const connectorIds = catalog.connectors.map(c => c.id);
+
+    // ArgoCD удалён, а российские сервисы предустановлены
+    assert.ok(!connectorIds.includes('ArgoCD'), 'ArgoCD должен быть убран из /SERVICES');
+    for (const expectedId of ['CBR', 'DaData', 'RuCalendar', '1C', 'Bitrix24', 'YandexDisk', 'Telegram', 'Yandex', 'SearXNG', 'DuckDuckGo', 'Weather']) {
+        assert.ok(connectorIds.includes(expectedId), `Сервис ${expectedId} должен присутствовать в /SERVICES`);
+    }
+
+    // Пресеты MCP включают российские шаблоны
+    const presetIds = catalog.presets.map(p => p.id);
+    for (const pId of ['1c-mcp', 'yandex-tracker', 'gitverse', 'diadoc-edo', 'marketplaces-ru', 'postgres', 'playwright', 'filesystem']) {
+        assert.ok(presetIds.includes(pId), `Пресет MCP ${pId} должен быть в витрине MCP_PRESETS`);
+    }
+
+    // Проверка DaData.validate_requisites (контрольные разряды ИНН, ОГРН, БИК и расчётного счёта)
+    const dadata = (await import('../SERVICES/DaData/$service/class.js')).default;
+    const validCheck = await dadata.validate_requisites({
+        inn: '7707083893',              // ПАО Сбербанк (валидный 10-значный ИНН)
+        ogrn: '1027700132195',          // ПАО Сбербанк (валидный 13-значный ОГРН)
+        bik: '044525225',               // БИК Сбербанка
+        account: '40702810938000000000' // Проверим ключевание
+    });
+    assert.equal(validCheck.inn.valid, true, 'ИНН 7707083893 должен проходить проверку ФНС');
+    assert.equal(validCheck.ogrn.valid, true, 'ОГРН 1027700132195 должен проходить проверку ФНС');
+
+    const badInn = await dadata.validate_requisites({ inn: '7707083890' });
+    assert.equal(badInn.ok, false);
+    assert.equal(badInn.inn.valid, false, 'Битый ИНН должен отклоняться проверкой контрольной суммы');
+
+    // Проверка Производственного календаря РФ (RuCalendar)
+    const ruCal = (await import('../SERVICES/RuCalendar/$service/class.js')).default;
+    const victoryDay = await ruCal.check_date({ date: '2026-05-09' });
+    assert.equal(victoryDay.isHoliday, true);
+    assert.equal(victoryDay.isWorking, false);
+    assert.match(victoryDay.holidayName, /День Победы/);
+
+    const period = await ruCal.workdays_between({ from: '2026-05-01', to: '2026-05-11' });
+    assert.equal(period.calendarDays, 11);
+    assert.equal(period.holidaysCount, 2); // 1 мая и 9 мая
+    assert.equal(period.workingDays, 5);   // 4, 5, 6, 7, 8 мая (8 мая — сокращённый предпраздничный, 11 мая — перенос)
+
+    const deadline = await ruCal.add_workdays({ date: '2026-04-30', days: 1 });
+    assert.equal(deadline.resultDate, '2026-05-04', 'Следующий рабочий день после 30.04.2026 — 04.05.2026 (с учётом 1–3 мая)');
+});
+

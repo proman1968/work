@@ -367,6 +367,19 @@ function isPiperOnnxDirSync(weightsDir) {
     return onnxFiles.some(f => fs.existsSync(`${f}.json`));
 }
 
+function isKokoroDirSync(weightsDir) {
+    if (!weightsDir || !fs.existsSync(weightsDir))
+        return false;
+    try {
+        const files = fs.readdirSync(weightsDir);
+        const hasPth = files.some(f => /^kokoro.*\.pth$/i.test(f) && !f.endsWith('.part'));
+        return hasPth && files.includes('config.json');
+    }
+    catch {
+        return false;
+    }
+}
+
 export function packagesForModality(modality = 'llm', weightsDir = '') {
     const mod = String(modality || 'llm').toLowerCase();
     const hasOnnx = hasOnnxModelSync(weightsDir);
@@ -386,6 +399,8 @@ export function packagesForModality(modality = 'llm', weightsDir = '') {
         return ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers', 'safetensors'];
     if ((mod === 'tts' || mod === 'voice') && isPiperOnnxDirSync(weightsDir))
         return ['piper-tts', 'onnxruntime'];
+    if ((mod === 'tts' || mod === 'voice') && isKokoroDirSync(weightsDir))
+        return ['torch', 'kokoro', 'soundfile'];
     if (mod === 'music' || mod === 'text-to-audio')
         return ['torch', 'transformers', 'accelerate', 'safetensors', 'soundfile'];
     if (mod === 'tts' || mod === 'voice')
@@ -754,6 +769,15 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         throw new Error(wInsp.incompatibleReason);
     }
 
+    const aiCaps = (Array.isArray(ai?.capabilities || ai?.DATA?.capabilities)
+        ? (ai?.capabilities || ai?.DATA?.capabilities)
+        : []).map(c => String(c).toLowerCase());
+    const aiMod = String(ai?.modality || ai?.DATA?.modality || '').toLowerCase();
+    const nonChatCap = aiCaps.find(c => ['music', 'tts', 'stt', 'asr', 'image', 'video', 'embeddings', 'rerank'].includes(c));
+    if ((nonChatCap && !aiCaps.includes('chat')) || ['image', 'video', 'embed', 'rerank', 'tts', 'stt', 'music'].includes(aiMod)) {
+        throw new Error(`Эта модель (${nonChatCap || aiMod}) не предназначена для текстового чата — используйте соответствующий режим в её карточке.`);
+    }
+
     if (wInsp.hasGguf || wInsp.hasBuboManifest || ai?.protocol === 'halogen' || ai?.DATA?.protocol === 'halogen') {
         const backend = await ensureHalogenBackendRunning({
             baseUrl: ai?.baseUrl || ai?.DATA?.baseUrl,
@@ -769,15 +793,7 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         throw new Error('Загрузка весов модели ещё не завершена (проверьте вкладку «Модели» в /MODELS/Local).');
     }
 
-    const aiCaps = (Array.isArray(ai?.capabilities || ai?.DATA?.capabilities)
-        ? (ai?.capabilities || ai?.DATA?.capabilities)
-        : []).map(c => String(c).toLowerCase());
-    const aiMod = String(ai?.modality || ai?.DATA?.modality || '').toLowerCase();
-    const nonChatCap = aiCaps.find(c => ['music', 'tts', 'stt', 'asr', 'image', 'video', 'embeddings', 'rerank'].includes(c));
     if (wInsp.hasReadyWeights) {
-        if ((nonChatCap && !aiCaps.includes('chat')) || ['image', 'video', 'embed', 'rerank', 'tts', 'stt', 'music'].includes(aiMod)) {
-            throw new Error(`Эта модель (${nonChatCap || aiMod}) не предназначена для текстового чата — используйте соответствующий режим в её карточке.`);
-        }
         if (!wInsp.hasSafetensors) {
             throw new Error(`Веса модели уже скачаны (формат: ${wInsp.weightFormat || 'other'}), но для локального текстового чата требуются .safetensors + tokenizer.json.`);
         }
@@ -970,8 +986,20 @@ export async function localRerank(ai, params = {}) {
     };
 }
 
+function assertDiffusersModelIndex(weightsDir) {
+    if (!fs.existsSync(path.join(weightsDir, 'model_index.json'))) {
+        throw new Error(
+            'В папке весов модели отсутствует model_index.json (конфигурация пайплайна Diffusers). '
+            + 'Скачанный файл является одиночным чекпоинтом (ComfyUI / single-file / GGUF) без VAE и текстового энкодера '
+            + 'и не может запускаться автономно. Установите полноценную Diffusers-модель из каталога '
+            + '(например Z-Image-Turbo, Lightricks/LTX-Video или Wan2.1-T2V).'
+        );
+    }
+}
+
 export async function localGenerateImage(ai, params = {}) {
     const weightsDir = assertLocalWeightsReady(ai);
+    assertDiffusersModelIndex(weightsDir);
     const prompt = String(params.prompt || params.post || '').trim();
     if (!prompt)
         throw new Error('generateImage: пустой prompt');
@@ -998,6 +1026,7 @@ export async function localGenerateImage(ai, params = {}) {
 
 export async function localGenerateVideo(ai, params = {}) {
     const weightsDir = assertLocalWeightsReady(ai);
+    assertDiffusersModelIndex(weightsDir);
     const prompt = String(params.prompt || params.post || '').trim();
     if (!prompt)
         throw new Error('generateVideo: пустой prompt');
@@ -1155,6 +1184,7 @@ const ALLOWED_PYTHON_DEPS = new Set([
     'qwen-tts',
     'qwen-asr',
     'piper-tts',
+    'kokoro',
     'imageio',
     'imageio-ffmpeg',
     'sentencepiece',
