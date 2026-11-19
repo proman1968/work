@@ -764,4 +764,76 @@ print(json.dumps({
             globalThis.location = prevLoc;
         }
     });
+
+    it('19. Piper TTS (RU) ONNX без PyTorch и генерация видео с выгрузкой по простою', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const { CURATED_HF_MODELS, detectBrokenWeightsLayout } = await import('../sources/modules/trainer/huggingface.js');
+        const { inspectWeightsDirectorySync } = await import('../sources/modules/trainer/paths.js');
+        const { packagesForModality } = await import('../sources/modules/trainer/local-engine.js');
+
+        const piperCard = CURATED_HF_MODELS.find(m => m.id === 'rhasspy/piper-voices');
+        assert.ok(piperCard, 'карточка Piper TTS RU присутствует в каталоге');
+        assert.equal(piperCard.folderName, 'Piper-TTS-RU');
+        assert.equal(piperCard.files?.length, 4, 'скачиваются только 2 русских голоса (4 файла), а не весь репозиторий');
+
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-piper-video-'));
+        try {
+            const dmitriDir = path.join(tmp, 'ru', 'ru_RU', 'dmitri', 'medium');
+            const irinaDir = path.join(tmp, 'ru', 'ru_RU', 'irina', 'medium');
+            await fsp.mkdir(dmitriDir, { recursive: true });
+            await fsp.mkdir(irinaDir, { recursive: true });
+            await fsp.writeFile(path.join(dmitriDir, 'ru_RU-dmitri-medium.onnx'), Buffer.alloc(1024, 1));
+            await fsp.writeFile(path.join(dmitriDir, 'ru_RU-dmitri-medium.onnx.json'), '{}');
+            await fsp.writeFile(path.join(irinaDir, 'ru_RU-irina-medium.onnx'), Buffer.alloc(1024, 2));
+            await fsp.writeFile(path.join(irinaDir, 'ru_RU-irina-medium.onnx.json'), '{}');
+
+            const wInfo = inspectWeightsDirectorySync(tmp);
+            assert.equal(wInfo.hasReadyWeights, true);
+            assert.equal(wInfo.weightFormat, 'other');
+            const broken = detectBrokenWeightsLayout(tmp);
+            assert.equal(broken.broken, false, 'Piper ONNX + .onnx.json не считается сломанной без .onnx_data');
+
+            const piperPkgs = packagesForModality('tts', tmp);
+            assert.deepEqual(piperPkgs, ['piper-tts', 'onnxruntime']);
+
+            const videoPkgs = packagesForModality('video', tmp);
+            assert.ok(videoPkgs.includes('diffusers') && videoPkgs.includes('imageio') && videoPkgs.includes('imageio-ffmpeg'));
+
+            const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+            const py = `
+import json, runpy
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+found = ns['_find_piper_onnx_files'](${JSON.stringify(tmp)})
+picked_irina = ns['_pick_piper_voice_file'](found, 'Женский (Ирина)')[0]
+picked_dmitri = ns['_pick_piper_voice_file'](found, 'dmitri')[0]
+
+evict_fn = ns['_evict_memory_if_needed']
+evict_fn.__globals__['_get_free_ram_gb'] = lambda: 64.0
+now = 20000.0
+mod_cache = {('video', '/tmp/ltx'): ('v_pipe', 'cuda:0'), ('tts_piper', picked_dmitri): ('p_obj', 'cpu')}
+mod_last = {('video', '/tmp/ltx'): now - 700.0, ('tts_piper', picked_dmitri): now - 700.0}
+evicted = evict_fn(mod_cache, mod_last, {}, {}, now_ts=now)
+
+print(json.dumps({
+    'count': len(found),
+    'irina': 'irina' in picked_irina.lower(),
+    'dmitri': 'dmitri' in picked_dmitri.lower(),
+    'videoEvicted': ('video', '/tmp/ltx') not in mod_cache,
+    'piperKept': ('tts_piper', picked_dmitri) in mod_cache,
+    'evictedLen': len(evicted),
+}))
+`;
+            const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+            assert.equal(res.status, 0, res.stderr || '');
+            const out = JSON.parse(String(res.stdout || '').trim());
+            assert.equal(out.count, 2);
+            assert.equal(out.irina, true);
+            assert.equal(out.dmitri, true);
+            assert.equal(out.videoEvicted, true, 'тяжёлая видео-диффузия выгружается по простою');
+            assert.equal(out.piperKept, true, 'лёгкий Piper ONNX остаётся горячим в памяти');
+        }
+        finally {
+            await fsp.rm(tmp, { recursive: true, force: true });
+        }
+    });
 });

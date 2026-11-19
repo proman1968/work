@@ -571,6 +571,8 @@ def handle_check_deps():
         "soundfile": "soundfile",
         "qwen_tts": "qwen-tts",
         "qwen_asr": "qwen-asr",
+        "piper": "piper-tts",
+        "imageio": "imageio",
         "onnxruntime": ort_pkg,
     }
     status = {}
@@ -802,7 +804,11 @@ def handle_image(req, cache):
         w, h = [max(256, min(1536, int(v))) for v in size_str.lower().split("x")[:2]]
     except Exception:
         w, h = 512, 512
-    is_turbo = "z-image" in weights_dir.lower() or "turbo" in weights_dir.lower()
+    is_turbo = (
+        "z-image" in weights_dir.lower()
+        or "turbo" in weights_dir.lower()
+        or "schnell" in weights_dir.lower()
+    )
     steps = int(req.get("steps") or (4 if is_turbo else 8))
     seed = int(req.get("seed") if req.get("seed") is not None else 42)
     was_cached = ("image", weights_dir) in cache
@@ -837,6 +843,176 @@ def handle_image(req, cache):
     img.save(buf, format="PNG")
     gen_ms = max(1, int((time.time() - t_gen0) * 1000))
     return {"mime": "image/png", "base64": base64.b64encode(buf.getvalue()).decode("ascii"), "device": _describe_torch_device(device), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
+
+
+def _load_video_pipeline(weights_dir, cache):
+    key = ("video", weights_dir)
+    if key in cache:
+        return cache[key]
+    try:
+        import diffusers
+        import accelerate  # noqa: F401
+        from PIL import Image  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(json.dumps(_missing_pkg_error(e, {
+            "diffusers": "diffusers",
+            "accelerate": "accelerate",
+            "PIL": "pillow",
+        })))
+    device, dtype = _best_device_and_dtype()
+    cls_name = ""
+    try:
+        idx_path = os.path.join(weights_dir, "model_index.json")
+        if os.path.isfile(idx_path):
+            with open(idx_path, "r", encoding="utf-8") as f:
+                cls_name = str(json.load(f).get("_class_name") or "")
+    except Exception:
+        cls_name = ""
+
+    low = (cls_name + " " + weights_dir).lower()
+    pipe = None
+    candidates = []
+    if "ltx" in low and hasattr(diffusers, "LTXPipeline"):
+        candidates.append(diffusers.LTXPipeline)
+    if "wan" in low and hasattr(diffusers, "WanPipeline"):
+        candidates.append(diffusers.WanPipeline)
+    if cls_name and hasattr(diffusers, cls_name):
+        candidates.append(getattr(diffusers, cls_name))
+    candidates.append(diffusers.DiffusionPipeline)
+
+    last_err = None
+    for cls in candidates:
+        try:
+            pipe = cls.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
+            break
+        except Exception as e:
+            last_err = e
+            pipe = None
+    if pipe is None:
+        raise last_err or RuntimeError(f"Не удалось загрузить видео-пайплайн из {weights_dir}")
+
+    try:
+        pipe.to(device)
+    except Exception:
+        if str(device).startswith("cuda") and HAS_TORCH:
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        device = "cpu"
+        pipe.to(device)
+    cache[key] = (pipe, device)
+    return cache[key]
+
+
+def _encode_video_frames(frames, fps=16):
+    import tempfile
+    norm_frames = []
+    for fr in frames:
+        if hasattr(fr, "convert"):
+            norm_frames.append(fr.convert("RGB"))
+        else:
+            norm_frames.append(fr)
+
+    tmp_mp4 = None
+    try:
+        import imageio.v2 as imageio  # noqa: F401
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tf:
+            tmp_mp4 = tf.name
+        try:
+            from diffusers.utils import export_to_video
+            export_to_video(norm_frames, tmp_mp4, fps=int(fps))
+        except Exception:
+            import numpy as np
+            with imageio.get_writer(tmp_mp4, fps=int(fps), codec="libx264") as writer:
+                for fr in norm_frames:
+                    writer.append_data(np.asarray(fr))
+        with open(tmp_mp4, "rb") as f:
+            data = f.read()
+        if data:
+            return "video/mp4", base64.b64encode(data).decode("ascii")
+    except Exception:
+        pass
+    finally:
+        if tmp_mp4:
+            try:
+                os.remove(tmp_mp4)
+            except Exception:
+                pass
+
+    # Фоллбэк в анимированный GIF через Pillow, если ffmpeg не установлен
+    buf = io.BytesIO()
+    if norm_frames and hasattr(norm_frames[0], "save"):
+        norm_frames[0].save(
+            buf,
+            format="GIF",
+            save_all=True,
+            append_images=norm_frames[1:],
+            duration=max(30, int(1000 / max(1, int(fps)))),
+            loop=0,
+        )
+        return "image/gif", base64.b64encode(buf.getvalue()).decode("ascii")
+    raise RuntimeError("Для экспорта видео требуется пакет imageio[ffmpeg] или pillow.")
+
+
+def handle_video(req, cache):
+    weights_dir = req["weightsDir"]
+    prompt = str(req.get("prompt", "")).strip()
+    size_str = str(req.get("size", "512x320"))
+    try:
+        w, h = [max(256, min(1280, (int(v) // 16) * 16)) for v in size_str.lower().split("x")[:2]]
+    except Exception:
+        w, h = 512, 320
+    num_frames = max(9, min(121, int(req.get("numFrames") or 17)))
+    fps = max(8, min(30, int(req.get("fps") or 16)))
+    is_ltx = "ltx" in weights_dir.lower()
+    steps = max(4, min(50, int(req.get("steps") or (12 if is_ltx else 18))))
+    seed = int(req.get("seed") if req.get("seed") is not None else 42)
+    was_cached = ("video", weights_dir) in cache
+    t_load0 = time.time()
+    pipe, device = _load_video_pipeline(weights_dir, cache)
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+    t_gen0 = time.time()
+    gen = torch.Generator(device=device).manual_seed(seed)
+    kwargs = {
+        "prompt": prompt,
+        "width": w,
+        "height": h,
+        "num_frames": num_frames,
+        "num_inference_steps": steps,
+        "generator": gen,
+    }
+    try:
+        with torch.inference_mode():
+            out = pipe(**kwargs)
+            frames = out.frames[0] if hasattr(out, "frames") else out.images
+    except Exception as e:
+        if str(device).startswith("cuda") and _is_recoverable_gpu_error(e):
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            device = "cpu"
+            pipe.to("cpu")
+            cache[("video", weights_dir)] = (pipe, "cpu")
+            kwargs["generator"] = torch.Generator(device="cpu").manual_seed(seed)
+            with torch.inference_mode():
+                out = pipe(**kwargs)
+                frames = out.frames[0] if hasattr(out, "frames") else out.images
+        else:
+            raise
+    mime, b64 = _encode_video_frames(frames, fps=fps)
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {
+        "mime": mime,
+        "base64": b64,
+        "frames": len(frames) if frames is not None else num_frames,
+        "fps": fps,
+        "device": _describe_torch_device(device),
+        "loadMs": load_ms,
+        "genMs": gen_ms,
+        "durationMs": gen_ms,
+    }
 
 
 def _pcm_to_wav_base64(samples, sample_rate):
@@ -1276,8 +1452,75 @@ def _load_qwen_tts_model(weights_dir):
     raise last_err
 
 
+def _find_piper_onnx_files(weights_dir):
+    found = []
+    if not weights_dir or not os.path.isdir(weights_dir):
+        return found
+    for root, dirs, files in os.walk(weights_dir):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+        for fn in sorted(files):
+            if fn.lower().endswith(".onnx") and not fn.endswith(".part"):
+                onnx_p = os.path.join(root, fn)
+                cfg_p = onnx_p + ".json"
+                if os.path.isfile(cfg_p):
+                    found.append((onnx_p, cfg_p))
+    return found
+
+
+def _pick_piper_voice_file(piper_files, requested=""):
+    want = str(requested or "").strip().lower()
+    if any(k in want for k in ("irina", "жен", "serena", "vivian", "female")):
+        for onnx_p, cfg_p in piper_files:
+            if "irina" in onnx_p.lower():
+                return onnx_p, cfg_p
+    if any(k in want for k in ("dmitri", "муж", "ryan", "aiden", "dylan", "male")):
+        for onnx_p, cfg_p in piper_files:
+            if "dmitri" in onnx_p.lower():
+                return onnx_p, cfg_p
+    return piper_files[0]
+
+
+def _handle_tts_piper(req, cache, piper_files):
+    text = str(req.get("text", "")).strip()
+    onnx_p, cfg_p = _pick_piper_voice_file(piper_files, req.get("voice") or "")
+    key = ("tts_piper", onnx_p)
+    was_cached = key in cache
+    t_load0 = time.time()
+    if not was_cached:
+        try:
+            from piper.voice import PiperVoice
+        except Exception as e:
+            raise RuntimeError(json.dumps(_missing_pkg_error(e, {"piper": "piper-tts"})))
+        cache[key] = PiperVoice.load(onnx_p, config_path=cfg_p)
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+    voice = cache[key]
+    t_gen0 = time.time()
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        if callable(getattr(voice, "synthesize_wav", None)):
+            voice.synthesize_wav(text, wf)
+        else:
+            voice.synthesize(text, wf)
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    sr = int(getattr(getattr(voice, "config", None), "sample_rate", 22050) or 22050)
+    return {
+        "audioBase64": base64.b64encode(buf.getvalue()).decode("ascii"),
+        "sampleRate": sr,
+        "ttsKind": "piper",
+        "voiceUsed": os.path.basename(onnx_p).replace(".onnx", ""),
+        "instructUsed": "",
+        "device": "CPU (Piper ONNX)",
+        "loadMs": load_ms,
+        "genMs": gen_ms,
+        "durationMs": gen_ms,
+    }
+
+
 def handle_tts(req, cache):
     weights_dir = req["weightsDir"]
+    piper_files = _find_piper_onnx_files(weights_dir)
+    if piper_files:
+        return _handle_tts_piper(req, cache, piper_files)
     text = str(req.get("text", "")).strip()
     language = _tts_language(req.get("language") or "Russian")
     instructions = str(req.get("instructions") or "").strip()
@@ -1557,7 +1800,7 @@ def _evict_memory_if_needed(
     def _do():
         low_mem = free_gb is not None and free_gb < min_free_gb
         for k in list(mod_cache.keys()):
-            if not (isinstance(k, tuple) and len(k) >= 1 and k[0] == "image"):
+            if not (isinstance(k, tuple) and len(k) >= 1 and k[0] in ("image", "video")):
                 continue
             if k == keep_mod_key:
                 continue
@@ -1648,12 +1891,18 @@ def main():
             if op == "check_deps":
                 print(json.dumps({"id": req_id, "event": "result", "data": handle_check_deps()}), flush=True)
                 continue
-            if not HAS_TORCH and not (op in ("embed", "rerank") and _find_onnx_file(str(req.get("weightsDir") or ""))):
+            is_onnx_fast = (
+                (op in ("embed", "rerank") and _find_onnx_file(str(req.get("weightsDir") or "")))
+                or (op == "tts" and _find_piper_onnx_files(str(req.get("weightsDir") or "")))
+            )
+            if not HAS_TORCH and not is_onnx_fast:
                 needed = ["torch"]
                 if op in ("embed", "rerank"):
                     needed.append("transformers")
                 elif op == "image":
                     needed.extend(["diffusers", "accelerate", "pillow", "transformers"])
+                elif op == "video":
+                    needed.extend(["diffusers", "accelerate", "pillow", "transformers", "imageio", "imageio-ffmpeg"])
                 elif op == "tts":
                     needed.extend(["qwen-tts", "soundfile", "transformers"])
                 elif op == "stt":
@@ -1665,7 +1914,7 @@ def main():
                     "missingDeps": needed,
                 }), flush=True)
                 continue
-            if op in ("embed", "rerank", "image", "tts", "stt"):
+            if op in ("embed", "rerank", "image", "video", "tts", "stt"):
                 t0 = time.time()
                 mod_key = (op, str(req.get("weightsDir") or ""))
                 _evict_memory_if_needed(
@@ -1676,13 +1925,14 @@ def main():
                     "embed": handle_embed,
                     "rerank": handle_rerank,
                     "image": handle_image,
+                    "video": handle_video,
                     "tts": handle_tts,
                     "stt": handle_stt,
                 }[op]
                 with cache_lock:
                     res = fn(req, mod_cache)
                     mod_last_used[mod_key] = time.time()
-                if op == "image":
+                if op in ("image", "video"):
                     _schedule_image_idle_eviction()
                 if "durationMs" not in res:
                     res["durationMs"] = int((time.time() - t0) * 1000)

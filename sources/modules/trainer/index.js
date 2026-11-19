@@ -384,6 +384,8 @@ function inferTestModality(ai) {
         return 'tts';
     if (caps.includes('stt') || caps.includes('asr') || mod === 'stt' || mod === 'asr')
         return 'stt';
+    if (caps.includes('video') || caps.includes('text-to-video') || mod === 'video')
+        return 'video';
     if (caps.includes('image') || caps.includes('text-to-image') || mod === 'image')
         return 'image';
     if (caps.includes('rerank') || mod === 'rerank' || /rerank/i.test(String(ai?.id || ai?.model || '')))
@@ -496,6 +498,32 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 mime: pic?.mime || 'image/png',
                 base64: pic?.base64 || '',
                 summary: `Картинка ${pic?.mime || 'image/png'} за ${(durationMs / 1000).toFixed(1)} с`,
+            };
+        }
+        if (modality === 'video') {
+            const prompt = String(p.prompt || 'Камера плавно облетает современный светлый офис с панорамными окнами, кинематографичный свет').trim();
+            const vid = await ai.generateVideo({
+                prompt,
+                size: p.size,
+                numFrames: p.numFrames ? Number(p.numFrames) : undefined,
+                fps: p.fps ? Number(p.fps) : undefined,
+                steps: p.steps ? Number(p.steps) : undefined,
+            });
+            const totalMs = Math.max(1, Date.now() - t0);
+            const loadMs = Number(vid?.loadMs) || 0;
+            const durationMs = Number(vid?.genMs || vid?.durationMs) || Math.max(1, totalMs - loadMs);
+            return {
+                ok: true,
+                modality,
+                device: vid?.device || '',
+                loadMs,
+                durationMs,
+                totalMs,
+                mime: vid?.mime || 'video/mp4',
+                base64: vid?.base64 || '',
+                frames: vid?.frames || 0,
+                fps: vid?.fps || 16,
+                summary: `Видео ${vid?.frames || 17} кадр. (${vid?.mime || 'video/mp4'}) за ${(durationMs / 1000).toFixed(1)} с`,
             };
         }
         if (modality === 'embed') {
@@ -1197,15 +1225,25 @@ export const TRAINER_METHODS = Object.freeze({
     trainer_hf_download: {
         level: 'admin',
         fn: async function (p = {}) {
-            const files = typeof p.files === 'string' && p.files.trim().startsWith('[')
+            const repoId = String(p.repoId ?? p.id ?? '').trim();
+            const curated = CURATED_HF_MODELS.find(m => m.id.toLowerCase() === repoId.toLowerCase()) || null;
+            let files = typeof p.files === 'string' && p.files.trim().startsWith('[')
                 ? JSON.parse(p.files)
                 : Array.isArray(p.files) ? p.files : null;
+            if (!files && Array.isArray(curated?.files) && curated.files.length)
+                files = curated.files;
             const job = await startHuggingFaceDownload({
-                repoId: p.repoId ?? p.id,
+                repoId,
                 files,
                 quant: p.quant || 'Q8_0',
                 revision: p.revision || 'main',
                 token: p.token || '',
+                targetNodeName: p.targetNodeName || curated?.folderName || '',
+                nodeMeta: curated ? {
+                    label: curated.modelName,
+                    modality: curated.modality,
+                    capabilities: curated.capabilities,
+                } : null,
                 registerInWork: p.registerInWork !== false && p.registerInWork !== 'false',
                 waitForCompletion: p.wait === true || p.wait === 'true',
             });

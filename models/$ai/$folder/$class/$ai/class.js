@@ -582,6 +582,22 @@ export default {
     },
 
     /**
+     * Генерация видеоролика по текстовому описанию (capabilities `video`).
+     * Локальный движок WORK возвращает base64 MP4/GIF и метаданные.
+     * @param {object} [params]
+     * @param {string} params.prompt Текстовый сценарий видео
+     * @returns {Promise<{ mime: string, base64: string, frames?: number, fps?: number, model?: string }>}
+     */
+    async generateVideo(params = {}) {
+        const ai = params.$ai || this;
+        if (!hasCap(ai, 'video'))
+            throw new Error('generateVideo: у модели нет capabilities video');
+        if (isLocalDirectModel(ai) && typeof WORK?.localEngine?.generateVideo === 'function')
+            return WORK.localEngine.generateVideo(ai, params);
+        throw new Error('generateVideo: поддерживается только локальными видео-моделями в /MODELS/Local');
+    },
+
+    /**
      * Синтез речи (capabilities `tts`): OpenAI-совместимый POST {origin}/v1/audio/speech → WAV (Buffer).
      * Поля модели: voice ('default'), ttsTask ('VoiceDesign' | 'CustomVoice' | 'Base'), instructions (описание голоса),
      * language ('Russian'). Через шлюз Bifrost task_type/language проходят только с заголовком passthrough.

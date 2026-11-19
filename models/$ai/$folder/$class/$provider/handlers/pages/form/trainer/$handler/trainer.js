@@ -789,6 +789,7 @@ export default {
             { id: 'vlm', label: 'Зрение и Документы', icon: 'carbon:image-search' },
             { id: 'audio', label: 'Речь и Голос', icon: 'carbon:microphone' },
             { id: 'image', label: 'Картинки', icon: 'carbon:paint-brush' },
+            { id: 'video', label: 'Видео', icon: 'av:videocam' },
             { id: 'embed', label: 'Поиск (RAG)', icon: 'carbon:search-locate' },
             { id: 'halo', label: 'Комплект Halo (128–192 ГБ)', icon: 'carbon:chip' },
         ];
@@ -933,11 +934,12 @@ export default {
         // 4. Каталог Hugging Face
         for (const item of this.hfModels || []) {
             const short = String(item.id || '').split('/').pop();
-            if (findEntry(short, item.id))
+            const targetId = item.folderName || short || item.id;
+            if (findEntry(targetId, item.id) || (short && findEntry(short, item.id)))
                 continue;
             list.push({
                 key: `hf:${item.id}`,
-                id: short || item.id,
+                id: targetId,
                 repoId: item.id,
                 label: item.modelName || item.id,
                 desc: item.whatItDoes || item.recommendedFor || '',

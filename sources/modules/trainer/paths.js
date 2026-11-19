@@ -26,22 +26,29 @@ const WEIGHT_SCANNED_SUBDIRS = [...WEIGHT_SIDECAR_SUBDIRS, ...WEIGHT_COMPONENT_S
 
 function collectWeightDirRawEntriesSync(dirPath) {
     const out = [];
-    const rootEntries = fs.readdirSync(dirPath, { withFileTypes: true });
-    for (const ent of rootEntries) {
-        if (ent.isFile()) {
-            out.push(ent.name);
+    const walk = (absDir, relPrefix, depth) => {
+        if (depth > 6)
+            return;
+        let entries = [];
+        try {
+            entries = fs.readdirSync(absDir, { withFileTypes: true });
         }
-        else if (ent.isDirectory() && WEIGHT_SCANNED_SUBDIRS.includes(ent.name)) {
-            try {
-                const subEntries = fs.readdirSync(path.join(dirPath, ent.name), { withFileTypes: true });
-                for (const sub of subEntries) {
-                    if (sub.isFile())
-                        out.push(`${ent.name}/${sub.name}`);
-                }
+        catch {
+            return;
+        }
+        for (const ent of entries) {
+            if (ent.name.startsWith('.') || ent.name === '__pycache__')
+                continue;
+            const rel = relPrefix ? `${relPrefix}/${ent.name}` : ent.name;
+            if (ent.isFile()) {
+                out.push(rel);
             }
-            catch { /* ignore */ }
+            else if (ent.isDirectory()) {
+                walk(path.join(absDir, ent.name), rel, depth + 1);
+            }
         }
-    }
+    };
+    walk(dirPath, '', 0);
     return out;
 }
 

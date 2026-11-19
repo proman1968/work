@@ -285,7 +285,14 @@ export default {
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'tts'">
                 <textarea rows="2" :value="testTtsText" placeholder="Текст для озвучивания…" @input="testTtsText = $this.value"></textarea>
-                <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base'">
+                <div class="chips" style="gap:6px;" ~if="ttsKind === 'piper'">
+                    <button type="button" class="btn" ~for="piperVoicePresets"
+                        :style="testPiperVoice === $for.item.speaker ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
+                        @tap="testPiperVoice = $for.item.speaker">
+                        {{$for.item.label}}
+                    </button>
+                </div>
+                <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base' && ttsKind !== 'piper'">
                     <button type="button" class="btn" ~for="ttsVoicePresets"
                         :style="(isCustomVoice06B ? testTtsVoice === $for.item.speaker : testTtsInstructions === $for.item.value) ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
                         @tap="selectTtsPreset($for.item)">
@@ -294,7 +301,7 @@ export default {
                 </div>
                 <textarea ~if="ttsKind === 'voice_design' || (ttsKind === 'custom_voice' && !isCustomVoice06B)" rows="2" :value="testTtsInstructions" placeholder="Описание голоса и манеры (instruct): например «Мужской баритон, спокойная деловая интонация»…" @input="testTtsInstructions = $this.value"></textarea>
                 <input ~if="ttsKind === 'custom_voice'" :value="testTtsVoice" placeholder="Голос (speaker): Ryan, Aiden, Dylan, Serena, Vivian…" @input="testTtsVoice = $this.value">
-                <div ~if="ttsKind === 'base'" style="font-size:12px;opacity:0.8;">Модель Base клонирует голос: для синтеза нужна эталонная запись (WAV) и её текст. Без эталона используйте VoiceDesign или CustomVoice.</div>
+                <div ~if="ttsKind === 'base'" style="font-size:12px;opacity:0.8;">Модель Base клонирует голос: для синтеза нужна эталонная запись (WAV) и её текст. Без эталона используйте VoiceDesign, CustomVoice или Piper.</div>
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'stt'">
                 <div style="font-size:12px;opacity:0.8;">Можно загрузить WAV-файл или запустить автоматическую проверку встроенным тестовым аудиосигналом.</div>
@@ -302,6 +309,17 @@ export default {
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'image'">
                 <textarea rows="2" :value="testImagePrompt" placeholder="Опишите изображение…" @input="testImagePrompt = $this.value"></textarea>
+            </div>
+            <div class="vertical" style="gap:8px;" ~if="testModality === 'video'">
+                <textarea rows="2" :value="testVideoPrompt" placeholder="Опишите видеоролик…" @input="testVideoPrompt = $this.value"></textarea>
+                <div class="toolbar" style="font-size:12px;">
+                    <span style="opacity:0.75;">Длительность:</span>
+                    <select @change="testVideoFrames = Number($this.value)" style="padding:4px 8px;border-radius:6px;border:1px solid var(--border-color,#cbd5e1);background:var(--content-background,#fff);color:inherit;">
+                        <option value="17" :selected="testVideoFrames === 17">Быстрый тест (17 кадров, ~1 с)</option>
+                        <option value="33" :selected="testVideoFrames === 33">Средний ролик (33 кадра, ~2 с)</option>
+                        <option value="49" :selected="testVideoFrames === 49">Длинный ролик (49 кадров, ~3 с)</option>
+                    </select>
+                </div>
             </div>
             <div class="vertical" style="gap:8px;" ~if="testModality === 'embed'">
                 <textarea rows="3" :value="testEmbedInput" placeholder="Строки для векторизации (по одной в строке)…" @input="testEmbedInput = $this.value"></textarea>
@@ -329,6 +347,8 @@ export default {
             <div class="reply-box" ~if="testReply">{{testReply}}</div>
             <audio controls ~if="testAudioUrl" :src="testAudioUrl" style="width:100%;"></audio>
             <img ~if="testImageUrl" :src="testImageUrl" style="max-width:100%;max-height:360px;object-fit:contain;border-radius:6px;border:1px solid var(--border-color, #cbd5e1);">
+            <video controls autoplay loop muted ~if="testVideoUrl && !testVideoIsGif" :src="testVideoUrl" style="max-width:100%;max-height:360px;border-radius:6px;border:1px solid var(--border-color, #cbd5e1);background:#000;"></video>
+            <img ~if="testVideoUrl && testVideoIsGif" :src="testVideoUrl" style="max-width:100%;max-height:360px;object-fit:contain;border-radius:6px;border:1px solid var(--border-color, #cbd5e1);">
         </div>
     </div>
     `,
@@ -342,6 +362,11 @@ export default {
     testTtsText: 'Привет! Локальный синтез речи платформы WORK работает.',
     testTtsInstructions: 'Мужской баритон, спокойная деловая интонация',
     testTtsVoice: 'Ryan',
+    testPiperVoice: 'dmitri',
+    piperVoicePresets: [
+        { label: 'Мужской (Дмитрий)', speaker: 'dmitri' },
+        { label: 'Женский (Ирина)', speaker: 'irina' },
+    ],
     ttsVoicePresets: [
         { label: 'Мужской баритон', value: 'Мужской баритон, спокойная деловая интонация', speaker: 'Ryan' },
         { label: 'Мужской диктор', value: 'Мужской дикторский голос, глубокий уверенный тембр, чёткая дикция', speaker: 'Aiden' },
@@ -349,6 +374,8 @@ export default {
         { label: 'Женский живой', value: 'Женский живой энергичный голос, доброжелательная выразительная подача', speaker: 'Vivian' },
     ],
     testImagePrompt: 'Минималистичная светлая 3D-иконка офисного здания в стиле современного UI',
+    testVideoPrompt: 'Камера плавно облетает современный светлый офис с панорамными окнами, мягкий утренний свет',
+    testVideoFrames: 17,
     testEmbedInput: 'Учётная система WORK\nОборотно-сальдовая ведомость',
     testRerankQuery: 'остатки на расчётном счёте 51',
     testRerankDocs: 'Счёт 51 «Расчётные счета»: обороты и остатки денежных средств\nДоговор аренды офиса и коммунальные услуги',
@@ -356,6 +383,8 @@ export default {
     testReply: '',
     testAudioUrl: '',
     testImageUrl: '',
+    testVideoUrl: '',
+    testVideoIsGif: false,
     testMetricsLine: '',
     testing: false,
     busyAction: false,
@@ -373,6 +402,8 @@ export default {
             return 'tts';
         if (caps.includes('stt') || caps.includes('asr') || mod === 'stt' || mod === 'asr')
             return 'stt';
+        if (caps.includes('video') || caps.includes('text-to-video') || mod === 'video')
+            return 'video';
         if (caps.includes('image') || caps.includes('text-to-image') || mod === 'image')
             return 'image';
         if (caps.includes('rerank') || mod === 'rerank' || id.includes('rerank'))
@@ -385,6 +416,8 @@ export default {
         const id = String(this.info?.id || this.resolvedModelId || '').toLowerCase();
         const task = String(this.info?.DATA?.ttsTask || this.info?.ttsTask || '').toLowerCase();
         const hay = `${id} ${task}`;
+        if (hay.includes('piper'))
+            return 'piper';
         if (hay.includes('voicedesign') || hay.includes('voice_design'))
             return 'voice_design';
         if (hay.includes('customvoice') || hay.includes('custom_voice'))
@@ -412,6 +445,7 @@ export default {
             tts: 'Синтез речи (TTS)',
             stt: 'Распознавание речи (STT)',
             image: 'Генерация изображений',
+            video: 'Генерация видео',
             embed: 'Эмбеддинги (RAG)',
             rerank: 'Реранкинг (RAG)',
         };
@@ -423,6 +457,7 @@ export default {
             tts: 'Озвучить фразу',
             stt: 'Проверить распознавание',
             image: 'Сгенерировать картинку',
+            video: 'Сгенерировать видео',
             embed: 'Проверить эмбеддинги',
             rerank: 'Проверить реранкинг',
         };
@@ -617,6 +652,8 @@ export default {
         this.testReply = '';
         this.testAudioUrl = '';
         this.testImageUrl = '';
+        this.testVideoUrl = '';
+        this.testVideoIsGif = false;
         this.testMetricsLine = '';
         this.provisionBanner = '';
 
@@ -647,15 +684,24 @@ export default {
             }
             else if (m === 'tts') {
                 body.text = this.testTtsText.trim();
-                if (!this.isCustomVoice06B && this.testTtsInstructions.trim())
-                    body.instructions = this.testTtsInstructions.trim();
-                if (this.ttsKind === 'custom_voice' && this.testTtsVoice.trim())
-                    body.voice = this.testTtsVoice.trim();
+                if (this.ttsKind === 'piper') {
+                    body.voice = this.testPiperVoice || 'dmitri';
+                }
+                else {
+                    if (!this.isCustomVoice06B && this.testTtsInstructions.trim())
+                        body.instructions = this.testTtsInstructions.trim();
+                    if (this.ttsKind === 'custom_voice' && this.testTtsVoice.trim())
+                        body.voice = this.testTtsVoice.trim();
+                }
             }
             else if (m === 'stt' && this.testSttBase64)
                 body.audioBase64 = this.testSttBase64;
             else if (m === 'image')
                 body.prompt = this.testImagePrompt.trim();
+            else if (m === 'video') {
+                body.prompt = this.testVideoPrompt.trim();
+                body.numFrames = Number(this.testVideoFrames) || 17;
+            }
             else if (m === 'embed')
                 body.input = this.testEmbedInput.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
             else if (m === 'rerank') {
@@ -704,6 +750,10 @@ export default {
             }
             else if (m === 'image' && res.base64) {
                 this.testImageUrl = `data:${res.mime || 'image/png'};base64,${res.base64}`;
+            }
+            else if (m === 'video' && res.base64) {
+                this.testVideoIsGif = String(res.mime || '').includes('gif');
+                this.testVideoUrl = `data:${res.mime || 'video/mp4'};base64,${res.base64}`;
             }
             else if (m === 'embed') {
                 this.testReply = `Получено векторов: ${res.count}, размерность: ${res.dimensions}`;

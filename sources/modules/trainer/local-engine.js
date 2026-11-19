@@ -340,18 +340,31 @@ function hasTorchWeightsSync(weightsDir) {
     }
 }
 
-function hasOnnxModelSync(weightsDir) {
-    if (!weightsDir || !fs.existsSync(weightsDir))
-        return false;
-    for (const sub of ['', 'onnx']) {
-        const dir = sub ? path.join(weightsDir, sub) : weightsDir;
-        try {
-            if (fs.existsSync(dir) && fs.readdirSync(dir).some(f => f.toLowerCase().endsWith('.onnx') && !f.endsWith('.part')))
-                return true;
+function scanOnnxFilesSync(dirPath, depth = 0, out = []) {
+    if (!dirPath || depth > 6 || !fs.existsSync(dirPath))
+        return out;
+    try {
+        for (const ent of fs.readdirSync(dirPath, { withFileTypes: true })) {
+            if (ent.name.startsWith('.') || ent.name === '__pycache__')
+                continue;
+            const full = path.join(dirPath, ent.name);
+            if (ent.isFile() && ent.name.toLowerCase().endsWith('.onnx') && !ent.name.endsWith('.part'))
+                out.push(full);
+            else if (ent.isDirectory())
+                scanOnnxFilesSync(full, depth + 1, out);
         }
-        catch { /* ignore */ }
     }
-    return false;
+    catch { /* ignore */ }
+    return out;
+}
+
+function hasOnnxModelSync(weightsDir) {
+    return scanOnnxFilesSync(weightsDir).length > 0;
+}
+
+function isPiperOnnxDirSync(weightsDir) {
+    const onnxFiles = scanOnnxFilesSync(weightsDir);
+    return onnxFiles.some(f => fs.existsSync(`${f}.json`));
 }
 
 export function packagesForModality(modality = 'llm', weightsDir = '') {
@@ -367,8 +380,12 @@ export function packagesForModality(modality = 'llm', weightsDir = '') {
     }
     if (mod === 'embed' || mod === 'embedding' || mod === 'rerank')
         return ['torch', 'transformers', 'safetensors', 'accelerate'];
+    if (mod === 'video' || mod === 'text-to-video')
+        return ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers', 'safetensors', 'imageio', 'imageio-ffmpeg'];
     if (mod === 'image' || mod === 'text-to-image')
         return ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers', 'safetensors'];
+    if ((mod === 'tts' || mod === 'voice') && isPiperOnnxDirSync(weightsDir))
+        return ['piper-tts', 'onnxruntime'];
     if (mod === 'tts' || mod === 'voice')
         return ['torch', 'qwen-tts', 'soundfile', 'transformers', 'accelerate', 'safetensors'];
     if (mod === 'stt' || mod === 'asr' || mod === 'audio')
@@ -855,7 +872,8 @@ async function runWorkerOp(payload, timeoutMs = 120000) {
     // На машинах Strix Halo (gfx1151) автоматически апгрейдим CPU-only torch до GPU ROCm 7.13 (Radeon 8060S/8065S),
     // чтобы Qwen3-TTS 1.7B, Qwen3-ASR 1.7B, Z-Image-Turbo 6B и локальные LLM работали на iGPU в 5–10 раз быстрее.
     const op = String(payload?.op || 'llm');
-    const usesOnnxFastPath = (op === 'embed' || op === 'rerank') && hasOnnxModelSync(payload?.weightsDir || '');
+    const usesOnnxFastPath = ((op === 'embed' || op === 'rerank') && hasOnnxModelSync(payload?.weightsDir || ''))
+        || (op === 'tts' && isPiperOnnxDirSync(payload?.weightsDir || ''));
     if (
         op !== 'check_deps'
         && !usesOnnxFastPath
@@ -958,6 +976,35 @@ export async function localGenerateImage(ai, params = {}) {
         mime: res.mime || 'image/png',
         base64: res.base64,
         model: String(ai?.model || ai?.id || 'local-image'),
+        device: res.device || '',
+        loadMs: Number(res.loadMs) || 0,
+        genMs: Number(res.genMs || res.durationMs) || 0,
+        durationMs: Number(res.genMs || res.durationMs) || 0,
+    };
+}
+
+export async function localGenerateVideo(ai, params = {}) {
+    const weightsDir = assertLocalWeightsReady(ai);
+    const prompt = String(params.prompt || params.post || '').trim();
+    if (!prompt)
+        throw new Error('generateVideo: пустой prompt');
+    const isLtx = /ltx/i.test(weightsDir) || /ltx/i.test(String(ai?.model || ai?.id || ''));
+    const res = await runWorkerOp({
+        op: 'video',
+        weightsDir,
+        prompt,
+        size: String(params.size || (isLtx ? '512x320' : '480x320')),
+        numFrames: Math.max(9, Math.min(121, Number(params.numFrames || params.frames) || 17)),
+        fps: Math.max(8, Math.min(30, Number(params.fps) || 16)),
+        steps: Math.max(4, Math.min(50, Number(params.steps) || (isLtx ? 12 : 18))),
+        seed: params.seed != null ? Number(params.seed) : 42,
+    }, 600000);
+    return {
+        mime: res.mime || 'video/mp4',
+        base64: res.base64,
+        frames: Number(res.frames) || 0,
+        fps: Number(res.fps) || 16,
+        model: String(ai?.model || ai?.id || 'local-video'),
         device: res.device || '',
         loadMs: Number(res.loadMs) || 0,
         genMs: Number(res.genMs || res.durationMs) || 0,
@@ -1069,6 +1116,9 @@ const ALLOWED_PYTHON_DEPS = new Set([
     'soundfile',
     'qwen-tts',
     'qwen-asr',
+    'piper-tts',
+    'imageio',
+    'imageio-ffmpeg',
     'sentencepiece',
     'safetensors',
     'onnxruntime',
@@ -1307,6 +1357,7 @@ export function collectPackagesForAllInstalledModelsSync(rootDir = process.cwd()
                     const raw = fs.readFileSync(classFile, 'utf-8');
                     if (/"tts"/i.test(raw)) mod = 'tts';
                     else if (/"(stt|asr)"/i.test(raw)) mod = 'stt';
+                    else if (/"video"/i.test(raw)) mod = 'video';
                     else if (/"(image|text-to-image)"/i.test(raw)) mod = 'image';
                     else if (/"rerank"/i.test(raw)) mod = 'rerank';
                     else if (/"(embeddings|embed)"/i.test(raw)) mod = 'embed';
@@ -1315,8 +1366,9 @@ export function collectPackagesForAllInstalledModelsSync(rootDir = process.cwd()
             }
             if (!mod) {
                 const low = ent.name.toLowerCase();
-                if (low.includes('tts')) mod = 'tts';
+                if (low.includes('tts') || low.includes('piper')) mod = 'tts';
                 else if (low.includes('asr') || low.includes('whisper')) mod = 'stt';
+                else if (low.includes('video') || low.includes('wan') || low.includes('ltx')) mod = 'video';
                 else if (low.includes('image') || low.includes('flux') || low.includes('sd')) mod = 'image';
                 else if (low.includes('rerank')) mod = 'rerank';
                 else if (low.includes('bge') || low.includes('embed')) mod = 'embed';
@@ -1364,7 +1416,7 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
     if (!clean.length)
         clean = ['torch', 'transformers', 'accelerate', 'safetensors'];
 
-    const usesOnnxOnly = clean.some(p => p.startsWith('onnxruntime')) && !clean.includes('torch') && !upgradeRocmGfx1151;
+    const usesOnnxOnly = (clean.some(p => p.startsWith('onnxruntime')) || clean.includes('piper-tts')) && !clean.includes('torch') && !upgradeRocmGfx1151;
     if (!usesOnnxOnly && !clean.includes('torch') && clean.some(p => p !== 'safetensors' && p !== 'numpy'))
         clean.unshift('torch');
 
@@ -1541,6 +1593,7 @@ export const localEngine = Object.freeze({
     embed: localEmbed,
     rerank: localRerank,
     generateImage: localGenerateImage,
+    generateVideo: localGenerateVideo,
     speak: localSpeak,
     transcribe: localTranscribe,
     decide: localDecide,

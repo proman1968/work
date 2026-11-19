@@ -403,6 +403,29 @@ export const CURATED_HF_MODELS = Object.freeze([
         likes: 510,
     },
     {
+        id: 'rhasspy/piper-voices',
+        folderName: 'Piper-TTS-RU',
+        author: 'rhasspy',
+        modelName: 'Piper TTS RU (Мгновенный голос: Дмитрий + Ирина, CPU)',
+        modality: 'audio',
+        format: 'onnx',
+        paramsB: 0.06,
+        ramRequiredGb: 0.25,
+        trainRamGb: 0.5,
+        capabilities: ['tts', 'voice'],
+        files: [
+            'ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx',
+            'ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx.json',
+            'ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx',
+            'ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json',
+        ],
+        whatItDoes: 'Сверхбыстрый локальный синтез русской речи на CPU (ONNX) за 0.15–0.4 с без нагрузки на GPU',
+        recommendedFor: 'Мгновенная озвучка в голосовом режиме WORK (~125 МБ за два русских голоса, работает на любом ПК)',
+        tags: ['audio', 'tts', 'text-to-speech', 'voice', 'piper', 'onnx', 'russian'],
+        downloads: 920000,
+        likes: 2150,
+    },
+    {
         id: 'hexgrad/Kokoro-82M',
         author: 'hexgrad',
         modelName: 'Kokoro-82M (Ультралёгкий TTS)',
@@ -1786,6 +1809,7 @@ export async function startHuggingFaceDownload({
                     const depMod = capsLow.includes('rerank') || /rerank/i.test(cleanId) ? 'rerank'
                         : capsLow.includes('tts') ? 'tts'
                         : (capsLow.includes('stt') || capsLow.includes('asr')) ? 'stt'
+                        : (capsLow.includes('video') || job.modality === 'video') ? 'video'
                         : capsLow.includes('image') ? 'image'
                         : (capsLow.includes('embeddings') || job.modality === 'embed') ? 'embed'
                         : 'llm';
@@ -2278,7 +2302,8 @@ export function detectBrokenWeightsLayout(weightsDir) {
     if (hasShards && !files.some(f => /\.safetensors\.index\.json$/i.test(f)))
         reasons.push('есть шарды весов, но нет индекса *.safetensors.index.json');
     const onnxFiles = files.filter(f => /\.onnx$/i.test(f));
-    if (onnxFiles.length && !files.some(f => /\.onnx_data$/i.test(f))) {
+    const hasPiperConfig = onnxFiles.some(rel => hasRel(`${rel}.json`));
+    if (onnxFiles.length && !hasPiperConfig && !files.some(f => /\.onnx_data$/i.test(f))) {
         let graphSmall = false;
         for (const rel of onnxFiles) {
             try {
