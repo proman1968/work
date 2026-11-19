@@ -183,6 +183,9 @@ export default {
             this._savedExpandedSet.add(rootPath);
             if (focused && focused !== '/') {
                 const parts = focused.split('/').filter(Boolean);
+                const sysIds = new Set(['oda', 'sources', 'scripts', 'rules', 'AGENTS.md', 'config.json', 'favicon.ico', 'logo.png', 'package.json', 'progress.md', 'run.mjs', 'sw.js']);
+                if (rootPath === '/' && sysIds.has(parts[0]))
+                    this._savedExpandedSet.add('/SYSTEM');
                 let acc = '';
                 for (let i = 0; i < parts.length - 1; i++) {
                     acc += '/' + parts[i];
@@ -190,7 +193,7 @@ export default {
                 }
             }
             if (Array.isArray(parsed?.expanded)) {
-                const topDomains = new Set(['/', '/ORGANIZATIONS', '/MODULES', '/MODELS', '/NODES', '/SERVICES']);
+                const topDomains = new Set(['/', '/ORGANIZATIONS', '/PROJECTS', '/MODULES', '/MODELS', '/NODES', '/SERVICES', '/SYSTEM']);
                 for (const p of parsed.expanded) {
                     const s = String(p || '');
                     if (topDomains.has(s))
@@ -333,6 +336,21 @@ export default {
             let next = Array.isArray(children)
                 ? children.find(ch => (ch?.short || ch?.path) === stepPath || ch?.id === parts[i])
                 : null;
+            if (!next && i === 0 && rootPath === '/' && Array.isArray(children)) {
+                const sysNode = children.find(ch => ch?.id === 'SYSTEM');
+                if (sysNode) {
+                    const cachedSysKids = sysNode?.[R]?.cache?.[this.itemsSelector];
+                    const sysKids = Array.isArray(cachedSysKids) ? cachedSysKids : await sysNode?.[this.itemsSelector];
+                    const inSys = Array.isArray(sysKids)
+                        ? sysKids.find(ch => (ch?.short || ch?.path) === stepPath || ch?.id === parts[0])
+                        : null;
+                    if (inSys) {
+                        expandItem(sysNode);
+                        this.recordNodeExpanded(sysNode, true);
+                        next = inSys;
+                    }
+                }
+            }
             const secNodes = SEC_NODES_MAP.get(rawItem(cur));
             if (!next && i === 0 && Array.isArray(secNodes)) {
                 const findInSec = (nodes) => {
@@ -725,7 +743,7 @@ ODA({is: 'oda-tree-node',
             return false;
         const t = it.type;
         const isNetServer = t === '$node' && it.id !== 'NODES';
-        return it instanceof CORE.$user || t === '$user' || t === '$base' || t === '$server' || isNetServer;
+        return it instanceof CORE.$user || t === '$user' || t === '$base' || t === '$project' || t === '$server' || isNetServer;
     },
     get isDepartmentNode() {
         const it = this.$item;
@@ -745,8 +763,8 @@ ODA({is: 'oda-tree-node',
         if (!it || isLinkNode(it) || ('isPlace' in Object(it) && it.isPlace))
             return false;
         const t = it.type;
-        // $server (корень WORK) — тоже наследник $structure: на нём тоже показываем BOSS.
-        return t === '$base' || t === '$structure' || t === '$server';
+        // $server (корень WORK) и $project — тоже наследники $structure: на них показываем BOSS.
+        return t === '$base' || t === '$project' || t === '$structure' || t === '$server';
     },
     get isModule() {
         const it = this.$item;
@@ -776,7 +794,7 @@ ODA({is: 'oda-tree-node',
             return false;
         this.$item.__version;
         const t = this.$item?.type;
-        if (t !== '$structure' && t !== '$base' && t !== '$server')
+        if (t !== '$structure' && t !== '$base' && t !== '$project' && t !== '$server')
             return false;
         return !!this.$item?.DATA?.hasSecurity;
     },

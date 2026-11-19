@@ -14,7 +14,7 @@ import * as POLICY from './policy.js';
 import * as WORKPLACES from './workplaces.js';
 
 /** Типы, на которые ссылки не действуют (структура видна по своим правилам). */
-export const NO_LINK_TYPES = new Set(['$structure', '$group', '$user', '$base', '$server']);
+export const NO_LINK_TYPES = new Set(['$structure', '$group', '$user', '$base', '$project', '$server']);
 
 /** Имена метапапок, в которых лежит class.js подразделения. */
 const STRUCTURE_METAS = WORKPLACES.STRUCTURE_META_NAMES;
@@ -319,7 +319,7 @@ export async function grantsWrite(cls, params) {
  * пользователю как каркас дерева (SYSTEM/NESTED), не открывая чужие ветки и MODULES.
  */
 export async function isStructureAncestor(cls, item, params = {}) {
-    if (!cls || !['$domain', '$base', '$structure'].includes(cls.type))
+    if (!cls || !['$domain', '$base', '$project', '$structure'].includes(cls.type))
         return false;
     if (item?.type === '$module' || (item?.type === '$domain' && item?.id === 'MODULES'))
         return false;

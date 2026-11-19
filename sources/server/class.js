@@ -48,7 +48,9 @@ import {
 } from './class/scaffold.js';
 import {
     buildBasePassportClassJs,
+    buildProjectPassportClassJs,
     scaffoldBaseOrganizationSync,
+    scaffoldProjectSync,
     seedBaseTemplateDemoData,
 } from './class/base-template.js';
 import { classScriptStatics } from './class/script.js';
@@ -439,17 +441,19 @@ export class $class extends $folder {
         LINKS.reset();
         if (String(this.path || '').startsWith('/MODULES/')) {
             try {
-                const orgsDom = await globalThis.WORK?.get_item('/ORGANIZATIONS');
-                const orgs = (await orgsDom?.children) || [];
-                for (const org of orgs) {
-                    if (!org?.id || org.id[0] === '$')
-                        continue;
-                    const peer = await globalThis.WORK?.get_item(`${org.path}/MODULES/${this.id}`).catch(() => null);
-                    if (peer) {
-                        peer._ownEnabledCache = null;
-                        peer._sysBlockedCache = null;
-                        peer.reset();
-                        await peer.init;
+                for (const domPath of ['/ORGANIZATIONS', '/PROJECTS']) {
+                    const dom = await globalThis.WORK?.get_item(domPath);
+                    const nodes = (await dom?.children) || [];
+                    for (const node of nodes) {
+                        if (!node?.id || node.id[0] === '$')
+                            continue;
+                        const peer = await globalThis.WORK?.get_item(`${node.path}/MODULES/${this.id}`).catch(() => null);
+                        if (peer) {
+                            peer._ownEnabledCache = null;
+                            peer._sysBlockedCache = null;
+                            peer.reset();
+                            await peer.init;
+                        }
                     }
                 }
             }
@@ -565,7 +569,7 @@ export class $class extends $folder {
             if (myType === '$domain') {
                 return declared.length
                     ? [...new Set([...declared, '$domain'])]
-                    : ['$domain', '$base', '$module', '$catalog', '$struct', '$operation', '$register'];
+                    : ['$domain', '$base', '$project', '$module', '$catalog', '$struct', '$operation', '$register'];
             }
             if (myType in ALLOWED_CHILD_TYPES)
                 return [...new Set([...declared, ...ALLOWED_CHILD_TYPES[myType]])];
@@ -612,9 +616,13 @@ export class $class extends $folder {
             assertClassId(id);
 
         const inOrg = this.path === '/ORGANIZATIONS' || String(this.path || '').startsWith('/ORGANIZATIONS/');
-        const rawPreset = (type === '$base' && inOrg && typeof p.preset === 'string') ? p.preset.trim().toLowerCase() : '';
+        const inProject = this.path === '/PROJECTS' || String(this.path || '').startsWith('/PROJECTS/');
+        const inOrgOrProject = inOrg || inProject;
+        const rawPreset = (((type === '$base' && inOrg) || (type === '$project' && inProject)) && typeof p.preset === 'string')
+            ? p.preset.trim().toLowerCase()
+            : '';
         const basePreset = ['empty', 'standard', 'demo'].includes(rawPreset) ? rawPreset : '';
-        const srcModDir = (type === '$module' && inOrg) ? path.join('./MODULES', id) : '';
+        const srcModDir = (type === '$module' && inOrgOrProject) ? path.join('./MODULES', id) : '';
         const srcModClassFile = srcModDir ? path.join(srcModDir, '$module', 'class.js') : '';
 
         let post = p.post;
@@ -623,6 +631,14 @@ export class $class extends $folder {
         if (post == null) {
             if (type === '$base' && basePreset) {
                 post = buildBasePassportClassJs({
+                    id,
+                    label: p.label || id,
+                    preset: basePreset,
+                    bossUid: $class.resolveUid(p) || '',
+                });
+            }
+            else if (type === '$project' && basePreset) {
+                post = buildProjectPassportClassJs({
                     id,
                     label: p.label || id,
                     preset: basePreset,
@@ -670,7 +686,7 @@ export class $class extends $folder {
         const ctor = FS[type] || FS.$class;
         const log = await this._createClass(id, type, ctor, post, p);
         const allowScaffold = p.scaffold !== false && p.scaffold !== 'false';
-        if (allowScaffold && inOrg) {
+        if (allowScaffold && inOrgOrProject) {
             const targetDir = path.join(this.real_dir, id);
             if (type === '$module' && srcModDir && fs.existsSync(srcModDir)) {
                 scaffoldModuleTreeSync(srcModDir, targetDir);
@@ -678,21 +694,34 @@ export class $class extends $folder {
                 createdItem?.reset?.();
                 this.reset();
             }
-            else if (type === '$base') {
+            else if (type === '$base' || type === '$project') {
+                const isProj = type === '$project';
                 if (basePreset) {
                     const explicitMods = p.modules !== undefined
                         ? parseModuleList(p.modules, [])
                         : (basePreset === 'empty' ? [] : ['Register', 'Geo']);
-                    scaffoldBaseOrganizationSync({
-                        targetDir,
-                        orgId: id,
-                        preset: basePreset,
-                        modules: explicitMods,
-                    });
+                    if (isProj) {
+                        scaffoldProjectSync({
+                            targetDir,
+                            preset: basePreset,
+                            modules: explicitMods,
+                        });
+                    }
+                    else {
+                        scaffoldBaseOrganizationSync({
+                            targetDir,
+                            orgId: id,
+                            preset: basePreset,
+                            modules: explicitMods,
+                        });
+                    }
                     if (basePreset === 'demo') {
                         await seedBaseTemplateDemoData({
                             rootDir: process.cwd(),
                             orgId: id,
+                            domainDir: isProj ? 'PROJECTS' : 'ORGANIZATIONS',
+                            metaName: isProj ? '$project' : '$base',
+                            flatProject: isProj,
                             author: $class.resolveUid(p) || 'demo',
                         });
                     }

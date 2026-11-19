@@ -228,14 +228,16 @@ let openedFile = '';
 const openedByBase = new Map();
 
 /**
- * Путь к файлу БД конкретной организации ($base): `<Организация>/$base/#system/work.db`.
+ * Путь к файлу БД конкретной организации ($base) или проекта ($project):
+ * `<Организация>/$base/#system/work.db` или `<Проект>/$project/#system/work.db`.
  * Для пустого basePath (режим по умолчанию) — `./.data/work.db`.
  */
 export function baseDbFile(rootDir = process.cwd(), basePath = '') {
     const norm = String(basePath ?? '').trim().replace(/\/+$/, '');
     if (norm && norm !== '/') {
         const rel = norm.replace(/^\/+/, '');
-        return path.resolve(rootDir, rel, '$base', '#system', DATA_FILE);
+        const metaDir = /^PROJECTS(\/|$)/i.test(rel) ? '$project' : '$base';
+        return path.resolve(rootDir, rel, metaDir, '#system', DATA_FILE);
     }
     return path.resolve(rootDir, DATA_DIR, DATA_FILE);
 }

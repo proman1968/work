@@ -4,6 +4,6 @@ export default {
     roles: ['BOSS'],
     order: 4,
     allowUse($context) {
-        return $context?.type === '$server' || $context?.type === '$base';
+        return $context?.type === '$server' || $context?.type === '$base' || $context?.type === '$project';
     },
 };

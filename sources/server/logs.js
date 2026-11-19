@@ -55,16 +55,17 @@ export async function dbForStorage(storage) {
     const rootDir = globalThis.WORK?.real_dir || globalThis.WORK?.dir || process.cwd();
     let basePath = '';
     for (let cur = storage; cur; cur = cur.$parent || cur.parent) {
-        if (cur?.type === '$base' && cur.path) {
+        if ((cur?.type === '$base' || cur?.type === '$project') && cur.path) {
             basePath = cur.path;
             break;
         }
     }
     if (!basePath) {
         const fp = feedPathOf(storage);
-        const m = fp.match(/^\/(ORGANIZATIONS|BASES)\/([^/]+)/);
+        const m = fp.match(/^\/(ORGANIZATIONS|PROJECTS|BASES)\/([^/]+)/);
         if (m) {
-            const candidate = path.resolve(rootDir, m[1], m[2], '$base');
+            const metaDir = m[1] === 'PROJECTS' ? '$project' : '$base';
+            const candidate = path.resolve(rootDir, m[1], m[2], metaDir);
             if (fs.existsSync(candidate))
                 basePath = `/${m[1]}/${m[2]}`;
         }
@@ -751,7 +752,7 @@ export async function deleteLogEntry(storage, params = {}) {
     catch { /* ignore */ }
 
     for (const candidate of [stubPath, targetPath, storage?.path || '']) {
-        const m = String(candidate || '').match(/^\/(ORGANIZATIONS|BASES)\/([^/]+)/);
+        const m = String(candidate || '').match(/^\/(ORGANIZATIONS|PROJECTS|BASES)\/([^/]+)/);
         if (m) {
             const orgDbPath = `/${m[1]}/${m[2]}`;
             try {

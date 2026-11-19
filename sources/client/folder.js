@@ -273,6 +273,8 @@ export class $folder extends $item {
                 || method.startsWith('provider_')
                 || method.startsWith('license_')
                 || method.startsWith('messenger_')
+                || method.startsWith('distro_')
+                || method === 'export_distro'
             ))
             || (method === 'logs' && params.mode && params.mode !== 'folder' && params.mode !== 'files');
         return WORK.fetch?.(this.short || '/', method, params, post_data).then(res => {

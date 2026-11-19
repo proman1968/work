@@ -18,8 +18,8 @@
  * Чистые функции поверх объекта `#security` (без ввода-вывода).
  */
 
-/** Имена метапапок типов-структур (в них лежит class.js подразделения). */
-export const STRUCTURE_META_NAMES = Object.freeze(['$structure', '$base', '$server']);
+/** Имена метапапок типов-структур (в них лежит class.js подразделения/организации/проекта). */
+export const STRUCTURE_META_NAMES = Object.freeze(['$structure', '$base', '$project', '$server']);
 
 /** Групповые псевдо-субъекты для назначения на рабочие места и в USER. */
 export const PSEUDO_USERS = Object.freeze({

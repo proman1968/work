@@ -137,6 +137,9 @@ export function pointSecretPaths(point) {
     else if (/^ORGANIZATIONS\/[^/]+$/.test(rel)) {
         metaName = '$base';
     }
+    else if (/^PROJECTS\/[^/]+$/.test(rel)) {
+        metaName = '$project';
+    }
 
     return {
         secret: path.join(abs, metaName, '#secret', 'messengers.json'),
@@ -386,7 +389,7 @@ export async function buildPointChain(point) {
 
     for (let len = baseSegs.length; len >= 1; len--) {
         const subSegs = baseSegs.slice(0, len);
-        if (subSegs.length === 1 && (subSegs[0] === 'ORGANIZATIONS' || subSegs[0] === 'USERS' || subSegs[0] === 'MODULES'))
+        if (subSegs.length === 1 && (subSegs[0] === 'ORGANIZATIONS' || subSegs[0] === 'PROJECTS' || subSegs[0] === 'USERS' || subSegs[0] === 'MODULES'))
             continue;
         const p = '/' + subSegs.join('/');
         if (seenPaths.has(p))

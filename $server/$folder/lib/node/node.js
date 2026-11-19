@@ -123,7 +123,7 @@ export default {
         if (!it || ('isPlace' in Object(it) && it.isPlace))
             return '';
         const t = it.type;
-        if (t === '$base' || t === '$structure' || t === '$server' || t === '$domain')
+        if (t === '$base' || t === '$project' || t === '$structure' || t === '$server' || t === '$domain')
             return '';
         const c = isLinkNode(it) ? it.objectCount : it.DATA?.objectCount;
         return (typeof c === 'number' && c > 0) ? c.toLocaleString('ru-RU') : '';
@@ -167,7 +167,7 @@ export default {
             return false;
         const t = it.type;
         const isNetServer = t === '$node' && it.id !== 'NODES';
-        return t === '$base' || t === '$structure' || t === '$server' || isNetServer || it.id === 'ORGANIZATIONS';
+        return t === '$base' || t === '$project' || t === '$structure' || t === '$server' || isNetServer || it.id === 'ORGANIZATIONS' || it.id === 'PROJECTS';
     },
     // пользователи в строке дерева не показываются (шум и запросы на каждую строку); свойство оставлено для совместимости биндов
     showUsers: false,
@@ -241,7 +241,7 @@ export default {
             return 24;
         const t = this.$item?.type;
         const isNetServer = t === '$node' && this.$item?.id !== 'NODES';
-        if(this.isUser || t === '$user' || t === '$base' || t === '$server' || isNetServer)
+        if(this.isUser || t === '$user' || t === '$base' || t === '$project' || t === '$server' || isNetServer)
             return 48;
         if(t === '$structure')
             return 32;

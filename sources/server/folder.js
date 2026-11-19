@@ -176,7 +176,7 @@ export class $folder extends $item{
             }
             if (this instanceof FS.$class && this.inherit_source && !fs.existsSync(this.dir)) {
                 let hasLocalFolderLayer = false;
-                for (let p = this.$parent; p && (p.path || '').startsWith('/ORGANIZATIONS/'); p = p.$parent) {
+                for (let p = this.$parent; p && /^\/(ORGANIZATIONS|PROJECTS)\//.test(p.path || ''); p = p.$parent) {
                     if (p.meta_folder && fs.existsSync(p.meta_folder.dir + '/$folder')) {
                         hasLocalFolderLayer = true;
                         break;
@@ -479,7 +479,7 @@ export class $folder extends $item{
 
             if(this.id === '$folder'){
                 const owner = this.$parent;
-                const m = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.*)?$/.exec(owner?.path || '');
+                const m = /^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.*)?$/.exec(owner?.path || '');
                 if (m) {
                     const modPath = `/MODULES/${m[1]}${m[2] || ''}`;
                     if (modPath !== owner.path && fs.existsSync('.' + modPath)) {
@@ -980,7 +980,7 @@ export class $folder extends $item{
                             folders.add(domain);
                     }
                 }
-                const tm = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.+)$/.exec(typeRoot.parent?.path || '');
+                const tm = /^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.+)$/.exec(typeRoot.parent?.path || '');
                 if (tm) {
                     const tModPath = `/MODULES/${tm[1]}${tm[2]}`;
                     if (fs.existsSync('.' + tModPath)) {
@@ -999,7 +999,7 @@ export class $folder extends $item{
 
             folders.push(...horizontal_folders);
 
-            const m = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.+)$/.exec(this.path || '');
+            const m = /^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.+)$/.exec(this.path || '');
             if (m) {
                 const modPath = `/MODULES/${m[1]}${m[2]}`;
                 if (fs.existsSync('.' + modPath)) {
@@ -2052,11 +2052,11 @@ export class $folder extends $item{
     }
 
     sortItems(files, reverse = false, isType = this.isType) {
-        const rootOrder = { ORGANIZATIONS: 0, MODULES: 1, MODELS: 2, NODES: 3, nodes: 3, SERVICES: 4, USERS: 5 };
+        const rootOrder = { ORGANIZATIONS: 0, PROJECTS: 1, MODULES: 2, MODELS: 3, NODES: 4, nodes: 4, SERVICES: 5, USERS: 6 };
         const typeGroup = (t) => {
             if (t === '$catalog' || t === '$virtual' || t === '$struct' || t === '$operation' || t === '$register' || t === '$account')
                 return 0;
-            if (t === '$structure' || t === '$base')
+            if (t === '$structure' || t === '$base' || t === '$project')
                 return 1;
             if (t === '$module' || t === '$domain')
                 return 3;

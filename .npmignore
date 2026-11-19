@@ -70,10 +70,13 @@ sources/modules/*/.venv/
 **/$*/work/
 **/$*/task/
 **/$*/call/
-# В чистой поставке в /ORGANIZATIONS публикуется только системная метапапка $domain (организации создаются пользователем из BASE_TEMPLATE)
+# В чистой поставке в /ORGANIZATIONS и /PROJECTS публикуется только системная метапапка $domain
 /ORGANIZATIONS/*/
 !/ORGANIZATIONS/$domain/
 !/ORGANIZATIONS/$domain/**
+/PROJECTS/*/
+!/PROJECTS/$domain/
+!/PROJECTS/$domain/**
 /$server/task/
 /$server/xlsx/
 /$server/docx/

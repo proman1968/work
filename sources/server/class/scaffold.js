@@ -24,6 +24,7 @@ export const ALLOWED_CHILD_TYPES = Object.freeze({
     $server:    Object.freeze(['$domain']),
     $domain:    Object.freeze(['$domain']),
     $base:      Object.freeze(['$structure', '$base', '$domain', '$module']),
+    $project:   Object.freeze(['$domain', '$module']),
     $structure: Object.freeze(['$structure']),
     $module:    Object.freeze(['$domain', '$module', '$catalog', '$struct', '$operation', '$register']),
     $catalog:   Object.freeze(['$catalog', '$virtual']),

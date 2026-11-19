@@ -37,7 +37,7 @@ async function fastLinkNodeMeta(pathStr, item) {
         try {
             const db = await dataStore(basePath);
             const cls = getClass(db, pathStr);
-            const modMatch = /^\/ORGANIZATIONS\/[^/]+\/(?:MODULES\/)?([^/]+\/.+)$/.exec(pathStr);
+            const modMatch = /^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/(?:MODULES\/)?([^/]+\/.+)$/.exec(pathStr);
             const peerCls = modMatch ? getClass(db, '/MODULES/' + modMatch[1]) : null;
             if (cls || peerCls) {
                 const own = cls?.own || {};
@@ -258,7 +258,7 @@ export const classSecurityMethods = {
         const roots = [];
         const targetPaths = [];
         for (const [id, e] of eff) {
-            const modMatch = /^(\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+|\/MODULES\/[^/]+)\/(.+)$/.exec(id);
+            const modMatch = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\/[^/]+|\/MODULES\/[^/]+)\/(.+)$/.exec(id);
             if (modMatch) {
                 try {
                     let modItem = await globalThis.WORK?.get_item(modMatch[1]);

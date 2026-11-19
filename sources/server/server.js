@@ -19,6 +19,7 @@ import { DEV_MODE } from "../host/config.js";
 import { serverId } from "../host/server-id.js";
 import { guardedGet } from "../host/net-guard.js";
 import { tlsAgentFor } from "../host/tls-ca.js";
+import { serverDistroMethods } from "./class/distro.js";
 
 /**
  * Ядро агента (sources/modules/agent) для слоёв дерева: class.js грузятся как data:-модули
@@ -50,10 +51,118 @@ const sessionProto = {
     },
 };
 
+/**
+ * Системные папки и файлы корня WORK, которые в дереве проводника группируются
+ * внутри виртуальной системной папки `/SYSTEM` (сохраняя свои нативные пути `/oda`, `/sources`, …).
+ */
+export const ROOT_SYSTEM_IDS = new Set([
+    'oda',
+    'sources',
+    'scripts',
+    'rules',
+    'AGENTS.md',
+    'config.json',
+    'favicon.ico',
+    'logo.png',
+    'package.json',
+    'progress.md',
+    'run.mjs',
+    'sw.js',
+]);
+
+/**
+ * Служебные каталоги и файлы разработки/рантайма в корне проекта, которые полностью
+ * скрываются из дерева проводника WORK (но остаются доступными по прямому пути при необходимости).
+ */
+export const ROOT_HIDDEN_IDS = new Set([
+    'node_modules',
+    'tests',
+    'torus',
+    'license-server',
+    'data',
+    'root',
+    'package-lock.json',
+    'eslint.config.js',
+    'jsconfig.json',
+    'publish.cmd',
+    'test_tts.wav',
+    'current_session.json',
+    'opencode.json',
+    'opencode_session.json',
+    'model_start.json',
+]);
+
+export function isRootHiddenId(id) {
+    const s = String(id || '');
+    if (!s) return true;
+    if (ROOT_HIDDEN_IDS.has(s)) return true;
+    if (/\.(log|tgz)$/i.test(s)) return true;
+    return false;
+}
+
+export class $system_folder extends $folder {
+    get id() {
+        return 'SYSTEM';
+    }
+    get label() {
+        return 'SYSTEM';
+    }
+    get dir() {
+        return '.';
+    }
+    get real_dir() {
+        return '.';
+    }
+    get type() {
+        return '$folder';
+    }
+    get inherit_ancestor() {
+        return Promise.resolve(null);
+    }
+    _collect_own() {
+        if (!this.parent)
+            return [];
+        const rootOwn = this.parent._collect_own();
+        return rootOwn.filter(f => f !== this && ROOT_SYSTEM_IDS.has(f.id));
+    }
+    async _hasItems() {
+        return true;
+    }
+    async delete() {
+        throw new Error('Системная папка SYSTEM не может быть удалена');
+    }
+}
+
 export class $server extends $class {
     parent = null;
     path = '';
     dir = '.';
+    _collect_own() {
+        const files = super._collect_own();
+        if (!files.some(f => f.id === 'SYSTEM')) {
+            const sys = $system_folder.build('SYSTEM', this);
+            files.push(sys);
+            if (this[R]?.cache?._own_files && !this[R].cache._own_files.some(f => f.id === 'SYSTEM'))
+                this[R].cache._own_files.push(sys);
+        }
+        return files;
+    }
+    get items() {
+        return new AsyncPromise(async () => {
+            const entries = await this.entries;
+            return (entries || []).filter(f => {
+                if (f.id[0] === '$' || f.id[0] === '.')
+                    return false;
+                if (f instanceof $class)
+                    return true;
+                if (f.id === 'SYSTEM')
+                    return true;
+                if (ROOT_SYSTEM_IDS.has(f.id) || isRootHiddenId(f.id))
+                    return false;
+                return true;
+            });
+        });
+    }
     get fs(){
         return fs
     }
@@ -612,5 +721,5 @@ export class $server extends $class {
     }
 }
 $server.type_chain = Object.create(null);
-Object.assign($server.prototype, authMethods);
+Object.assign($server.prototype, authMethods, serverDistroMethods);
 globalThis.$server = $server;

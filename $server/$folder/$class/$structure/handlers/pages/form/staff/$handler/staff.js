@@ -239,7 +239,7 @@ export default {
         return this.userMap?.[uid] || uid;
     },
     classTitle(path) {
-        return this.classMap?.[path] || String(path || '').replace(/^\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+\//, '');
+        return this.classMap?.[path] || String(path || '').replace(/^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\/[^/]+\//, '');
     },
     async reload() {
         this.error = '';
@@ -277,7 +277,7 @@ export default {
     async loadAvailableClasses() {
         try {
             const p = String(this.$item?.path || '');
-            const m = /^(\/ORGANIZATIONS\/[^/]+)/.exec(p);
+            const m = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(p);
             const basePath = m ? m[1] : '';
             if (!basePath)
                 return;

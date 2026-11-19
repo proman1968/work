@@ -14,15 +14,18 @@ export default {
     async execute(filter) {
         const $context = await this.$item.$context;
         const isOrgsRoot = $context?.path === '/ORGANIZATIONS';
+        const isProjectsRoot = $context?.path === '/PROJECTS';
         const isModelsRoot = $context?.path === '/MODELS';
         const props = {
             $item: $context,
-            name: isOrgsRoot ? 'Моё предприятие' : (isModelsRoot ? 'OpenAI' : 'new'),
+            name: isOrgsRoot ? 'Моё предприятие' : (isProjectsRoot ? 'Мой проект' : (isModelsRoot ? 'OpenAI' : 'new')),
             message: isOrgsRoot
                 ? `Введите название организации и выберите уровень наполнения`
-                : isModelsRoot
-                    ? `Выберите шаблон провайдера ИИ или укажите свой сервер`
-                    : `Введите имя создаваемого item'а и выберите тип`,
+                : isProjectsRoot
+                    ? `Введите название проекта и выберите уровень наполнения`
+                    : isModelsRoot
+                        ? `Выберите шаблон провайдера ИИ или укажите свой сервер`
+                        : `Введите имя создаваемого item'а и выберите тип`,
             filter,
             'name-changed': (e) => {
                 e.target.parentElement.enable = !e.target.validity
@@ -68,7 +71,7 @@ export default {
                 if (!owner)
                     throw new Error('create класса: нужен контекст $class');
                 const createParams = { type, id: name, label: el.moduleLabel || el.name };
-                if (type === '$base') {
+                if (type === '$base' || type === '$project') {
                     if (el.basePreset)
                         createParams.preset = el.basePreset;
                     if (Array.isArray(el.selectedModules))
@@ -356,8 +359,8 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
             <oda-icon class="chevron" icon="icons:chevron-right:90" title="Выберите тип создаваемого item'а" @tap="_selectType"></oda-icon>
         </fieldset>
         <fieldset ~if="showBasePreset" class="modules-box">
-            <legend>Наполнение организации (BASE_TEMPLATE):</legend>
-            <label ~for="basePresets" class="preset-card" :active="basePreset === $for.item.id" @tap="_selectPreset($for.item.id)">
+            <legend>{{type === '$project' ? 'Наполнение проекта:' : 'Наполнение организации (BASE_TEMPLATE):'}}</legend>
+            <label ~for="activePresets" class="preset-card" :active="basePreset === $for.item.id" @tap="_selectPreset($for.item.id)">
                 <input type="radio" name="basePreset" :checked="basePreset === $for.item.id" style="margin-top:3px;flex:0 0 auto;">
                 <div class="vertical" style="gap:2px;min-width:0;">
                     <span class="preset-title">{{$for.item.label}}</span>
@@ -419,6 +422,14 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
         { id: 'standard', label: '2. С типовой конфигурацией', desc: '8 типовых подразделений и рабочих мест + справочники, операции и полный план счетов' },
         { id: 'demo', label: '3. С демоданными', desc: 'Типовая конфигурация + контрагенты, номенклатура, сотрудники и проведённые операции' },
     ],
+    projectPresets: [
+        { id: 'empty', label: '1. Пустой проект', desc: 'Только паспорт проекта ($project) без предустановленных рабочих мест и демоданных' },
+        { id: 'standard', label: '2. С типовыми ролями', desc: 'Готовые рабочие места участников прямо в проекте (без подразделений) + подключённые модули' },
+        { id: 'demo', label: '3. С демоданными', desc: 'Типовые роли проекта + предзаполненные справочники и операции в БД проекта' },
+    ],
+    get activePresets() {
+        return this.type === '$project' ? this.projectPresets : this.basePresets;
+    },
     moduleLabel: '',
     providerPresets: [],
     selectedProviderPreset: 'OpenAI',
@@ -430,17 +441,17 @@ ODA({is: 'input-name-type', imports: '/oda//icon.js, /oda//tree',
     providerIncludeModels: true,
     get isInOrganizations() {
         const p = String(this.$item?.path || '');
-        return p === '/ORGANIZATIONS' || p.startsWith('/ORGANIZATIONS/');
+        return p === '/ORGANIZATIONS' || p.startsWith('/ORGANIZATIONS/') || p === '/PROJECTS' || p.startsWith('/PROJECTS/');
     },
     get isInModels() {
         const p = String(this.$item?.path || '');
         return p === '/MODELS' || p.startsWith('/MODELS/');
     },
     get showBasePreset() {
-        return this.isInOrganizations && this.type === '$base';
+        return this.isInOrganizations && (this.type === '$base' || this.type === '$project');
     },
     get showBaseModules() {
-        return this.isInOrganizations && this.type === '$base' && this.availableModules?.length > 0;
+        return this.isInOrganizations && (this.type === '$base' || this.type === '$project') && this.availableModules?.length > 0;
     },
     get showModulePicker() {
         return this.isInOrganizations && this.type === '$module' && this.availableModules?.length > 0;

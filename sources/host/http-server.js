@@ -719,6 +719,13 @@ export function createRequestHandler() {
                 if (Number(params.contentLength) > 0)
                     header["Content-Length"] = Number(params.contentLength);
             }
+            else if (method === 'export_distro' || /\.zip$/i.test(String(params.filename || ''))) {
+                const rawName = String(params.filename || 'odant-work-distro.zip');
+                const safeAscii = rawName.replace(/[^\x20-\x7E]|[\r\n"\\;]/g, '_');
+                header["Content-Type"] = "application/zip";
+                header["Content-Disposition"] = `attachment; filename="${safeAscii}"; filename*=UTF-8''${encodeURIComponent(rawName)}`;
+                header["Cache-Control"] = "no-cache";
+            }
             else {
                 header["Content-Type"] = "application/octet-stream";
             }

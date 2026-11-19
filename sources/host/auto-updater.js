@@ -113,8 +113,10 @@ export function isProtectedUserPath(relPath) {
     if (rel.startsWith('USERS/') && !rel.startsWith('USERS/$users/') && rel !== 'USERS/$users')
         return true;
 
-    // 5. Организации пользователей (кроме системной метапапки ORGANIZATIONS/$domain)
+    // 5. Организации и проекты пользователей (кроме системных метапапок ORGANIZATIONS/$domain и PROJECTS/$domain)
     if (rel.startsWith('ORGANIZATIONS/') && !rel.startsWith('ORGANIZATIONS/$domain/') && rel !== 'ORGANIZATIONS/$domain')
+        return true;
+    if (rel.startsWith('PROJECTS/') && !rel.startsWith('PROJECTS/$domain/') && rel !== 'PROJECTS/$domain')
         return true;
 
     // 6. Примонтированные внешние узлы федерации (кроме системной метапапки NODES/$nodes)
@@ -161,6 +163,7 @@ const TRACKED_ROOTS = [
     'SERVICES',
     'USERS/$users',
     'ORGANIZATIONS/$domain',
+    'PROJECTS/$domain',
 ];
 
 /**

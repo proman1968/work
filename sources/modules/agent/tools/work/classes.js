@@ -22,7 +22,7 @@ import {
 } from './common.js';
 
 const ROOT_PROTECTED_CLASSES = new Set([
-    '/', '/ORGANIZATIONS', '/MODULES', '/USERS', '/MODELS', '/SERVICES', '/NODES', '/DATA',
+    '/', '/ORGANIZATIONS', '/PROJECTS', '/MODULES', '/USERS', '/MODELS', '/SERVICES', '/NODES', '/DATA',
 ]);
 
 /** Проверка границ правки структуры: запрещено менять /$server, и из организации — общий /MODULES. */

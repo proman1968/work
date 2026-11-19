@@ -613,7 +613,7 @@ Object.defineProperties(proto, Object.getOwnPropertyDescriptors({
         if (!this.editing?.id)
             return;
         const curPath = String(this.$item?.short || this.$item?.path || '');
-        const rootMatch = curPath.match(/^(\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+\/OPERATIONS|\/MODULES\/[^/]+\/OPERATIONS)/);
+        const rootMatch = curPath.match(/^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\/[^/]+\/OPERATIONS|\/MODULES\/[^/]+\/OPERATIONS)/);
         const opRootPath = rootMatch ? rootMatch[1] : curPath;
         let rootItem = this.$item;
         if (opRootPath && typeof WORK?.get_item === 'function') {

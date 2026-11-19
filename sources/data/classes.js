@@ -18,13 +18,13 @@ import { tx } from './db.js';
 /** Типы прикладных классов данных. */
 export const DATA_TYPES = Object.freeze(['$catalog', '$virtual', '$struct', '$operation', '$account', '$register']);
 
-/** Типы классов орг-структуры (подразделения), доменов и модулей. */
-export const STRUCTURE_TYPES = Object.freeze(['$structure', '$base']);
+/** Типы классов орг-структуры (подразделения), проектов, доменов и модулей. */
+export const STRUCTURE_TYPES = Object.freeze(['$structure', '$base', '$project']);
 export const MODULE_TYPES = Object.freeze(['$module']);
 export const DOMAIN_TYPES = Object.freeze(['$domain']);
 
 /** Корни дерева, которые сканируются по умолчанию. */
-export const DEFAULT_ROOTS = Object.freeze(['MODULES', 'ORGANIZATIONS', 'DATA', 'BASE']);
+export const DEFAULT_ROOTS = Object.freeze(['MODULES', 'ORGANIZATIONS', 'PROJECTS', 'DATA', 'BASE']);
 
 /** Папки, которые не бывают классами. */
 const SKIP = new Set(['node_modules', 'history', 'logs']);

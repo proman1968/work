@@ -199,17 +199,19 @@ export async function listSqlDatabases(item, params = {}) {
         ...inspectDbQuickStats(idxDb, indexFile),
     });
 
-    // 3. Изолированные БД всех организаций в /ORGANIZATIONS
-    const orgsDir = path.resolve(rootDir, 'ORGANIZATIONS');
-    if (fs.existsSync(orgsDir)) {
-        const entries = fs.readdirSync(orgsDir, { withFileTypes: true })
+    // 3. Изолированные БД всех организаций в /ORGANIZATIONS и проектов в /PROJECTS
+    for (const [domName, metaDirName] of [['ORGANIZATIONS', '$base'], ['PROJECTS', '$project']]) {
+        const domDir = path.resolve(rootDir, domName);
+        if (!fs.existsSync(domDir))
+            continue;
+        const entries = fs.readdirSync(domDir, { withFileTypes: true })
             .filter(d => d.isDirectory() && !d.name.startsWith('$') && !d.name.startsWith('.') && !d.name.startsWith('#'))
             .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
         for (const d of entries) {
-            const baseMetaDir = path.join(orgsDir, d.name, '$base');
+            const baseMetaDir = path.join(domDir, d.name, metaDirName);
             if (!fs.existsSync(baseMetaDir))
                 continue;
-            const bp = `/ORGANIZATIONS/${d.name}`;
+            const bp = `/${domName}/${d.name}`;
             const absFile = baseDbFile(rootDir, bp);
             const relFile = path.relative(rootDir, absFile).replace(/\\/g, '/');
             const db = fs.existsSync(absFile) ? await dataStore(bp) : null;
@@ -269,8 +271,8 @@ export async function resolveSqlDatabase(item, params = {}) {
     }
     if (reqId.startsWith('base:')) {
         const bp = reqId.slice('base:'.length).trim();
-        if (!/^\/(ORGANIZATIONS|BASES)\/[^/]+$/.test(bp))
-            throw new DataError(`Недопустимый путь базы организации: ${bp}`);
+        if (!/^\/(ORGANIZATIONS|PROJECTS|BASES)\/[^/]+$/.test(bp))
+            throw new DataError(`Недопустимый путь базы организации/проекта: ${bp}`);
         const db = await dataStore(bp);
         const absFile = baseDbFile(rootDir, bp);
         return {

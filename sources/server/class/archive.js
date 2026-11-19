@@ -52,26 +52,27 @@ function stripZipExt(filename = '') {
 
 export const classArchiveMethods = {
     /**
-     * Упаковать организацию (`$base`) в ZIP-архив для переноса на другой сервер.
+     * Упаковать организацию (`$base`) или проект (`$project`) в ZIP-архив для переноса на другой сервер.
      * @param {object} [params]
      * @returns {Promise<Buffer>}
      */
     async export_archive(params = {}) {
         await this.init;
-        if (this.type !== '$base')
-            throw new Error('Архивация доступна только для организации ($base)');
+        if (this.type !== '$base' && this.type !== '$project')
+            throw new Error('Архивация доступна только для организации ($base) или проекта ($project)');
         await this.assertAccess(params, this.constructor.ACCESS_LEVEL.READ);
 
         const baseDir = this.dir;
         if (!baseDir || !fs.existsSync(baseDir))
-            throw new Error(`Папка организации не найдена: ${this.path}`);
+            throw new Error(`Папка не найдена: ${this.path}`);
 
         // Сбрасываем WAL-журнал SQLite в основной файл work.db
         await checkpointBaseDb(this.path);
 
         const zip = new AdmZip();
         const manifest = {
-            format: 'work-base-archive',
+            format: this.type === '$project' ? 'work-project-archive' : 'work-base-archive',
+            type: this.type,
             version: 1,
             id: this.id,
             label: this.DATA?.label || this.label || this.id,
@@ -89,14 +90,14 @@ export const classArchiveMethods = {
     },
 
     /**
-     * Загрузить организацию (`$base`) из ZIP-архива в домен `/ORGANIZATIONS`.
+     * Загрузить организацию (`$base`) или проект (`$project`) из ZIP-архива в домен `/ORGANIZATIONS` или `/PROJECTS`.
      * @param {object} [params]
      * @returns {Promise<{ok: boolean, id: string, path: string, label: string, filesCount: number}>}
      */
     async import_archive(params = {}) {
         await this.init;
-        if (this.id !== 'ORGANIZATIONS' && this.type !== '$domain')
-            throw new Error('Загрузка из архива выполняется в разделе /ORGANIZATIONS');
+        if (this.id !== 'ORGANIZATIONS' && this.id !== 'PROJECTS' && this.type !== '$domain')
+            throw new Error('Загрузка из архива выполняется в разделе /ORGANIZATIONS или /PROJECTS');
         await this.assertAccess(params, this.constructor.ACCESS_LEVEL.ADMIN);
 
         let buf = null;
@@ -145,15 +146,16 @@ export const classArchiveMethods = {
         if (!fileEntries.length)
             throw new Error('Архив пуст');
 
-        // Проверим, лежат ли файлы сразу в корне ($base/class.js) или в одной общей папке (<Имя>/$base/class.js)
+        const expectedMeta = this.id === 'PROJECTS' ? '$project' : '$base';
+        // Проверим, лежат ли файлы сразу в корне ($base/class.js или $project/class.js) или в одной общей папке
         let prefix = '';
         let folderFromZip = '';
-        const hasRootBase = fileEntries.some(f => f.norm === '$base/class.js');
+        const hasRootBase = fileEntries.some(f => f.norm === `${expectedMeta}/class.js` || f.norm === '$base/class.js' || f.norm === '$project/class.js');
         if (!hasRootBase) {
             const firstSegs = new Set(fileEntries.map(f => f.norm.split('/')[0]));
             if (firstSegs.size === 1) {
                 const candidate = [...firstSegs][0];
-                if (fileEntries.some(f => f.norm === `${candidate}/$base/class.js`)) {
+                if (fileEntries.some(f => f.norm === `${candidate}/${expectedMeta}/class.js` || f.norm === `${candidate}/$base/class.js` || f.norm === `${candidate}/$project/class.js`)) {
                     prefix = `${candidate}/`;
                     folderFromZip = candidate;
                 }
@@ -165,8 +167,8 @@ export const classArchiveMethods = {
             entry: f.entry,
         })).filter(f => f.relPath);
 
-        if (!stripped.some(f => f.relPath === '$base/class.js'))
-            throw new Error('В архиве не найден паспорт организации ($base/class.js)');
+        if (!stripped.some(f => f.relPath === `${expectedMeta}/class.js` || f.relPath === '$base/class.js' || f.relPath === '$project/class.js'))
+            throw new Error(`В архиве не найден паспорт (${expectedMeta}/class.js)`);
 
         // Прочитаем манифест, если он есть
         let manifest = null;

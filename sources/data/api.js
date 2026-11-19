@@ -52,12 +52,12 @@ const linksModule = () => import('../server/access/links.js');
 const storeStates = new Map();
 let dirtyGeneration = 1;
 
-/** Путь организации ($base) для вызова: из параметра `base` или из пути элемента `/ORGANIZATIONS/<Имя>`. */
+/** Путь организации ($base) или проекта ($project) для вызова: из параметра `base` или из пути элемента `/ORGANIZATIONS/<Имя>` / `/PROJECTS/<Имя>`. */
 export function resolveBasePath(item, p = {}) {
     if (typeof p?.base === 'string' && p.base.trim())
         return '/' + p.base.trim().replace(/^\/+|\/+$/g, '');
     const raw = typeof item === 'string' ? item : String(item?.path ?? '');
-    const m = raw.match(/^\/(ORGANIZATIONS|BASES)\/([^/]+)/);
+    const m = raw.match(/^\/(ORGANIZATIONS|PROJECTS|BASES)\/([^/]+)/);
     return m ? `/${m[1]}/${m[2]}` : '';
 }
 
@@ -144,7 +144,7 @@ function getDbSummary(db) {
         countFor(clsPath, clsType = '') {
             const cls = getClass(db, clsPath);
             const type = cls?.type || clsType;
-            if (!type || type === '$base' || type === '$structure' || type === '$domain')
+            if (!type || type === '$base' || type === '$project' || type === '$structure' || type === '$domain')
                 return 0;
             const key = `${type}:${cls?.cid || clsPath}`;
             if (subtreeCounts.has(key))
@@ -701,7 +701,7 @@ function schemaSubtree(db, cls) {
             }
         }
     }
-    const rootModPath = cls.path.replace(/^\/(ORGANIZATIONS|BASES)\/[^/]+/, '');
+    const rootModPath = cls.path.replace(/^\/(ORGANIZATIONS|PROJECTS|BASES)\/[^/]+/, '');
     const defaultIcon = cls.own?.icon
         || (rootModPath !== cls.path ? getClass(db, rootModPath)?.own?.icon : '')
         || (fam === 'operation' ? 'carbon:task-complete' : 'carbon:catalog');

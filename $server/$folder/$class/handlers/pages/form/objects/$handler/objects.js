@@ -442,7 +442,7 @@ export default {
             return;
         if (!targetPath.startsWith('/')) {
             const curPath = this.$item?.short || this.$item?.path || '';
-            const m = curPath.match(/^(\/ORGANIZATIONS\/[^/]+\/MODULES\/[^/]+)/);
+            const m = curPath.match(/^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\/[^/]+)/);
             if (m)
                 targetPath = `${m[1]}/${targetPath.replace(/^\/+/, '')}`;
         }

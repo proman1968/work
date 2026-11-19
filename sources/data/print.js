@@ -295,7 +295,7 @@ const ORG_FIELDS = ['full_name', 'inn', 'kpp', 'ogrn', 'okpo', 'okato', 'address
 
 function orgOf(db, op = null) {
     const bp = (op?.cid && classBasePath(db, op.cid)) || (op?.unit && classBasePath(db, op.unit)) || '';
-    const root = (bp && getClass(db, bp)) ?? getClass(db, 'org') ?? classesOfType(db, '$base')[0];
+    const root = (bp && getClass(db, bp)) ?? getClass(db, 'org') ?? classesOfType(db, '$base')[0] ?? classesOfType(db, '$project')[0];
     const own = root?.own ?? {};
     const org = { name: root?.label ?? '' };
     for (const k of ORG_FIELDS)

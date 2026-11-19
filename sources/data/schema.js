@@ -31,7 +31,7 @@ export const FAMILY = Object.freeze({
     $struct: 'struct',
     $operation: 'operation',
     $account: 'account', $register: 'account',
-    $structure: 'structure', $base: 'structure',
+    $structure: 'structure', $base: 'structure', $project: 'structure',
     $module: 'module',
 });
 
@@ -111,11 +111,11 @@ function mergeRule(prev, raw) {
     return r;
 }
 
-/** Путь организации ($base), внутри которой находится класс (или '' для корня). */
+/** Путь организации ($base) или проекта ($project), внутри которых находится класс (или '' для корня). */
 export function classBasePath(db, cid) {
     const chain = ancestors(db, cid, { self: true });
     for (let i = chain.length - 1; i >= 0; i--) {
-        if (chain[i].type === '$base')
+        if (chain[i].type === '$base' || chain[i].type === '$project')
             return chain[i].path;
     }
     const m = /^(\/MODULES\/[^/]+)\//.exec(String(cid || ''));

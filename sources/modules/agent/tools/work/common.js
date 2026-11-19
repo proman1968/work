@@ -67,12 +67,12 @@ export function contextConeOf(ctxOrPath) {
     if (!raw || raw === '/')
         return null;
     const segs = canonicalSegs(raw);
-    if (segs[0] !== 'ORGANIZATIONS' || segs.length < 2)
+    if ((segs[0] !== 'ORGANIZATIONS' && segs[0] !== 'PROJECTS') || segs.length < 2)
         return null;
     const orgId = segs[1];
     if (!orgId || orgId[0] === '$' || orgId[0] === '.' || orgId === '~')
         return null;
-    const cone = ['ORGANIZATIONS', orgId];
+    const cone = [segs[0], orgId];
     if (segs.length >= 3 && segs[2] !== 'MODULES') {
         for (let i = 2; i < segs.length; i++) {
             const s = segs[i];
@@ -99,16 +99,16 @@ export function checkContextCone(targetPath, ctx) {
         ? absPath(targetPath, { place: { path: ctx } })
         : absPath(targetPath, ctx);
     const segs = canonicalSegs(p);
-    if (segs[0] !== 'ORGANIZATIONS' || segs.length < 2)
+    if ((segs[0] !== 'ORGANIZATIONS' && segs[0] !== 'PROJECTS') || segs.length < 2)
         return { ok: true };
     const orgSeg = segs[1];
     if (orgSeg[0] === '$' || orgSeg[0] === '.' || orgSeg === '~')
         return { ok: true };
     const placePath = typeof ctx === 'string' ? ctx : (ctx?.place?.path || '/' + cone.join('/'));
-    if (orgSeg !== cone[1]) {
+    if (segs[0] !== cone[0] || orgSeg !== cone[1]) {
         return {
             ok: false,
-            reason: `Выход за рамки контекста организации «${cone[1]}» (${placePath}): обращение к другой организации «/ORGANIZATIONS/${orgSeg}» запрещено. Движение возможно только вниз (дочерние элементы) или вверх (уровень WORK).`,
+            reason: `Выход за рамки контекста «${cone[1]}» (${placePath}): обращение к «/${segs[0]}/${orgSeg}» запрещено. Движение возможно только вниз (дочерние элементы) или вверх (уровень WORK).`,
         };
     }
     if (cone.length > 2 && segs.length >= 3 && segs[2] !== 'MODULES') {

@@ -203,12 +203,12 @@ export function treeDistance(a, b) {
  */
 export function inVerticalCone(targetPath, basePointPath) {
     const baseSegs = segsOf(basePointPath);
-    if (baseSegs[0] !== 'ORGANIZATIONS' || baseSegs.length < 2)
+    if ((baseSegs[0] !== 'ORGANIZATIONS' && baseSegs[0] !== 'PROJECTS') || baseSegs.length < 2)
         return true;
     const orgId = baseSegs[1];
     if (!orgId || orgId[0] === '$' || orgId[0] === '.' || orgId === '~')
         return true;
-    const cone = ['ORGANIZATIONS', orgId];
+    const cone = [baseSegs[0], orgId];
     if (baseSegs.length >= 3 && baseSegs[2] !== 'MODULES') {
         for (let i = 2; i < baseSegs.length; i++) {
             const s = baseSegs[i];
@@ -218,12 +218,12 @@ export function inVerticalCone(targetPath, basePointPath) {
         }
     }
     const segs = segsOf(targetPath);
-    if (segs[0] !== 'ORGANIZATIONS' || segs.length < 2)
+    if ((segs[0] !== 'ORGANIZATIONS' && segs[0] !== 'PROJECTS') || segs.length < 2)
         return true;
     const orgSeg = segs[1];
     if (orgSeg[0] === '$' || orgSeg[0] === '.' || orgSeg === '~')
         return true;
-    if (orgSeg !== cone[1])
+    if (segs[0] !== cone[0] || orgSeg !== cone[1])
         return false;
     if (cone.length > 2 && segs.length >= 3 && segs[2] !== 'MODULES') {
         for (let i = 2; i < cone.length && i < segs.length; i++) {

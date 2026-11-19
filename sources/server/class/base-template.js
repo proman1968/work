@@ -26,6 +26,24 @@ export const BASE_TEMPLATE_PRESETS = Object.freeze([
     },
 ]);
 
+export const PROJECT_TEMPLATE_PRESETS = Object.freeze([
+    {
+        id: 'empty',
+        label: '1. Пустой проект',
+        title: 'Только паспорт проекта без предустановленных рабочих мест и демоданных',
+    },
+    {
+        id: 'standard',
+        label: '2. С типовыми ролями',
+        title: 'Готовые рабочие места участников прямо в проекте (без подразделений) + подключённые модули',
+    },
+    {
+        id: 'demo',
+        label: '3. С демоданными',
+        title: 'Типовые роли проекта + предзаполненные справочники и операции в БД проекта',
+    },
+]);
+
 /** Нормативы типовой конфигурации: вид → [единица, значение]. */
 export const TEMPLATE_NORMS = Object.freeze({
     'Ставка НДС': ['доля', 0.2],
@@ -480,6 +498,125 @@ export function buildTemplateDepartments(orgId) {
 }
 
 /**
+ * Сгенерировать текст `$project/class.js` для создаваемого проекта в `/PROJECTS`.
+ * В проекте нет вложенных подразделений ($structure) — все рабочие места (ROLES) находятся непосредственно в самом проекте.
+ */
+export function buildProjectPassportClassJs({
+    id = 'Мой проект',
+    label = '',
+    preset = 'standard',
+    bossUid = '',
+} = {}) {
+    const cleanLabel = String(label || id || 'Мой проект').trim();
+    const projPath = `/PROJECTS/${id}`;
+    const regPrefix = `${projPath}/MODULES/Register`;
+    const geoPrefix = `${projPath}/MODULES/Geo`;
+    const bossArr = bossUid ? [String(bossUid)] : [];
+    const today = new Date().toISOString().slice(0, 10);
+
+    const obj = {
+        label: cleanLabel,
+        code: preset === 'empty' ? '' : 'PRJ-001',
+        customer: preset === 'empty' ? '' : 'Внутренний заказчик',
+        start_date: preset === 'empty' ? '' : today,
+        end_date: '',
+        status: preset === 'empty' ? '' : 'В работе',
+        budget: preset === 'empty' ? 0 : 1500000,
+        description: preset === 'empty' ? '' : `Рабочее пространство проекта «${cleanLabel}»`,
+        METADATA: {
+            STATIC: [
+                { id: 'code', label: 'Код проекта', type: 'string' },
+                { id: 'customer', label: 'Заказчик / Инициатор', type: 'string' },
+                { id: 'start_date', label: 'Дата начала', type: 'date' },
+                { id: 'end_date', label: 'Дата окончания', type: 'date' },
+                { id: 'status', label: 'Статус', type: 'string' },
+                { id: 'budget', label: 'Бюджет', type: 'number' },
+                { id: 'description', label: 'Описание', type: 'string' },
+            ],
+        },
+        icon: 'carbon:rocket',
+    };
+
+    if (preset === 'standard' || preset === 'demo') {
+        obj['#security'] = {
+            ...(bossArr.length ? { BOSS: bossArr } : {}),
+            ROLES: [
+                {
+                    id: 'pm',
+                    label: 'Руководитель проекта',
+                    icon: 'fontawesome:s-user-tie',
+                    USERS: ['USERS'],
+                    LINKS: [
+                        { id: `${regPrefix}/CATALOGS`, access: 'write' },
+                        { id: `${regPrefix}/OPERATIONS`, access: 'write', scope: 'all' },
+                        { id: `${regPrefix}/REGISTER`, access: 'read', scope: 'all' },
+                        { id: `${geoPrefix}/Геоточки`, access: 'write' },
+                    ],
+                },
+                {
+                    id: 'team',
+                    label: 'Исполнители проекта',
+                    icon: 'fontawesome:s-users',
+                    USERS: ['USERS'],
+                    LINKS: [
+                        { id: `${regPrefix}/CATALOGS`, access: 'read' },
+                        { id: `${regPrefix}/OPERATIONS`, access: 'write', scope: 'place' },
+                        { id: `${regPrefix}/REGISTER`, access: 'read', scope: 'place' },
+                        { id: `${geoPrefix}/Геоточки`, access: 'write' },
+                    ],
+                },
+                {
+                    id: 'stakeholders',
+                    label: 'Участники и заказчик',
+                    icon: 'fontawesome:s-eye',
+                    USERS: ['USERS'],
+                    LINKS: [
+                        { id: `${regPrefix}/CATALOGS`, access: 'read' },
+                        { id: `${regPrefix}/REGISTER`, access: 'read', scope: 'all' },
+                    ],
+                },
+            ],
+        };
+    }
+    else if (bossArr.length) {
+        obj['#security'] = { BOSS: bossArr };
+    }
+
+    return `export default ${ JSON.stringify(obj, null, 4) }\n`;
+}
+
+/**
+ * Развернуть файловую структуру проекта (`$project`) в `/PROJECTS/<id>`:
+ * создаёт домен `MODULES/$domain` и подключает выбранные модули без создания подразделений `$structure`.
+ */
+export function scaffoldProjectSync({
+    targetDir,
+    modulesRoot = './MODULES',
+    preset = 'standard',
+    modules = [],
+} = {}) {
+    ensureBaseModulesDomainSync(targetDir);
+
+    const modList = preset === 'empty'
+        ? modules
+        : [...new Set(['Register', 'Geo', ...modules])];
+
+    for (const modId of modList) {
+        const modSrc = path.join(modulesRoot, modId);
+        const modSrcClass = path.join(modSrc, '$module', 'class.js');
+        if (!fs.existsSync(modSrcClass))
+            continue;
+        const modDst = path.join(targetDir, 'MODULES', modId);
+        const modDstClass = path.join(modDst, '$module', 'class.js');
+        if (!fs.existsSync(modDstClass)) {
+            fs.mkdirSync(path.dirname(modDstClass), { recursive: true });
+            fs.writeFileSync(modDstClass, extractStubClassJsSync(modSrcClass, modId), 'utf-8');
+        }
+        scaffoldModuleTreeSync(modSrc, modDst);
+    }
+}
+
+/**
  * Развернуть файловую структуру организации (`$base`) по выбранному уровню (`empty`, `standard`, `demo`).
  */
 export function scaffoldBaseOrganizationSync({
@@ -521,11 +658,14 @@ export function scaffoldBaseOrganizationSync({
 }
 
 /**
- * Засеять стартовый пакет демонстрационных объектов и проводок в БД созданной организации (`preset === 'demo'`).
+ * Засеять стартовый пакет демонстрационных объектов и проводок в БД созданной организации или проекта (`preset === 'demo'`).
  */
 export async function seedBaseTemplateDemoData({
     rootDir = process.cwd(),
     orgId,
+    domainDir = 'ORGANIZATIONS',
+    metaName = '$base',
+    flatProject = false,
     author = 'demo',
     year = new Date().getFullYear(),
 } = {}) {
@@ -534,9 +674,9 @@ export async function seedBaseTemplateDemoData({
     const { createObject, queryObjects } = await import('../../data/objects.js');
     const { registerOperation } = await import('../../data/posting.js');
 
-    const orgBase = `/ORGANIZATIONS/${orgId}`;
+    const orgBase = `/${domainDir}/${orgId}`;
     const prefix = `${orgBase}/MODULES/Register`;
-    const dbFile = path.join(path.resolve(rootDir), 'ORGANIZATIONS', orgId, '$base', '#system', 'work.db');
+    const dbFile = path.join(path.resolve(rootDir), domainDir, orgId, metaName, '#system', 'work.db');
 
     const db = await openDataDb(dbFile);
     try {
@@ -595,14 +735,14 @@ export async function seedBaseTemplateDemoData({
 
         make('truck', '/CATALOGS/Транспорт', { name: 'КамАЗ-5490 Нео', plate: 'А123ВС77', kind: 'Бензовоз', capacity: 10000, fuel: ids.diesel });
 
-        // 3. Хозяйственные операции и проводки по подразделениям
+        // 3. Хозяйственные операции и проводки по подразделениям (или прямо в проекте при flatProject)
         const post = (subpath, md, body, unitSub, place = 'head') => {
             const o = createObject(db, {
                 cid: `${prefix}${subpath}`,
                 time: d(md),
                 author,
-                unit: `${orgBase}/${unitSub}`,
-                place,
+                unit: flatProject ? orgBase : `${orgBase}/${unitSub}`,
+                place: flatProject ? 'pm' : place,
                 body,
             });
             if (o.status !== 'registered')

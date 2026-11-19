@@ -172,7 +172,7 @@ export const classSearchMethods = {
                     await scanFolderFiles(cur.meta_folder, cur, 0);
             }
 
-            if (cur.type === '$base' || cur.type === '$structure') {
+            if (cur.type === '$base' || cur.type === '$project' || cur.type === '$structure') {
                 const sec = cur.DATA?.['#security'];
                 if (sec) {
                     const { common, places } = WORKPLACES.normalizeSecurity(sec);

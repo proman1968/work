@@ -871,7 +871,7 @@ ODA({is: 'work-form',
         if (!root)
             return false;
         const t = root.type;
-        if (t === '$file' || t === '$handler' || t === '$structure' || t === '$base' || t === '$server' || t === '$user')
+        if (t === '$file' || t === '$handler' || t === '$structure' || t === '$base' || t === '$project' || t === '$server' || t === '$user')
             return false;
         if (['$operation', '$catalog', '$register', '$account', '$struct', '$virtual'].includes(t))
             return true;
