@@ -207,7 +207,7 @@ async function runLoopCore(opts) {
             }
             const system = typeof opts.system === 'function' ? await opts.system() : (opts.system ?? '');
             const toolsTokens = estimateTokens(schemas);
-            const compactLlm = opts.ctx?.env?.config?.compactModel && typeof opts.ctx?.env?.compactLlm === 'function'
+            const compactLlm = typeof opts.ctx?.env?.compactLlm === 'function'
                 ? await opts.ctx.env.compactLlm(llm.name).catch(() => llm)
                 : llm;
             await maybeCompact({ llm: compactLlm, items, host, system, toolsTokens, hooks: opts.hooks, task: opts.ctx?.task, contextTokens: llm.contextTokens });

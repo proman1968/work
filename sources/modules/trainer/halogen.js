@@ -929,7 +929,18 @@ export function inspectWindowsHalogenEnvironment({ rootDir = process.cwd() } = {
 
     const xrtSmiPath = path.join(systemRoot, 'System32', 'AMD', 'xrt-smi.exe');
     const npuDriverInstalled = fs.existsSync(xrtSmiPath);
-    const npuXclbinPath = path.join(buboRootDir, 'tools', 'npu', 'final_4096x2560x1024_128x64x128.xclbin');
+    let npuXclbinPath = path.join(buboRootDir, 'tools', 'npu', 'final_4096x2560x1024_128x64x128.xclbin');
+    if (!fs.existsSync(npuXclbinPath)) {
+        const npuDir = path.join(buboRootDir, 'tools', 'npu');
+        try {
+            if (fs.existsSync(npuDir)) {
+                const found = fs.readdirSync(npuDir).find(f => f.toLowerCase().endsWith('.xclbin'));
+                if (found)
+                    npuXclbinPath = path.join(npuDir, found);
+            }
+        }
+        catch { /* ignore */ }
+    }
     const npuKernelsPresent = fs.existsSync(npuXclbinPath);
 
     const vcRedistInstalled = fs.existsSync(path.join(systemRoot, 'System32', 'vcruntime140.dll'));
@@ -1889,6 +1900,32 @@ export async function describeEngineSetup({
         return { path: p, name: path.basename(p), sizeGb };
     };
     const stateOnDisk = readEngineStateSync(rootDir);
+    const runningNpu = _managedInfo ? Boolean(_managedInfo.npuPrefill) : Boolean(stateOnDisk?.pid && stateOnDisk.npuPrefill);
+    const npuReady = Boolean(winEnv.npuDriverInstalled && winEnv.npuKernelsPresent);
+    let npuStatusText = '';
+    if (os.platform() === 'linux') {
+        const hasAccel = fs.existsSync('/dev/accel/accel0');
+        npuStatusText = hasAccel ? 'Доступен (/dev/accel/accel0)' : 'Не обнаружен (/dev/accel/accel0)';
+    }
+    else if (runningNpu) {
+        npuStatusText = 'Активен (--npu-prefill on · Ryzen AI XRT)';
+    }
+    else if (!cfg.npuPrefill) {
+        npuStatusText = 'Отключён в настройках движка (npuPrefill: false)';
+    }
+    else if (!winEnv.npuDriverInstalled) {
+        npuStatusText = 'Не включён: не найден драйвер AMD XRT NPU (C:\\Windows\\System32\\AMD\\xrt-smi.exe)';
+    }
+    else if (!winEnv.npuKernelsPresent) {
+        npuStatusText = 'Не включён: отсутствует AIE-ядро *.xclbin в папке bubo\\tools\\npu';
+    }
+    else if (['exact', 'stock', 'vanilla'].includes(String(_managedInfo?.profile || cfg.profile || ''))) {
+        npuStatusText = `Отключён профилем ${_managedInfo?.profile || cfg.profile} (переключите на default)`;
+    }
+    else if (npuReady) {
+        npuStatusText = 'Готов к запуску (--npu-prefill on, перезапустите движок при необходимости)';
+    }
+
     return {
         settings: cfg,
         weightsDir,
@@ -1914,7 +1951,11 @@ export async function describeEngineSetup({
             installed: Boolean(winEnv.buboInstalled || winEnv.gufoInstalled),
             runtime: winEnv.buboInstalled ? 'bubo.exe' : (winEnv.gufoInstalled ? 'gufo.exe' : ''),
             exePath,
-            npuReady: Boolean(winEnv.npuDriverInstalled && winEnv.npuKernelsPresent),
+            npuReady,
+            npuDriverInstalled: Boolean(winEnv.npuDriverInstalled),
+            npuKernelsPresent: Boolean(winEnv.npuKernelsPresent),
+            npuActive: runningNpu,
+            npuStatusText,
         },
         running: _managedInfo ? {
             runtime: _managedInfo.runtime,

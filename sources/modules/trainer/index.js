@@ -541,9 +541,27 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 summary: `Топ #${(top?.index ?? 0) + 1} (${((top?.relevance_score ?? 0) * 100).toFixed(1)}%) за ${durationMs} мс`,
             };
         }
-        const messages = Array.isArray(p.messages) && p.messages.length
+        const prefillBenchmark = isTruthy(p.prefillBenchmark);
+        let messages = Array.isArray(p.messages) && p.messages.length
             ? p.messages
             : [{ role: 'user', content: String(p.prompt || 'Привет! Представься коротко в одном предложении.') }];
+        if (prefillBenchmark) {
+            const nonce = Math.floor(Date.now() / 1000);
+            const rows = [];
+            let sum = 0;
+            // ~220 строк * ~18 токенов ≈ ~4 000 токенов уникального табличного контекста без попадания в KV-кэш
+            for (let i = 1; i <= 220; i++) {
+                const qty = ((i * 7 + (nonce % 13)) % 40) + 1;
+                const price = 100 + ((i * 31) % 900);
+                const total = qty * price;
+                sum += total;
+                rows.push(`Строка #${nonce}-${String(i).padStart(3, '0')}: Товарная позиция А-${i}, склад Основной, количество ${qty} шт., цена ${price} руб., сумма ${total} руб.`);
+            }
+            messages = [{
+                role: 'user',
+                content: `Бенчмарк длинного контекста #${nonce} (~4000 токенов):\n${rows.join('\n')}\n\nСколько товарных строк перечислено выше и какая контрольная сумма по первой строке? Ответь одной короткой строкой без пояснений.`,
+            }];
+        }
         const isHalo = ai?.protocol === 'halogen' || ai?.DATA?.protocol === 'halogen';
         const haloUrl = ai?.baseUrl || ai?.DATA?.baseUrl || HALOGEN_DEFAULT_BASE_URL;
         // Холодный запуск bubo.exe (загрузка 116 ГБ весов) не должен выглядеть как медленная генерация:
@@ -559,7 +577,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
         }
         const metricsBefore = isHalo ? await readHalogenMetrics(haloUrl).catch(() => null) : null;
         const genT0 = Date.now();
-        const maxOut = Number(p.maxOutput || p.maxTokens) || 256;
+        const maxOut = prefillBenchmark ? 48 : (Number(p.maxOutput || p.maxTokens) || 256);
         const chatOpts = {
             messages,
             maxOutput: maxOut,
@@ -579,10 +597,15 @@ async function runSingleModelSmokeTest(ai, p = {}) {
         const metricsDelta = isHalo ? computeHalogenMetricsDelta(metricsBefore, metricsAfter) : null;
 
         const ttftMs = Number(usage?.ttftMs) || 0;
+        const loadMs = Number(usage?.loadMs) || 0;
+        const device = String(usage?.device || '');
         const clientTokPerSec = Number(usage?.tokPerSec) || 0;
         const serverTokPerSec = Number(metricsDelta?.serverDecodeTokPerSec) || 0;
         const tokPerSec = serverTokPerSec > 0 ? serverTokPerSec : clientTokPerSec;
-        const promptTokPerSec = Number(metricsDelta?.serverPrefillTokPerSec || usage?.promptTokPerSec) || 0;
+        const fallbackPrefillTokSec = (Number(usage?.prompt_tokens) > 0 && ttftMs > 5)
+            ? +((Number(usage.prompt_tokens) * 1000) / ttftMs).toFixed(1)
+            : 0;
+        const promptTokPerSec = Number(metricsDelta?.serverPrefillTokPerSec || usage?.promptTokPerSec) || fallbackPrefillTokSec;
         const mtpAcceptPct = metricsDelta?.mtpAcceptPct ?? null;
         const mtpTokensPerStep = metricsDelta?.mtpTokensPerStep ?? null;
 
@@ -590,23 +613,29 @@ async function runSingleModelSmokeTest(ai, p = {}) {
             ok: true,
             modality: 'llm',
             text: text.trim(),
+            device,
+            loadMs,
             durationMs,
             ttftMs,
             tokPerSec,
             clientTokPerSec,
             serverDecodeTokPerSec: serverTokPerSec,
             promptTokPerSec,
+            prefillBenchmark,
             mtpAcceptPct,
             mtpTokensPerStep,
             usage,
             engineStartMs,
             totalMs: durationMs + engineStartMs,
             summary: [
+                device ? `${device}` : '',
                 tokPerSec > 0 ? `${tokPerSec} tok/s` : `${durationMs} мс`,
+                promptTokPerSec > 0 && prefillBenchmark ? `Prefill ${promptTokPerSec} tok/s` : '',
                 ttftMs > 0 ? `TTFT ${(ttftMs / 1000).toFixed(2)} с` : '',
                 mtpAcceptPct !== null
                     ? `MTP ${mtpAcceptPct}%${mtpTokensPerStep ? ` (${mtpTokensPerStep} ток/шаг)` : ''}`
                     : '',
+                loadMs > 500 ? `загрузка ${(loadMs / 1000).toFixed(1)} с` : '',
                 engineStartMs > 500 ? `старт движка ${(engineStartMs / 1000).toFixed(1)} с` : '',
             ].filter(Boolean).join(' · '),
         };

@@ -34,10 +34,12 @@ async function configFor(file) {
     return loadConfig(place);
 }
 
-/** Найти активную локальную модель в /MODELS/Local с заданной возможностью (stt/tts). */
+/** Найти активную локальную модель в /MODELS/Local с заданной возможностью (stt/tts).
+ *  Для интерактивного TTS-голоса при наличии быстрой 0.6B CustomVoice отдаём ей приоритет перед тяжёлой 1.7B VoiceDesign. */
 async function localVoiceModel(cap) {
     try {
         const local = await WORK.get_item('/MODELS/Local').catch(() => null);
+        const matches = [];
         for (const m of (await local?.items) || []) {
             if (!m || Array.isArray(m))
                 continue;
@@ -45,8 +47,16 @@ async function localVoiceModel(cap) {
             if ((m.aiActive ?? m.DATA?.aiActive) === false || m.DATA?.enabled === false)
                 continue;
             if (capsOf(m).includes(cap))
-                return m;
+                matches.push(m);
         }
+        if (!matches.length)
+            return null;
+        if (cap === 'tts' && matches.length > 1) {
+            const fast = matches.find(m => /0\.6b|customvoice|kokoro/i.test(String(m.id || m.model || m.path || '')));
+            if (fast)
+                return fast;
+        }
+        return matches[0];
     }
     catch { /* ignore */ }
     return null;

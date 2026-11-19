@@ -63,7 +63,7 @@ export function getLocalEngineStatus({ totalRamGb, halogenOnline = false } = {})
         halogenOnline: Boolean(halogenOnline),
         mode: highMem ? 'always-on' : 'on-demand',
         modeLabel: highMem
-            ? (running ? 'В памяти постоянно (Halo 128–192 ГБ)' : 'Готов к запуску (Halo 128–192 ГБ)')
+            ? (running ? 'В памяти постоянно (Halo 128–192 ГБ, автовыгрузка диффузии по простою 10 мин)' : 'Готов к запуску (Halo 128–192 ГБ)')
             : (running ? `В памяти (автовыгрузка через ${idleTimeoutMin} мин простоя)` : `Автозапуск по запросу (выгрузка через ${idleTimeoutMin} мин)`),
         idleTimeoutMin: highMem ? 0 : idleTimeoutMin,
         lastActivityAt: _lastActivityAt,
@@ -584,6 +584,14 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
         const inputIds = Array.from(tokenizer.encode(promptText), Number);
 
         const runOnce = async function* () {
+            if (
+                !_autoProvisionOverride
+                && Date.now() > _rocmUpgradeCooldownUntil
+                && isStrixHaloGfx1151Host()
+                && !hasRocmGfx1151InVenvSync()
+            ) {
+                await ensurePythonForModality('llm', { weightsDir, upgradeRocmGfx1151: true }).catch(() => null);
+            }
             const proc = await ensureInferWorker({ modality: 'llm', weightsDir });
             proc.stdout?.ref?.();
             const reqId = 'req_' + crypto.randomUUID().slice(0, 8);
@@ -593,6 +601,8 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
             let finished = false;
             let workerErr = null;
             let missingDeps = null;
+            let workerDevice = '';
+            let workerLoadMs = 0;
 
             _pendingRequests.set(reqId, {
                 onMessage(msg) {
@@ -600,6 +610,10 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
                         queue.push(msg.token);
                     }
                     else if (msg.event === 'done') {
+                        if (msg.device)
+                            workerDevice = String(msg.device);
+                        if (msg.loadMs != null)
+                            workerLoadMs = Number(msg.loadMs) || 0;
                         finished = true;
                     }
                     else if (msg.event === 'error') {
@@ -687,6 +701,8 @@ export async function* localStreamChat(ai, body = {}, options = {}) {
                 cached_tokens: cachedTokens,
                 ttftMs,
                 decodeMs,
+                ...(workerDevice ? { device: workerDevice } : {}),
+                ...(workerLoadMs > 0 ? { loadMs: workerLoadMs } : {}),
                 ...(tokPerSec > 0 ? { tokPerSec } : {}),
                 ...(sessionRes.fromStatus ? { halogen_from: sessionRes.fromStatus } : {}),
             };

@@ -716,7 +716,10 @@ export async function prompt(file, params = {}) {
         body.items.push({ id: genId(), type: 'user', time: Date.now(), content: text, ...(voice ? { voice: true } : {}), ...(attachments.length ? { attachments } : {}) });
         if (!body.title) {
             const fallbackTitle = attachments.map(a => a?.name || String(a?.path || '').split('/').pop()).filter(Boolean).join(', ');
-            body.title = (text.split('\n')[0] || fallbackTitle).slice(0, 80);
+            const rawSlice = (text.split('\n')[0] || fallbackTitle).slice(0, 80);
+            body.title = rawSlice;
+            if (text.length > 24 && !process.env.NODE_TEST_CONTEXT)
+                scheduleAutoTaskTitle(s, session, file, text, rawSlice);
         }
     }
     if (params.location && typeof params.location === 'object')
@@ -1137,4 +1140,53 @@ export async function idle(file) {
  */
 export function isRunning(file) {
     return !!stateOf(file).running;
+}
+
+/** Сгенерировать короткий осмысленный заголовок задачи (3–6 слов) через быструю локальную модель (`Qwen3-0.6B`).
+ * @param {any} env
+ * @param {string} text
+ * @returns {Promise<string>}
+ */
+export async function generateAutoTaskTitle(env, text) {
+    const clean = String(text || '').trim();
+    if (!clean || !env || typeof env.classifierModel !== 'function')
+        return '';
+    const model = await env.classifierModel().catch(() => null);
+    if (!model || typeof model.streamChat !== 'function')
+        return '';
+    const promptText = 'Сформулируй очень короткий заголовок (3–6 слов, без кавычек, без точки в конце и без пояснений) для запроса пользователя:\n'
+        + clean.slice(0, 600);
+    let raw = '';
+    for await (const chunk of model.streamChat({
+        messages: [{ role: 'user', content: promptText }],
+        max_tokens: 28,
+        maxOutput: 28,
+        temperature: 0.1,
+    }, { effort: 'off' })) {
+        if (typeof chunk === 'string')
+            raw += chunk;
+    }
+    const title = raw
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/^["'«»„“]+|["'«»„“.,:;!?]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80);
+    return title.length >= 3 ? title : '';
+}
+
+function scheduleAutoTaskTitle(s, session, file, text, expectedPrevTitle) {
+    const place = file?.$class || file?.$owner || null;
+    setTimeout(async () => {
+        try {
+            const env = await createEnv({ place, session });
+            const title = await generateAutoTaskTitle(env, text);
+            if (!title || !s?.body || s.body.title !== expectedPrevTitle)
+                return;
+            s.body.title = title;
+            await save(s, session);
+            send(s, session, { type: 'task.title', title });
+        }
+        catch { /* авто-заголовок необязателен */ }
+    }, 50).unref?.();
 }

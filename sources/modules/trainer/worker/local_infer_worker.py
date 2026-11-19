@@ -5,6 +5,8 @@
 Общается с Node.js-сервером WORK по протоколу JSONL (stdin -> stdout), удерживая веса модели в памяти между запросами.
 """
 import base64
+import ctypes
+import gc
 import glob
 import io
 import json
@@ -12,6 +14,7 @@ import mmap
 import os
 import struct
 import sys
+import threading
 import time
 import warnings
 import wave
@@ -227,39 +230,93 @@ class LocalCausalLM:
         self.rms_eps = float(self.cfg.get("rms_norm_eps", 1e-6))
         self.rope_theta = float(self.cfg.get("rope_theta", 1000000.0))
 
-        self.embed_tokens = self.store.get("model.embed_tokens.weight")
-        self.norm = self.store.get("model.norm.weight")
-        self.lm_head = self.store.get("lm_head.weight")
-        if self.lm_head is None:
-            self.lm_head = self.embed_tokens
+        target_dev, _ = _best_device_and_dtype()
+        self.device = target_dev
 
-        self.compute_dtype = self.embed_tokens.dtype
+        def _build_weights(dev):
+            embed_t = self.store.get("model.embed_tokens.weight")
+            norm_t = self.store.get("model.norm.weight")
+            lm_t = self.store.get("lm_head.weight")
+            if lm_t is None:
+                lm_t = embed_t
+            dt = embed_t.dtype if embed_t is not None else torch.bfloat16
+            if str(dev).startswith("cuda") and dt not in (torch.bfloat16, torch.float16, torch.float32):
+                dt = torch.bfloat16
 
-        inv_freq = 1.0 / (
-            self.rope_theta
-            ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32) / self.head_dim)
-        )
-        self.inv_freq = inv_freq
+            def _move(t):
+                if t is None:
+                    return None
+                if str(dev) == "cpu":
+                    return t
+                return t.to(device=dev, dtype=dt)
 
-        self.layers = []
-        for i in range(self.num_layers):
-            p = f"model.layers.{i}"
-            self.layers.append({
-                "in_norm": self.store.get(f"{p}.input_layernorm.weight"),
-                "q_proj": self.store.get(f"{p}.self_attn.q_proj.weight"),
-                "q_bias": self.store.get(f"{p}.self_attn.q_proj.bias"),
-                "k_proj": self.store.get(f"{p}.self_attn.k_proj.weight"),
-                "k_bias": self.store.get(f"{p}.self_attn.k_proj.bias"),
-                "v_proj": self.store.get(f"{p}.self_attn.v_proj.weight"),
-                "v_bias": self.store.get(f"{p}.self_attn.v_proj.bias"),
-                "o_proj": self.store.get(f"{p}.self_attn.o_proj.weight"),
-                "q_norm": self.store.get(f"{p}.self_attn.q_norm.weight"),
-                "k_norm": self.store.get(f"{p}.self_attn.k_norm.weight"),
-                "post_norm": self.store.get(f"{p}.post_attention_layernorm.weight"),
-                "gate_proj": self.store.get(f"{p}.mlp.gate_proj.weight"),
-                "up_proj": self.store.get(f"{p}.mlp.up_proj.weight"),
-                "down_proj": self.store.get(f"{p}.mlp.down_proj.weight"),
-            })
+            embed_m = _move(embed_t)
+            norm_m = _move(norm_t)
+            lm_m = embed_m if (lm_t is embed_t) else _move(lm_t)
+            inv_f = (1.0 / (
+                self.rope_theta
+                ** (torch.arange(0, self.head_dim, 2, dtype=torch.float32) / self.head_dim)
+            )).to(device=dev)
+            layers_m = []
+            for i in range(self.num_layers):
+                p = f"model.layers.{i}"
+                layers_m.append({
+                    "in_norm": _move(self.store.get(f"{p}.input_layernorm.weight")),
+                    "q_proj": _move(self.store.get(f"{p}.self_attn.q_proj.weight")),
+                    "q_bias": _move(self.store.get(f"{p}.self_attn.q_proj.bias")),
+                    "k_proj": _move(self.store.get(f"{p}.self_attn.k_proj.weight")),
+                    "k_bias": _move(self.store.get(f"{p}.self_attn.k_proj.bias")),
+                    "v_proj": _move(self.store.get(f"{p}.self_attn.v_proj.weight")),
+                    "v_bias": _move(self.store.get(f"{p}.self_attn.v_proj.bias")),
+                    "o_proj": _move(self.store.get(f"{p}.self_attn.o_proj.weight")),
+                    "q_norm": _move(self.store.get(f"{p}.self_attn.q_norm.weight")),
+                    "k_norm": _move(self.store.get(f"{p}.self_attn.k_norm.weight")),
+                    "post_norm": _move(self.store.get(f"{p}.post_attention_layernorm.weight")),
+                    "gate_proj": _move(self.store.get(f"{p}.mlp.gate_proj.weight")),
+                    "up_proj": _move(self.store.get(f"{p}.mlp.up_proj.weight")),
+                    "down_proj": _move(self.store.get(f"{p}.mlp.down_proj.weight")),
+                })
+            return embed_m, norm_m, lm_m, dt, inv_f, layers_m
+
+        try:
+            (
+                self.embed_tokens,
+                self.norm,
+                self.lm_head,
+                self.compute_dtype,
+                self.inv_freq,
+                self.layers,
+            ) = _build_weights(self.device)
+            if str(self.device).startswith("cuda"):
+                # После переноса всех весов на GPU освобождаем CPU-mmap ссылки
+                self.store.tensors.clear()
+                for f_h, mm_h in self.store.files:
+                    try:
+                        mm_h.close()
+                    except Exception:
+                        pass
+                    try:
+                        f_h.close()
+                    except Exception:
+                        pass
+                self.store.files.clear()
+        except Exception:
+            if str(self.device).startswith("cuda"):
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+                self.device = "cpu"
+                (
+                    self.embed_tokens,
+                    self.norm,
+                    self.lm_head,
+                    self.compute_dtype,
+                    self.inv_freq,
+                    self.layers,
+                ) = _build_weights("cpu")
+            else:
+                raise
 
     def _rope_cos_sin(self, positions, dtype):
         freqs = torch.outer(positions.to(torch.float32), self.inv_freq)
@@ -270,9 +327,11 @@ class LocalCausalLM:
 
     @_inference_mode_dec()
     def forward_step(self, input_ids, kv_cache, start_pos):
+        if input_ids.device != self.embed_tokens.device:
+            input_ids = input_ids.to(self.embed_tokens.device)
         seq_len = input_ids.shape[1]
         x = F.embedding(input_ids, self.embed_tokens)  # [1, seq, hidden]
-        positions = torch.arange(start_pos, start_pos + seq_len, dtype=torch.long)
+        positions = torch.arange(start_pos, start_pos + seq_len, dtype=torch.long, device=self.embed_tokens.device)
         cos, sin = self._rope_cos_sin(positions, self.compute_dtype)
 
         for idx, layer in enumerate(self.layers):
@@ -323,12 +382,13 @@ class LocalCausalLM:
         return logits[0]
 
     @_inference_mode_dec()
-    def generate_stream(self, req_id, prompt_ids, max_new_tokens=384, temperature=0.6, top_p=0.9, repetition_penalty=1.08, eos_ids=None):
+    def generate_stream(self, req_id, prompt_ids, max_new_tokens=384, temperature=0.6, top_p=0.9, repetition_penalty=1.08, eos_ids=None, load_ms=0):
         eos_set = set(eos_ids or [151645, 151643])
         kv_cache = [None] * self.num_layers
         seen_tokens = list(prompt_ids)
+        dev = self.embed_tokens.device
 
-        inp = torch.tensor([prompt_ids], dtype=torch.long)
+        inp = torch.tensor([prompt_ids], dtype=torch.long, device=dev)
         logits = self.forward_step(inp, kv_cache, 0)
         cur_pos = len(prompt_ids)
 
@@ -339,16 +399,22 @@ class LocalCausalLM:
             seen_tokens.append(next_token)
             print(json.dumps({"id": req_id, "event": "token", "token": next_token}), flush=True)
 
-            inp_next = torch.tensor([[next_token]], dtype=torch.long)
+            inp_next = torch.tensor([[next_token]], dtype=torch.long, device=dev)
             logits = self.forward_step(inp_next, kv_cache, cur_pos)
             cur_pos += 1
 
-        print(json.dumps({"id": req_id, "event": "done", "generated": cur_pos - len(prompt_ids)}), flush=True)
+        print(json.dumps({
+            "id": req_id,
+            "event": "done",
+            "generated": cur_pos - len(prompt_ids),
+            "device": _describe_torch_device(self.device),
+            "loadMs": int(load_ms or 0),
+        }), flush=True)
 
     def _sample(self, logits, seen_tokens, temperature, top_p, repetition_penalty):
         logits_f = logits.to(torch.float32).clone()
         if repetition_penalty and repetition_penalty != 1.0 and seen_tokens:
-            uniq = torch.tensor(list(set(seen_tokens[-128:])), dtype=torch.long)
+            uniq = torch.tensor(list(set(seen_tokens[-128:])), dtype=torch.long, device=logits_f.device)
             vals = logits_f[uniq]
             logits_f[uniq] = torch.where(vals < 0, vals * repetition_penalty, vals / repetition_penalty)
 
@@ -1111,6 +1177,71 @@ def _call_tts_gen(fn, max_new_tokens, **kwargs):
             return fn(**kwargs)
 
 
+def _move_qwen_tts_vocoder_to_cpu(mdl):
+    """Переносит декодер вокодера `speech_tokenizer` на CPU один раз при загрузке модели на GPU `cuda:0`.
+
+    Убирает сотни мелких перебросов `cuda:0 ↔ cpu` внутри `_install_rocm_miopen_fallback` для каждой
+    отдельной Conv1d/ConvTranspose1d свёртки: коды 12 Гц кадров один раз уходят в Unified Memory на CPU
+    и целиком декодируются в волну.
+    """
+    st = getattr(getattr(mdl, "model", None), "speech_tokenizer", None) or getattr(mdl, "speech_tokenizer", None)
+    if st is None or getattr(st, "_work_cpu_vocoder_patched", False):
+        return False
+    inner = getattr(st, "model", None) or st
+    decoder = getattr(inner, "decoder", None)
+
+    def _to_cpu_arg(v):
+        if HAS_TORCH and torch is not None and isinstance(v, torch.Tensor):
+            return v.detach().to("cpu")
+        if isinstance(v, list):
+            return [_to_cpu_arg(x) for x in v]
+        if isinstance(v, tuple):
+            return tuple(_to_cpu_arg(x) for x in v)
+        if isinstance(v, dict):
+            return {k: _to_cpu_arg(val) for k, val in v.items()}
+        return v
+
+    if decoder is not None and callable(getattr(decoder, "forward", None)) and hasattr(decoder, "to"):
+        try:
+            cpu_dt = torch.float32 if (HAS_TORCH and torch is not None) else "float32"
+            decoder.to(device="cpu", dtype=cpu_dt)
+            orig_fwd = decoder.forward
+
+            def _cpu_decoder_fwd(*args, **kwargs):
+                return orig_fwd(*(_to_cpu_arg(a) for a in args), **{k: _to_cpu_arg(v) for k, v in kwargs.items()})
+
+            decoder.forward = _cpu_decoder_fwd
+            st._work_cpu_vocoder_patched = True
+            return True
+        except Exception:
+            pass
+
+    dec = getattr(st, "decode", None)
+    if not callable(dec):
+        return False
+    try:
+        if hasattr(inner, "to"):
+            cpu_dt = torch.float32 if (HAS_TORCH and torch is not None) else "float32"
+            inner.to(device="cpu", dtype=cpu_dt)
+    except Exception:
+        return False
+
+    orig_dec = dec
+
+    def _cpu_decode(*args, **kwargs):
+        return orig_dec(*(_to_cpu_arg(a) for a in args), **{k: _to_cpu_arg(v) for k, v in kwargs.items()})
+
+    try:
+        st.decode = _cpu_decode
+        orig_enc = getattr(st, "encode", None)
+        if callable(orig_enc):
+            st.encode = lambda *args, **kwargs: orig_enc(*(_to_cpu_arg(a) for a in args), **{k: _to_cpu_arg(v) for k, v in kwargs.items()})
+        st._work_cpu_vocoder_patched = True
+        return True
+    except Exception:
+        return False
+
+
 def _load_qwen_tts_model(weights_dir):
     from qwen_tts import Qwen3TTSModel
     device, dtype = _best_device_and_dtype()
@@ -1131,6 +1262,8 @@ def _load_qwen_tts_model(weights_dir):
             except Exception:
                 mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=dev, dtype=dt)
             _install_fast_qwen_tts_code_predictor(mdl)
+            if str(dev).startswith("cuda"):
+                _move_qwen_tts_vocoder_to_cpu(mdl)
             mdl._work_device = dev
             return mdl
         except Exception as e:
@@ -1351,9 +1484,155 @@ def handle_stt(req, cache):
     return {"text": str(txt or "").strip(), "language": language or "Auto", "device": _describe_torch_device(active_dev), "loadMs": load_ms, "genMs": gen_ms, "durationMs": gen_ms}
 
 
+def _get_free_ram_gb():
+    """Кроссплатформенно определить объём свободной оперативной памяти в ГБ."""
+    try:
+        if sys.platform == "win32":
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            st = _MEMORYSTATUSEX()
+            st.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return float(st.ullAvailPhys) / (1024.0 ** 3)
+        elif os.path.isfile("/proc/meminfo"):
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        kb = float(line.split()[1])
+                        return kb / (1024.0 ** 2)
+    except Exception:
+        pass
+    return None
+
+
+def _release_cached_item(obj):
+    try:
+        if isinstance(obj, tuple) and len(obj) >= 1 and hasattr(obj[0], "to"):
+            try:
+                obj[0].to("cpu")
+            except Exception:
+                pass
+        elif hasattr(obj, "to"):
+            try:
+                obj.to("cpu")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _evict_memory_if_needed(
+    mod_cache,
+    mod_last_used,
+    models,
+    llm_last_used,
+    cache_lock=None,
+    keep_mod_key=None,
+    keep_llm_key=None,
+    now_ts=None,
+):
+    """Умная очистка памяти:
+    - Тяжёлую диффузию (`image`, напр. Z-Image-Turbo) выгружаем через `WORK_IMAGE_IDLE_SEC` (10 мин)
+      или при падении свободной RAM ниже `WORK_MIN_FREE_RAM_GB` (20 ГБ).
+    - Лёгкие модели (embed, rerank, tts, stt, 0.6B/4B) держим постоянно горячими,
+      выгружая по LRU только при критической нехватке RAM (`< WORK_CRIT_FREE_RAM_GB`, 10 ГБ).
+    """
+    now = float(now_ts if now_ts is not None else time.time())
+    image_idle_sec = float(os.environ.get("WORK_IMAGE_IDLE_SEC", "600"))
+    min_free_gb = float(os.environ.get("WORK_MIN_FREE_RAM_GB", "20"))
+    crit_free_gb = float(os.environ.get("WORK_CRIT_FREE_RAM_GB", "10"))
+    free_gb = _get_free_ram_gb()
+    evicted = []
+
+    def _do():
+        low_mem = free_gb is not None and free_gb < min_free_gb
+        for k in list(mod_cache.keys()):
+            if not (isinstance(k, tuple) and len(k) >= 1 and k[0] == "image"):
+                continue
+            if k == keep_mod_key:
+                continue
+            idle = now - float(mod_last_used.get(k, now))
+            if idle >= image_idle_sec or low_mem:
+                obj = mod_cache.pop(k, None)
+                mod_last_used.pop(k, None)
+                _release_cached_item(obj)
+                evicted.append(k)
+
+        if free_gb is not None and free_gb < crit_free_gb:
+            # Критическая нехватка памяти — выгружаем самую давно неиспользуемую неактивную модель
+            candidates = []
+            for k in list(mod_cache.keys()):
+                if k != keep_mod_key:
+                    candidates.append(("mod", k, float(mod_last_used.get(k, 0.0))))
+            for k in list(models.keys()):
+                if k != keep_llm_key:
+                    candidates.append(("llm", k, float(llm_last_used.get(k, 0.0))))
+            candidates.sort(key=lambda item: item[2])
+            for kind, k, _ in candidates[:2]:
+                if kind == "mod":
+                    obj = mod_cache.pop(k, None)
+                    mod_last_used.pop(k, None)
+                    _release_cached_item(obj)
+                    evicted.append(k)
+                else:
+                    obj = models.pop(k, None)
+                    llm_last_used.pop(k, None)
+                    _release_cached_item(obj)
+                    evicted.append(("llm", k))
+
+    if cache_lock is not None:
+        with cache_lock:
+            _do()
+    else:
+        _do()
+
+    if evicted:
+        try:
+            gc.collect()
+        except Exception:
+            pass
+        if HAS_TORCH and torch is not None and torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+    return evicted
+
+
 def main():
     models = {}
     mod_cache = {}
+    mod_last_used = {}
+    llm_last_used = {}
+    cache_lock = threading.Lock()
+    idle_timers = {"image": None}
+
+    def _schedule_image_idle_eviction():
+        try:
+            prev = idle_timers.get("image")
+            if prev is not None:
+                prev.cancel()
+            delay = max(5.0, float(os.environ.get("WORK_IMAGE_IDLE_SEC", "600")) + 1.0)
+            t = threading.Timer(
+                delay,
+                lambda: _evict_memory_if_needed(mod_cache, mod_last_used, models, llm_last_used, cache_lock=cache_lock),
+            )
+            t.daemon = True
+            t.start()
+            idle_timers["image"] = t
+        except Exception:
+            pass
+
     print(json.dumps({"event": "ready"}), flush=True)
 
     for line in sys.stdin:
@@ -1388,6 +1667,11 @@ def main():
                 continue
             if op in ("embed", "rerank", "image", "tts", "stt"):
                 t0 = time.time()
+                mod_key = (op, str(req.get("weightsDir") or ""))
+                _evict_memory_if_needed(
+                    mod_cache, mod_last_used, models, llm_last_used,
+                    cache_lock=cache_lock, keep_mod_key=mod_key,
+                )
                 fn = {
                     "embed": handle_embed,
                     "rerank": handle_rerank,
@@ -1395,7 +1679,11 @@ def main():
                     "tts": handle_tts,
                     "stt": handle_stt,
                 }[op]
-                res = fn(req, mod_cache)
+                with cache_lock:
+                    res = fn(req, mod_cache)
+                    mod_last_used[mod_key] = time.time()
+                if op == "image":
+                    _schedule_image_idle_eviction()
                 if "durationMs" not in res:
                     res["durationMs"] = int((time.time() - t0) * 1000)
                 print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
@@ -1407,15 +1695,26 @@ def main():
             temperature = float(req.get("temperature", 0.6))
             eos_ids = req.get("eosTokenIds", [151645, 151643])
 
-            if weights_dir not in models:
-                models[weights_dir] = LocalCausalLM(weights_dir)
+            _evict_memory_if_needed(
+                mod_cache, mod_last_used, models, llm_last_used,
+                cache_lock=cache_lock, keep_llm_key=weights_dir,
+            )
+            load_ms = 0
+            with cache_lock:
+                if weights_dir not in models:
+                    t_l0 = time.time()
+                    models[weights_dir] = LocalCausalLM(weights_dir)
+                    load_ms = int((time.time() - t_l0) * 1000)
+                llm_last_used[weights_dir] = time.time()
+                mdl_ref = models[weights_dir]
 
-            models[weights_dir].generate_stream(
+            mdl_ref.generate_stream(
                 req_id=req_id,
                 prompt_ids=prompt_ids,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 eos_ids=eos_ids,
+                load_ms=load_ms,
             )
         except Exception as e:
             err_str = str(e)

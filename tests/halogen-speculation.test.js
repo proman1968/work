@@ -608,4 +608,114 @@ print(json.dumps({
         assert.equal(out.gpuAttempts, 1, 'после первого сбоя MIOpen повторные свёртки того же типа не тратят время на падающий вызов');
         assert.equal(out.cpuAttempts, 2);
     });
+
+    it('16. Перенос вокодера Qwen3-TTS на CPU и умная выгрузка тяжёлой диффузии по простою', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const py = `
+import json, runpy, time
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+class FakeDecoder:
+    def __init__(self):
+        self.device = 'cuda:0'
+        self.dtype = 'bfloat16'
+        self.called_with = None
+    def to(self, device=None, dtype=None):
+        self.device = device or self.device
+        self.dtype = dtype or self.dtype
+        return self
+    def forward(self, codes):
+        self.called_with = codes
+        return 'wav_ok'
+
+class FakeInner:
+    def __init__(self):
+        self.decoder = FakeDecoder()
+
+class FakeSpeechTok:
+    def __init__(self):
+        self.model = FakeInner()
+
+class FakeTTS:
+    def __init__(self):
+        class M:
+            pass
+        self.model = M()
+        self.model.speech_tokenizer = FakeSpeechTok()
+
+m = FakeTTS()
+moved = ns['_move_qwen_tts_vocoder_to_cpu'](m)
+res_dec = m.model.speech_tokenizer.model.decoder.forward('codes_sample')
+
+# Проверяем выгрузку тяжёлой диффузии (image) при простое >= 600 с при сохранении TTS/embed/LLM
+# Имитируем нормальный запас свободной памяти (64 ГБ), а затем критический (5 ГБ)
+evict_fn = ns['_evict_memory_if_needed']
+evict_fn.__globals__['_get_free_ram_gb'] = lambda: 64.0
+mod_cache = {
+    ('image', '/tmp/z'): ('pipe_obj', 'cuda:0'),
+    ('tts', '/tmp/tts'): ('tts_obj', 'cuda:0'),
+    ('embed', '/tmp/bge'): ('embed_obj', 'ort'),
+}
+now = 10000.0
+mod_last = {
+    ('image', '/tmp/z'): now - 650.0,
+    ('tts', '/tmp/tts'): now - 650.0,
+    ('embed', '/tmp/bge'): now - 650.0,
+}
+models = {'/tmp/qwen4b': 'llm_obj'}
+llm_last = {'/tmp/qwen4b': now - 650.0}
+evicted = evict_fn(mod_cache, mod_last, models, llm_last, now_ts=now)
+
+# При критическом падении памяти (<10 ГБ) выгружаются и старые лёгкие кэши по LRU
+evict_fn.__globals__['_get_free_ram_gb'] = lambda: 5.0
+crit_evicted = evict_fn(mod_cache, mod_last, models, llm_last, now_ts=now, keep_llm_key='/tmp/qwen4b')
+
+print(json.dumps({
+    'moved': moved,
+    'decDevice': m.model.speech_tokenizer.model.decoder.device,
+    'resDec': res_dec,
+    'evicted': [list(x) for x in evicted],
+    'hasImage': ('image', '/tmp/z') in mod_cache,
+    'critEvictedCount': len(crit_evicted),
+    'keptActiveLlm': '/tmp/qwen4b' in models,
+}))
+`;
+        const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+        assert.equal(res.status, 0, res.stderr || '');
+        const out = JSON.parse(String(res.stdout || '').trim());
+        assert.equal(out.moved, true);
+        assert.equal(out.decDevice, 'cpu');
+        assert.equal(out.resDec, 'wav_ok');
+        assert.equal(out.hasImage, false, 'тяжёлая диффузия image выгружается после 10 мин простоя');
+        assert.ok(out.evicted.some(x => x[0] === 'image') && out.evicted.length === 1, 'при 64 ГБ свободной RAM выгружается только image, лёгкие модели не трогаются');
+        assert.ok(out.critEvictedCount >= 1, 'при падении памяти <10 ГБ включается LRU-выгрузка неактивных моделей');
+        assert.equal(out.keptActiveLlm, true, 'активная модель остаётся в памяти');
+    });
+
+    it('17. Авто-заголовок задачи через classifierModel (Qwen3-0.6B) и точная диагностика NPU', async () => {
+        await import('../sources/reactor.js');
+        const { generateAutoTaskTitle } = await import('../sources/modules/agent/session.js');
+        const { describeEngineSetup } = await import('../sources/modules/trainer/index.js');
+
+        const fakeEnv = {
+            classifierModel: async () => ({
+                async *streamChat() {
+                    yield '<think>размышления</think>"Сверка остатков по счёту 51".';
+                },
+            }),
+        };
+        const title = await generateAutoTaskTitle(fakeEnv, 'Проведи сверку оборотов и конечного сальдо по расчётному счёту 51 за октябрь');
+        assert.equal(title, 'Сверка остатков по счёту 51');
+
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-npu-diag-'));
+        try {
+            const setup = await describeEngineSetup({ rootDir: tmp });
+            assert.equal(typeof setup.engine.npuStatusText, 'string');
+            assert.ok(setup.engine.npuStatusText.length > 5, 'npuStatusText содержит пояснение статуса NPU');
+        }
+        finally {
+            await fsp.rm(tmp, { recursive: true, force: true });
+        }
+    });
 });

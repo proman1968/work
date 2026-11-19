@@ -250,6 +250,10 @@ export default {
                 <span class="kv-label">Встроенный сервер (:8731):</span>
                 <span class="kv-val">{{halogenServerLine}}</span>
             </div>
+            <div class="kv-row" ~if="resolvedProtocol === 'halogen' && halogenNpuLine">
+                <span class="kv-label">NPU (Ryzen AI):</span>
+                <span class="kv-val">{{halogenNpuLine}}</span>
+            </div>
             <div class="kv-row" ~if="resolvedProtocol === 'halogen' && halogenSpeculationLine">
                 <span class="kv-label">Спекуляция (MTP):</span>
                 <span class="kv-val">{{halogenSpeculationLine}}</span>
@@ -314,6 +318,10 @@ export default {
                     <input type="checkbox" :checked="testNoThinking" @change="testNoThinking = $event.target.checked">
                     <span>Без рассуждений (чистый замер скорости)</span>
                 </label>
+                <label class="toolbar" ~if="testModality === 'llm'" style="cursor:pointer;font-size:12px;opacity:0.85;">
+                    <input type="checkbox" :checked="testPrefill4k" @change="testPrefill4k = $event.target.checked">
+                    <span>Замер длинного Prefill (4K токенов)</span>
+                </label>
             </div>
             <div class="toolbar" ~if="testMetricsLine" style="font-size:12px;opacity:0.9;">
                 <span class="pill">{{testMetricsLine}}</span>
@@ -327,6 +335,7 @@ export default {
     info: null,
     modelEnabled: true,
     testNoThinking: true,
+    testPrefill4k: false,
     provisionBanner: '',
     weightsRepair: null,
     testPrompt: 'Привет! Коротко в 3–4 предложениях расскажи, чем ты умеешь помогать в работе с документами, таблицами и кодом.',
@@ -441,10 +450,14 @@ export default {
     get halogenServerLine() {
         const setup = this.info?.engineSetup;
         const prof = setup?.running?.profile || setup?.settings?.profile || 'default';
-        const npu = (setup?.running?.npuPrefill || setup?.engine?.npuReady) ? ' · NPU prefill' : '';
+        const npu = (setup?.running?.npuPrefill || setup?.engine?.npuActive) ? ' · NPU prefill' : '';
         if (this.info?.halogenOnline)
             return `Запущен (профиль ${prof}${npu})`;
         return `Автозапуск по первому запросу (профиль ${prof}${npu})`;
+    },
+    get halogenNpuLine() {
+        const setup = this.info?.engineSetup;
+        return setup?.engine?.npuStatusText || '';
     },
     get weightsRepairLine() {
         const r = this.weightsRepair || this.info?.weightsRepair;
@@ -464,9 +477,10 @@ export default {
             return '';
         if (plan.summary)
             return plan.summary;
-        if (plan.enabled || plan.mode === 'explicit' || plan.mode === 'weights-only') {
+        const hasMtpWeight = Boolean(setup?.sidecars?.mtp);
+        if (plan.enabled || plan.mode === 'explicit' || plan.mode === 'weights-only' || hasMtpWeight) {
             const parts = [
-                plan.mode === 'explicit' ? 'MTP включён' : 'MTP (по весам)',
+                plan.mode === 'explicit' ? 'MTP включён' : (hasMtpWeight ? 'MTP (по весам)' : 'MTP'),
                 plan.promptLookup ? 'Prompt Lookup вкл.' : 'Prompt Lookup выкл.',
             ];
             return parts.filter(Boolean).join(' · ');
@@ -586,7 +600,7 @@ export default {
         if (!this.$item)
             return;
         const m = this.testModality;
-        if (m === 'llm' && !this.testPrompt.trim())
+        if (m === 'llm' && !this.testPrefill4k && !this.testPrompt.trim())
             return;
         this.testing = true;
         this.error = '';
@@ -616,7 +630,9 @@ export default {
             const body = { modality: m };
             if (m === 'llm') {
                 body.messages = [{ role: 'user', content: this.testPrompt.trim() }];
-                body.maxOutput = 256;
+                body.maxOutput = this.testPrefill4k ? 48 : 256;
+                if (this.testPrefill4k)
+                    body.prefillBenchmark = true;
                 if (this.hasEffortCap && this.testNoThinking)
                     body.effort = 'off';
             }
