@@ -56,16 +56,19 @@ torus/binnet/models/
 **/#datasets/
 **/#adapters/
 
-# Незавершённые загрузки моделей (папка #downloads с .part-файлами может занимать десятки ГБ)
-**/#downloads/
-**/#cache/
-**/#runtime/
-**/#tmp/
-
 # Скачанные и загружаемые локальные модели в MODELS/Local (в Git хранится только $provider)
 /MODELS/Local/*/
 !/MODELS/Local/$provider/
 !/MODELS/Local/$provider/**
+
+# Незавершённые загрузки моделей и временный рантайм внутри $provider
+**/#downloads/
+**/#cache/
+**/#runtime/
+**/#runtime/**
+**/#tmp/
+/MODELS/Local/$provider/#runtime/
+/MODELS/Local/$provider/#runtime/**
 
 !*.js
 

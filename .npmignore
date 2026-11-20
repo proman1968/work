@@ -40,6 +40,9 @@
 **/#datasets/
 **/#adapters/
 **/#runtime/
+**/#runtime/**
+/MODELS/Local/$provider/#runtime/
+/MODELS/Local/$provider/#runtime/**
 **/#cache/
 **/#tmp/
 **/*.safetensors
