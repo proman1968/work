@@ -9,6 +9,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import {
     parseEngineHelpFlags,
@@ -1263,6 +1264,136 @@ print(json.dumps({
         }
         finally {
             await fsp.rm(tmp, { recursive: true, force: true });
+        }
+    });
+
+    it('24. Голос диалога: персональный выбор Silero/Piper + дефолт модели + проброс voice в voice_speak', async () => {
+        await import('../sources/reactor.js');
+        const { voice } = await import('../sources/modules/agent/index.js');
+        const { TRAINER_METHODS } = await import('../sources/modules/trainer/index.js');
+        const { MEMBERS } = await import('../sources/server/access/gateway.js');
+
+        assert.equal(MEMBERS.voice_set_prefs, 'user');
+
+        const tmpRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-voice-prefs-'));
+        const prevCwd = process.cwd();
+        const prevWork = globalThis.WORK;
+        const speakCalls = [];
+
+        try {
+            process.chdir(tmpRoot);
+            await fsp.mkdir(path.join(tmpRoot, 'USERS', 'U1', '$user'), { recursive: true });
+            await fsp.mkdir(path.join(tmpRoot, 'MODELS', 'Local', 'Silero-TTS-RU', '$ai'), { recursive: true });
+            await fsp.writeFile(
+                path.join(tmpRoot, 'MODELS', 'Local', 'Silero-TTS-RU', '$ai', 'class.js'),
+                `export default ${JSON.stringify({
+                    label: 'Silero TTS v5.6 RU',
+                    modality: 'audio',
+                    capabilities: ['tts', 'voice'],
+                    protocol: 'local',
+                }, null, 4)};\n`,
+                'utf8'
+            );
+
+            // 1. Сохранение голоса модели по умолчанию через trainer_set_model_voice
+            const defRes = await TRAINER_METHODS.trainer_set_model_voice.fn.call(
+                { id: 'Silero-TTS-RU', DATA: {} },
+                { voice: 'baya' }
+            );
+            assert.equal(defRes.ok, true);
+            assert.equal(defRes.voice, 'baya');
+            const clsSaved = fs.readFileSync(path.join(tmpRoot, 'MODELS', 'Local', 'Silero-TTS-RU', '$ai', 'class.js'), 'utf8');
+            assert.match(clsSaved, /"voice":\s*"baya"/);
+
+            // Мок WORK с двумя локальными TTS-моделями (Silero и Piper)
+            const sileroItem = {
+                id: 'Silero-TTS-RU',
+                path: '/MODELS/Local/Silero-TTS-RU',
+                label: 'Silero TTS v5.6 RU',
+                capabilities: ['tts', 'voice'],
+                voice: 'baya',
+                DATA: { enabled: true, aiActive: true, voice: 'baya', protocol: 'local' },
+                async speak(p) {
+                    speakCalls.push({ model: 'silero', ...p });
+                    return Buffer.from('RIFF' + '0'.repeat(64));
+                },
+            };
+            const piperItem = {
+                id: 'Piper-TTS-RU',
+                path: '/MODELS/Local/Piper-TTS-RU',
+                label: 'Piper TTS RU',
+                capabilities: ['tts', 'voice'],
+                DATA: { enabled: true, aiActive: true, protocol: 'local' },
+                async speak(p) {
+                    speakCalls.push({ model: 'piper', ...p });
+                    return Buffer.from('RIFF' + '1'.repeat(64));
+                },
+            };
+            const localProv = {
+                id: 'Local',
+                DATA: { enabled: true },
+                items: Promise.resolve([sileroItem, piperItem]),
+            };
+            const modelsRoot = {
+                id: 'MODELS',
+                items: Promise.resolve([localProv]),
+            };
+            const map = new Map([
+                ['/MODELS', modelsRoot],
+                ['/MODELS/Local', localProv],
+                ['/MODELS/Local/Silero-TTS-RU', sileroItem],
+                ['/MODELS/Local/Piper-TTS-RU', piperItem],
+            ]);
+            globalThis.WORK = {
+                async get_item(p) {
+                    const hit = map.get(String(p || ''));
+                    if (!hit) throw new Error('not found: ' + p);
+                    return hit;
+                },
+            };
+            voice.resetVoiceProbes();
+            voice.resetVoiceRate();
+            voice.resetVoicePrefsCache();
+
+            const place = { path: '/ORGANIZATIONS/Demo', load_config: async () => ({ ttsModel: '/MODELS/odant/Qwen3-TTS' }) };
+
+            // 2. Без персонального выбора берётся Silero с дефолтом модели ('baya')
+            const cfg1 = await voice.voiceConfig(place, { uid: 'U1' });
+            assert.equal(cfg1.tts, true);
+            assert.equal(cfg1.ttsModel, '/MODELS/Local/Silero-TTS-RU');
+            assert.equal(cfg1.ttsVoice, 'baya');
+            assert.equal(cfg1.ttsModels.length, 2);
+            assert.equal(cfg1.ttsModels[0].voices.length, 5);
+
+            // 3. Пользователь U1 выбирает мужской голос 'aidar' — сохраняется в USERS/U1/$user/#system/voice-prefs.json
+            const saved = voice.setUserVoicePrefs({ uid: 'U1', ttsModel: '/MODELS/Local/Silero-TTS-RU', ttsVoice: 'aidar' });
+            assert.equal(saved.ok, true);
+            assert.equal(saved.persisted, true);
+            assert.ok(fs.existsSync(path.join(tmpRoot, 'USERS', 'U1', '$user', '#system', 'voice-prefs.json')));
+
+            await voice.speak(place, { text: 'Привет!', uid: 'U1' });
+            assert.equal(speakCalls.at(-1).model, 'silero');
+            assert.equal(speakCalls.at(-1).voice, 'aidar');
+
+            // 4. Явное переключение "на лету" на 'eugene' перекрывает сохранённое
+            await voice.speak(place, { text: 'Проверка Евгения.', voice: 'eugene', uid: 'U1' });
+            assert.equal(speakCalls.at(-1).model, 'silero');
+            assert.equal(speakCalls.at(-1).voice, 'eugene');
+
+            // 5. Переключение на Piper с несовместимым для Piper голосом ('aidar') откатывает на голос Piper ('dmitri')
+            await voice.speak(place, { text: 'Проверка Пайпера.', ttsModel: '/MODELS/Local/Piper-TTS-RU', uid: 'U1' });
+            assert.equal(speakCalls.at(-1).model, 'piper');
+            assert.equal(speakCalls.at(-1).voice, 'dmitri');
+
+            // 6. Невалидный путь ttsModel вне /MODELS безопасно игнорируется (откат к дефолту)
+            await voice.speak(place, { text: 'Проверка защиты.', ttsModel: '/ORGANIZATIONS/Secret', uid: 'U1' });
+            assert.equal(speakCalls.at(-1).model, 'silero');
+        }
+        finally {
+            globalThis.WORK = prevWork;
+            voice.resetVoicePrefsCache();
+            process.chdir(prevCwd);
+            await fsp.rm(tmpRoot, { recursive: true, force: true });
         }
     });
 });

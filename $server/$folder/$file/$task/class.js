@@ -104,23 +104,54 @@ export default {
     async change_effort(params = {}) {
         return (await WORK_AGENT()).configure(this, { session: params.session, effort: params.effort ?? params.post?.effort });
     },
-    /** Голосовой режим: что доступно ({ tts, stt, lang }). Нет моделей — клиент работает на речи браузера. */
+    /** Голосовой режим: что доступно ({ tts, stt, lang, ttsModel, ttsVoice, ttsModels }). */
     async voice_config(params = {}) {
         await this.assertAccess(params, 'read');
         await this._ensureVoiceModelsFresh();
-        return (await WORK_AGENT_CORE()).voice.voiceConfig(this);
+        return (await WORK_AGENT_CORE()).voice.voiceConfig(this, { uid: params.session?.principal?.id || params.session?.uid });
+    },
+    /** Сохранить персональный выбор TTS-модели и голоса пользователя. */
+    async voice_set_prefs(params = {}) {
+        await this.assertAccess(params, 'read');
+        let payload = {};
+        if (typeof params.post === 'string') {
+            try { payload = JSON.parse(params.post) || {}; } catch { payload = {}; }
+        }
+        else if (params.post && typeof params.post === 'object') {
+            payload = params.post;
+        }
+        const uid = params.session?.principal?.id || params.session?.uid;
+        return (await WORK_AGENT_CORE()).voice.setUserVoicePrefs({
+            uid,
+            ttsModel: params.ttsModel ?? payload.ttsModel,
+            ttsVoice: params.ttsVoice ?? payload.ttsVoice,
+            ttsInstructions: params.ttsInstructions ?? payload.ttsInstructions,
+        });
     },
     /** Внешний вид персонажа агента (ai/config.js `dot`): { color, eyes, accessory }. */
     async dot_look(params = {}) {
         await this.assertAccess(params, 'read');
         return (await WORK_AGENT_CORE()).voice.dotLook(this);
     },
-    /** Синтез речи: ?voice_speak&text=… → WAV (24 кГц). Ключи модели остаются на сервере. */
+    /** Синтез речи: ?voice_speak&text=… → WAV. Ключи модели остаются на сервере. */
     async voice_speak(params = {}) {
         await this.assertAccess(params, 'read');
         await this._ensureVoiceModelsFresh();
-        const text = params.text ?? (typeof params.post === 'string' ? params.post : params.post?.text);
-        return (await WORK_AGENT_CORE()).voice.speak(this, { text, language: params.language, instructions: params.instructions, uid: params.session?.principal?.id || params.session?.uid });
+        let payload = {};
+        if (typeof params.post === 'string') {
+            const raw = params.post.trim();
+            if (raw.startsWith('{')) {
+                try { payload = JSON.parse(raw) || {}; } catch { payload = { text: params.post }; }
+            }
+            else {
+                payload = { text: params.post };
+            }
+        }
+        else if (params.post && typeof params.post === 'object') {
+            payload = params.post;
+        }
+        const text = params.text ?? payload.text;
+        return (await WORK_AGENT_CORE()).voice.speak(this, { text, language: params.language ?? payload.language, instructions: params.instructions ?? payload.instructions, voice: params.voice ?? payload.voice, ttsModel: params.ttsModel ?? payload.ttsModel, uid: params.session?.principal?.id || params.session?.uid });
     },
     async _ensureVoiceModelsFresh() {
         try {

@@ -953,6 +953,8 @@ export const TRAINER_METHODS = Object.freeze({
                 maxOutput: Number(d.maxOutput || d.$public?.maxOutput) || 8192,
                 capabilities: effCaps,
                 efforts: Array.isArray(d.efforts) ? d.efforts : [],
+                voice: String(d.voice || ''),
+                instructions: String(d.instructions || ''),
                 weightsDir: resolvedWeightsRel,
                 primaryFile: resolvedPrimaryFile,
                 enabled: d.enabled !== false,
@@ -1750,6 +1752,54 @@ export const TRAINER_METHODS = Object.freeze({
                 ? args.packages
                 : String(args.packages || '').split(/[\s,]+/).filter(Boolean);
             return localEngine.installDeps(list);
+        },
+    },
+    /** Сохранить голос/интонацию по умолчанию в карточке локальной TTS-модели ($ai/class.js). */
+    trainer_set_model_voice: {
+        level: 'admin',
+        fn: async function (p = {}) {
+            const args = mergeTrainerArgs(p);
+            const modelId = String(args.modelId || this?.id || '').trim();
+            if (!modelId)
+                throw new Error('Не указан идентификатор модели');
+            const clsPath = path.join(process.cwd(), 'MODELS', 'Local', modelId, '$ai', 'class.js');
+            if (!fs.existsSync(clsPath))
+                throw new Error(`Файл описания модели не найден: MODELS/Local/${modelId}/$ai/class.js`);
+            const rawCls = fs.readFileSync(clsPath, 'utf-8');
+            const mJson = rawCls.match(/export\s+default\s+(\{[\s\S]*\})\s*;?\s*$/);
+            if (!mJson)
+                throw new Error('Не удалось разобрать формат class.js модели');
+            const parsed = JSON.parse(mJson[1]);
+            const nextVoice = args.voice !== undefined ? String(args.voice || '').trim() : undefined;
+            const nextInst = args.instructions !== undefined ? String(args.instructions || '').trim() : undefined;
+            if (nextVoice !== undefined) {
+                if (nextVoice) parsed.voice = nextVoice;
+                else delete parsed.voice;
+            }
+            if (nextInst !== undefined) {
+                if (nextInst) parsed.instructions = nextInst;
+                else delete parsed.instructions;
+            }
+            fs.writeFileSync(
+                clsPath,
+                `/**\n * Локальная модель ИИ: ${parsed.label || modelId} (${parsed.modality || 'audio'})\n * Репозиторий Hugging Face: ${parsed.hfRepo || 'локальный'}\n */\nexport default ${JSON.stringify(parsed, null, 4)};\n`,
+                'utf-8'
+            );
+            if (this?.DATA) {
+                if (nextVoice !== undefined) this.DATA.voice = parsed.voice || '';
+                if (nextInst !== undefined) this.DATA.instructions = parsed.instructions || '';
+            }
+            this?.reset?.();
+            try {
+                const localNode = await globalThis.WORK?.get_item?.('/MODELS/Local');
+                localNode?.reset?.();
+            }
+            catch { /* ignore */ }
+            return {
+                ok: true,
+                voice: parsed.voice || '',
+                instructions: parsed.instructions || '',
+            };
         },
     },
 });

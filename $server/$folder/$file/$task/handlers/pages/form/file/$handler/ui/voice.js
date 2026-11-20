@@ -742,6 +742,92 @@ export class VoiceController extends EventTarget {
     _hasWebSpeech() {
         return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
     }
+    _voicePrefKey(suffix) {
+        const uid = globalThis.WORK?.uid || globalThis.WORK?.USER?.id || globalThis.WORK?.credentials?.uid || 'default';
+        return `work.user.ai:${uid}:${suffix}`;
+    }
+    _readLocalVoicePrefs() {
+        try {
+            const uid = globalThis.WORK?.uid || globalThis.WORK?.USER?.id || globalThis.WORK?.credentials?.uid || 'default';
+            const get = k => localStorage.getItem(`work.user.ai:${uid}:${k}`) || localStorage.getItem(`work.user.ai:default:${k}`) || '';
+            return {
+                ttsModel: get('ttsModel'),
+                ttsVoice: get('ttsVoice'),
+                ttsInstructions: get('ttsInstructions'),
+            };
+        }
+        catch {
+            return { ttsModel: '', ttsVoice: '', ttsInstructions: '' };
+        }
+    }
+    _saveLocalVoicePrefs({ ttsModel = '', ttsVoice = '', ttsInstructions = '' } = {}) {
+        try {
+            const uid = globalThis.WORK?.uid || globalThis.WORK?.USER?.id || globalThis.WORK?.credentials?.uid || 'default';
+            for (const prefix of [`work.user.ai:${uid}`, 'work.user.ai:default']) {
+                if (ttsModel) localStorage.setItem(`${prefix}:ttsModel`, ttsModel);
+                else localStorage.removeItem(`${prefix}:ttsModel`);
+                if (ttsVoice) localStorage.setItem(`${prefix}:ttsVoice`, ttsVoice);
+                else localStorage.removeItem(`${prefix}:ttsVoice`);
+                if (ttsInstructions) localStorage.setItem(`${prefix}:ttsInstructions`, ttsInstructions);
+                else localStorage.removeItem(`${prefix}:ttsInstructions`);
+            }
+        }
+        catch { /* ignore */ }
+    }
+    async setTtsPreference({ ttsModel = '', ttsVoice = '', ttsInstructions = '' } = {}) {
+        const models = Array.isArray(this.cfg?.ttsModels) ? this.cfg.ttsModels : [];
+        const pickedModel = models.find(m => m.path === ttsModel) || models.find(m => m.path === this.cfg?.ttsModel) || models[0] || null;
+        const nextModel = pickedModel?.path || ttsModel || this.cfg?.ttsModel || '';
+        const nextVoice = ttsVoice || (pickedModel?.voices?.find(v => (v.voice || v.id) === this.cfg?.ttsVoice)?.voice) || pickedModel?.defaultVoice || '';
+        const nextInst = ttsInstructions || '';
+        this.cfg = {
+            ...this.cfg,
+            ttsModel: nextModel,
+            ttsVoice: nextVoice,
+            ttsInstructions: nextInst,
+        };
+        this._saveLocalVoicePrefs({ ttsModel: nextModel, ttsVoice: nextVoice, ttsInstructions: nextInst });
+        this.dispatchEvent(new CustomEvent('prefs', { detail: this.cfg }));
+        try {
+            const target = this.item || (await WORK.get_item('/'));
+            await target?.fetch?.('voice_set_prefs', {}, JSON.stringify({
+                ttsModel: nextModel,
+                ttsVoice: nextVoice,
+                ttsInstructions: nextInst,
+            }));
+        }
+        catch { /* гость или сеть — локальное сохранение уже выполнено */ }
+        return this.cfg;
+    }
+    async previewTtsVoice({ ttsModel = '', ttsVoice = '', ttsInstructions = '', lang = 'ru' } = {}) {
+        try {
+            this._previewAudio?.pause?.();
+        }
+        catch { /* ignore */ }
+        const text = lang === 'en'
+            ? 'Hello! I am ready to help you in dialog mode.'
+            : 'Привет! Голос настроен и готов к работе.';
+        const target = this.item || (await WORK.get_item('/'));
+        const blob = await WORK.fetch(target.short || '/', 'voice_speak', { _: ++this.seq }, JSON.stringify({
+            text,
+            ttsModel,
+            voice: ttsVoice,
+            instructions: ttsInstructions,
+        }));
+        if (!(blob instanceof Blob) || blob.size < 64)
+            throw new Error('ответ не звук');
+        const url = URL.createObjectURL(blob);
+        const audio = new Audio(url);
+        this._previewAudio = audio;
+        const clean = () => {
+            URL.revokeObjectURL(url);
+            if (this._previewAudio === audio)
+                this._previewAudio = null;
+        };
+        audio.onended = clean;
+        audio.onerror = clean;
+        await audio.play();
+    }
     async enable() {
         if (this.on)
             return true;
@@ -753,7 +839,34 @@ export class VoiceController extends EventTarget {
             cfg = await target?.fetch?.('voice_config');
         }
         catch { /* нет метода или сервер недоступен — работаем на браузере */ }
-        this.cfg = { tts: !!cfg?.tts, stt: !!cfg?.stt, lang: cfg?.lang, dot: cfg?.dot || null };
+        const ttsModels = Array.isArray(cfg?.ttsModels) ? cfg.ttsModels : [];
+        const localPrefs = this._readLocalVoicePrefs();
+        const validLocalModel = localPrefs.ttsModel && ttsModels.some(m => m.path === localPrefs.ttsModel)
+            ? localPrefs.ttsModel
+            : '';
+        const effModel = validLocalModel || cfg?.ttsModel || ttsModels[0]?.path || '';
+        const modelDesc = ttsModels.find(m => m.path === effModel) || null;
+        const effVoice = (validLocalModel ? localPrefs.ttsVoice : (localPrefs.ttsVoice || cfg?.ttsVoice))
+            || cfg?.ttsVoice
+            || modelDesc?.defaultVoice
+            || '';
+        const effInst = (validLocalModel ? localPrefs.ttsInstructions : (localPrefs.ttsInstructions || cfg?.ttsInstructions))
+            || cfg?.ttsInstructions
+            || '';
+        this.cfg = {
+            tts: !!cfg?.tts,
+            stt: !!cfg?.stt,
+            lang: cfg?.lang,
+            dot: cfg?.dot || null,
+            ttsModel: effModel,
+            ttsVoice: effVoice,
+            ttsInstructions: effInst,
+            ttsModels,
+        };
+        if (effModel && (effModel !== cfg?.ttsModel || effVoice !== cfg?.ttsVoice || effInst !== cfg?.ttsInstructions)) {
+            this.setTtsPreference({ ttsModel: effModel, ttsVoice: effVoice, ttsInstructions: effInst }).catch(() => {});
+        }
+        this.dispatchEvent(new CustomEvent('prefs', { detail: this.cfg }));
         if (!this.cfg.stt && !this._hasWebSpeech()) {
             this.shell.toast?.('Распознавание речи недоступно: нет модели и браузер не умеет');
             return false;
@@ -1058,7 +1171,13 @@ export class VoiceController extends EventTarget {
     }
     async _fetchWav(text) {
         const target = this.item || (await WORK.get_item('/'));
-        const blob = await WORK.fetch(target.short || '/', 'voice_speak', { _: ++this.seq }, text);
+        const payload = {
+            text,
+            ...(this.cfg?.ttsModel ? { ttsModel: this.cfg.ttsModel } : {}),
+            ...(this.cfg?.ttsVoice ? { voice: this.cfg.ttsVoice } : {}),
+            ...(this.cfg?.ttsInstructions ? { instructions: this.cfg.ttsInstructions } : {}),
+        };
+        const blob = await WORK.fetch(target.short || '/', 'voice_speak', { _: ++this.seq }, JSON.stringify(payload));
         if (!(blob instanceof Blob) || blob.size < 64)
             throw new Error('ответ не звук');
         return blob;

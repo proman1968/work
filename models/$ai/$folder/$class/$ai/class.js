@@ -664,7 +664,7 @@ export default {
             body = {
                 model: tag,
                 input: text,
-                voice: String(ai.voice || 'default'),
+                voice: String(params.voice || ai.voice || 'default'),
                 response_format: 'wav',
                 task_type: String(ai.ttsTask || 'VoiceDesign'),
                 language: String(params.language || ai.language || 'Russian'),

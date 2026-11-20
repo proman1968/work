@@ -15,7 +15,7 @@ import path from 'node:path';
 const ROOT = path.resolve(import.meta.dirname, '..');
 const CODE_ROOTS = ['$server', 'sources', 'oda', 'tests', 'scripts', 'rules', 'MODELS', 'NODES', 'SERVICES', 'license-server'];
 const CODE_EXT = /\.(js|mjs|ts)$/;
-const LOCAL_ENV = /(^|\/)(\.venv|node_modules|models)(\/|$)/; // не исходники репозитория
+const LOCAL_ENV = /(^|\/)(\.venv|venv|#runtime|node_modules|models)(\/|$)/; // не исходники репозитория
 
 function walk(dir, out = []) {
     let entries;

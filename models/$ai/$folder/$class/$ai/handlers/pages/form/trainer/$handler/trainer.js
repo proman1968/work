@@ -359,6 +359,9 @@ export default {
                 <button type="button" class="btn primary" :disabled="testing" @tap="runTestPrompt()">
                     {{testing ? 'Выполняю…' : testButtonLabel}}
                 </button>
+                <button type="button" class="btn" ~if="testModality === 'tts' && isLocalModel && ttsKind !== 'base'" :disabled="busyAction" @tap="saveDefaultModelVoice()">
+                    Сделать голосом по умолчанию
+                </button>
                 <label class="toolbar" ~if="testModality === 'llm' && hasEffortCap" style="cursor:pointer;font-size:12px;opacity:0.85;">
                     <input type="checkbox" :checked="testNoThinking" @change="testNoThinking = $event.target.checked">
                     <span>Без рассуждений (чистый замер скорости)</span>
@@ -600,6 +603,16 @@ export default {
                 inf = { ...inf.DATA, id: inf.id || inf.DATA.id, label: inf.label || inf.DATA.label, path: inf.path || inf.DATA.path };
             }
             this.info = inf;
+            const savedVoice = String(inf?.voice || inf?.DATA?.voice || '').trim();
+            const savedInst = String(inf?.instructions || inf?.DATA?.instructions || '').trim();
+            if (savedVoice) {
+                if (this.ttsKind === 'silero') this.testSileroVoice = savedVoice;
+                else if (this.ttsKind === 'piper') this.testPiperVoice = savedVoice;
+                else if (this.ttsKind === 'kokoro') this.testKokoroVoice = savedVoice;
+                else if (this.ttsKind === 'custom_voice') this.testTtsVoice = savedVoice;
+            }
+            if (savedInst && this.ttsKind === 'voice_design')
+                this.testTtsInstructions = savedInst;
             if (this.ttsKind === 'kokoro' && this.testTtsText === 'Привет! Локальный синтез речи платформы WORK работает.') {
                 this.testTtsText = 'Hello! Local Kokoro-82M text-to-speech in WORK is working smoothly.';
             }
@@ -627,6 +640,38 @@ export default {
             this.notice = res?.mode === 'deleted_model'
                 ? 'Несовместимая модель и её файлы удалены с диска. Откройте /MODELS/Local для установки Windows-версии.'
                 : 'Несовместимые файлы (.hgn/.hnpw) удалены с диска.';
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.busyAction = false;
+        }
+    },
+    async saveDefaultModelVoice() {
+        if (!this.$item || !this.isLocalModel)
+            return;
+        this.busyAction = true;
+        this.error = '';
+        this.notice = '';
+        try {
+            const voice = this.ttsKind === 'silero' ? (this.testSileroVoice || 'xenia')
+                : this.ttsKind === 'piper' ? (this.testPiperVoice || 'dmitri')
+                : this.ttsKind === 'kokoro' ? (this.testKokoroVoice || 'af_heart')
+                : this.ttsKind === 'custom_voice' ? (this.testTtsVoice || 'Serena')
+                : '';
+            const instructions = (this.ttsKind === 'voice_design' || (this.ttsKind === 'custom_voice' && !this.isCustomVoice06B))
+                ? (this.testTtsInstructions || '').trim()
+                : undefined;
+            const res = await this.$item.fetch('trainer_set_model_voice', {}, {
+                modelId: this.$item.id,
+                voice,
+                ...(instructions !== undefined ? { instructions } : {}),
+            });
+            if (res?.ok) {
+                this.notice = `Голос модели по умолчанию сохранён: ${res.voice || res.instructions || 'обновлён'}.`;
+                await this.reload().catch(() => {});
+            }
         }
         catch (e) {
             this.error = String(e?.message || e);
