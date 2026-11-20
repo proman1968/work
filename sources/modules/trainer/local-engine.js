@@ -380,6 +380,18 @@ function isKokoroDirSync(weightsDir) {
     }
 }
 
+function isSileroTtsDirSync(weightsDir) {
+    if (!weightsDir || !fs.existsSync(weightsDir))
+        return false;
+    try {
+        const files = fs.readdirSync(weightsDir);
+        return files.some(f => /^(v\d+(?:_\d+)?_ru|ru_v\d+|silero.*)\.pt$/i.test(f) && !f.endsWith('.part'));
+    }
+    catch {
+        return false;
+    }
+}
+
 export function packagesForModality(modality = 'llm', weightsDir = '') {
     const mod = String(modality || 'llm').toLowerCase();
     const hasOnnx = hasOnnxModelSync(weightsDir);
@@ -399,6 +411,8 @@ export function packagesForModality(modality = 'llm', weightsDir = '') {
         return ['torch', 'diffusers', 'accelerate', 'pillow', 'transformers', 'safetensors'];
     if ((mod === 'tts' || mod === 'voice') && isPiperOnnxDirSync(weightsDir))
         return ['piper-tts', 'onnxruntime'];
+    if ((mod === 'tts' || mod === 'voice') && isSileroTtsDirSync(weightsDir))
+        return ['torch'];
     if ((mod === 'tts' || mod === 'voice') && isKokoroDirSync(weightsDir))
         return ['torch', 'kokoro', 'soundfile'];
     if (mod === 'music' || mod === 'text-to-audio')

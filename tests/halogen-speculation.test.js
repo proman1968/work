@@ -1166,4 +1166,103 @@ print(json.dumps({
             await fsp.rm(tmp, { recursive: true, force: true });
         }
     });
+
+    it('23. Silero TTS v5.6 RU: курируемая карточка, пакеты [torch] и оффлайн-синтез через torch.package', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const { searchHuggingFaceModels, CURATED_HF_MODELS } = await import('../sources/modules/trainer/huggingface.js');
+        const { packagesForModality } = await import('../sources/modules/trainer/local-engine.js');
+
+        const silero = CURATED_HF_MODELS.find(m => m.id === 'snakers4/silero-models');
+        assert.ok(silero, 'Silero-TTS-RU должен быть в CURATED_HF_MODELS');
+        assert.equal(silero.folderName, 'Silero-TTS-RU');
+        assert.ok(Array.isArray(silero.customFiles) && silero.customFiles[0].url.includes('v5_6_ru.pt'));
+
+        const list = await searchHuggingFaceModels({ modality: 'audio', capability: 'tts', fetchImpl: null });
+        assert.ok(list.items.some(m => m.id === 'snakers4/silero-models'));
+
+        const tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-silero-'));
+        try {
+            await fsp.writeFile(path.join(tmp, 'v5_6_ru.pt'), Buffer.from('stub-torch-package'));
+            const pkgs = packagesForModality('tts', tmp);
+            assert.deepEqual(pkgs, ['torch']);
+
+            const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+            const py = `
+import base64, json, runpy, types
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+calls = []
+class FakeTensor:
+    def __init__(self, vals):
+        self._vals = list(vals)
+    def detach(self): return self
+    def cpu(self): return self
+    def float(self): return self
+    def flatten(self): return self
+    def tolist(self): return self._vals
+
+class FakeModel:
+    def to(self, dev):
+        calls.append(('to', str(dev)))
+        return self
+    def apply_tts(self, text='', speaker='', sample_rate=48000, put_accent=False, put_yo=False):
+        calls.append(('apply_tts', text, speaker, sample_rate, put_accent, put_yo))
+        return FakeTensor([0.0, 0.2, -0.2, 0.1])
+
+class FakeImporter:
+    def __init__(self, p):
+        calls.append(('PackageImporter', p))
+    def load_pickle(self, pkg, name):
+        calls.append(('load_pickle', pkg, name))
+        return FakeModel()
+
+class NoGrad:
+    def __enter__(self): return None
+    def __exit__(self, *a): return False
+
+fake_torch = types.SimpleNamespace(
+    device=lambda s: s,
+    set_num_threads=lambda n: calls.append(('threads', n)),
+    package=types.SimpleNamespace(PackageImporter=FakeImporter),
+    inference_mode=lambda: NoGrad(),
+    cat=lambda parts: FakeTensor([x for p in parts for x in p._vals]),
+    cuda=types.SimpleNamespace(is_available=lambda: False),
+)
+
+fn = ns['handle_tts']
+fn.__globals__['torch'] = fake_torch
+ns['_handle_tts_silero'].__globals__['torch'] = fake_torch
+
+cache = {}
+long_text = ('Привет! Проверка чистой русской речи. ' * 25).strip()
+res = fn({'weightsDir': ${JSON.stringify(tmp)}, 'text': long_text, 'voice': 'xenia'}, cache)
+wav = base64.b64decode(res['audioBase64'])
+print(json.dumps({
+    'ttsKind': res['ttsKind'],
+    'voiceUsed': res['voiceUsed'],
+    'sampleRate': res['sampleRate'],
+    'device': res['device'],
+    'isWav': wav[:4] == b'RIFF',
+    'chunkCount': sum(1 for c in calls if c[0] == 'apply_tts'),
+    'firstCall': next((c for c in calls if c[0] == 'apply_tts'), None),
+}))
+`;
+            const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+            assert.equal(res.status, 0, res.stderr || '');
+            const out = JSON.parse(String(res.stdout || '').trim());
+            assert.equal(out.ttsKind, 'silero');
+            assert.equal(out.voiceUsed, 'xenia');
+            assert.equal(out.sampleRate, 48000);
+            assert.equal(out.device, 'CPU (Silero v5)');
+            assert.equal(out.isWav, true);
+            assert.ok(out.chunkCount >= 2, 'длинный текст разбивается на чанки <= 650 символов');
+            assert.equal(out.firstCall[2], 'xenia');
+            assert.equal(out.firstCall[3], 48000);
+            assert.equal(out.firstCall[4], true);
+            assert.equal(out.firstCall[5], true);
+        }
+        finally {
+            await fsp.rm(tmp, { recursive: true, force: true });
+        }
+    });
 });

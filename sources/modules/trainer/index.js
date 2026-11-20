@@ -439,7 +439,9 @@ async function runSingleModelSmokeTest(ai, p = {}) {
     const t0 = Date.now();
     try {
         if (modality === 'tts') {
-            const isKokoro = /kokoro/i.test(`${ai?.id || ''} ${ai?.model || ''} ${ai?.DATA?.hfRepo || ''}`);
+            const hay = `${ai?.id || ''} ${ai?.model || ''} ${ai?.DATA?.hfRepo || ''}`.toLowerCase();
+            const isKokoro = hay.includes('kokoro');
+            const isSilero = hay.includes('silero');
             const text = String(p.text || p.prompt || (isKokoro
                 ? 'Hello! Local Kokoro-82M speech synthesis in WORK is working smoothly.'
                 : 'Привет! Проверка локального синтеза речи WORK.')).trim();
@@ -447,7 +449,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 text,
                 language: p.language,
                 instructions: p.instructions,
-                voice: p.voice || (isKokoro ? 'af_heart' : undefined),
+                voice: p.voice || (isKokoro ? 'af_heart' : (isSilero ? 'xenia' : undefined)),
                 seed: p.seed,
                 refAudioBase64: p.refAudioBase64,
                 refText: p.refText,
@@ -1321,11 +1323,15 @@ export const TRAINER_METHODS = Object.freeze({
             let files = typeof p.files === 'string' && p.files.trim().startsWith('[')
                 ? JSON.parse(p.files)
                 : Array.isArray(p.files) ? p.files : null;
-            if (!files && Array.isArray(curated?.files) && curated.files.length)
+            const customFiles = Array.isArray(curated?.customFiles) && curated.customFiles.length
+                ? curated.customFiles
+                : null;
+            if (!files && !customFiles && Array.isArray(curated?.files) && curated.files.length)
                 files = curated.files;
             const job = await startHuggingFaceDownload({
                 repoId,
                 files,
+                customFiles,
                 quant: p.quant || 'Q8_0',
                 revision: p.revision || 'main',
                 token: p.token || '',

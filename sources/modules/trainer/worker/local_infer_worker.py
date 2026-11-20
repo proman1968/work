@@ -12,6 +12,7 @@ import io
 import json
 import mmap
 import os
+import re
 import struct
 import sys
 import threading
@@ -1669,6 +1670,126 @@ def _handle_tts_kokoro(req, cache, kokoro_files):
     }
 
 
+def _find_silero_tts_file(weights_dir):
+    if not weights_dir or not os.path.isdir(weights_dir):
+        return None
+    try:
+        for fn in sorted(os.listdir(weights_dir)):
+            low = fn.lower()
+            if re.match(r"^(v\d+(?:_\d+)?_ru|ru_v\d+|silero.*)\.pt$", low) and not low.endswith(".part"):
+                return os.path.join(weights_dir, fn)
+    except Exception:
+        return None
+    return None
+
+
+def _clean_silero_text(text):
+    s = str(text or "").strip()
+    s = s.replace("«", '"').replace("»", '"').replace("—", "-").replace("–", "-")
+    s = re.sub(r"[`*_#~^{}\[\]|<>]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s or "Привет! Проверка локального синтеза речи Силеро."
+
+
+def _split_silero_chunks(text, limit=650):
+    if len(text) <= limit:
+        return [text]
+    parts = re.split(r"(?<=[.!?…])\s+", text)
+    chunks = []
+    cur = ""
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        if len(cur) + len(p) + 1 <= limit:
+            cur = f"{cur} {p}".strip() if cur else p
+        else:
+            if cur:
+                chunks.append(cur)
+            if len(p) <= limit:
+                cur = p
+            else:
+                words = p.split(" ")
+                cur = ""
+                for w in words:
+                    if len(cur) + len(w) + 1 <= limit:
+                        cur = f"{cur} {w}".strip() if cur else w
+                    else:
+                        if cur:
+                            chunks.append(cur)
+                        cur = w
+    if cur:
+        chunks.append(cur)
+    return chunks or [text[:limit]]
+
+
+def _handle_tts_silero(req, cache, pt_path):
+    text = _clean_silero_text(req.get("text") or "Привет! Локальный синтез речи платформы Ворк работает.")
+    allowed_speakers = ("xenia", "baya", "kseniya", "aidar", "eugene")
+    want = str(req.get("voice") or "xenia").strip().lower()
+    speaker = want if want in allowed_speakers else "xenia"
+    sr = 48000
+
+    key = ("tts_silero", pt_path)
+    was_cached = key in cache
+    t_load0 = time.time()
+    if not was_cached:
+        try:
+            if hasattr(torch, "set_num_threads"):
+                torch.set_num_threads(max(1, min(8, os.cpu_count() or 4)))
+        except Exception:
+            pass
+        mdl = torch.package.PackageImporter(pt_path).load_pickle("tts_models", "model")
+        mdl.to(torch.device("cpu"))
+        cache[key] = mdl
+    load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
+    mdl = cache[key]
+
+    t_gen0 = time.time()
+    audio_parts = []
+    with torch.inference_mode():
+        for chunk in _split_silero_chunks(text):
+            try:
+                wav = mdl.apply_tts(
+                    text=chunk,
+                    speaker=speaker,
+                    sample_rate=sr,
+                    put_accent=True,
+                    put_yo=True,
+                )
+            except TypeError:
+                wav = mdl.apply_tts(text=chunk, speaker=speaker, sample_rate=sr)
+            except Exception as e:
+                # На моделях v2/16kHz 48000 может быть недоступен — откатываемся на 24000 / 16000
+                if "sample_rate" in str(e).lower() or "48000" in str(e):
+                    sr = 24000
+                    try:
+                        wav = mdl.apply_tts(text=chunk, speaker=speaker, sample_rate=sr)
+                    except Exception:
+                        sr = 16000
+                        wav = mdl.apply_tts(text=chunk, speaker=speaker, sample_rate=sr)
+                else:
+                    raise
+            if wav is not None:
+                audio_parts.append(wav.detach().cpu().float().flatten())
+
+    if not audio_parts:
+        raise RuntimeError(json.dumps({"error": "Silero TTS не вернул аудиоданные для переданного текста."}))
+    full_wav = torch.cat(audio_parts) if len(audio_parts) > 1 else audio_parts[0]
+    gen_ms = max(1, int((time.time() - t_gen0) * 1000))
+    return {
+        "audioBase64": _pcm_to_wav_base64(full_wav, sr),
+        "sampleRate": sr,
+        "ttsKind": "silero",
+        "voiceUsed": speaker,
+        "instructUsed": "",
+        "device": "CPU (Silero v5)",
+        "loadMs": load_ms,
+        "genMs": gen_ms,
+        "durationMs": gen_ms,
+    }
+
+
 def handle_tts(req, cache):
     weights_dir = req["weightsDir"]
     piper_files = _find_piper_onnx_files(weights_dir)
@@ -1677,6 +1798,9 @@ def handle_tts(req, cache):
     kokoro_files = _find_kokoro_files(weights_dir)
     if kokoro_files:
         return _handle_tts_kokoro(req, cache, kokoro_files)
+    silero_pt = _find_silero_tts_file(weights_dir)
+    if silero_pt:
+        return _handle_tts_silero(req, cache, silero_pt)
     text = str(req.get("text", "")).strip()
     language = _tts_language(req.get("language") or "Russian")
     instructions = str(req.get("instructions") or "").strip()
@@ -2139,8 +2263,11 @@ def main():
                 elif op == "video":
                     needed.extend(["diffusers", "accelerate", "pillow", "transformers", "imageio", "imageio-ffmpeg"])
                 elif op == "tts":
-                    if _find_kokoro_files(str(req.get("weightsDir") or "")):
+                    w_dir_arg = str(req.get("weightsDir") or "")
+                    if _find_kokoro_files(w_dir_arg):
                         needed.extend(["kokoro", "soundfile"])
+                    elif _find_silero_tts_file(w_dir_arg):
+                        pass  # torch уже в needed
                     else:
                         needed.extend(["qwen-tts", "soundfile", "transformers"])
                 elif op == "music":

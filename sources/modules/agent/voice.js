@@ -52,6 +52,9 @@ async function localVoiceModel(cap) {
         if (!matches.length)
             return null;
         if (cap === 'tts' && matches.length > 1) {
+            const silero = matches.find(m => /silero/i.test(String(m.id || m.model || m.path || '')));
+            if (silero)
+                return silero;
             const piper = matches.find(m => /piper/i.test(String(m.id || m.model || m.path || '')));
             if (piper)
                 return piper;

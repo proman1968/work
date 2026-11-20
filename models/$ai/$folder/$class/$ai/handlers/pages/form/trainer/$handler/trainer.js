@@ -292,6 +292,14 @@ export default {
                         {{$for.item.label}}
                     </button>
                 </div>
+                <div class="chips" style="gap:6px;" ~if="ttsKind === 'silero'">
+                    <button type="button" class="btn" ~for="sileroVoicePresets"
+                        :style="testSileroVoice === $for.item.speaker ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
+                        @tap="testSileroVoice = $for.item.speaker">
+                        {{$for.item.label}}
+                    </button>
+                </div>
+                <div ~if="ttsKind === 'silero'" style="font-size:12px;opacity:0.8;">Silero v5.6 RU поддерживает автоударения, омографы, вопросы и ручную пометку ударения знаком <code>+</code> перед гласной (например: «зам+ок», «г+отов»).</div>
                 <div class="chips" style="gap:6px;" ~if="ttsKind === 'kokoro'">
                     <button type="button" class="btn" ~for="kokoroVoicePresets"
                         :style="testKokoroVoice === $for.item.speaker ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
@@ -299,8 +307,8 @@ export default {
                         {{$for.item.label}}
                     </button>
                 </div>
-                <div ~if="ttsKind === 'kokoro'" style="font-size:12px;opacity:0.8;">Kokoro-82M работает с EN/FR/ES/IT/PT/JA/ZH (для русского языка используйте Piper TTS RU или Qwen3-TTS).</div>
-                <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base' && ttsKind !== 'piper' && ttsKind !== 'kokoro'">
+                <div ~if="ttsKind === 'kokoro'" style="font-size:12px;opacity:0.8;">Kokoro-82M работает с EN/FR/ES/IT/PT/JA/ZH (для русского языка используйте Silero TTS RU, Piper TTS RU или Qwen3-TTS).</div>
+                <div class="chips" style="gap:6px;" ~if="ttsKind !== 'base' && ttsKind !== 'piper' && ttsKind !== 'kokoro' && ttsKind !== 'silero'">
                     <button type="button" class="btn" ~for="ttsVoicePresets"
                         :style="(isCustomVoice06B ? testTtsVoice === $for.item.speaker : testTtsInstructions === $for.item.value) ? 'border-color:var(--accent-color,#4f46e5);color:var(--accent-color,#4f46e5);' : ''"
                         @tap="selectTtsPreset($for.item)">
@@ -386,6 +394,14 @@ export default {
         { label: 'Мужской (Дмитрий)', speaker: 'dmitri' },
         { label: 'Женский (Ирина)', speaker: 'irina' },
     ],
+    testSileroVoice: 'xenia',
+    sileroVoicePresets: [
+        { label: 'Женский (Ксения · xenia)', speaker: 'xenia' },
+        { label: 'Женский мягкий (Бая · baya)', speaker: 'baya' },
+        { label: 'Женский чёткий (Ксения · kseniya)', speaker: 'kseniya' },
+        { label: 'Мужской (Айдар · aidar)', speaker: 'aidar' },
+        { label: 'Мужской (Евгений · eugene)', speaker: 'eugene' },
+    ],
     testKokoroVoice: 'af_heart',
     kokoroVoicePresets: [
         { label: 'EN Женский (Heart)', speaker: 'af_heart' },
@@ -450,6 +466,8 @@ export default {
         const hay = `${id} ${task}`;
         if (hay.includes('piper'))
             return 'piper';
+        if (hay.includes('silero'))
+            return 'silero';
         if (hay.includes('kokoro'))
             return 'kokoro';
         if (hay.includes('voicedesign') || hay.includes('voice_design'))
@@ -725,6 +743,9 @@ export default {
                 body.text = this.testTtsText.trim();
                 if (this.ttsKind === 'piper') {
                     body.voice = this.testPiperVoice || 'dmitri';
+                }
+                else if (this.ttsKind === 'silero') {
+                    body.voice = this.testSileroVoice || 'xenia';
                 }
                 else if (this.ttsKind === 'kokoro') {
                     body.voice = this.testKokoroVoice || 'af_heart';
