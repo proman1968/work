@@ -59,6 +59,9 @@ import {
     collectPackagesForAllInstalledModelsSync,
     isStrixHaloGfx1151Host,
     hasRocmGfx1151InVenvSync,
+    getLoadedLocalModelsStatus,
+    warmupLocalAiSuite,
+    getLocalWarmupState,
     AMD_ROCM_GFX1151_WHL_INDEX,
     ROCM_GFX1151_TORCH_VERSION,
     _setAutoProvisionForTest,
@@ -180,6 +183,9 @@ export {
     collectPackagesForAllInstalledModelsSync,
     isStrixHaloGfx1151Host,
     hasRocmGfx1151InVenvSync,
+    getLoadedLocalModelsStatus,
+    warmupLocalAiSuite,
+    getLocalWarmupState,
     AMD_ROCM_GFX1151_WHL_INDEX,
     ROCM_GFX1151_TORCH_VERSION,
     _setAutoProvisionForTest,
@@ -375,6 +381,162 @@ function stripInventoryFiles(inv) {
 /**
  * Методы `trainer_*`, подключаемые к узлам `$class` (в `/MODELS/Local` и локальных `$ai`) и в шлюз `gateway.js`.
  */
+const _lastModelSpeed = new Map();
+
+function recordModelSpeed(ai, res) {
+    if (!res?.ok)
+        return;
+    const keys = [String(ai?.path || '').trim(), String(ai?.id || '').trim()].filter(Boolean);
+    if (!keys.length)
+        return;
+    const entry = {
+        device: String(res.device || ''),
+        ttftMs: Number(res.ttftMs) || 0,
+        tokPerSec: Number(res.tokPerSec) || 0,
+        promptTokPerSec: Number(res.promptTokPerSec) || 0,
+        durationMs: Number(res.durationMs) || 0,
+        loadMs: Number(res.loadMs) || 0,
+        mtpAcceptPct: res.mtpAcceptPct ?? null,
+        summary: String(res.summary || ''),
+        updatedAt: Date.now(),
+    };
+    for (const k of keys)
+        _lastModelSpeed.set(k, entry);
+}
+
+function formatSpeedSummary(m) {
+    if (!m)
+        return '';
+    const parts = [];
+    if (m.tokPerSec > 0)
+        parts.push(`${m.tokPerSec} tok/s`);
+    else if (m.durationMs > 0)
+        parts.push(m.durationMs >= 1000 ? `${(m.durationMs / 1000).toFixed(2)} с` : `${m.durationMs} мс`);
+    if (m.ttftMs > 0)
+        parts.push(`TTFT ${(m.ttftMs / 1000).toFixed(2)} с`);
+    if (m.mtpAcceptPct !== null && m.mtpAcceptPct !== undefined)
+        parts.push(`MTP ${m.mtpAcceptPct}%`);
+    return parts.join(' · ');
+}
+
+/**
+ * Единый паспорт «Способ запуска» для карточки модели $ai и списка /MODELS/Local.
+ */
+export function buildLaunchPassport({
+    id = '',
+    path: itemPath = '',
+    isLocal = false,
+    protocol = 'local',
+    modality = 'llm',
+    weightFormat = '',
+    sizeGb = 0,
+    weightsDirAbs = '',
+    active = false,
+    halogenOnline = false,
+    loadedStatus = null,
+    rocmReady = false,
+    isHaloHost = false,
+    engineSetup = null,
+} = {}) {
+    const idLow = String(id || '').toLowerCase();
+    const modLow = String(modality || 'llm').toLowerCase();
+    const isSilero = idLow.includes('silero');
+    const isPiper = idLow.includes('piper');
+    const isHalogenGguf = protocol === 'halogen' || weightFormat === 'gguf' || weightFormat === 'bubo' || idLow === 'qwen3.8-flash-next';
+    const isOnDemand = ['image', 'video', 'music'].includes(modLow) || idLow.includes('z-image');
+
+    const last = _lastModelSpeed.get(String(itemPath || '').trim()) || _lastModelSpeed.get(String(id || '').trim()) || null;
+    const normPath = p => p ? path.resolve(String(p)).replace(/\\/g, '/').toLowerCase() : '';
+    const normWeights = normPath(weightsDirAbs);
+    const loadedEntry = (loadedStatus?.loadedModels || []).find(x => {
+        const w = normPath(x?.weightsDir);
+        return normWeights && w && w === normWeights;
+    }) || null;
+
+    let engine = '';
+    let computeDevice = '';
+    let memoryPolicy = '';
+    let memoryPolicyKind = 'always-hot';
+    let loadedInMemory = false;
+    let memoryStateLabel = '';
+
+    if (!isLocal) {
+        engine = `Внешний API (${protocol})`;
+        computeDevice = 'Удалённый сервер';
+        memoryPolicy = 'Облачный вызов';
+        memoryPolicyKind = 'remote';
+        loadedInMemory = Boolean(active);
+        memoryStateLabel = active ? 'Подключена (API)' : 'Не настроена';
+    }
+    else if (isHalogenGguf) {
+        const isWin = os.platform() === 'win32';
+        engine = isWin ? 'Halowin Bubo (ROCm 10 + NPU)' : 'Halogen Server (ROCm + NPU)';
+        const npuActive = Boolean(engineSetup?.running?.npuPrefill || engineSetup?.engine?.npuActive);
+        computeDevice = npuActive
+            ? 'iGPU Radeon 8060S/8065S (gfx1151) + Ryzen AI NPU'
+            : 'iGPU Radeon 8060S/8065S (gfx1151)';
+        memoryPolicy = 'Always-Hot (всегда в памяти, не выгружается)';
+        memoryPolicyKind = 'always-hot';
+        loadedInMemory = Boolean(halogenOnline);
+        memoryStateLabel = loadedInMemory ? 'Загружена в памяти' : 'Не загружена';
+    }
+    else if (isSilero || isPiper) {
+        engine = isSilero ? 'PyTorch CPU' : 'Piper ONNX CPU';
+        computeDevice = 'CPU Zen 5';
+        memoryPolicy = 'Always-Hot (всегда в памяти)';
+        memoryPolicyKind = 'always-hot';
+        loadedInMemory = Boolean(loadedEntry);
+        memoryStateLabel = loadedInMemory ? 'Загружена в памяти' : 'Не загружена';
+    }
+    else {
+        const cudaOn = Boolean(loadedStatus?.cuda || rocmReady);
+        engine = cudaOn ? 'PyTorch ROCm 7.13' : (isHaloHost ? 'PyTorch (ожидает ROCm 7.13)' : 'PyTorch CPU');
+        if (loadedEntry?.device)
+            computeDevice = loadedEntry.device;
+        else if (last?.device)
+            computeDevice = last.device;
+        else if (cudaOn)
+            computeDevice = 'iGPU Radeon 8060S/8065S (gfx1151)';
+        else
+            computeDevice = isHaloHost ? 'iGPU (нужна установка ROCm 7.13)' : 'CPU';
+
+        if (isOnDemand) {
+            memoryPolicy = 'По требованию (выгрузка через 10 мин простоя)';
+            memoryPolicyKind = 'on-demand';
+            loadedInMemory = Boolean(loadedEntry);
+            memoryStateLabel = loadedInMemory ? 'Загружена в памяти' : 'Выгружена (по требованию)';
+        }
+        else {
+            memoryPolicy = 'Always-Hot (всегда в памяти)';
+            memoryPolicyKind = 'always-hot';
+            loadedInMemory = Boolean(loadedEntry);
+            memoryStateLabel = loadedInMemory ? 'Загружена в памяти' : 'Не загружена';
+        }
+    }
+
+    const fmtParts = [];
+    if (weightFormat)
+        fmtParts.push(String(weightFormat).toUpperCase());
+    if (sizeGb > 0)
+        fmtParts.push(`${sizeGb} ГБ`);
+    const speedText = formatSpeedSummary(last);
+    const formatAndSpeed = [fmtParts.join(' · '), speedText].filter(Boolean).join(' · ') || '—';
+
+    return {
+        engine,
+        computeDevice,
+        memoryPolicy,
+        memoryPolicyKind,
+        loadedInMemory,
+        memoryStateLabel,
+        weightFormat: String(weightFormat || ''),
+        sizeGb: Number(sizeGb) || 0,
+        lastSpeed: speedText,
+        formatAndSpeed,
+        compactBadge: `${engine} · ${loadedInMemory ? 'В памяти' : (memoryPolicyKind === 'on-demand' ? 'По требованию' : 'Готова')}`,
+    };
+}
+
 function inferTestModality(ai) {
     const d = ai?.DATA || {};
     const mod = String(ai?.modality || d.modality || '').toLowerCase();
@@ -672,7 +834,7 @@ async function runSingleModelSmokeTest(ai, p = {}) {
         const mtpAcceptPct = metricsDelta?.mtpAcceptPct ?? null;
         const mtpTokensPerStep = metricsDelta?.mtpTokensPerStep ?? null;
 
-        return {
+        const outRes = {
             ok: true,
             modality: 'llm',
             text: text.trim(),
@@ -702,6 +864,8 @@ async function runSingleModelSmokeTest(ai, p = {}) {
                 engineStartMs > 500 ? `старт движка ${(engineStartMs / 1000).toFixed(1)} с` : '',
             ].filter(Boolean).join(' · '),
         };
+        recordModelSpeed(ai, outRes);
+        return outRes;
     }
     catch (e) {
         const durationMs = Math.max(1, Date.now() - t0);
@@ -745,10 +909,11 @@ export const TRAINER_METHODS = Object.freeze({
     trainer_status: {
         level: 'read',
         fn: async function () {
-            const [hardware, local, datasets] = await Promise.all([
+            const [hardware, local, datasets, loadedStatus] = await Promise.all([
                 detectHardware(),
                 listLocalModelsAndAdapters(),
                 listWorkDatasets(),
+                getLoadedLocalModelsStatus().catch(() => null),
             ]);
             const halogenPlan = computeHalogenMemoryPlan({
                 totalRamGb: hardware?.totalRamGb >= 120 ? hardware.totalRamGb : 192,
@@ -756,9 +921,38 @@ export const TRAINER_METHODS = Object.freeze({
             });
             const platform = hardware?.platform || os.platform();
             const probe = await probeHalogenServer(HALOGEN_DEFAULT_BASE_URL).catch(() => null);
-            const runtime = getLocalEngineStatus({
-                totalRamGb: hardware?.totalRamGb,
-                halogenOnline: Boolean(probe?.online),
+            const runtime = {
+                ...getLocalEngineStatus({
+                    totalRamGb: hardware?.totalRamGb,
+                    halogenOnline: Boolean(probe?.online),
+                }),
+                warmup: getLocalWarmupState(),
+                loadedModels: loadedStatus?.loadedModels || [],
+            };
+            const rocmReady = hasRocmGfx1151InVenvSync();
+            const isHaloHost = isStrixHaloGfx1151Host();
+            const engineSetup = await describeEngineSetup().catch(() => null);
+            const modelsWithPassport = (local.models || []).map(m => {
+                const wDirAbs = modelWeightsDir(process.cwd(), m.id || '', 'Local');
+                return {
+                    ...m,
+                    launchPassport: buildLaunchPassport({
+                        id: m.id,
+                        path: m.path,
+                        isLocal: true,
+                        protocol: m.protocol || (m.weightFormat === 'gguf' || m.id === 'Qwen3.8-Flash-Next' ? 'halogen' : 'local'),
+                        modality: m.modality || 'llm',
+                        weightFormat: m.weightFormat || '',
+                        sizeGb: m.sizeGb || 0,
+                        weightsDirAbs: wDirAbs,
+                        active: Boolean(m.active),
+                        halogenOnline: Boolean(probe?.online),
+                        loadedStatus,
+                        rocmReady,
+                        isHaloHost,
+                        engineSetup,
+                    }),
+                };
             });
             const curatedCompatible = CURATED_HF_MODELS.filter(m =>
                 (!Array.isArray(m.platforms) || !m.platforms.length || m.platforms.includes(platform))
@@ -767,7 +961,7 @@ export const TRAINER_METHODS = Object.freeze({
             return {
                 hardware,
                 runtime,
-                models: local.models,
+                models: modelsWithPassport,
                 adapters: local.adapters,
                 datasets,
                 downloads: listHuggingFaceDownloads(),
@@ -938,6 +1132,29 @@ export const TRAINER_METHODS = Object.freeze({
                 catch { weightsRepair = null; }
             }
 
+            const loadedStatus = isLocal ? await getLoadedLocalModelsStatus().catch(() => null) : null;
+            const rocmReady = isLocal ? hasRocmGfx1151InVenvSync() : false;
+            const isHaloHost = isLocal ? isStrixHaloGfx1151Host() : false;
+            const wDirForPassport = resolvedWeightsRel
+                ? path.resolve(process.cwd(), resolvedWeightsRel)
+                : (isLocal ? modelWeightsDir(process.cwd(), modelFolder, 'Local') : '');
+            const launchPassport = buildLaunchPassport({
+                id: this?.id || '',
+                path: itemPath,
+                isLocal,
+                protocol: resolvedProtocol,
+                modality: effModality,
+                weightFormat: weightInfo?.weightFormat || '',
+                sizeGb,
+                weightsDirAbs: wDirForPassport,
+                active: actReeval.active,
+                halogenOnline: Boolean(halogenProbe?.online),
+                loadedStatus,
+                rocmReady,
+                isHaloHost,
+                engineSetup,
+            });
+
             return {
                 id: this?.id || '',
                 label: d.label || this?.label || this?.id || '',
@@ -974,6 +1191,7 @@ export const TRAINER_METHODS = Object.freeze({
                 engineSetup,
                 engineSettings: (resolvedProtocol === 'halogen' || isGgufLlm) ? readEngineSettings(process.cwd()) : null,
                 pythonProvision: getPythonProvisionState(),
+                launchPassport,
                 windowsEnv: halogenProbe?.windowsEnv || (() => { try { return inspectWindowsHalogenEnvironment(); } catch { return null; } })(),
             };
         },
@@ -1697,7 +1915,9 @@ export const TRAINER_METHODS = Object.freeze({
                 if (found)
                     target = found;
             }
-            return runSingleModelSmokeTest(target, args);
+            const res = await runSingleModelSmokeTest(target, args);
+            recordModelSpeed(target, res);
+            return res;
         },
     },
     trainer_check_all_models: {

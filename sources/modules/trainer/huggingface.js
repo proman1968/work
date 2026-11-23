@@ -1200,28 +1200,13 @@ export function selectFilesToDownload(repoMeta, { files = null, quant = '', moda
     const mod = String(modality || repoMeta?.modality || '').toLowerCase();
     const onnxWithData = onnxModels.filter(m => onnxData.some(d => d.name === `${m.name}_data`));
 
-    // Embed/Rerank: ONNX-пара (model.onnx + model.onnx_data) исполняется на iGPU/NPU через
-    // onnxruntime-directml, поэтому предпочитаем её. PyTorch-веса оставляем как прозрачный
-    // фоллбэк, если ONNX-сессия не поднимется.
-    if (onnxWithData.length && (mod === 'embed' || mod === 'rerank')) {
-        const picked = new Set(onnxWithData.map(m => m.name));
-        for (const d of onnxData) {
-            if ([...picked].some(n => `${n}_data` === d.name))
-                picked.add(d.name);
-        }
-        const hasStFallback = safetensors.length > 0;
-        return all.filter(f =>
-            picked.has(f.name)
-            || f.kind === 'config'
-            || /\.safetensors$/i.test(f.name)
-            || (!hasStFallback && /\.(bin|pt|pth)$/i.test(f.name)));
-    }
-    // Шардированные и обычные чекпоинты: только safetensors (индексы шардов — в configs).
+    // Шардированные и обычные чекпоинты (включая BGE-M3 и BGE-Reranker):
+    // единый стек PyTorch ROCm 7.13 использует safetensors + конфиги без ONNX/DirectML.
     if (safetensors.length)
         return all.filter(f => f.kind === 'config' || /\.safetensors$/i.test(f.name));
     if (torchBins.length)
         return all.filter(f => f.kind === 'config' || /\.(bin|pt|pth)$/i.test(f.name));
-    // Self-contained ONNX без внешних данных.
+    // Self-contained ONNX как крайний вариант, если в репозитории нет PyTorch-весов.
     if (onnxModels.length)
         return all.filter(f => f.kind === 'config' || /\.onnx(_data)?$/i.test(f.name));
     return configs;

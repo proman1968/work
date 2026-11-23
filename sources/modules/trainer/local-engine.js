@@ -394,15 +394,6 @@ function isSileroTtsDirSync(weightsDir) {
 
 export function packagesForModality(modality = 'llm', weightsDir = '') {
     const mod = String(modality || 'llm').toLowerCase();
-    const hasOnnx = hasOnnxModelSync(weightsDir);
-    if ((mod === 'embed' || mod === 'embedding' || mod === 'rerank') && hasOnnx) {
-        const pkgs = [os.platform() === 'win32' ? 'onnxruntime-directml' : 'onnxruntime', 'transformers', 'numpy'];
-        // PyTorch-веса лежат рядом как фоллбэк: если DML/NPU-сессия не поднимется,
-        // воркер прозрачно считает на torch, не требуя переустановки.
-        if (hasTorchWeightsSync(weightsDir))
-            pkgs.push('torch', 'safetensors');
-        return pkgs;
-    }
     if (mod === 'embed' || mod === 'embedding' || mod === 'rerank')
         return ['torch', 'transformers', 'safetensors', 'accelerate'];
     if (mod === 'video' || mod === 'text-to-video')
@@ -880,7 +871,8 @@ export function isStrixHaloGfx1151Host(rootDir = process.cwd()) {
             return true;
         const rt = runtimeRoot(rootDir);
         if (
-            fs.existsSync(path.join(rt, 'bubo', 'bubo.exe'))
+            fs.existsSync(path.join(rt, 'bubo', 'bin', 'bubo.exe'))
+            || fs.existsSync(path.join(rt, 'bubo', 'bubo.exe'))
             || fs.existsSync(path.join(rt, 'bubo', 'runtime', 'rocm-10.0.0-gfx1151'))
         ) {
             return true;
@@ -913,12 +905,13 @@ export function hasRocmGfx1151InVenvSync(rootDir = process.cwd()) {
 
 async function runWorkerOp(payload, timeoutMs = 120000) {
     // На машинах Strix Halo (gfx1151) автоматически апгрейдим CPU-only torch до GPU ROCm 7.13 (Radeon 8060S/8065S),
-    // чтобы Qwen3-TTS 1.7B, Qwen3-ASR 1.7B, Z-Image-Turbo 6B и локальные LLM работали на iGPU в 5–10 раз быстрее.
+    // чтобы все локальные PyTorch-модели (Qwen3-0.6B/4B, Qwen3-ASR 1.7B, Z-Image-Turbo 6B, BGE-M3, BGE-Reranker)
+    // работали в едином быстром движке на iGPU.
     const op = String(payload?.op || 'llm');
-    const usesOnnxFastPath = ((op === 'embed' || op === 'rerank') && hasOnnxModelSync(payload?.weightsDir || ''))
-        || (op === 'tts' && isPiperOnnxDirSync(payload?.weightsDir || ''));
+    const usesOnnxFastPath = (op === 'tts' && isPiperOnnxDirSync(payload?.weightsDir || ''));
     if (
         op !== 'check_deps'
+        && op !== 'status'
         && !usesOnnxFastPath
         && !_autoProvisionOverride
         && Date.now() > _rocmUpgradeCooldownUntil
@@ -1517,8 +1510,9 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
     fs.mkdirSync(rtDir, { recursive: true });
     const ovrFile = path.join(rtDir, 'uv-overrides.txt');
 
-    const wantRocmGfx1151 = (upgradeRocmGfx1151 || isStrixHaloGfx1151Host(rootDir))
-        && clean.includes('torch')
+    const alreadyHasRocm = hasRocmGfx1151InVenvSync(rootDir);
+    const wantRocmGfx1151 = (upgradeRocmGfx1151 || alreadyHasRocm || isStrixHaloGfx1151Host(rootDir))
+        && (clean.includes('torch') || alreadyHasRocm)
         && Date.now() > _rocmUpgradeCooldownUntil;
 
     const runInstallAttempt = async (useRocm) => {
@@ -1593,10 +1587,9 @@ export async function installLocalPythonDeps(packages = [], { rootDir = process.
 
     let res = await runInstallAttempt(wantRocmGfx1151);
     if (!res.ok && wantRocmGfx1151) {
-        // Если индекс AMD ROCm временно недоступен — ставим кулдаун и прозрачно откатываемся на стандартный PyPI,
-        // чтобы модель гарантированно заработала без блокировки пользователя.
+        // Если индекс AMD ROCm временно недоступен — ставим кулдаун, НО НИКОГДА не перезаписываем уже установленный ROCm venv на CPU-torch.
         _rocmUpgradeCooldownUntil = Date.now() + 30 * 60 * 1000;
-        if (!upgradeRocmGfx1151)
+        if (!upgradeRocmGfx1151 && !alreadyHasRocm)
             res = await runInstallAttempt(false);
     }
 
@@ -1672,6 +1665,155 @@ export async function ensurePythonForModality(modality = 'llm', { weightsDir = '
     }
 }
 
+let _warmupPromise = null;
+let _warmupState = { active: false, startedAt: 0, finishedAt: 0, warmed: [], error: '' };
+
+export function getLocalWarmupState() {
+    return { ..._warmupState };
+}
+
+export async function getLoadedLocalModelsStatus(rootDir = process.cwd()) {
+    const workerAlive = Boolean(_workerProc && !_workerProc.killed && _workerReady);
+    if (!workerAlive) {
+        return {
+            workerAlive: false,
+            cuda: hasRocmGfx1151InVenvSync(rootDir),
+            deviceName: '',
+            loadedModels: [],
+        };
+    }
+    try {
+        const res = await runWorkerOpOnce({ op: 'status' }, 3500);
+        return {
+            workerAlive: true,
+            cuda: Boolean(res?.cuda),
+            deviceName: String(res?.deviceName || ''),
+            freeRamGb: Number(res?.freeRamGb) || 0,
+            loadedModels: Array.isArray(res?.loadedModels) ? res.loadedModels : [],
+        };
+    }
+    catch {
+        return {
+            workerAlive,
+            cuda: hasRocmGfx1151InVenvSync(rootDir),
+            deviceName: '',
+            loadedModels: [],
+        };
+    }
+}
+
+function detectInstalledHotModelsForWarmup(rootDir = process.cwd()) {
+    const localDir = path.join(rootDir, 'MODELS', 'Local');
+    if (!fs.existsSync(localDir))
+        return { hasFlash: false, hot: [] };
+    let hasFlash = false;
+    const hot = [];
+    try {
+        for (const ent of fs.readdirSync(localDir, { withFileTypes: true })) {
+            if (!ent.isDirectory() || ent.name.startsWith('$') || ent.name.startsWith('#') || ent.name.startsWith('.'))
+                continue;
+            const aiDir = path.join(localDir, ent.name, '$ai');
+            const weightsDir = path.join(aiDir, '#weights');
+            if (!fs.existsSync(weightsDir))
+                continue;
+            const wInsp = inspectWeightsDirectorySync(weightsDir);
+            if (!wInsp.hasReadyWeights || wInsp.incompatibleOnPlatform)
+                continue;
+            const classFile = path.join(aiDir, 'class.js');
+            let raw = '';
+            let enabled = true;
+            if (fs.existsSync(classFile)) {
+                try {
+                    raw = fs.readFileSync(classFile, 'utf-8');
+                    if (/"enabled"\s*:\s*false/i.test(raw))
+                        enabled = false;
+                }
+                catch { /* ignore */ }
+            }
+            if (!enabled)
+                continue;
+            if (ent.name === 'Qwen3.8-Flash-Next' || wInsp.hasGguf || wInsp.hasBuboManifest || /"protocol"\s*:\s*"halogen"/i.test(raw)) {
+                hasFlash = true;
+                continue;
+            }
+            const hay = `${ent.name} ${raw}`.toLowerCase();
+            let mod = 'llm';
+            if (/"music"/i.test(raw) || hay.includes('musicgen') || hay.includes('audioldm')) mod = 'music';
+            else if (/"video"/i.test(raw) || /\b(ltx|wan2|hunyuan[-_.]?video|cogvideo)\b/.test(hay)) mod = 'video';
+            else if (/"(image|text-to-image)"/i.test(raw) || hay.includes('z-image') || hay.includes('flux')) mod = 'image';
+            else if (/"(tts|voice)"/i.test(raw) || hay.includes('silero') || hay.includes('tts') || hay.includes('kokoro') || hay.includes('piper')) mod = 'tts';
+            else if (/"(stt|asr)"/i.test(raw) || hay.includes('asr') || hay.includes('whisper')) mod = 'stt';
+            else if (/"rerank"/i.test(raw) || hay.includes('rerank')) mod = 'rerank';
+            else if (/"(embeddings|embed)"/i.test(raw) || hay.includes('bge-m3') || hay.includes('embed')) mod = 'embed';
+            if (mod === 'image' || mod === 'video' || mod === 'music')
+                continue; // тяжёлая диффузия грузится по требованию и выгружается через 10 мин простоя
+            hot.push({ id: ent.name, modality: mod, weightsDir });
+        }
+    }
+    catch { /* ignore */ }
+    // Приоритет прогрева: быстрые классификатор/RAG/речь -> LLM 4B
+    const prio = { embed: 1, rerank: 2, tts: 3, stt: 4, llm: 5 };
+    hot.sort((a, b) => (prio[a.modality] || 9) - (prio[b.modality] || 9));
+    return { hasFlash, hot };
+}
+
+/**
+ * Неблокирующий фоновый прогрев при старте сервера WORK:
+ *  1) Запускает/прогревает `Qwen3.8-Flash-Next` в `Halowin Bubo` (Always-Hot);
+ *  2) Если развёрнута Python-среда, последовательно прогревает горячие модели (`0.6B`, `4B`, `ASR`, `BGE-M3`, `BGE-Reranker`, `Silero`).
+ */
+export async function warmupLocalAiSuite({ rootDir = process.cwd() } = {}) {
+    if (process.env.NODE_TEST_CONTEXT || process.env.WORK_DISABLE_AUTO_WARMUP === '1')
+        return { skipped: true };
+    if (_warmupPromise)
+        return _warmupPromise;
+
+    const run = async () => {
+        _warmupState = { active: true, startedAt: Date.now(), finishedAt: 0, warmed: [], error: '' };
+        try {
+            const { hasFlash, hot } = detectInstalledHotModelsForWarmup(rootDir);
+            if (hasFlash) {
+                try {
+                    const be = await ensureHalogenBackendRunning({ rootDir, waitTimeoutMs: 120000 });
+                    if (be?.ready)
+                        _warmupState.warmed.push('Qwen3.8-Flash-Next');
+                }
+                catch { /* не роняем сервер при холодном старте */ }
+            }
+            if (hot.length && process.env.WORK_DISABLE_AUTO_PYTHON !== '1') {
+                const py = await resolvePythonCommandAsync(rootDir).catch(() => null);
+                if (py) {
+                    for (const item of hot) {
+                        try {
+                            const res = await runWorkerOp({
+                                op: 'warmup',
+                                modality: item.modality,
+                                weightsDir: item.weightsDir,
+                            }, 180000);
+                            if (res?.ok && !res?.skipped)
+                                _warmupState.warmed.push(item.id);
+                        }
+                        catch { /* прогрев не должен блокировать остальные модели */ }
+                    }
+                }
+            }
+        }
+        catch (e) {
+            _warmupState.error = String(e?.message || e);
+        }
+        finally {
+            _warmupState.active = false;
+            _warmupState.finishedAt = Date.now();
+        }
+        return { ..._warmupState };
+    };
+
+    _warmupPromise = run().finally(() => {
+        _warmupPromise = null;
+    });
+    return _warmupPromise;
+}
+
 export const localEngine = Object.freeze({
     streamChat: localStreamChat,
     embed: localEmbed,
@@ -1686,4 +1828,7 @@ export const localEngine = Object.freeze({
     installDeps: installLocalPythonDeps,
     ensureForModality: ensurePythonForModality,
     getProvisionState: getPythonProvisionState,
+    getLoadedStatus: getLoadedLocalModelsStatus,
+    warmupSuite: warmupLocalAiSuite,
+    getWarmupState: getLocalWarmupState,
 });

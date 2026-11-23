@@ -301,23 +301,28 @@ class LocalCausalLM:
                     except Exception:
                         pass
                 self.store.files.clear()
-        except Exception:
+        except Exception as e:
             if str(self.device).startswith("cuda"):
                 try:
+                    gc.collect()
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
-                self.device = "cpu"
-                (
-                    self.embed_tokens,
-                    self.norm,
-                    self.lm_head,
-                    self.compute_dtype,
-                    self.inv_freq,
-                    self.layers,
-                ) = _build_weights("cpu")
+                try:
+                    (
+                        self.embed_tokens,
+                        self.norm,
+                        self.lm_head,
+                        self.compute_dtype,
+                        self.inv_freq,
+                        self.layers,
+                    ) = _build_weights(self.device)
+                except Exception as e2:
+                    raise RuntimeError(json.dumps({
+                        "error": f"Не удалось загрузить LLM на GPU ({self.device}): {e2} (тихий откат на CPU отключён)"
+                    }))
             else:
-                raise
+                raise e
 
     def _rope_cos_sin(self, positions, dtype):
         freqs = torch.outer(positions.to(torch.float32), self.inv_freq)
@@ -470,11 +475,9 @@ def _describe_torch_device(device="cpu"):
     if HAS_TORCH and dev_str.startswith("cuda") and torch.cuda.is_available():
         try:
             name = str(torch.cuda.get_device_name(0) or "").strip()
-            return f"GPU ({name})" if name else "GPU"
+            return f"iGPU ({name})" if name else "iGPU (ROCm)"
         except Exception:
-            return "GPU"
-    if dev_str == "ort":
-        return "ONNX (DirectML/NPU)"
+            return "iGPU (ROCm)"
     return "CPU (BF16)" if _cpu_supports_bf16() else "CPU"
 
 
@@ -562,7 +565,6 @@ def _missing_pkg_error(exc, required_map):
 
 
 def handle_check_deps():
-    ort_pkg = "onnxruntime-directml" if sys.platform == "win32" else "onnxruntime"
     mods = {
         "torch": "torch",
         "transformers": "transformers",
@@ -574,7 +576,6 @@ def handle_check_deps():
         "qwen_asr": "qwen-asr",
         "piper": "piper-tts",
         "imageio": "imageio",
-        "onnxruntime": ort_pkg,
     }
     status = {}
     for mod, pkg in mods.items():
@@ -585,22 +586,19 @@ def handle_check_deps():
             status[pkg] = False
     cuda = False
     device_name = "CPU (BF16)" if _cpu_supports_bf16() else "CPU"
+    torch_version = ""
     try:
-        cuda = bool(HAS_TORCH and torch.cuda.is_available())
-        if cuda:
-            device_name = torch.cuda.get_device_name(0)
-        elif status.get(ort_pkg):
-            import onnxruntime as ort
-            provs = set(ort.get_available_providers() or [])
-            if "VitisAIExecutionProvider" in provs or "QNNExecutionProvider" in provs:
-                device_name = f"NPU (ONNX) + {device_name}"
-            elif "DmlExecutionProvider" in provs:
-                device_name = f"DirectML + {device_name}"
+        if HAS_TORCH and torch is not None:
+            torch_version = str(getattr(torch, "__version__", "") or "")
+            cuda = bool(torch.cuda.is_available())
+            if cuda:
+                device_name = f"iGPU {torch.cuda.get_device_name(0)}"
     except Exception:
         pass
     return {
         "packages": status,
         "cuda": cuda,
+        "torchVersion": torch_version,
         "deviceName": device_name,
         "python": sys.executable,
     }
@@ -609,32 +607,44 @@ def handle_check_deps():
 def _load_embed_model(weights_dir, cache):
     key = ("embed", weights_dir)
     if key in cache:
-        return cache[key]
+        cached = cache[key]
+        if len(cached) >= 4 and str(cached[3]) == "cpu" and HAS_TORCH and torch.cuda.is_available():
+            cache.pop(key, None)
+        else:
+            return cached
     try:
         from transformers import AutoTokenizer, AutoModel
     except Exception as e:
         raise RuntimeError(json.dumps(_missing_pkg_error(e, {"transformers": "transformers"})))
     tok = AutoTokenizer.from_pretrained(weights_dir, local_files_only=True)
-    onnx_path = _find_onnx_file(weights_dir)
-    if onnx_path:
-        try:
-            sess = _load_ort_session(onnx_path)
-            cache[key] = ("onnx", tok, sess, "ort")
-            return cache[key]
-        except Exception:
-            if not _has_torch_weights(weights_dir) or not HAS_TORCH:
-                raise
     device, dtype = _best_device_and_dtype()
-    try:
+    load_dtype = dtype if str(device).startswith("cuda") else torch.float32
+
+    def _load_on(dev, dt):
         try:
-            mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype, attn_implementation="sdpa")
+            m = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dt, attn_implementation="sdpa")
         except Exception:
-            mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
-        mdl.to(device).eval()
-    except Exception:
-        mdl = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=torch.float32)
-        mdl.to("cpu").eval()
-        device = "cpu"
+            m = AutoModel.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dt)
+        m.to(dev).eval()
+        return m
+
+    try:
+        mdl = _load_on(device, load_dtype)
+    except Exception as e:
+        if str(device).startswith("cuda") and HAS_TORCH:
+            try:
+                gc.collect()
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            try:
+                mdl = _load_on(device, load_dtype)
+            except Exception as e2:
+                raise RuntimeError(json.dumps({
+                    "error": f"Не удалось загрузить модель эмбеддингов на GPU ({device}): {e2} (тихий откат на CPU отключён)"
+                }))
+        else:
+            raise e
     cache[key] = ("torch", tok, mdl, device)
     return cache[key]
 
@@ -688,32 +698,44 @@ def handle_embed(req, cache):
 def _load_rerank_model(weights_dir, cache):
     key = ("rerank", weights_dir)
     if key in cache:
-        return cache[key]
+        cached = cache[key]
+        if len(cached) >= 4 and str(cached[3]) == "cpu" and HAS_TORCH and torch.cuda.is_available():
+            cache.pop(key, None)
+        else:
+            return cached
     try:
         from transformers import AutoTokenizer, AutoModelForSequenceClassification
     except Exception as e:
         raise RuntimeError(json.dumps(_missing_pkg_error(e, {"transformers": "transformers"})))
     tok = AutoTokenizer.from_pretrained(weights_dir, local_files_only=True)
-    onnx_path = _find_onnx_file(weights_dir)
-    if onnx_path:
-        try:
-            sess = _load_ort_session(onnx_path)
-            cache[key] = ("onnx", tok, sess, "ort")
-            return cache[key]
-        except Exception:
-            if not _has_torch_weights(weights_dir) or not HAS_TORCH:
-                raise
     device, dtype = _best_device_and_dtype()
-    try:
+    load_dtype = dtype if str(device).startswith("cuda") else torch.float32
+
+    def _load_on(dev, dt):
         try:
-            mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype, attn_implementation="sdpa")
+            m = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dt, attn_implementation="sdpa")
         except Exception:
-            mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
-        mdl.to(device).eval()
-    except Exception:
-        mdl = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=torch.float32)
-        mdl.to("cpu").eval()
-        device = "cpu"
+            m = AutoModelForSequenceClassification.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dt)
+        m.to(dev).eval()
+        return m
+
+    try:
+        mdl = _load_on(device, load_dtype)
+    except Exception as e:
+        if str(device).startswith("cuda") and HAS_TORCH:
+            try:
+                gc.collect()
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            try:
+                mdl = _load_on(device, load_dtype)
+            except Exception as e2:
+                raise RuntimeError(json.dumps({
+                    "error": f"Не удалось загрузить модель реранкинга на GPU ({device}): {e2} (тихий откат на CPU отключён)"
+                }))
+        else:
+            raise e
     cache[key] = ("torch", tok, mdl, device)
     return cache[key]
 
@@ -763,7 +785,11 @@ def handle_rerank(req, cache):
 def _load_image_pipeline(weights_dir, cache):
     key = ("image", weights_dir)
     if key in cache:
-        return cache[key]
+        cached = cache[key]
+        if len(cached) >= 2 and str(cached[1]) == "cpu" and HAS_TORCH and torch.cuda.is_available():
+            cache.pop(key, None)
+        else:
+            return cached
     if not os.path.isfile(os.path.join(weights_dir, "model_index.json")):
         raise RuntimeError(json.dumps({
             "error": (
@@ -794,14 +820,26 @@ def _load_image_pipeline(weights_dir, cache):
         pipe = diffusers.AutoPipelineForText2Image.from_pretrained(weights_dir, local_files_only=True, torch_dtype=dtype)
     try:
         pipe.to(device)
-    except Exception:
+    except Exception as e:
         if str(device).startswith("cuda") and HAS_TORCH:
             try:
+                gc.collect()
                 torch.cuda.empty_cache()
             except Exception:
                 pass
-        device = "cpu"
-        pipe.to(device)
+            try:
+                pipe.to(device)
+            except Exception as e2:
+                raise RuntimeError(json.dumps({
+                    "error": f"Недостаточно GPU-памяти (ROCm) или сбой драйвера при загрузке генератора изображений на {device}: {e2} (тихий откат на CPU отключён)"
+                }))
+        else:
+            raise e
+    try:
+        if hasattr(pipe, "enable_vae_slicing"):
+            pipe.enable_vae_slicing()
+    except Exception:
+        pass
     cache[key] = (pipe, device)
     return cache[key]
 
@@ -837,16 +875,19 @@ def handle_image(req, cache):
     except Exception as e:
         if str(device).startswith("cuda") and _is_recoverable_gpu_error(e):
             try:
+                gc.collect()
                 torch.cuda.empty_cache()
             except Exception:
                 pass
-            device = "cpu"
-            pipe.to("cpu")
-            cache[("image", weights_dir)] = (pipe, "cpu")
-            kwargs["generator"] = torch.Generator(device="cpu").manual_seed(seed)
-            with torch.inference_mode():
-                out = pipe(**kwargs)
-                img = out.images[0]
+            try:
+                kwargs["generator"] = torch.Generator(device=device).manual_seed(seed)
+                with torch.inference_mode():
+                    out = pipe(**kwargs)
+                    img = out.images[0]
+            except Exception as e2:
+                raise RuntimeError(json.dumps({
+                    "error": f"Ошибка GPU ({device}) при генерации изображения: {e2} (тихий откат на CPU отключён)"
+                }))
         else:
             raise
     buf = io.BytesIO()
@@ -1441,31 +1482,29 @@ def _move_qwen_tts_vocoder_to_cpu(mdl):
 def _load_qwen_tts_model(weights_dir):
     from qwen_tts import Qwen3TTSModel
     device, dtype = _best_device_and_dtype()
-    candidates = [(device, dtype)]
-    if str(device).startswith("cuda"):
-        cpu_dtype = torch.bfloat16 if _cpu_supports_bf16() else torch.float32
-        candidates.append(("cpu", cpu_dtype))
     last_err = None
-    for dev, dt in candidates:
+    attempts = 2 if str(device).startswith("cuda") else 1
+    for _ in range(attempts):
         try:
             try:
                 mdl = Qwen3TTSModel.from_pretrained(
                     weights_dir,
-                    device_map=dev,
-                    dtype=dt,
+                    device_map=device,
+                    dtype=dtype,
                     attn_implementation="sdpa",
                 )
             except Exception:
-                mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=dev, dtype=dt)
+                mdl = Qwen3TTSModel.from_pretrained(weights_dir, device_map=device, dtype=dtype)
             _install_fast_qwen_tts_code_predictor(mdl)
-            if str(dev).startswith("cuda"):
+            if str(device).startswith("cuda"):
                 _move_qwen_tts_vocoder_to_cpu(mdl)
-            mdl._work_device = dev
+            mdl._work_device = device
             return mdl
         except Exception as e:
             last_err = e
-            if str(dev).startswith("cuda") and HAS_TORCH:
+            if str(device).startswith("cuda") and HAS_TORCH:
                 try:
+                    gc.collect()
                     torch.cuda.empty_cache()
                 except Exception:
                     pass
@@ -1783,7 +1822,7 @@ def _handle_tts_silero(req, cache, pt_path):
         "ttsKind": "silero",
         "voiceUsed": speaker,
         "instructUsed": "",
-        "device": "CPU (Silero v5)",
+        "device": "CPU (Zen 5 · Silero v5)",
         "loadMs": load_ms,
         "genMs": gen_ms,
         "durationMs": gen_ms,
@@ -1992,6 +2031,77 @@ def handle_music(req, cache):
     }
 
 
+def _load_stt_model(weights_dir, cache):
+    key = ("stt", weights_dir)
+    if key in cache:
+        kind_c, mdl_c = cache[key]
+        active_c = getattr(mdl_c, "_work_device", None) or str(getattr(mdl_c, "device", "cpu"))
+        if str(active_c) == "cpu" and HAS_TORCH and torch.cuda.is_available():
+            cache.pop(key, None)
+        else:
+            return cache[key]
+    device, dtype = _best_device_and_dtype()
+    attempts = 2 if str(device).startswith("cuda") else 1
+    errors = []
+    try:
+        from qwen_asr import Qwen3ASRModel
+        for _ in range(attempts):
+            try:
+                try:
+                    loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device, attn_implementation="sdpa")
+                except Exception:
+                    loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dtype, device_map=device)
+                loaded._work_device = device
+                cache[key] = ("qwen_asr", loaded)
+                break
+            except Exception as e:
+                errors.append(f"qwen-asr ({device}): {e}")
+                if str(device).startswith("cuda") and HAS_TORCH:
+                    try:
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+    except Exception as e:
+        errors.append(f"qwen-asr (нет пакета): {e}")
+    if key not in cache:
+        try:
+            from transformers import pipeline
+            for _ in range(attempts):
+                try:
+                    p_obj = pipeline(
+                        "automatic-speech-recognition",
+                        model=weights_dir,
+                        device=0 if str(device).startswith("cuda") else -1,
+                        torch_dtype=dtype,
+                    )
+                    p_obj._work_device = device
+                    cache[key] = ("hf_asr", p_obj)
+                    break
+                except Exception as e:
+                    errors.append(f"transformers ({device}): {e}")
+                    if str(device).startswith("cuda") and HAS_TORCH:
+                        try:
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                        except Exception:
+                            pass
+        except Exception as e:
+            errors.append(f"transformers (нет пакета): {e}")
+    if key not in cache:
+        msg = " | ".join(errors)
+        if "No module named" in msg:
+            raise RuntimeError(json.dumps(_missing_pkg_error(Exception(msg), {
+                "qwen_asr": "qwen-asr",
+                "soundfile": "soundfile",
+                "transformers": "transformers",
+            })))
+        raise RuntimeError(json.dumps({
+            "error": f"Не удалось загрузить модель распознавания речи на {device} из {weights_dir}: {msg}",
+        }))
+    return cache[key]
+
+
 def handle_stt(req, cache):
     weights_dir = req["weightsDir"]
     audio_b64 = req.get("audioBase64", "")
@@ -2000,64 +2110,8 @@ def handle_stt(req, cache):
     key = ("stt", weights_dir)
     was_cached = key in cache
     t_load0 = time.time()
-    if not was_cached:
-        device, dtype = _best_device_and_dtype()
-        candidates = [(device, dtype)]
-        if str(device).startswith("cuda"):
-            cpu_dtype = torch.bfloat16 if _cpu_supports_bf16() else torch.float32
-            candidates.append(("cpu", cpu_dtype))
-        errors = []
-        try:
-            from qwen_asr import Qwen3ASRModel
-            for dev, dt in candidates:
-                try:
-                    try:
-                        loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dt, device_map=dev, attn_implementation="sdpa")
-                    except Exception:
-                        loaded = Qwen3ASRModel.from_pretrained(weights_dir, dtype=dt, device_map=dev)
-                    loaded._work_device = dev
-                    cache[key] = ("qwen_asr", loaded)
-                    break
-                except Exception as e:
-                    errors.append(f"qwen-asr ({dev}): {e}")
-                    if str(dev).startswith("cuda") and HAS_TORCH:
-                        try:
-                            torch.cuda.empty_cache()
-                        except Exception:
-                            pass
-        except Exception as e:
-            errors.append(f"qwen-asr (нет пакета): {e}")
-        if key not in cache:
-            try:
-                from transformers import pipeline
-                for dev, dt in candidates:
-                    try:
-                        p_obj = pipeline(
-                            "automatic-speech-recognition",
-                            model=weights_dir,
-                            device=0 if str(dev).startswith("cuda") else -1,
-                            torch_dtype=dt,
-                        )
-                        p_obj._work_device = dev
-                        cache[key] = ("hf_asr", p_obj)
-                        break
-                    except Exception as e:
-                        errors.append(f"transformers ({dev}): {e}")
-            except Exception as e:
-                errors.append(f"transformers (нет пакета): {e}")
-        if key not in cache:
-            msg = " | ".join(errors)
-            if "No module named" in msg:
-                raise RuntimeError(json.dumps(_missing_pkg_error(Exception(msg), {
-                    "qwen_asr": "qwen-asr",
-                    "soundfile": "soundfile",
-                    "transformers": "transformers",
-                })))
-            raise RuntimeError(json.dumps({
-                "error": f"Не удалось загрузить модель распознавания речи из {weights_dir}: {msg}",
-            }))
+    kind, mdl = _load_stt_model(weights_dir, cache)
     load_ms = 0 if was_cached else int((time.time() - t_load0) * 1000)
-    kind, mdl = cache[key]
     active_dev = getattr(mdl, "_work_device", None) or str(getattr(mdl, "device", "cpu"))
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
@@ -2119,18 +2173,178 @@ def _get_free_ram_gb():
 
 def _release_cached_item(obj):
     try:
-        if isinstance(obj, tuple) and len(obj) >= 1 and hasattr(obj[0], "to"):
-            try:
-                obj[0].to("cpu")
-            except Exception:
-                pass
-        elif hasattr(obj, "to"):
-            try:
-                obj.to("cpu")
-            except Exception:
-                pass
+        if hasattr(obj, "store") and getattr(obj.store, "files", None):
+            for f_h, mm_h in obj.store.files:
+                try:
+                    mm_h.close()
+                except Exception:
+                    pass
+                try:
+                    f_h.close()
+                except Exception:
+                    pass
+            obj.store.files.clear()
+            if getattr(obj.store, "tensors", None):
+                obj.store.tensors.clear()
     except Exception:
         pass
+
+
+def _describe_cached_entry_device(k, obj):
+    try:
+        if isinstance(k, tuple) and len(k) >= 1 and k[0] == "tts_silero":
+            return "CPU (Zen 5 · Silero v5)"
+        if isinstance(k, tuple) and len(k) >= 1 and k[0] == "tts_piper":
+            return "CPU (Piper ONNX)"
+        if isinstance(k, tuple) and len(k) >= 1 and k[0] in ("embed", "rerank") and isinstance(obj, tuple) and len(obj) >= 4:
+            return _describe_torch_device(obj[3])
+        if isinstance(k, tuple) and len(k) >= 1 and k[0] == "image" and isinstance(obj, tuple) and len(obj) >= 2:
+            return _describe_torch_device(obj[1])
+        if isinstance(obj, tuple) and len(obj) >= 2:
+            mdl = obj[1]
+            dev = getattr(mdl, "_work_device", None) or getattr(mdl, "device", "cpu")
+            return _describe_torch_device(dev)
+        dev = getattr(obj, "_work_device", None) or getattr(obj, "device", "cpu")
+        return _describe_torch_device(dev)
+    except Exception:
+        return _describe_torch_device("cpu")
+
+
+def handle_status(mod_cache, mod_last_used, models, llm_last_used, cache_lock=None):
+    loaded = []
+    def _collect():
+        for k, obj in mod_cache.items():
+            op_name = k[0] if isinstance(k, tuple) and len(k) >= 1 else "mod"
+            w_dir = k[1] if isinstance(k, tuple) and len(k) >= 2 else ""
+            if op_name in ("tts_silero", "tts_piper", "tts_kokoro"):
+                op_name = "tts"
+                w_dir = os.path.dirname(str(w_dir))
+            loaded.append({
+                "op": op_name,
+                "weightsDir": str(w_dir),
+                "device": _describe_cached_entry_device(k, obj),
+                "lastUsed": float(mod_last_used.get(k, 0.0)),
+            })
+        for w_dir, mdl in models.items():
+            loaded.append({
+                "op": "llm",
+                "weightsDir": str(w_dir),
+                "device": _describe_torch_device(getattr(mdl, "device", "cpu")),
+                "lastUsed": float(llm_last_used.get(w_dir, 0.0)),
+            })
+    if cache_lock is not None:
+        with cache_lock:
+            _collect()
+    else:
+        _collect()
+    cuda_ok = bool(HAS_TORCH and torch is not None and torch.cuda.is_available())
+    dev_name = _describe_torch_device("cuda:0" if cuda_ok else "cpu")
+    return {
+        "cuda": cuda_ok,
+        "deviceName": dev_name,
+        "freeRamGb": round(_get_free_ram_gb() or 0.0, 2),
+        "loadedModels": loaded,
+    }
+
+
+def handle_warmup(req, mod_cache, mod_last_used, models, llm_last_used, cache_lock=None):
+    modality = str(req.get("modality") or "llm").lower()
+    weights_dir = str(req.get("weightsDir") or "")
+    if not weights_dir or not os.path.isdir(weights_dir):
+        return {"ok": False, "skipped": True, "reason": "weightsDir not found"}
+    if modality in ("image", "video", "music"):
+        return {"ok": True, "skipped": True, "reason": "on-demand modality"}
+
+    t0 = time.time()
+    cached = False
+    dev = "cpu"
+    if modality == "llm":
+        def _load_llm():
+            nonlocal cached, dev
+            if weights_dir in models:
+                cached = True
+                dev = _describe_torch_device(getattr(models[weights_dir], "device", "cpu"))
+            else:
+                models[weights_dir] = LocalCausalLM(weights_dir)
+                dev = _describe_torch_device(getattr(models[weights_dir], "device", "cpu"))
+            llm_last_used[weights_dir] = time.time()
+        if cache_lock is not None:
+            with cache_lock:
+                _load_llm()
+        else:
+            _load_llm()
+    elif modality in ("embed", "embedding"):
+        def _load_emb():
+            nonlocal cached, dev
+            cached = ("embed", weights_dir) in mod_cache
+            _, _, _, d = _load_embed_model(weights_dir, mod_cache)
+            mod_last_used[("embed", weights_dir)] = time.time()
+            dev = _describe_torch_device(d)
+        if cache_lock is not None:
+            with cache_lock:
+                _load_emb()
+        else:
+            _load_emb()
+    elif modality == "rerank":
+        def _load_rr():
+            nonlocal cached, dev
+            cached = ("rerank", weights_dir) in mod_cache
+            _, _, _, d = _load_rerank_model(weights_dir, mod_cache)
+            mod_last_used[("rerank", weights_dir)] = time.time()
+            dev = _describe_torch_device(d)
+        if cache_lock is not None:
+            with cache_lock:
+                _load_rr()
+        else:
+            _load_rr()
+    elif modality in ("stt", "asr"):
+        def _load_stt():
+            nonlocal cached, dev
+            cached = ("stt", weights_dir) in mod_cache
+            _, mdl = _load_stt_model(weights_dir, mod_cache)
+            mod_last_used[("stt", weights_dir)] = time.time()
+            active = getattr(mdl, "_work_device", None) or str(getattr(mdl, "device", "cpu"))
+            dev = _describe_torch_device(active)
+        if cache_lock is not None:
+            with cache_lock:
+                _load_stt()
+        else:
+            _load_stt()
+    elif modality in ("tts", "voice"):
+        silero_pt = _find_silero_tts_file(weights_dir)
+        if silero_pt:
+            def _load_silero():
+                nonlocal cached, dev
+                key = ("tts_silero", silero_pt)
+                cached = key in mod_cache
+                if not cached:
+                    mdl = torch.package.PackageImporter(silero_pt).load_pickle("tts_models", "model")
+                    mdl.to(torch.device("cpu"))
+                    mod_cache[key] = mdl
+                mod_last_used[key] = time.time()
+                dev = "CPU (Zen 5 · Silero v5)"
+            if cache_lock is not None:
+                with cache_lock:
+                    _load_silero()
+            else:
+                _load_silero()
+        else:
+            def _load_qtts():
+                nonlocal cached, dev
+                key = ("tts", weights_dir)
+                cached = key in mod_cache
+                if not cached:
+                    mod_cache[key] = _load_qwen_tts_model(weights_dir)
+                mod_last_used[key] = time.time()
+                active = getattr(mod_cache[key], "_work_device", None) or str(getattr(mod_cache[key], "device", "cpu"))
+                dev = _describe_torch_device(active)
+            if cache_lock is not None:
+                with cache_lock:
+                    _load_qtts()
+            else:
+                _load_qtts()
+    load_ms = 0 if cached else int((time.time() - t0) * 1000)
+    return {"ok": True, "cached": cached, "device": dev, "loadMs": load_ms}
 
 
 def _evict_memory_if_needed(
@@ -2143,16 +2357,16 @@ def _evict_memory_if_needed(
     keep_llm_key=None,
     now_ts=None,
 ):
-    """Умная очистка памяти:
+    """Умная очистка памяти (192 ГБ Unified Memory):
     - Тяжёлую диффузию (`image`, напр. Z-Image-Turbo) выгружаем через `WORK_IMAGE_IDLE_SEC` (10 мин)
-      или при падении свободной RAM ниже `WORK_MIN_FREE_RAM_GB` (20 ГБ).
-    - Лёгкие модели (embed, rerank, tts, stt, 0.6B/4B) держим постоянно горячими,
-      выгружая по LRU только при критической нехватке RAM (`< WORK_CRIT_FREE_RAM_GB`, 10 ГБ).
+      или при падении свободной RAM ниже `WORK_MIN_FREE_RAM_GB` (24 ГБ).
+    - Горячие модели (embed, rerank, tts, stt, 0.6B/4B) держим постоянно горячими,
+      выгружая по LRU только при критической нехватке RAM (`< WORK_CRIT_FREE_RAM_GB`, 8 ГБ).
     """
     now = float(now_ts if now_ts is not None else time.time())
     image_idle_sec = float(os.environ.get("WORK_IMAGE_IDLE_SEC", "600"))
-    min_free_gb = float(os.environ.get("WORK_MIN_FREE_RAM_GB", "20"))
-    crit_free_gb = float(os.environ.get("WORK_CRIT_FREE_RAM_GB", "10"))
+    min_free_gb = float(os.environ.get("WORK_MIN_FREE_RAM_GB", "24"))
+    crit_free_gb = float(os.environ.get("WORK_CRIT_FREE_RAM_GB", "8"))
     free_gb = _get_free_ram_gb()
     evicted = []
 
@@ -2250,9 +2464,11 @@ def main():
             if op == "check_deps":
                 print(json.dumps({"id": req_id, "event": "result", "data": handle_check_deps()}), flush=True)
                 continue
+            if op == "status":
+                print(json.dumps({"id": req_id, "event": "result", "data": handle_status(mod_cache, mod_last_used, models, llm_last_used, cache_lock=cache_lock)}), flush=True)
+                continue
             is_onnx_fast = (
-                (op in ("embed", "rerank") and _find_onnx_file(str(req.get("weightsDir") or "")))
-                or (op == "tts" and _find_piper_onnx_files(str(req.get("weightsDir") or "")))
+                op == "tts" and _find_piper_onnx_files(str(req.get("weightsDir") or ""))
             )
             if not HAS_TORCH and not is_onnx_fast:
                 needed = ["torch"]
@@ -2280,6 +2496,10 @@ def main():
                     "error": "В Python-окружении не установлен PyTorch (torch) и необходимые библиотеки.",
                     "missingDeps": needed,
                 }), flush=True)
+                continue
+            if op == "warmup":
+                res = handle_warmup(req, mod_cache, mod_last_used, models, llm_last_used, cache_lock=cache_lock)
+                print(json.dumps({"id": req_id, "event": "result", "data": res}), flush=True)
                 continue
             if op in ("embed", "rerank", "image", "video", "music", "tts", "stt"):
                 t0 = time.time()

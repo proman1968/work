@@ -231,6 +231,34 @@ export default {
     </div>
     <div class="msg warn" ~if="weightsRepairLine">{{weightsRepairLine}}</div>
 
+    <div class="card" ~if="info?.launchPassport">
+        <div class="section-title">Способ запуска</div>
+        <div class="grid-2" style="gap:8px 24px;">
+            <div class="kv-row">
+                <span class="kv-label">Движок:</span>
+                <span class="kv-val"><code>{{info.launchPassport.engine}}</code></span>
+            </div>
+            <div class="kv-row">
+                <span class="kv-label">Вычислитель:</span>
+                <span class="kv-val">{{info.launchPassport.computeDevice}}</span>
+            </div>
+            <div class="kv-row">
+                <span class="kv-label">Память и статус:</span>
+                <span class="kv-val">
+                    <span class="badge" ~class="info.launchPassport.loadedInMemory ? 'active' : 'inactive'" style="margin-right:6px;">
+                        <span class="dot" ~class="info.launchPassport.loadedInMemory ? 'on' : 'off'"></span>
+                        <span>{{info.launchPassport.memoryStateLabel}}</span>
+                    </span>
+                    <span style="font-weight:500;opacity:0.8;">{{info.launchPassport.memoryPolicy}}</span>
+                </span>
+            </div>
+            <div class="kv-row">
+                <span class="kv-label">Формат и скорость:</span>
+                <span class="kv-val">{{info.launchPassport.formatAndSpeed}}</span>
+            </div>
+        </div>
+    </div>
+
     <div class="grid-2" ~if="info">
         <div class="card">
             <div class="section-title">Параметры модели</div>

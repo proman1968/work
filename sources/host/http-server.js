@@ -217,6 +217,14 @@ export function startServers(requestHandler) {
         console.log(`Server running at ${LOCAL_ORIGIN}/`);
         if (shouldAutoOpenBrowser())
             openBrowser(`${LOCAL_ORIGIN}/`);
+        if (!process.env.NODE_TEST_CONTEXT && process.env.WORK_DISABLE_AUTO_WARMUP !== '1') {
+            const warmupTimer = setTimeout(() => {
+                import('../modules/trainer/local-engine.js')
+                    .then(m => m.warmupLocalAiSuite?.())
+                    .catch(() => {});
+            }, 1500);
+            warmupTimer.unref?.();
+        }
     });
 
     let httpsServer;

@@ -122,7 +122,7 @@ describe('trainer-weights-layout: структура репозитория, ф�
         ]);
     });
 
-    it('4. Embed/Rerank: ONNX-пара (model.onnx + model.onnx_data) предпочитается, PyTorch остаётся фоллбэком', () => {
+    it('4. Embed/Rerank: скачиваются safetensors для единого PyTorch ROCm (без лишних .bin и ONNX/DirectML)', () => {
         const repoMeta = {
             modality: 'embed',
             files: [
@@ -134,9 +134,8 @@ describe('trainer-weights-layout: структура репозитория, ф�
             ],
         };
         const names = selectFilesToDownload(repoMeta, { modality: 'embed' }).map(f => f.name).sort();
-        assert.ok(names.includes('onnx/model.onnx'), 'ONNX-граф выбран');
-        assert.ok(names.includes('onnx/model.onnx_data'), 'внешние данные ONNX выбраны');
-        assert.ok(names.includes('model.safetensors'), 'PyTorch-фоллбэк сохранён');
+        assert.ok(names.includes('model.safetensors'), 'PyTorch safetensors выбраны');
+        assert.ok(!names.includes('onnx/model.onnx'), 'ONNX/DirectML больше не дублирует веса');
         assert.ok(!names.includes('pytorch_model.bin'), 'дублирующий .bin не качается');
     });
 

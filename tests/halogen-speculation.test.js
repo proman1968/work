@@ -250,14 +250,13 @@ llamacpp:spec_decode_num_accepted_tokens_total 266
         assert.ok(delta.mtpTokensPerStep > 5);
     });
 
-    it('9. Пакеты Python по модальности (включая ONNX DirectML/NPU) и автообновление системных UI-хендлеров', async () => {
+    it('9. Пакеты Python по модальности (единый PyTorch без DirectML для embed/rerank) и автообновление системных UI-хендлеров', async () => {
         const tmpWeights = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-onnx-mod-'));
         try {
             assert.deepEqual(packagesForModality('rerank', tmpWeights), ['torch', 'transformers', 'safetensors', 'accelerate']);
             await fsp.writeFile(path.join(tmpWeights, 'model.onnx'), 'ONNX');
-            const onnxPkgs = packagesForModality('rerank', tmpWeights);
-            assert.ok(onnxPkgs.some(p => p.startsWith('onnxruntime')), 'для ONNX-графа подбирается onnxruntime(-directml) без тяжёлого SDK');
-            assert.ok(!onnxPkgs.includes('torch'));
+            const rerankPkgs = packagesForModality('rerank', tmpWeights);
+            assert.deepEqual(rerankPkgs, ['torch', 'transformers', 'safetensors', 'accelerate'], 'даже при наличии .onnx используется единый PyTorch ROCm без onnxruntime-directml');
         }
         finally {
             await fsp.rm(tmpWeights, { recursive: true, force: true });
@@ -1254,7 +1253,7 @@ print(json.dumps({
             assert.equal(out.ttsKind, 'silero');
             assert.equal(out.voiceUsed, 'xenia');
             assert.equal(out.sampleRate, 48000);
-            assert.equal(out.device, 'CPU (Silero v5)');
+            assert.equal(out.device, 'CPU (Zen 5 · Silero v5)');
             assert.equal(out.isWav, true);
             assert.ok(out.chunkCount >= 2, 'длинный текст разбивается на чанки <= 650 символов');
             assert.equal(out.firstCall[2], 'xenia');
@@ -1394,6 +1393,167 @@ print(json.dumps({
             voice.resetVoicePrefsCache();
             process.chdir(prevCwd);
             await fsp.rm(tmpRoot, { recursive: true, force: true });
+        }
+    });
+
+    it('25. Единый стек gfx1151: запрет тихого отката Z-Image-Turbo на CPU, статус/warmup в воркере и паспорт запуска', async () => {
+        const { spawnSync } = await import('node:child_process');
+        const { buildLaunchPassport } = await import('../sources/modules/trainer/index.js');
+
+        // 1. Проверка паспорта «Способ запуска» для всех 4 классов моделей конечного набора
+        const flashPass = buildLaunchPassport({
+            id: 'Qwen3.8-Flash-Next',
+            path: '/MODELS/Local/Qwen3.8-Flash-Next',
+            isLocal: true,
+            protocol: 'halogen',
+            modality: 'llm',
+            weightFormat: 'gguf',
+            sizeGb: 108.6,
+            active: true,
+            halogenOnline: true,
+            engineSetup: { running: { npuPrefill: true } },
+        });
+        assert.match(flashPass.engine, /Halowin Bubo|Halogen Server/);
+        assert.match(flashPass.computeDevice, /gfx1151.*NPU/);
+        assert.equal(flashPass.memoryPolicyKind, 'always-hot');
+        assert.equal(flashPass.loadedInMemory, true);
+
+        const zImgPass = buildLaunchPassport({
+            id: 'Z-Image-Turbo',
+            path: '/MODELS/Local/Z-Image-Turbo',
+            isLocal: true,
+            protocol: 'local',
+            modality: 'image',
+            weightFormat: 'safetensors',
+            sizeGb: 32.8,
+            weightsDirAbs: '/tmp/z-image',
+            active: true,
+            rocmReady: true,
+            isHaloHost: true,
+            loadedStatus: { cuda: true, loadedModels: [] },
+        });
+        assert.equal(zImgPass.engine, 'PyTorch ROCm 7.13');
+        assert.equal(zImgPass.memoryPolicyKind, 'on-demand');
+        assert.equal(zImgPass.loadedInMemory, false);
+
+        const sileroPass = buildLaunchPassport({
+            id: 'Silero-TTS-RU',
+            path: '/MODELS/Local/Silero-TTS-RU',
+            isLocal: true,
+            protocol: 'local',
+            modality: 'audio',
+            weightFormat: 'pt',
+            sizeGb: 0.14,
+            weightsDirAbs: '/tmp/silero',
+            active: true,
+            rocmReady: true,
+            loadedStatus: { cuda: true, loadedModels: [{ op: 'tts', weightsDir: '/tmp/silero', device: 'CPU (Zen 5 · Silero v5)' }] },
+        });
+        assert.equal(sileroPass.engine, 'PyTorch CPU');
+        assert.equal(sileroPass.computeDevice, 'CPU Zen 5');
+        assert.equal(sileroPass.loadedInMemory, true);
+
+        const bgePass = buildLaunchPassport({
+            id: 'bge-m3',
+            path: '/MODELS/Local/bge-m3',
+            isLocal: true,
+            protocol: 'local',
+            modality: 'embed',
+            weightFormat: 'safetensors',
+            sizeGb: 2.1,
+            weightsDirAbs: '/tmp/bge',
+            active: true,
+            rocmReady: true,
+            loadedStatus: { cuda: true, loadedModels: [{ op: 'embed', weightsDir: '/tmp/bge', device: 'iGPU (Radeon 8065S)' }] },
+        });
+        assert.equal(bgePass.engine, 'PyTorch ROCm 7.13');
+        assert.equal(bgePass.memoryPolicyKind, 'always-hot');
+        assert.equal(bgePass.loadedInMemory, true);
+
+        // 2. В Python-воркере при доступной GPU (cuda:0) Z-Image-Turbo НЕ откатывается на CPU при ошибке GPU, а честно падает с ошибкой
+        const workerPath = path.resolve(process.cwd(), 'sources/modules/trainer/worker/local_infer_worker.py');
+        const tmpImg = await fsp.mkdtemp(path.join(os.tmpdir(), 'work-zimg-strict-'));
+        try {
+            await fsp.writeFile(path.join(tmpImg, 'model_index.json'), '{}');
+            const py = `
+import json, runpy, sys, types
+ns = runpy.run_path(${JSON.stringify(workerPath)}, run_name='worker_under_test')
+
+class FakeTorch:
+    bfloat16 = 'bf16'
+    float16 = 'f16'
+    float32 = 'f32'
+    class cuda:
+        @staticmethod
+        def is_available(): return True
+        @staticmethod
+        def empty_cache(): pass
+        @staticmethod
+        def get_device_name(i): return 'AMD Radeon 8065S'
+    class Generator:
+        def __init__(self, device='cpu'):
+            self.device = device
+        def manual_seed(self, s):
+            return self
+    class inference_mode:
+        def __enter__(self): return None
+        def __exit__(self, *a): return False
+
+class FailingPipe:
+    def __init__(self):
+        self.devices = []
+    def to(self, dev):
+        self.devices.append(dev)
+        if str(dev).startswith('cuda'):
+            raise RuntimeError('hip out of memory')
+        return self
+    def enable_vae_slicing(self): pass
+
+sys.modules['diffusers'] = types.SimpleNamespace(
+    ZImagePipeline=types.SimpleNamespace(from_pretrained=lambda *a, **kw: FailingPipe()),
+    AutoPipelineForText2Image=types.SimpleNamespace(from_pretrained=lambda *a, **kw: FailingPipe()),
+)
+sys.modules['accelerate'] = types.SimpleNamespace()
+sys.modules['PIL'] = types.SimpleNamespace(Image=object)
+
+ns['_load_image_pipeline'].__globals__['torch'] = FakeTorch
+ns['_load_image_pipeline'].__globals__['HAS_TORCH'] = True
+ns['_best_device_and_dtype'].__globals__['torch'] = FakeTorch
+ns['_best_device_and_dtype'].__globals__['HAS_TORCH'] = True
+
+cache = {}
+err_msg = ''
+try:
+    ns['_load_image_pipeline'](${JSON.stringify(tmpImg)}, cache)
+except Exception as e:
+    try:
+        err_msg = json.loads(str(e)).get('error', str(e))
+    except Exception:
+        err_msg = str(e)
+
+# Проверяем handle_status и handle_warmup (image пропускается, llm/embed учитываются)
+st = ns['handle_status']({('embed', '/tmp/bge'): ('torch', None, None, 'cuda:0')}, {('embed', '/tmp/bge'): 123.0}, {}, {})
+wu_img = ns['handle_warmup']({'modality': 'image', 'weightsDir': ${JSON.stringify(tmpImg)}}, {}, {}, {}, {})
+
+print(json.dumps({
+    'errMsg': err_msg,
+    'cacheLen': len(cache),
+    'statusCount': len(st['loadedModels']),
+    'statusOp': st['loadedModels'][0]['op'] if st['loadedModels'] else '',
+    'wuImgSkipped': bool(wu_img.get('skipped')),
+}))
+`;
+            const res = spawnSync('python', ['-c', py], { encoding: 'utf8', timeout: 15000 });
+            assert.equal(res.status, 0, res.stderr || '');
+            const out = JSON.parse(String(res.stdout || '').trim());
+            assert.match(out.errMsg, /тихий откат на CPU отключён/i, 'ошибка GPU не должна прятаться в CPU-фоллбэк');
+            assert.equal(out.cacheLen, 0, 'сбойный пайплайн не кэшируется на CPU');
+            assert.equal(out.statusCount, 1);
+            assert.equal(out.statusOp, 'embed');
+            assert.equal(out.wuImgSkipped, true, 'Z-Image-Turbo не прогревается заранее как always-hot');
+        }
+        finally {
+            await fsp.rm(tmpImg, { recursive: true, force: true });
         }
     });
 });

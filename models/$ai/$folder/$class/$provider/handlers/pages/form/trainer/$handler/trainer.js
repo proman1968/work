@@ -499,6 +499,9 @@ export default {
                                 <span class="status-chip ok" ~if="$for.item.state === 'installed' && !$for.item.incompatibleOnPlatform">
                                     Установлена<span ~if="$for.item.sizeGb"> · {{$for.item.sizeGb}} ГБ</span>
                                 </span>
+                                <span class="status-chip" ~class="$for.item.launchPassport?.loadedInMemory ? 'ok' : 'busy'" ~if="$for.item.state === 'installed' && !$for.item.incompatibleOnPlatform && $for.item.launchPassport?.compactBadge">
+                                    {{$for.item.launchPassport.compactBadge}}
+                                </span>
                                 <span class="status-chip err" ~if="$for.item.state === 'installed' && $for.item.incompatibleOnPlatform">
                                     Несовместима с ОС<span ~if="$for.item.sizeGb"> · {{$for.item.sizeGb}} ГБ</span>
                                 </span>
@@ -861,7 +864,8 @@ export default {
                 sizeGb: m.sizeGb || 0,
                 ramGb: m.sizeGb || halo?.ramGb || 4,
                 fit: 'optimal',
-                device: halo?.device || '',
+                device: m.launchPassport?.computeDevice || halo?.device || '',
+                launchPassport: m.launchPassport || null,
                 download: null,
                 progressPct: 100,
                 etaText: '',
