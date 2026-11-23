@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:gas-station',
     METADATA: {
         FIELDS: [
-            { id: 'item', label: 'Материал / запчасть', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', analytic: true },
+            { id: 'item', label: 'Материал / запчасть', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', analytic: true },
         ],
     },
 }

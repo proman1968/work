@@ -1,9 +1,4 @@
-export default {    async TestFunc(s, d = {
-        d: 44
-      }) {
-        let a = 100;
-        let b = a + 100;
-      },
+export default {
     $public: {
         form: "objects"
     },

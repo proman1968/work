@@ -1,22 +1,23 @@
-export default {    label: 'Начисление зарплаты',
+export default {
+    label: 'Начисление зарплаты',
     icon: 'carbon:calculator',
     METADATA: {
         FIELDS: [
-            { id: 'period', label: 'За месяц', type: 'Date' },
+            { id: 'period', label: 'За месяц', type: 'date' },
             {
                 id: 'staff',
                 label: 'Сотрудники',
-                type: 'Table',
+                table: true,
                 required: true,
                 FIELDS: [
                     {
                         id: 'employee',
                         label: 'Сотрудник',
-                        type: 'Link',
+                        type: 'link',
                         target: '/MODULES/Register/CATALOGS/Сотрудники',
                         required: true,
                     },
-                    { id: 'sum', label: 'Начислено', type: 'Money', required: true },
+                    { id: 'sum', label: 'Начислено', type: 'money', required: true },
                 ],
             },
         ],

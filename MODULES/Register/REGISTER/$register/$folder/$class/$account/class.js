@@ -1,6 +1,6 @@
 /**
  * $account — счёт (субсчёт) единого журнала. Поля счёта — его аналитики:
- * METADATA.FIELDS с type: 'Link', catalog и analytic: true (required — обязательна в проводке).
+ * METADATA.FIELDS с type: 'link', catalog и analytic: true (required — обязательна в проводке).
  * NORMS — счёт нормативов. Проводки и остатки — учётное ядро (sources/data).
  */
 export default {

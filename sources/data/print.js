@@ -21,6 +21,7 @@ import { classSchema, findAncestor, classBasePath } from './schema.js';
 import { readObject } from './objects.js';
 import { normValue } from './posting.js';
 import { compile, round, toNumber } from './expr.js';
+import { formatFio } from './fio.js';
 import { DataError } from './errors.js';
 import { localDay } from './time.js';
 
@@ -208,11 +209,28 @@ export function amountInWords(v) {
     return (num(v) < 0 ? 'минус ' : '') + text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+function formatAddress(v) {
+    if (!v)
+        return '';
+    if (typeof v !== 'object')
+        return String(v);
+    return [
+        v.postcode,
+        v.region,
+        v.city ? (v.city.includes('.') ? v.city : `г. ${v.city}`) : '',
+        v.street ? (v.street.includes('.') ? v.street : `ул. ${v.street}`) : '',
+        v.house ? (v.house.includes('.') ? v.house : `д. ${v.house}`) : '',
+        v.flat ? (v.flat.includes('.') ? v.flat : `кв. ${v.flat}`) : '',
+    ].filter(Boolean).join(', ');
+}
+
 const FUNCTIONS = Object.freeze({
     money: x => fmtNumber(x, 2),
     n: (x, digits = 0) => fmtNumber(x, Math.max(0, Math.min(6, Math.trunc(num(digits))))),
     date: fmtDate,
     words: amountInWords,
+    fio: (v, pad = 'Именительный') => formatFio(v, pad),
+    address: formatAddress,
 });
 
 /* ---------- данные документа ---------- */
@@ -271,7 +289,10 @@ function partyOf(body, out, objs) {
             break;
         }
     }
-    const firstAcc = Array.isArray(ref?.accounts) && ref.accounts.length ? ref.accounts[0] : null;
+    const accList = Array.isArray(ref?.bank_accounts) && ref.bank_accounts.length
+        ? ref.bank_accounts
+        : (Array.isArray(ref?.accounts) && ref.accounts.length ? ref.accounts : []);
+    const firstAcc = accList[0] || null;
     const rawReq = String(body?.acct_r || '').trim();
     const accMatch = rawReq.match(/\b(40\d{18}|301\d{17})\b/);
     const bikMatch = rawReq.match(/\b(04\d{7})\b/);
@@ -286,7 +307,7 @@ function partyOf(body, out, objs) {
         bik: String(ref?.bik || firstAcc?.bik || bikMatch?.[1] || ''),
         account: String(ref?.account || firstAcc?.account || firstAcc?.num || accMatch?.[1] || (!bikMatch && !innMatch ? rawReq : '') || ''),
         corr: String(ref?.corr || firstAcc?.corr || ''),
-        address: String(ref?.address || ''),
+        address: formatAddress(ref?.legal_address || ref?.actual_address || ref?.address || ''),
     };
 }
 
@@ -310,8 +331,13 @@ function show(v) {
         return '';
     if (Array.isArray(v))
         return v.map(show).join(', ');
-    if (typeof v === 'object')
+    if (typeof v === 'object') {
+        if ('last_name' in v || 'first_name' in v)
+            return formatFio(v, 'Именительный');
+        if ('city' in v || 'street' in v || 'house' in v)
+            return formatAddress(v);
         return String(v.title ?? v.name ?? v.id ?? '');
+    }
     if (typeof v === 'boolean')
         return v ? 'да' : 'нет';
     if (typeof v === 'number')

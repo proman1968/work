@@ -139,8 +139,33 @@ export default {
                     <span>{{$for.item.node.label || $for.item.node.id}}</span>
                     <span class="muted">({{$for.item.trail}})</span>
                     <div ~if="canEdit" class="horizontal" style="margin-left:auto;gap:6px;">
+                        <oda-button icon="icons:send" title="Пригласить сотрудника по ссылке, Email, Telegram или MAX" @tap="openInvite($for.item.trail)">Пригласить</oda-button>
                         <oda-button icon="icons:add" title="Добавить подчинённое рабочее место" @tap="promptSubPlace($for.item.trail)">Подчинённое место</oda-button>
                         <oda-button icon="icons:delete" title="Удалить рабочее место" @tap="removePlace($for.item.trail)"></oda-button>
+                    </div>
+                </div>
+
+                <div ~if="canEdit && inviteTrail === $for.item.trail" class="card" style="padding:10px 12px;gap:8px;background:var(--subtle-background);">
+                    <div class="role-row">
+                        <span class="role-title">Канал приглашения:</span>
+                        <select ::value="inviteChannel">
+                            <option value="link">🔗 Одноразовая ссылка</option>
+                            <option value="email">✉️ Email (почта)</option>
+                            <option value="telegram">✈️ Telegram</option>
+                            <option value="max">💬 Мессенджер MAX</option>
+                        </select>
+                        <input ~if="inviteChannel === 'email'" type="text" placeholder="Email сотрудника (name@company.ru)…" ::value="inviteRecipient" style="flex:1;min-width:200px;">
+                        <input ~if="inviteChannel === 'telegram' || inviteChannel === 'max'" type="text" placeholder="Chat ID (для отправки ботом) или имя для заметки…" ::value="inviteRecipient" style="flex:1;min-width:200px;">
+                        <input type="text" placeholder="Комментарий (опционально)" ::value="inviteNote" style="width:180px;">
+                        <oda-button icon="icons:check" :disabled="inviteBusy" @tap="sendInvite()">{{inviteBusy ? 'Отправка…' : 'Создать'}}</oda-button>
+                        <oda-button icon="icons:close" @tap="inviteTrail = ''; inviteResult = null">Закрыть</oda-button>
+                    </div>
+                    <div ~if="inviteResult" class="role-row" style="gap:8px;flex-wrap:wrap;">
+                        <input type="text" readonly :value="inviteResult.url" style="flex:1;min-width:260px;font-family:monospace;font-size:12px;">
+                        <oda-button icon="icons:content-copy" @tap="copyText(inviteResult.url)">Копировать ссылку</oda-button>
+                        <a ~if="inviteResult.shareUrl" :href="inviteResult.shareUrl" target="_blank" rel="noopener" style="font-size:13px;color:var(--accent-color);text-decoration:none;font-weight:600;">Отправить в Telegram ↗</a>
+                        <span ~if="inviteResult.sent" style="color:var(--success-color, #15803d);font-size:13px;font-weight:600;">✓ Отправлено ({{inviteResult.sentVia}})</span>
+                        <span ~if="inviteResult.warning" class="muted" style="color:#b45309;">{{inviteResult.warning}}</span>
                     </div>
                 </div>
 
@@ -187,6 +212,20 @@ export default {
                 </div>
             </div>
         </div>
+        <div ~if="canEdit && invitesList.length" class="card">
+            <div class="card-header">
+                <oda-icon icon="icons:send" icon-size="20"></oda-icon>
+                <span>Приглашения ({{invitesList.length}})</span>
+            </div>
+            <div class="link-row" ~for="invitesList" style="justify-content:space-between;flex-wrap:wrap;">
+                <span><b>{{$for.item.placeLabel}}</b> · {{$for.item.channel}}{{$for.item.recipient ? ' (' + $for.item.recipient + ')' : ''}}</span>
+                <span class="muted">Статус: {{inviteStatusLabel($for.item.effectiveStatus)}}</span>
+                <div class="horizontal" style="gap:6px;">
+                    <oda-button ~if="$for.item.effectiveStatus === 'active'" icon="icons:content-copy" @tap="copyText(inviteLinkOf($for.item.token))">Ссылка</oda-button>
+                    <oda-button ~if="$for.item.effectiveStatus === 'active'" icon="icons:close" @tap="revokeInvite($for.item.id)">Отозвать</oda-button>
+                </div>
+            </div>
+        </div>
         <oda-messenger-settings :$item="$item" :can-edit="canEdit" :user-map="userMap"></oda-messenger-settings>
         <div ~if="error" style="color:var(--error-color, #c00);">{{error}}</div>
     `,
@@ -198,6 +237,13 @@ export default {
     canEdit: false,
     focusedTrail: '',
     newPlaceLabel: '',
+    inviteTrail: '',
+    inviteChannel: 'link',
+    inviteRecipient: '',
+    inviteNote: '',
+    inviteBusy: false,
+    inviteResult: null,
+    invitesList: [],
     error: '',
     async attached() {
         await this.reload();
@@ -251,6 +297,7 @@ export default {
             this.security = JSON.parse(JSON.stringify(body?.['#security'] || {}));
             await this.loadUsers();
             await this.loadAvailableClasses();
+            await this.loadInvites();
         }
         catch (e) {
             this.error = String(e?.message || e);
@@ -464,5 +511,77 @@ export default {
             return;
         node.LINKS = node.LINKS.filter(l => l?.id !== clsPath);
         await this.persist(sec);
+    },
+    inviteStatusLabel(st) {
+        return ({ active: 'активно', used: 'принято', revoked: 'отозвано', expired: 'истекло' })[st] || st;
+    },
+    inviteLinkOf(token) {
+        return `${location.origin}/?invite=${encodeURIComponent(token || '')}`;
+    },
+    async copyText(text) {
+        try {
+            await navigator.clipboard?.writeText(String(text || ''));
+        }
+        catch {
+            window.prompt?.('Скопируйте ссылку приглашения:', String(text || ''));
+        }
+    },
+    async loadInvites() {
+        if (!this.canEdit || !this.$item?.fetch) {
+            this.invitesList = [];
+            return;
+        }
+        try {
+            const list = await this.$item.fetch('invite_list', {});
+            this.invitesList = Array.isArray(list) ? list : [];
+        }
+        catch {
+            this.invitesList = [];
+        }
+    },
+    openInvite(trail) {
+        if (this.inviteTrail === trail) {
+            this.inviteTrail = '';
+            this.inviteResult = null;
+            return;
+        }
+        this.inviteTrail = trail;
+        this.inviteChannel = 'link';
+        this.inviteRecipient = '';
+        this.inviteNote = '';
+        this.inviteResult = null;
+    },
+    async sendInvite() {
+        if (!this.inviteTrail || this.inviteBusy)
+            return;
+        this.inviteBusy = true;
+        this.error = '';
+        try {
+            const res = await this.$item.fetch('invite_create', {}, {
+                trail: this.inviteTrail,
+                channel: this.inviteChannel,
+                recipient: this.inviteRecipient,
+                note: this.inviteNote,
+                origin: location.origin,
+            });
+            this.inviteResult = res;
+            await this.loadInvites();
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+        finally {
+            this.inviteBusy = false;
+        }
+    },
+    async revokeInvite(id) {
+        this.error = '';
+        try {
+            await this.$item.fetch('invite_revoke', {}, { id });
+            await this.loadInvites();
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
     },
 }

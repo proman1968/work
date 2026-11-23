@@ -6,7 +6,7 @@ export default {    label: 'Письмо',
             {
                 id: 'direction',
                 label: 'Направление',
-                type: 'Enum',
+                type: 'enum',
                 values: ['Входящее', 'Исходящее'],
                 required: true,
             },

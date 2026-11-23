@@ -5,7 +5,7 @@ export default {    label: '44 Расходы на продажу',
             {
                 id: 'vehicle',
                 label: 'Транспорт',
-                type: 'Link',
+                type: 'link',
                 target: '/MODULES/Register/CATALOGS/Транспорт',
                 analytic: true,
                 required: true,

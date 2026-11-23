@@ -599,8 +599,37 @@ export default {
             cons?.refreshFormContext?.();
         }, 250);
     },
+    async _handleInviteQuery() {
+        try {
+            const url = new URL(window.location.href);
+            const tok = url.searchParams.get('invite') || '';
+            if (!tok)
+                return;
+            sessionStorage.setItem('work.pendingInviteToken', tok);
+            const info = await WORK.fetch('/', 'invite_info', {}, { token: tok });
+            if (!info?.valid)
+                return;
+            if (WORK.uid) {
+                const res = await WORK.fetch('/', 'invite_accept', {}, { token: tok });
+                sessionStorage.removeItem('work.pendingInviteToken');
+                url.searchParams.delete('invite');
+                history.replaceState(null, '', url.pathname + url.search + url.hash);
+                if (res?.consumed) {
+                    this.$('item-tree')?.refreshTree?.();
+                    const p = await WORK.get_item(res.pointPath).catch(() => null);
+                    if (p)
+                        window.execute?.(p);
+                }
+            }
+            else {
+                this.showUser = true;
+            }
+        }
+        catch { /* ignore */ }
+    },
     attached() {
         this.async(async ()=>{
+            await this._handleInviteQuery();
             if(!WORK.uid && !WORK.DEV_MODE){
                 this.visibleMode = 'user';
                 if(this.left_drawer)

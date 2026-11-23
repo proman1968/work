@@ -1,19 +1,20 @@
-export default {    label: 'Инвентаризация',
+export default {
+    label: 'Инвентаризация',
     icon: 'carbon:task',
     METADATA: {
         FIELDS: [
-            { id: 'storage', label: 'Склад', type: 'Link', target: '/MODULES/Register/CATALOGS/Склады и резервуары', required: true },
+            { id: 'storage', label: 'Склад', type: 'link', target: '/MODULES/Register/CATALOGS/Склады', required: true },
             {
                 id: 'lines',
                 label: 'Расхождения',
-                type: 'Table',
+                table: true,
                 required: true,
                 FIELDS: [
-                    { id: 'item', label: 'Номенклатура', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
-                    { id: 'unit', label: 'Единица', required: true },
-                    { id: 'delta', label: 'Излишек (+) / недостача (−)', type: 'Number', required: true },
-                    { id: 'cost', label: 'Учётная цена за единицу (пусто — по средней)', type: 'Money' },
-                    { id: 'batch', label: 'Партия', type: 'Link', target: '/MODULES/Register/CATALOGS/Партии' },
+                    { id: 'item', label: 'Номенклатура', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
+                    { id: 'unit', label: 'Единица', type: 'string', required: true },
+                    { id: 'delta', label: 'Излишек (+) / недостача (−)', type: 'number', required: true },
+                    { id: 'cost', label: 'Учётная цена за единицу (пусто — по средней)', type: 'money' },
+                    { id: 'batch', label: 'Партия', type: 'link', target: '/MODULES/Register/CATALOGS/Партии' },
                 ],
             },
         ],

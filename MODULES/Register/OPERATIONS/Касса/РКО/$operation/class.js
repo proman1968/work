@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:money',
     METADATA: {
         FIELDS: [
-            { id: 'employee', label: 'Выдать сотруднику (под отчёт)', type: 'Link', target: '/MODULES/Register/CATALOGS/Сотрудники', required: true },
+            { id: 'employee', label: 'Выдать сотруднику (под отчёт)', type: 'link', target: '/MODULES/Register/CATALOGS/Сотрудники', required: true },
         ],
         POSTINGS: [
             {

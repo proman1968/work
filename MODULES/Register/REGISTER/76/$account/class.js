@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:wallet',
     METADATA: {
         FIELDS: [
-            { id: 'counterparty', label: 'Контрагент', type: 'Link', target: '/MODULES/Register/CATALOGS/Субъекты', analytic: true },
+            { id: 'counterparty', label: 'Контрагент', type: 'link', target: '/MODULES/Register/CATALOGS/Субъекты', analytic: true },
         ],
     },
 }

@@ -5,7 +5,7 @@ export default {
         FIELDS: [
             { id: 'code', label: 'Код должности', type: 'string' },
             { id: 'department', label: 'Подразделение', type: 'string' },
-            { id: 'base_salary', label: 'Оклад по штату', type: 'Money' },
+            { id: 'base_salary', label: 'Оклад по штату', type: 'money' },
         ],
     },
 }

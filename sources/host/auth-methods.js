@@ -5,6 +5,7 @@ import { getMailer } from './mail.js';
 import * as CORE from '../server/index.js';
 import { $server } from '../server/server.js';
 import { audit } from '../server/access/audit.js';
+import { inspectInvite, consumeInvite } from '../server/access/invites.js';
 import { assertWorkplaceAvailableForLogin } from '../modules/license/index.js';
 
 const REGISTER_CODE_TTL_MS = 10 * 60 * 1000;
@@ -77,7 +78,7 @@ async function isFirstOrBossUser(uid) {
 
 export const authMethods = {
     async user_register_start(params = {}) {
-        let { uid, email } = params.post || {};
+        let { uid, email, inviteToken } = params.post || {};
         if (!email || typeof email !== 'string')
             throw new Error("Не указан email");
         const expected = uidOfEmail(email);
@@ -100,6 +101,15 @@ export const authMethods = {
                     autoCode: code,
                     message: 'Регистрация первого администратора (BOSS) выполняется напрямую без почтового сервера.',
                 };
+            }
+            if (inviteToken) {
+                const inv = inspectInvite(inviteToken);
+                if (inv?.valid && inv.channel === 'email' && inv.recipient && inv.recipient.toLowerCase() === email.trim().toLowerCase()) {
+                    return {
+                        autoCode: code,
+                        message: `Приглашение на ${inv.placeLabel} подтверждено по адресу ${email}.`,
+                    };
+                }
             }
             if (DEV_MODE) {
                 return "На Вашу почту отправлено письмо с одноразовым кодом, введите его для продолжения регистрации.";
@@ -160,7 +170,7 @@ export const authMethods = {
     },
 
     async user_register_finish(params = {}) {
-        let { credentials: { uid: postUid, icon, surname, name, patronymic, publicKey, time } = {}, signature } = params.post || {};
+        let { credentials: { uid: postUid, icon, surname, name, patronymic, publicKey, time } = {}, signature, inviteToken } = params.post || {};
         let session = params.session;
         // uid и email — только из проверенной кодом регистрации этой сессии
         const verified = session.credentials?.verified ? session.credentials : null;
@@ -244,6 +254,17 @@ export const authMethods = {
 
         if (isFirstUser) {
             await ensureBootstrapBoss(uid, params);
+        }
+        const invTok = String(inviteToken || params.inviteToken || '').trim();
+        if (invTok) {
+            try {
+                const invRes = await consumeInvite({ token: invTok, uid, sockets: params.sockets });
+                if (invRes?.consumed)
+                    audit('invite_consume_register', { uid, pointPath: invRes.pointPath, trail: invRes.trail, params });
+            }
+            catch (err) {
+                console.warn('[WORK] invite consume on register:', err?.message || err);
+            }
         }
 
         $server.broadcastAuthChangedToSession(session, { uid, reason: 'register' });
@@ -329,6 +350,17 @@ export const authMethods = {
             $user.online = undefined;
             $user.reset();
             $server.broadcastAuthChangedToSession(session, { uid, reason: 'login' });
+        }
+        const invTok = String(params.post?.inviteToken || params.inviteToken || '').trim();
+        if (invTok && uid) {
+            try {
+                const invRes = await consumeInvite({ token: invTok, uid, sockets: params.sockets });
+                if (invRes?.consumed)
+                    audit('invite_consume_login', { uid, pointPath: invRes.pointPath, trail: invRes.trail, params });
+            }
+            catch (err) {
+                console.warn('[WORK] invite consume on login:', err?.message || err);
+            }
         }
         return "Вход выполнен";
     },

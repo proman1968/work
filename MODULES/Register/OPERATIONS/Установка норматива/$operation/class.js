@@ -3,9 +3,9 @@ export default {    label: 'Установка норматива',
     AUTO_REGISTER: true,
     METADATA: {
         FIELDS: [
-            { id: 'kind', label: 'Вид норматива', type: 'Link', target: '/MODULES/Register/CATALOGS/Виды нормативов', required: true },
-            { id: 'object', label: 'Объект', type: 'Link', target: '/MODULES/Register/CATALOGS' },
-            { id: 'value', label: 'Значение', type: 'Number', required: true },
+            { id: 'kind', label: 'Вид норматива', type: 'link', target: '/MODULES/Register/CATALOGS/Виды нормативов', required: true },
+            { id: 'object', label: 'Объект', type: 'link', target: '/MODULES/Register/CATALOGS' },
+            { id: 'value', label: 'Значение', type: 'number', required: true },
         ],
         POSTINGS: [
             {

@@ -5,7 +5,7 @@ export default {    label: 'Коммуникации',
             {
                 id: 'counterparty',
                 label: 'Контрагент',
-                type: 'Link',
+                type: 'link',
                 target: '/MODULES/Register/CATALOGS/Субъекты',
                 analytic: true,
                 required: true,

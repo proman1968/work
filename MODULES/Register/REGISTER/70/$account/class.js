@@ -5,7 +5,7 @@ export default {    label: '70 Расчёты с персоналом',
             {
                 id: 'employee',
                 label: 'Сотрудник',
-                type: 'Link',
+                type: 'link',
                 target: '/MODULES/Register/CATALOGS/Сотрудники',
                 analytic: true,
                 required: true,

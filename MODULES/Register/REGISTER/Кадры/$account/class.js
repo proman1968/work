@@ -5,7 +5,7 @@ export default {    label: 'Кадры',
             {
                 id: 'person',
                 label: 'Сотрудник',
-                type: 'Link',
+                type: 'link',
                 target: '/MODULES/Register/CATALOGS/Субъекты/Физ. лица',
                 analytic: true,
                 required: true,

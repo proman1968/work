@@ -1,20 +1,21 @@
-export default {    label: 'Перемещение',
+export default {
+    label: 'Перемещение',
     icon: 'carbon:arrows-horizontal',
     METADATA: {
         FIELDS: [
-            { id: 'from_storage', label: 'Откуда', type: 'Link', target: '/MODULES/Register/CATALOGS/Склады и резервуары', required: true },
-            { id: 'to_storage', label: 'Куда', type: 'Link', target: '/MODULES/Register/CATALOGS/Склады и резервуары', required: true },
+            { id: 'from_storage', label: 'Откуда', type: 'link', target: '/MODULES/Register/CATALOGS/Склады', required: true },
+            { id: 'to_storage', label: 'Куда', type: 'link', target: '/MODULES/Register/CATALOGS/Склады', required: true },
             {
                 id: 'lines',
                 label: 'Товары',
-                type: 'Table',
+                table: true,
                 required: true,
                 FIELDS: [
-                    { id: 'item', label: 'Номенклатура', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
-                    { id: 'unit', label: 'Единица', required: true },
-                    { id: 'qty', label: 'Количество', type: 'Number', required: true },
-                    { id: 'price', label: 'Учётная цена за единицу (пусто — по средней)', type: 'Money' },
-                    { id: 'batch', label: 'Партия', type: 'Link', target: '/MODULES/Register/CATALOGS/Партии' },
+                    { id: 'item', label: 'Номенклатура', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
+                    { id: 'unit', label: 'Единица', type: 'string', required: true },
+                    { id: 'qty', label: 'Количество', type: 'number', required: true },
+                    { id: 'price', label: 'Учётная цена за единицу (пусто — по средней)', type: 'money' },
+                    { id: 'batch', label: 'Партия', type: 'link', target: '/MODULES/Register/CATALOGS/Партии' },
                 ],
             },
         ],

@@ -1,11 +1,12 @@
-export default {    label: '41 Товары',
+export default {
+    label: '41 Товары',
     icon: 'carbon:product',
     METADATA: {
         FIELDS: [
             {
                 id: 'item',
                 label: 'Номенклатура',
-                type: 'Link',
+                type: 'link',
                 target: '/MODULES/Register/CATALOGS/Номенклатура',
                 analytic: true,
                 required: true,
@@ -13,12 +14,12 @@ export default {    label: '41 Товары',
             {
                 id: 'storage',
                 label: 'Склад',
-                type: 'Link',
-                target: '/MODULES/Register/CATALOGS/Склады и резервуары',
+                type: 'link',
+                target: '/MODULES/Register/CATALOGS/Склады',
                 analytic: true,
                 required: true,
             },
-            { id: 'batch', label: 'Партия', type: 'Link', target: '/MODULES/Register/CATALOGS/Партии', analytic: true },
+            { id: 'batch', label: 'Партия', type: 'link', target: '/MODULES/Register/CATALOGS/Партии', analytic: true },
         ],
     },
 }

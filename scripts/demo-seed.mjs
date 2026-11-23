@@ -52,14 +52,16 @@ export function seedDemo(db, { since = `${new Date().getFullYear()}-01-01`, auth
     make('canister', `${prefix}/CATALOGS/Номенклатура`, { name: 'Канистра 20 л', kind: 'Тара', base_unit: 'шт' });
     make('barrel', `${prefix}/CATALOGS/Номенклатура`, { name: 'Бочка 200 л', kind: 'Тара', base_unit: 'шт' });
 
-    make('tank', `${prefix}/CATALOGS/Склады и резервуары`, { name: 'Резервуар Р-1', kind: 'Резервуар', capacity: 50000, item: ids.oil });
-    make('stock', `${prefix}/CATALOGS/Склады и резервуары`, { name: 'Склад готовой продукции', kind: 'Склад' });
-    make('fuel_stock', `${prefix}/CATALOGS/Склады и резервуары`, { name: 'Склад ГСМ', kind: 'Склад' });
+    make('tank', `${prefix}/CATALOGS/Склады`, { name: 'Резервуар Р-1', kind: 'Резервуар', capacity: 50000, item: ids.oil });
+    make('stock', `${prefix}/CATALOGS/Склады`, { name: 'Склад готовой продукции', kind: 'Склад' });
+    make('fuel_stock', `${prefix}/CATALOGS/Склады`, { name: 'Склад ГСМ', kind: 'Склад' });
 
     make('supplier', `${prefix}/CATALOGS/Субъекты/Юр. лица`, { name: 'ООО «Нефтехим-Поставка»', inn: '7701000001' });
     make('client', `${prefix}/CATALOGS/Субъекты/Юр. лица`, { name: 'ООО «Автосервис Плюс»', inn: '7701000002' });
     make('ivanov', `${prefix}/CATALOGS/Субъекты/Физ. лица`, { name: 'Иванов Иван Иванович' });
     make('petrov', `${prefix}/CATALOGS/Субъекты/Физ. лица`, { name: 'Петров Пётр Петрович' });
+    make('pos_mgr', `${prefix}/CATALOGS/Должности`, { name: 'Менеджер по продажам', code: 'MGR', base_salary: 100000 });
+    make('pos_drv', `${prefix}/CATALOGS/Должности`, { name: 'Водитель бензовоза', code: 'DRV', base_salary: 80000 });
     make('truck', `${prefix}/CATALOGS/Транспорт`, { name: 'Бензовоз КамАЗ', plate: 'А123ВС77', kind: 'Бензовоз', capacity: 10000, fuel: ids.diesel });
     return ids;
 }
@@ -122,11 +124,11 @@ export function seedDemoOperations(db, ids, { year = new Date().getFullYear(), a
     }, 'finances', 'head');
 
     post('/OPERATIONS/Кадры/Приём на работу', '01-15', {
-        person: ids.ivanov, position: 'Менеджер по продажам', salary: 100000,
+        person: ids.ivanov, position: ids.pos_mgr, salary: 100000,
     }, 'personal', 'head');
 
     post('/OPERATIONS/Кадры/Приём на работу', '01-15', {
-        person: ids.petrov, position: 'Водитель бензовоза', salary: 80000,
+        person: ids.petrov, position: ids.pos_drv, salary: 80000,
     }, 'personal', 'head');
 
     post('/OPERATIONS/Зарплата', '09-30', {

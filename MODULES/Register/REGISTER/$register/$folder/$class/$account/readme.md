@@ -13,7 +13,7 @@
 1. Объявление типа — в метапапке журнала: `REGISTER/$register/$folder/$class/$account/`.
 2. Создать счёт: `create_class` у журнала (`REGISTER`) или родительского счёта, **`type: '$account'`**, `id` = код счёта (`41`, `50`, `62`, `01`), в `class.js` — обязательно `label` и `icon` (из реальных наборов ODA: `carbon:`, `icons:`, `bootstrap:` и т.д.).
 3. Аналитики счёта задаются в `METADATA.FIELDS` как поля-ссылки:
-   `{ id: 'counterparty', label: 'Контрагент', type: 'Link', catalog: '/MODULES/Register/CATALOGS/Клиенты', analytic: true, required: true }`.
+   `{ id: 'counterparty', label: 'Контрагент', type: 'link', target: '/MODULES/Register/CATALOGS/Клиенты', analytic: true, required: true }`.
    При наследовании в организации путь справочника автоматически разрешается внутри текущей `$base`.
 4. Поля справочника-аналитики и поля его расширения `OVERLAY` автоматически доступны в отчётах как **субаналитики** (двухэтапный отбор и группировка).
 5. Если у счёта есть субсчета, проводки выполняются по конечным субсчетам-листьям, а родительский счёт агрегирует их обороты и сальдо.

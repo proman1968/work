@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:box',
     METADATA: {
         FIELDS: [
-            { id: 'item', label: 'Материал', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', analytic: true },
+            { id: 'item', label: 'Материал', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', analytic: true },
         ],
     },
 }

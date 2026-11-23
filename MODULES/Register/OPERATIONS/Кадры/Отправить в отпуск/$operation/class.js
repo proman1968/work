@@ -1,7 +1,7 @@
 export default {    label: 'Отправить в отпуск',
     icon: 'carbon:user',
     METADATA: {
-        FIELDS: [{ id: 'until', label: 'Отпуск до', type: 'Date' }],
+        FIELDS: [{ id: 'until', label: 'Отпуск до', type: 'date' }],
         POSTINGS: [
             {
                 id: 'main',

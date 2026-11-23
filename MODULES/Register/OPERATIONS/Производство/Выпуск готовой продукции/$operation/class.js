@@ -3,10 +3,10 @@ export default {
     icon: 'carbon:product',
     METADATA: {
         FIELDS: [
-            { id: 'storage', label: 'Склад готовой продукции', type: 'Link', target: '/MODULES/Register/CATALOGS/Склады и резервуары', required: true },
-            { id: 'item', label: 'Продукция', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
-            { id: 'qty', label: 'Количество', type: 'Number', required: true },
-            { id: 'sum', label: 'Плановая / фактическая себестоимость', type: 'Money', required: true },
+            { id: 'storage', label: 'Склад готовой продукции', type: 'link', target: '/MODULES/Register/CATALOGS/Склады', required: true },
+            { id: 'item', label: 'Продукция', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
+            { id: 'qty', label: 'Количество', type: 'number', required: true },
+            { id: 'sum', label: 'Плановая / фактическая себестоимость', type: 'money', required: true },
         ],
         POSTINGS: [
             {

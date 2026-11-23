@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:construction',
     METADATA: {
         FIELDS: [
-            { id: 'asset', label: 'Объект вложений', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', analytic: true },
+            { id: 'asset', label: 'Объект вложений', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', analytic: true },
         ],
     },
 }

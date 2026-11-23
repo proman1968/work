@@ -1,4 +1,5 @@
-export default {    label: 'Возврат от покупателя',
+export default {
+    label: 'Возврат от покупателя',
     icon: 'carbon:undo',
     METADATA: {
         POSTINGS: [
@@ -7,14 +8,14 @@ export default {    label: 'Возврат от покупателя',
                 each: 'lines',
                 amount: 'row.qty * row.price',
                 debit: { account: '/MODULES/Register/REGISTER/90/01', analytics: { item: 'row.item' } },
-                credit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client' } },
+                credit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client', contract: 'contract' } },
             },
             {
                 id: 'vat',
                 each: 'lines',
                 amount: "round(row.qty * row.price * norm('Ставка НДС', row.item), 2)",
                 debit: { account: '/MODULES/Register/REGISTER/68/02' },
-                credit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client' } },
+                credit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client', contract: 'contract' } },
             },
             {
                 id: 'cogs',

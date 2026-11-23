@@ -31,6 +31,8 @@ import {
 } from '../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../modules/license/index.js';
 import { NOTIFY_METHODS, resolveBotForPoint, sanitizeBotForUi } from '../modules/notify/index.js';
+import { INVITE_METHODS } from './access/invites.js';
+import { KLADR_METHODS } from '../modules/kladr/index.js';
 import { DATA_TYPES } from '../data/classes.js';
 import {
     looksLikeFileId,
@@ -899,6 +901,26 @@ for (const [name, m] of Object.entries(LICENSE_METHODS)) {
 }
 // методы мессенджеров и уведомлений точки (messenger_*)
 for (const [name, m] of Object.entries(NOTIFY_METHODS)) {
+    Object.defineProperty($class.prototype, name, {
+        value: function (params = {}) {
+            return m.fn.call(this, params);
+        },
+        writable: true,
+        configurable: true,
+    });
+}
+// одноразовые приглашения пользователей (invite_*)
+for (const [name, m] of Object.entries(INVITE_METHODS)) {
+    Object.defineProperty($class.prototype, name, {
+        value: function (params = {}) {
+            return m.fn.call(this, params);
+        },
+        writable: true,
+        configurable: true,
+    });
+}
+// адресный классификатор РФ и подразделения МВД (kladr_*)
+for (const [name, m] of Object.entries(KLADR_METHODS)) {
     Object.defineProperty($class.prototype, name, {
         value: function (params = {}) {
             return m.fn.call(this, params);

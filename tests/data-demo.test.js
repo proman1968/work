@@ -50,9 +50,9 @@ describe('классы демо-конфигурации', () => {
         const labels = type => classesOfType(db, type).map(c => c.label);
         for (const l of ['Юр. лица', 'Физ. лица', 'Номенклатура', 'Склады и резервуары', 'Партии', 'Договоры', 'Транспорт', 'Виды нормативов', 'Клиенты', 'Поставщики', 'Сотрудники', 'В отпуске'])
             assert.ok(labels(['$catalog', '$virtual']).includes(l), l);
-        for (const l of ['Адрес', 'Паспорт', 'Единица измерения'])
+        for (const l of ['Адрес', 'Паспорт', 'Единица измерения', 'ФИО', 'Банковский счёт'])
             assert.ok(labels('$struct').includes(l), l);
-        for (const l of ['Поступление товара', 'Перемещение', 'Фасовка', 'Покупателю', 'Возврат от покупателя', 'Доставка', 'Естественная убыль',
+        for (const l of ['Поступление товара', 'Перемещение', 'Фасовка', 'Покупателю', 'Возврат от покупателя', 'Доставка / Путевой лист', 'Естественная убыль',
             'Инвентаризация', 'Начисление зарплаты', 'Приём на работу', 'Письмо', 'Звонок', 'Установка норматива', 'От покупателя', 'Поставщику'])
             assert.ok(labels('$operation').includes(l), l);
         assert.deepEqual(classesOfType(db, '$operation').filter(c => classSchema(db, c.cid).fields.some(f => f.id === 'time')), [], 'дата операции — колонка, не поле');
@@ -75,7 +75,7 @@ describe('классы демо-конфигурации', () => {
         const addr = passport.fields.find(f => f.id === 'address');
         assert.equal(addr.type, 'struct');
         assert.equal(addr.struct, `${P}/STRUCTS/Адрес`);
-        assert.deepEqual(addr.fields.map(f => f.id), ['city', 'street', 'house']);
+        assert.deepEqual(addr.fields.map(f => f.id), ['postcode', 'region', 'city', 'street', 'house', 'flat']);
 
         const pay = classSchema(db, `${P}/OPERATIONS/Платежи с расчётного счёта/Поставщику`);
         const main = pay.postings.find(r => r.id === 'main');
@@ -87,7 +87,7 @@ describe('классы демо-конфигурации', () => {
         const vac = classSchema(db, `${P}/CATALOGS/Сотрудники/В отпуске`);
         assert.equal(vac.source.registry, `${P}/CATALOGS/Субъекты/Физ. лица`);
         assert.equal(vac.source.account, `${P}/REGISTER/Кадры/В отпуске`);
-        assert.deepEqual(vac.overlay.map(f => f.id), ['position', 'salary', 'personnel_number', 'until']);
+        assert.deepEqual(vac.overlay.map(f => f.id), ['position', 'salary', 'personnel_number', 'hire_date', 'until']);
     });
 
     it('места: ссылки указывают на существующие классы, места уникальны в подразделении', () => {
@@ -208,7 +208,7 @@ describe('сквозной сценарий', () => {
     });
 
     it('кадры: приём, отпуск, зарплата сотрудникам из состава', () => {
-        post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры/Приём на работу', '04-01', { person: ids.ivanov, position: 'Менеджер', salary: 100000 });
+        post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры/Приём на работу', '04-01', { person: ids.ivanov, position: ids.pos_mgr, salary: 100000 });
         post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры/Приём на работу', '04-01', { person: ids.petrov });
         assert.equal(virtualMembers(db, { cid: '/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники', at: d('04-02') }).items.length, 2);
         post('/ORGANIZATIONS/Маслоторг/MODULES/Register/OPERATIONS/Кадры/Отправить в отпуск', '07-01', { person: ids.petrov, until: d('07-14') });

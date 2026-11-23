@@ -80,6 +80,11 @@ sources/modules/*/.venv/
 /PROJECTS/*/
 !/PROJECTS/$domain/
 !/PROJECTS/$domain/**
+/NODES/*/
+!/NODES/$node/
+!/NODES/$node/**
+!/NODES/$nodes/
+!/NODES/$nodes/**
 /$server/task/
 /$server/xlsx/
 /$server/docx/
@@ -94,6 +99,7 @@ sources/modules/*/.venv/
 **/USER/call/
 **/USER/text/
 **/BOSS/task/
+progress.md
 .progress.md/
 /USERS/*/
 !/USERS/$users/
@@ -109,5 +115,12 @@ test_tts.wav
 Thumbs.db
 *.log
 *.tgz
+config.json
+.cursorrules
+.cursor/
+publish.cmd
+opencode.json
+eslint.config.js
+jsconfig.json
 current_session.json
 opencode_session.json

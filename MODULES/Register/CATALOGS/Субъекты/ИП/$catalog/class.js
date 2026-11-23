@@ -3,12 +3,10 @@ export default {
     icon: 'carbon:user-avatar',
     METADATA: {
         FIELDS: [
-            { id: 'inn', label: 'ИНН', required: true },
-            { id: 'ogrnip', label: 'ОГРНИП' },
-            { id: 'bank', label: 'Банк' },
-            { id: 'bik', label: 'БИК' },
-            { id: 'account', label: 'Р/с' },
-            { id: 'corr', label: 'К/с' },
+            { id: 'fio', label: 'ФИО предпринимателя', type: '/MODULES/Register/STRUCTS/ФИО' },
+            { id: 'inn', label: 'ИНН', type: 'string', required: true },
+            { id: 'ogrnip', label: 'ОГРНИП', type: 'string' },
+            { id: 'bank_accounts', label: 'Банковские счета', type: '/MODULES/Register/STRUCTS/Банковский счёт', table: true },
         ],
     },
 }

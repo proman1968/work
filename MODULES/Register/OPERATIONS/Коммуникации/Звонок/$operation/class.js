@@ -6,11 +6,11 @@ export default {    label: 'Звонок',
             {
                 id: 'direction',
                 label: 'Направление',
-                type: 'Enum',
+                type: 'enum',
                 values: ['Входящий', 'Исходящий'],
                 required: true,
             },
-            { id: 'minutes', label: 'Длительность, мин', type: 'Number', required: true },
+            { id: 'minutes', label: 'Длительность, мин', type: 'number', required: true },
         ],
         POSTINGS: [
             {

@@ -1,7 +1,11 @@
-export default {    label: 'Приём на работу',
+export default {
+    label: 'Приём на работу',
     icon: 'carbon:user-follow',
     METADATA: {
-        FIELDS: [{ id: 'position', label: 'Должность' }, { id: 'salary', label: 'Оклад', type: 'Money' }],
+        FIELDS: [
+            { id: 'position', label: 'Должность', type: 'link', target: '/MODULES/Register/CATALOGS/Должности' },
+            { id: 'salary', label: 'Оклад', type: 'money' },
+        ],
         POSTINGS: [
             {
                 id: 'main',

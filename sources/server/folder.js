@@ -11,6 +11,30 @@ import { DEV_MODE } from '../host/config.js';
 import { assertNotMemory } from './memory-mark.js';
 import { markClassesDirty, classObjectCount } from '../data/api.js';
 
+function readOwnTypeRefsSync(metaRealDir) {
+    if (!metaRealDir)
+        return [];
+    try {
+        const file = String(metaRealDir).replace(/[\\/]+$/, '') + '/class.js';
+        if (!fs.existsSync(file))
+            return [];
+        const src = fs.readFileSync(file, 'utf-8');
+        const m = /\b(?:types|TYPES)\s*:\s*\[([^\]]*)\]/.exec(src);
+        if (!m)
+            return [];
+        const out = [];
+        for (const q of m[1].matchAll(/(['"])((?:\\.|(?!\1).)*)\1/g)) {
+            const s = q[2].trim();
+            if (s && !out.includes(s))
+                out.push(s);
+        }
+        return out;
+    }
+    catch {
+        return [];
+    }
+}
+
 /**
  * Сброс кэшей сборки class.js (mergeFiles/merges, попарные merge, послойные скрипты типов).
  * Живые инстансы обновляются через reset() в save_file; это — чтобы следующий
@@ -999,18 +1023,60 @@ export class $folder extends $item{
 
             folders.push(...horizontal_folders);
 
-            const m = /^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/(?:MODULES\/)?([^/]+)(\/.+)$/.exec(this.path || '');
-            if (m) {
-                const modPath = `/MODULES/${m[1]}${m[2]}`;
+            const m = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)\/(?:MODULES\/)?([^/]+)(\/.*)?$/.exec(this.path || '');
+            let modPeer = null;
+            if (m && m[3]) {
+                const modPath = `/MODULES/${m[2]}${m[3]}`;
                 if (fs.existsSync('.' + modPath)) {
                     try {
-                        const modPeer = await WORK.get_item(modPath);
-                        if (modPeer?.meta_folder && modPeer.meta_folder !== this.meta_folder)
-                            folders.push(modPeer.meta_folder);
+                        modPeer = await WORK.get_item(modPath);
                     }
                     catch { /* нет предка в модуле */ }
                 }
             }
+
+            // Ось 1: Types (миксины `types` в class.js) — добавляются до Ancestor / Parent / SELF
+            // Читаем напрямую из файлов class.js, чтобы не вызывать циклический init -> load -> _tilde_layers
+            const basePrefix = m ? m[1] : '';
+            const typeRefs = [];
+            const addRefs = (arr) => {
+                for (const s of Array.isArray(arr) ? arr : []) {
+                    const clean = String(s || '').trim();
+                    if (clean && !typeRefs.includes(clean))
+                        typeRefs.push(clean);
+                }
+            };
+            const collectFromData = (data) => {
+                addRefs(data?.types ?? data?.TYPES ?? data?.METADATA?.types ?? data?.METADATA?.TYPES);
+            };
+            for (const tr of typeRoots)
+                addRefs(readOwnTypeRefsSync(tr.real_dir));
+            addRefs(readOwnTypeRefsSync(modPeer?.meta_folder?.real_dir));
+            collectFromData(modPeer?.DATA);
+            addRefs(readOwnTypeRefsSync(this.meta_folder?.real_dir));
+            collectFromData(this.DATA);
+
+            for (const rawRef of typeRefs) {
+                const candidates = [];
+                if (basePrefix && rawRef.startsWith('/MODULES/'))
+                    candidates.push(basePrefix + rawRef);
+                candidates.push(rawRef);
+                for (const cand of candidates) {
+                    if (cand === this.path)
+                        continue;
+                    try {
+                        const mixinCls = await WORK.get_item(cand);
+                        if (mixinCls?.meta_folder && mixinCls.meta_folder !== this.meta_folder) {
+                            folders.push(mixinCls.meta_folder);
+                            break;
+                        }
+                    }
+                    catch { /* нет миксина */ }
+                }
+            }
+
+            if (modPeer?.meta_folder && modPeer.meta_folder !== this.meta_folder)
+                folders.push(modPeer.meta_folder);
 
             // SELF (meta_folder) — ВСЕГДА ПОСЛЕДНИЙ
             folders.push(this.meta_folder);

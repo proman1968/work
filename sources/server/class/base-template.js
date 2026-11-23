@@ -51,8 +51,7 @@ export const TEMPLATE_NORMS = Object.freeze({
     'Ставка страховых взносов': ['доля', 0.302],
     'Стоимость письма': ['руб.', 50],
     'Стоимость минуты звонка': ['руб.', 5],
-    'Норма естественной убыли': ['доля от базы', 0.0005],
-    'Расход топлива, л/км': ['л/км', 0.3],
+    'Расход топлива, л/км': ['л/км', 0.15],
     'Учётная цена топлива': ['руб./л', 58],
 });
 
@@ -239,7 +238,7 @@ export function buildTemplateDepartments(orgId) {
                             { id: `${P}/CATALOGS/Клиенты`, access: 'write' },
                             { id: `${P}/CATALOGS/Договоры`, access: 'write' },
                             { id: `${P}/CATALOGS/Номенклатура`, access: 'read' },
-                            { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                            { id: `${P}/CATALOGS/Склады`, access: 'read' },
                             { id: `${P}/CATALOGS/Партии`, access: 'read' },
                             { id: `${P}/CATALOGS/Сотрудники`, access: 'read' },
                             { id: `${P}/REGISTER/41`, access: 'read', scope: 'all' },
@@ -261,7 +260,7 @@ export function buildTemplateDepartments(orgId) {
                                 { id: `${P}/CATALOGS/Клиенты`, access: 'write' },
                                 { id: `${P}/CATALOGS/Договоры`, access: 'write' },
                                 { id: `${P}/CATALOGS/Номенклатура`, access: 'read' },
-                                { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                                { id: `${P}/CATALOGS/Склады`, access: 'read' },
                                 { id: `${P}/CATALOGS/Партии`, access: 'read' },
                                 { id: `${P}/REGISTER/41`, access: 'read', scope: 'all' },
                                 { id: `${P}/REGISTER/43`, access: 'read', scope: 'all' },
@@ -291,7 +290,7 @@ export function buildTemplateDepartments(orgId) {
                             { id: `${P}/CATALOGS/Номенклатура`, access: 'write' },
                             { id: `${P}/CATALOGS/Партии`, access: 'write' },
                             { id: `${P}/CATALOGS/Договоры`, access: 'write' },
-                            { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                            { id: `${P}/CATALOGS/Склады`, access: 'read' },
                             { id: `${P}/OPERATIONS/Поступление товара`, access: 'write', scope: 'unit' },
                             { id: `${P}/OPERATIONS/Основные средства/Поступление ОС`, access: 'write', scope: 'unit' },
                             { id: `${P}/OPERATIONS/Платежи с расчётного счёта/Поставщику`, access: 'read', scope: 'all' },
@@ -312,7 +311,7 @@ export function buildTemplateDepartments(orgId) {
                                 { id: `${P}/CATALOGS/Номенклатура`, access: 'write' },
                                 { id: `${P}/CATALOGS/Партии`, access: 'write' },
                                 { id: `${P}/CATALOGS/Договоры`, access: 'write' },
-                                { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                                { id: `${P}/CATALOGS/Склады`, access: 'read' },
                                 { id: `${P}/OPERATIONS/Поступление товара`, access: 'write', scope: 'place' },
                                 { id: `${P}/OPERATIONS/Коммуникации`, access: 'write', scope: 'own' },
                                 { id: `${P}/REGISTER/60`, access: 'read', scope: 'all' },
@@ -333,7 +332,7 @@ export function buildTemplateDepartments(orgId) {
                         label: 'Заведующий складом',
                         USERS: ['USERS'],
                         LINKS: [
-                            { id: `${P}/CATALOGS/Склады и резервуары`, access: 'write' },
+                            { id: `${P}/CATALOGS/Склады`, access: 'write' },
                             { id: `${P}/CATALOGS/Партии`, access: 'write' },
                             { id: `${P}/CATALOGS/Номенклатура`, access: 'read' },
                             { id: `${P}/CATALOGS/Субъекты`, access: 'read' },
@@ -346,8 +345,8 @@ export function buildTemplateDepartments(orgId) {
                             { id: `${P}/REGISTER/94`, access: 'read', scope: 'unit' },
                             { id: `${P}/OPERATIONS/Поступление товара`, access: 'write', scope: 'unit' },
                             { id: `${P}/OPERATIONS/Перемещение`, access: 'write', scope: 'unit' },
-                            { id: `${P}/OPERATIONS/Фасовка`, access: 'write', scope: 'unit' },
-                            { id: `${P}/OPERATIONS/Естественная убыль`, access: 'write', scope: 'unit' },
+                            { id: `${P}/OPERATIONS/Комплектация`, access: 'write', scope: 'unit' },
+                            { id: `${P}/OPERATIONS/Списание ТМЦ`, access: 'write', scope: 'unit' },
                             { id: `${P}/OPERATIONS/Инвентаризация`, access: 'write', scope: 'unit' },
                             { id: `${P}/OPERATIONS/Реализация`, access: 'read', scope: 'all' },
                         ],
@@ -356,7 +355,7 @@ export function buildTemplateDepartments(orgId) {
                             label: 'Кладовщик',
                             USERS: ['USERS'],
                             LINKS: [
-                                { id: `${P}/CATALOGS/Склады и резервуары`, access: 'write' },
+                                { id: `${P}/CATALOGS/Склады`, access: 'write' },
                                 { id: `${P}/CATALOGS/Партии`, access: 'write' },
                                 { id: `${P}/CATALOGS/Номенклатура`, access: 'read' },
                                 { id: `${P}/CATALOGS/Субъекты`, access: 'read' },
@@ -367,7 +366,8 @@ export function buildTemplateDepartments(orgId) {
                                 { id: `${P}/REGISTER/43`, access: 'read', scope: 'all' },
                                 { id: `${P}/OPERATIONS/Поступление товара`, access: 'write', scope: 'place' },
                                 { id: `${P}/OPERATIONS/Перемещение`, access: 'write', scope: 'place' },
-                                { id: `${P}/OPERATIONS/Фасовка`, access: 'write', scope: 'place' },
+                                { id: `${P}/OPERATIONS/Комплектация`, access: 'write', scope: 'place' },
+                                { id: `${P}/OPERATIONS/Списание ТМЦ`, access: 'write', scope: 'place' },
                                 { id: `${P}/OPERATIONS/Реализация`, access: 'read', scope: 'all' },
                             ],
                         }],
@@ -387,10 +387,10 @@ export function buildTemplateDepartments(orgId) {
                         USERS: ['USERS'],
                         LINKS: [
                             { id: `${P}/CATALOGS/Номенклатура`, access: 'write' },
-                            { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                            { id: `${P}/CATALOGS/Склады`, access: 'read' },
                             { id: `${P}/CATALOGS/Сотрудники`, access: 'read' },
                             { id: `${P}/OPERATIONS/Производство`, access: 'write', scope: 'unit' },
-                            { id: `${P}/OPERATIONS/Фасовка`, access: 'write', scope: 'unit' },
+                            { id: `${P}/OPERATIONS/Комплектация`, access: 'write', scope: 'unit' },
                             { id: `${P}/OPERATIONS/Перемещение`, access: 'write', scope: 'unit' },
                             { id: `${P}/REGISTER/10`, access: 'read', scope: 'all' },
                             { id: `${P}/REGISTER/20`, access: 'read', scope: 'unit' },
@@ -403,9 +403,9 @@ export function buildTemplateDepartments(orgId) {
                             USERS: ['USERS'],
                             LINKS: [
                                 { id: `${P}/CATALOGS/Номенклатура`, access: 'read' },
-                                { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                                { id: `${P}/CATALOGS/Склады`, access: 'read' },
                                 { id: `${P}/OPERATIONS/Производство`, access: 'write', scope: 'place' },
-                                { id: `${P}/OPERATIONS/Фасовка`, access: 'write', scope: 'place' },
+                                { id: `${P}/OPERATIONS/Комплектация`, access: 'write', scope: 'place' },
                                 { id: `${P}/REGISTER/10`, access: 'read', scope: 'all' },
                                 { id: `${P}/REGISTER/20`, access: 'read', scope: 'place' },
                                 { id: `${P}/REGISTER/43`, access: 'read', scope: 'all' },
@@ -429,7 +429,7 @@ export function buildTemplateDepartments(orgId) {
                             { id: `${P}/CATALOGS/Транспорт`, access: 'write' },
                             { id: `${P}/CATALOGS/Клиенты`, access: 'read' },
                             { id: `${P}/CATALOGS/Субъекты`, access: 'read' },
-                            { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                            { id: `${P}/CATALOGS/Склады`, access: 'read' },
                             { id: `${P}/CATALOGS/Сотрудники`, access: 'read' },
                             { id: `${P}/CATALOGS/Номенклатура`, access: 'read' },
                             { id: `${P}/OPERATIONS/Доставка`, access: 'write', scope: 'unit' },
@@ -446,7 +446,7 @@ export function buildTemplateDepartments(orgId) {
                                 { id: `${P}/CATALOGS/Транспорт`, access: 'write' },
                                 { id: `${P}/CATALOGS/Клиенты`, access: 'read' },
                                 { id: `${P}/CATALOGS/Субъекты`, access: 'read' },
-                                { id: `${P}/CATALOGS/Склады и резервуары`, access: 'read' },
+                                { id: `${P}/CATALOGS/Склады`, access: 'read' },
                                 { id: `${P}/CATALOGS/Сотрудники`, access: 'read' },
                                 { id: `${P}/CATALOGS/Номенклатура`, access: 'read' },
                                 { id: `${P}/OPERATIONS/Доставка`, access: 'write', scope: 'place' },
@@ -599,7 +599,7 @@ export function scaffoldProjectSync({
 
     const modList = preset === 'empty'
         ? modules
-        : [...new Set(['Register', 'Geo', ...modules])];
+        : [...new Set(['Register', 'Geo', 'KLADR', 'Process', ...modules])];
 
     for (const modId of modList) {
         const modSrc = path.join(modulesRoot, modId);
@@ -630,7 +630,7 @@ export function scaffoldBaseOrganizationSync({
 
     const modList = preset === 'empty'
         ? modules
-        : [...new Set(['Register', 'Geo', ...modules])];
+        : [...new Set(['Register', 'Geo', 'KLADR', 'Process', ...modules])];
 
     for (const modId of modList) {
         const modSrc = path.join(modulesRoot, modId);
@@ -699,32 +699,65 @@ export async function seedBaseTemplateDemoData({
             createObject(db, { cid: `${prefix}/OPERATIONS/Установка норматива`, time: since, author, body: { kind: ids[`kind:${name}`], value } });
 
         // 2. Справочники: Номенклатура, Склады, Контрагенты, Физлица, Должности, Договоры, Транспорт
-        make('oil', '/CATALOGS/Номенклатура', {
-            name: 'Масло индустриальное 10W-40',
-            sku: 'OIL-10W40',
-            kind: 'Масло',
-            base_unit: 'л',
-            density: 0.88,
+        make('product_a', '/CATALOGS/Номенклатура', {
+            name: 'Комплект оборудования «Базовый»',
+            sku: 'EQ-BASE-01',
+            kind: 'Товар',
+            base_unit: 'шт',
+            vat_rate: '20%',
             units: [
-                { unit: 'канистра', coef: 20, price: 3200 },
-                { unit: 'бочка', coef: 200, price: 30000 },
+                { unit: 'коробка', coef: 5, price: 15000 },
+                { unit: 'паллета', coef: 20, price: 58000 },
             ],
         });
-        make('diesel', '/CATALOGS/Номенклатура', { name: 'Дизельное топливо ЕВРО', sku: 'FUEL-DT', kind: 'Топливо', base_unit: 'л', density: 0.84 });
-        make('canister', '/CATALOGS/Номенклатура', { name: 'Канистра полимерная 20 л', sku: 'TARE-20L', kind: 'Тара', base_unit: 'шт' });
-        make('server_eq', '/CATALOGS/Номенклатура', { name: 'Серверный комплекс ПАК WORK', sku: 'OS-PAK-01', kind: 'ОС', base_unit: 'шт' });
+        make('module_c', '/CATALOGS/Номенклатура', { name: 'Блок управления БУ-12', sku: 'MOD-12', kind: 'Материал', base_unit: 'шт', vat_rate: '20%' });
+        make('pack_box', '/CATALOGS/Номенклатура', { name: 'Коробка упаковочная 5 шт.', sku: 'PACK-05', kind: 'Тара', base_unit: 'шт', vat_rate: '20%' });
+        make('diesel', '/CATALOGS/Номенклатура', { name: 'Топливо для автопарка', sku: 'FUEL-01', kind: 'Материал', base_unit: 'л', vat_rate: '20%' });
+        make('server_eq', '/CATALOGS/Номенклатура', { name: 'Серверный комплекс ПАК WORK', sku: 'OS-PAK-01', kind: 'ОС', base_unit: 'шт', vat_rate: '20%' });
 
-        make('tank', '/CATALOGS/Склады и резервуары', { name: 'Основной терминал Р-1', kind: 'Резервуар', capacity: 50000, item: ids.oil });
-        make('stock', '/CATALOGS/Склады и резервуары', { name: 'Центральный склад готовой продукции', kind: 'Склад' });
-        make('fuel_stock', '/CATALOGS/Склады и резервуары', { name: 'Склад ГСМ и запчастей', kind: 'Склад' });
+        make('main_wh', '/CATALOGS/Склады', {
+            name: 'Центральный склад',
+            kind: 'Склад',
+            address: { city: 'Москва', street: 'Промышленная', house: '1' },
+        });
+        make('retail_wh', '/CATALOGS/Склады', {
+            name: 'Склад отгрузки № 1',
+            kind: 'Магазин',
+            address: { city: 'Москва', street: 'Тверская', house: '15' },
+        });
+        make('fuel_stock', '/CATALOGS/Склады', { name: 'Хозяйственный склад', kind: 'Склад' });
 
-        make('supplier', '/CATALOGS/Субъекты/Юр. лица', { name: 'ООО «ПромСнаб-Поставка»', inn: '7701000001', kpp: '770101001' });
-        make('client', '/CATALOGS/Субъекты/Юр. лица', { name: 'ООО «ТехноСервис Плюс»', inn: '7701000002', kpp: '770101001' });
-        make('ip_partner', '/CATALOGS/Субъекты/ИП', { name: 'ИП Смирнов А.В. (Сервис)', inn: '771500000012' });
+        make('supplier', '/CATALOGS/Субъекты/Юр. лица', {
+            name: 'ООО «ПромСнаб-Поставка»',
+            full_name: 'Общество с ограниченной ответственностью «ПромСнаб-Поставка»',
+            inn: '7701000001',
+            kpp: '770101001',
+            bank_accounts: [{ bank: 'ПАО Сбербанк', bik: '044525225', account: '40702810000000000101' }],
+        });
+        make('client', '/CATALOGS/Субъекты/Юр. лица', {
+            name: 'ООО «ТехноСервис Плюс»',
+            full_name: 'Общество с ограниченной ответственностью «ТехноСервис Плюс»',
+            inn: '7701000002',
+            kpp: '770101001',
+            bank_accounts: [{ bank: 'Банк ВТБ (ПАО)', bik: '044525187', account: '40702810000000000202' }],
+        });
+        make('ip_partner', '/CATALOGS/Субъекты/ИП', {
+            fio: { last_name: 'Смирнов', first_name: 'Андрей', middle_name: 'Викторович' },
+            inn: '771500000012',
+        });
 
-        make('ivanov', '/CATALOGS/Субъекты/Физ. лица', { name: 'Иванов Иван Иванович', phone: '+7 (900) 111-22-33' });
-        make('petrov', '/CATALOGS/Субъекты/Физ. лица', { name: 'Петров Пётр Петрович', phone: '+7 (900) 222-33-44' });
-        make('sidorova', '/CATALOGS/Субъекты/Физ. лица', { name: 'Сидорова Анна Сергеевна', phone: '+7 (900) 333-44-55' });
+        make('ivanov', '/CATALOGS/Субъекты/Физ. лица', {
+            fio: { last_name: 'Иванов', first_name: 'Иван', middle_name: 'Иванович' },
+            phone: '+7 (900) 111-22-33',
+        });
+        make('petrov', '/CATALOGS/Субъекты/Физ. лица', {
+            fio: { last_name: 'Петров', first_name: 'Пётр', middle_name: 'Петрович' },
+            phone: '+7 (900) 222-33-44',
+        });
+        make('sidorova', '/CATALOGS/Субъекты/Физ. лица', {
+            fio: { last_name: 'Сидорова', first_name: 'Анна', middle_name: 'Сергеевна' },
+            phone: '+7 (900) 333-44-55',
+        });
 
         make('pos_mgr', '/CATALOGS/Должности', { name: 'Менеджер по продажам', code: 'MGR-01', department: 'Отдел продаж', base_salary: 100000 });
         make('pos_acc', '/CATALOGS/Должности', { name: 'Главный бухгалтер', code: 'ACC-01', department: 'Бухгалтерия и финансы', base_salary: 120000 });
@@ -733,7 +766,7 @@ export async function seedBaseTemplateDemoData({
         make('contract_sup', '/CATALOGS/Договоры', { name: 'Договор поставки № П-101', counterparty: ids.supplier, kind: 'Покупка', date: d('01-10'), amount: 500000 });
         make('contract_cli', '/CATALOGS/Договоры', { name: 'Договор реализации № Р-205', counterparty: ids.client, kind: 'Поставка', date: d('01-12'), amount: 350000 });
 
-        make('truck', '/CATALOGS/Транспорт', { name: 'КамАЗ-5490 Нео', plate: 'А123ВС77', kind: 'Бензовоз', capacity: 10000, fuel: ids.diesel });
+        make('truck', '/CATALOGS/Транспорт', { name: 'ГАЗель Next', plate: 'А123ВС77', kind: 'Фургон', payload_kg: 1500 });
 
         // 3. Хозяйственные операции и проводки по подразделениям (или прямо в проекте при flatProject)
         const post = (subpath, md, body, unitSub, place = 'head') => {
@@ -751,24 +784,24 @@ export async function seedBaseTemplateDemoData({
         };
 
         // Кадры
-        post('/OPERATIONS/Кадры/Приём на работу', '01-15', { person: ids.ivanov, position: 'Менеджер по продажам', salary: 100000 }, 'hr', 'head');
-        post('/OPERATIONS/Кадры/Приём на работу', '01-15', { person: ids.petrov, position: 'Водитель-экспедитор', salary: 80000 }, 'hr', 'head');
-        post('/OPERATIONS/Кадры/Приём на работу', '01-15', { person: ids.sidorova, position: 'Главный бухгалтер', salary: 120000 }, 'hr', 'head');
+        post('/OPERATIONS/Кадры/Приём на работу', '01-15', { person: ids.ivanov, position: ids.pos_mgr, salary: 100000 }, 'hr', 'head');
+        post('/OPERATIONS/Кадры/Приём на работу', '01-15', { person: ids.petrov, position: ids.pos_drv, salary: 80000 }, 'hr', 'head');
+        post('/OPERATIONS/Кадры/Приём на работу', '01-15', { person: ids.sidorova, position: ids.pos_acc, salary: 120000 }, 'hr', 'head');
 
         // Закупки и склад
         post('/OPERATIONS/Поступление товара', '02-01', {
-            supplier: ids.supplier, contract: ids.contract_sup, storage: ids.tank, vat_sum: 30000,
-            lines: [{ item: ids.oil, unit: 'бочка', qty: 5, price: 30000, density: 0.88 }],
+            supplier: ids.supplier, contract: ids.contract_sup, storage: ids.main_wh, vat_sum: 56000,
+            lines: [{ item: ids.product_a, unit: 'шт', qty: 100, price: 2800 }],
         }, 'warehouse', 'head');
 
         post('/OPERATIONS/Поступление товара', '02-02', {
-            supplier: ids.supplier, contract: ids.contract_sup, storage: ids.stock, vat_sum: 2000,
-            lines: [{ item: ids.canister, unit: 'шт', qty: 100, price: 100 }],
+            supplier: ids.supplier, contract: ids.contract_sup, storage: ids.retail_wh, vat_sum: 2000,
+            lines: [{ item: ids.pack_box, unit: 'шт', qty: 100, price: 100 }],
         }, 'warehouse', 'head');
 
         post('/OPERATIONS/Поступление товара', '03-05', {
             supplier: ids.supplier, storage: ids.fuel_stock, vat_sum: 11000,
-            lines: [{ item: ids.diesel, unit: 'л', qty: 1000, price: 55, density: 0.84 }],
+            lines: [{ item: ids.diesel, unit: 'л', qty: 1000, price: 55 }],
         }, 'warehouse', 'head');
 
         // Основные средства и амортизация
@@ -782,30 +815,30 @@ export async function seedBaseTemplateDemoData({
             asset: ids.server_eq, sum: 4000,
         }, 'accounting', 'head');
 
-        // Производство / фасовка
-        post('/OPERATIONS/Фасовка', '04-15', {
-            item: ids.oil, from_storage: ids.tank, to_storage: ids.stock,
-            lines: [{ unit: 'канистра', qty: 20, container: ids.canister }],
+        // Комплектация / фасовка в коробки
+        post('/OPERATIONS/Комплектация', '04-15', {
+            item: ids.product_a, from_storage: ids.main_wh, to_storage: ids.retail_wh,
+            lines: [{ unit: 'коробка', qty: 10, container: ids.pack_box }],
         }, 'production', 'head');
 
         // Продажи
         post('/OPERATIONS/Реализация/Покупателю', '05-20', {
-            client: ids.client, contract: ids.contract_cli, storage: ids.stock,
-            lines: [{ item: ids.oil, unit: 'канистра', qty: 10, price: 3200 }],
+            client: ids.client, contract: ids.contract_cli, storage: ids.retail_wh,
+            lines: [{ item: ids.product_a, unit: 'коробка', qty: 5, price: 16000 }],
         }, 'sales', 'head/manager');
 
         post('/OPERATIONS/Реализация/Покупателю', '08-14', {
-            client: ids.client, contract: ids.contract_cli, storage: ids.tank,
-            lines: [{ item: ids.oil, unit: 'л', qty: 100, price: 240 }],
+            client: ids.client, contract: ids.contract_cli, storage: ids.main_wh,
+            lines: [{ item: ids.product_a, unit: 'шт', qty: 10, price: 3200 }],
         }, 'sales', 'head/manager');
 
         // Банк и Касса
         post('/OPERATIONS/Поступления на расчётный счёт/От покупателя', '09-01', {
-            counterparty: ids.client, sum: 38400, purpose: 'Оплата по счёту за продукцию',
+            counterparty: ids.client, contract: ids.contract_cli, sum: 96000, purpose: 'Оплата по счёту за оборудование',
         }, 'accounting', 'head');
 
         post('/OPERATIONS/Касса/ПКО', '09-05', {
-            counterparty: ids.client, contract: ids.contract_cli, sum: 28800, purpose: 'Оплата наличными по договору',
+            counterparty: ids.client, contract: ids.contract_cli, sum: 38400, purpose: 'Оплата наличными по договору',
         }, 'accounting', 'head/cashier');
 
         post('/OPERATIONS/Касса/РКО', '09-06', {
@@ -817,7 +850,7 @@ export async function seedBaseTemplateDemoData({
         }, 'accounting', 'head');
 
         post('/OPERATIONS/Платежи с расчётного счёта/Поставщику', '09-10', {
-            counterparty: ids.supplier, sum: 120000, purpose: 'Оплата поставщику за сырьё и материалы',
+            counterparty: ids.supplier, contract: ids.contract_sup, sum: 120000, purpose: 'Оплата поставщику за товары и материалы',
         }, 'accounting', 'head');
 
         // Зарплата и коммуникации

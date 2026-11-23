@@ -458,7 +458,12 @@ WORK.login = async function(force = false){
                 let privateKey = await crypto.subtle.importKey("pkcs8", KEY, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, true, ["sign"]);
                 let signature = await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, privateKey, new TextEncoder().encode(challenge));
                 signature = WORK.arrayBufferToBase64(signature);
-                const res = await WORK.fetch("/", 'user_login_finish' ,  { uid, time: WORK.credentials.time, challengeId}, {signature});
+                let pendingInviteToken = '';
+                try { pendingInviteToken = sessionStorage.getItem('work.pendingInviteToken') || ''; } catch { /* ignore */ }
+                const res = await WORK.fetch("/", 'user_login_finish' ,  { uid, time: WORK.credentials.time, challengeId}, {signature, ...(pendingInviteToken ? { inviteToken: pendingInviteToken } : {})});
+                if (pendingInviteToken) {
+                    try { sessionStorage.removeItem('work.pendingInviteToken'); } catch { /* ignore */ }
+                }
                 WORK.uid = uid;
                 await WORK.syncAuthUI();
                 WORK.notifyAuth?.({ uid, reason: 'login' });

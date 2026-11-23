@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:receipt',
     METADATA: {
         FIELDS: [
-            { id: 'employee', label: 'Подотчётное лицо', type: 'Link', target: '/MODULES/Register/CATALOGS/Сотрудники', required: true },
+            { id: 'employee', label: 'Подотчётное лицо', type: 'link', target: '/MODULES/Register/CATALOGS/Сотрудники', required: true },
         ],
         POSTINGS: [
             {

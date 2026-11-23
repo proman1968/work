@@ -19,6 +19,8 @@ import { DATA_METHODS } from '../../data/api.js';
 import { TRAINER_METHODS } from '../../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../../modules/license/index.js';
 import { NOTIFY_METHODS } from '../../modules/notify/index.js';
+import { INVITE_METHODS } from './invites.js';
+import { KLADR_METHODS } from '../../modules/kladr/index.js';
 
 export const LEVEL = Object.freeze({ PUBLIC: 'public', USER: 'user', READ: 'read', CALL: 'call', WRITE: 'write', ADMIN: 'admin' });
 
@@ -69,6 +71,10 @@ export const MEMBERS = Object.freeze({
     ...Object.fromEntries(Object.entries(LICENSE_METHODS).map(([name, m]) => [name, m.level])),
     // каналы уведомлений Telegram / MAX (sources/modules/notify/index.js)
     ...Object.fromEntries(Object.entries(NOTIFY_METHODS).map(([name, m]) => [name, m.level])),
+    // одноразовые приглашения пользователей на рабочие места (sources/server/access/invites.js)
+    ...Object.fromEntries(Object.entries(INVITE_METHODS).map(([name, m]) => [name, m.level])),
+    // адресный классификатор РФ и подразделения МВД (sources/modules/kladr/index.js)
+    ...Object.fromEntries(Object.entries(KLADR_METHODS).map(([name, m]) => [name, m.level])),
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
     delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,

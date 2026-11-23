@@ -6,12 +6,12 @@ export default {    label: 'Нормативы',
             {
                 id: 'kind',
                 label: 'Вид норматива',
-                type: 'Link',
+                type: 'link',
                 target: '/MODULES/Register/CATALOGS/Виды нормативов',
                 analytic: true,
                 required: true,
             },
-            { id: 'object', label: 'Объект', type: 'Link', target: '/MODULES/Register/CATALOGS', analytic: true },
+            { id: 'object', label: 'Объект', type: 'link', target: '/MODULES/Register/CATALOGS', analytic: true },
         ],
     },
 }

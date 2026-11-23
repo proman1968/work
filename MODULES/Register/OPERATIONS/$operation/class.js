@@ -11,6 +11,6 @@ export default {
         prefix: '',
     },
     METADATA: {
-        FIELDS: [{ id: 'comment', label: 'Комментарий', type: 'Text' }]
+        FIELDS: [{ id: 'comment', label: 'Комментарий', type: 'text' }]
     }
 }

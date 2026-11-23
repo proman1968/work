@@ -29,6 +29,9 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
         }
     </style>
     <div no-flex vertical style="gap: 16px; width: 280px; align-self: center; margin: 0px auto auto auto;">
+        <div ~if="pendingInvite?.valid" style="padding:10px 12px;border-radius:8px;border:1px solid #10b981;background:rgba(16,185,129,0.1);font-size:small;line-height:1.4;text-align:center;">
+            <b>Приглашение:</b> {{pendingInvite.pointLabel}} → <b>{{pendingInvite.placeLabel}}</b>
+        </div>
         <div vertical style="gap: 16px; align-items: center;">
             <div class="photo" vertical style="padding: 16px; border-radius: 50%;">
                 <oda-icon :icon="photoIcon" round @tap="loadPhoto" style="border-radius: 50%; fill: white; color: white;" icon-size="180"></oda-icon>
@@ -170,6 +173,27 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
 
     attached() {
         this.credentials = this.workSecure.getItem('credentials');
+        this._loadPendingInvite();
+    },
+    pendingInvite: null,
+    pendingInviteToken: '',
+    async _loadPendingInvite() {
+        try {
+            const urlTok = new URLSearchParams(window.location.search || '').get('invite') || '';
+            const tok = urlTok || sessionStorage.getItem('work.pendingInviteToken') || '';
+            if (!tok)
+                return;
+            if (urlTok)
+                sessionStorage.setItem('work.pendingInviteToken', urlTok);
+            this.pendingInviteToken = tok;
+            const info = await WORK.fetch('/', 'invite_info', {}, { token: tok });
+            if (info?.valid) {
+                this.pendingInvite = info;
+                if (info.channel === 'email' && info.recipient && !this.params.email)
+                    this.params.email = info.recipient;
+            }
+        }
+        catch { /* ignore */ }
     },
     credentials: {
         $def: null,
@@ -301,7 +325,8 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
             case 'changed':
             case 'unregistered': {
                 try {
-                    const res = await WORK.fetch("/", 'user_register_start', {}, this.params);
+                    const regPayload = { ...this.params, ...(this.pendingInviteToken ? { inviteToken: this.pendingInviteToken } : {}) };
+                    const res = await WORK.fetch("/", 'user_register_start', {}, regPayload);
                     if (res && typeof res === 'object' && res.autoCode) {
                         this.text = res.message || 'Идет процесс регистрации ключа безопасности...';
                         await this._onCode({ detail: { value: res.autoCode } });
@@ -344,7 +369,20 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
             // 3. Подписываем challenge
             let signature = await crypto.subtle.sign({ name: "RSASSA-PKCS1-v1_5" }, keyPair.privateKey, new TextEncoder().encode(options.challenge));
             signature = WORK.arrayBufferToBase64(signature);
-            const resp = await WORK.fetch("/", 'user_register_finish', {}, { signature, credentials: this.params });
+            const finishPayload = { signature, credentials: this.params, ...(this.pendingInviteToken ? { inviteToken: this.pendingInviteToken } : {}) };
+            const resp = await WORK.fetch("/", 'user_register_finish', {}, finishPayload);
+            if (this.pendingInviteToken) {
+                try { sessionStorage.removeItem('work.pendingInviteToken'); } catch { /* ignore */ }
+                this.pendingInviteToken = '';
+                this.pendingInvite = null;
+                try {
+                    const u = new URL(window.location.href);
+                    if (u.searchParams.has('invite')) {
+                        u.searchParams.delete('invite');
+                        history.replaceState(null, '', u.pathname + u.search + u.hash);
+                    }
+                } catch { /* ignore */ }
+            }
             this.workSecure.setItem('credentials', this.params);
             let privateKey = await window.crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
             privateKey = WORK.arrayBufferToBase64(privateKey);

@@ -53,7 +53,7 @@ if (!candidates.length) {
     process.exit(1);
 }
 
-const NPM_INTENTIONAL_EXCLUDE = /^MODELS\/(?:odant|Halogen)\/|^MODELS\/Local\/(?!\$provider\/)/;
+const NPM_INTENTIONAL_EXCLUDE = /^MODELS\/(?:odant|Halogen)\/|^MODELS\/Local\/(?!\$provider\/)|^NODES\/(?!\$node\/|\$nodes\/)|^eslint\.config\.js$/;
 const gitCandidates = candidates.filter(f => !/^MODELS\/Local\/(?!\$provider\/)/.test(f));
 
 // git check-ignore --stdin печатает только игнорируемые пути; код 1 — «ни один» (это норма)

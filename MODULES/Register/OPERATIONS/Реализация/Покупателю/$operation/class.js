@@ -1,4 +1,5 @@
-export default {    label: 'Покупателю',
+export default {
+    label: 'Покупателю',
     icon: 'carbon:shopping-cart',
     METADATA: {
         POSTINGS: [
@@ -6,14 +7,14 @@ export default {    label: 'Покупателю',
                 id: 'revenue',
                 each: 'lines',
                 amount: 'row.qty * row.price',
-                debit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client' } },
+                debit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client', contract: 'contract' } },
                 credit: { account: '/MODULES/Register/REGISTER/90/01', analytics: { item: 'row.item' } },
             },
             {
                 id: 'vat',
                 each: 'lines',
                 amount: "round(row.qty * row.price * norm('Ставка НДС', row.item), 2)",
-                debit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client' } },
+                debit: { account: '/MODULES/Register/REGISTER/62', analytics: { counterparty: 'client', contract: 'contract' } },
                 credit: { account: '/MODULES/Register/REGISTER/68/02' },
             },
             {

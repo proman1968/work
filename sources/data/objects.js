@@ -18,6 +18,7 @@ import { tx } from './db.js';
 import { getClass, descendants } from './classes.js';
 import { classSchema, objectTitle, FAMILY } from './schema.js';
 import { toNumber, round } from './expr.js';
+import { formatFio } from './fio.js';
 import { DataError } from './errors.js';
 import { parseTime, localDay, periodRange } from './time.js';
 import { registerOperation } from './posting.js';
@@ -169,7 +170,16 @@ function bodyFields(schema) {
 /** Проверить тело объекта класса; ошибки — DataError со списком. */
 export function validateBody(db, schema, body) {
     const errors = [];
-    const out = checkBody(db, bodyFields(schema), body ?? {}, errors);
+    const fields = bodyFields(schema);
+    let sourceBody = body ?? {};
+    if (sourceBody && typeof sourceBody === 'object' && !Array.isArray(sourceBody)
+        && isEmpty(sourceBody.name) && sourceBody.fio && typeof sourceBody.fio === 'object'
+        && fields.some(f => f.id === 'name')) {
+        const autoName = formatFio(sourceBody.fio, 'Именительный');
+        if (autoName)
+            sourceBody = { ...sourceBody, name: autoName };
+    }
+    const out = checkBody(db, fields, sourceBody, errors);
     if (errors.length)
         throw new DataError(`${schema.label}: данные не прошли проверку`, errors);
     return out;

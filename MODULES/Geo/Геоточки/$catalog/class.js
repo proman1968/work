@@ -1,11 +1,17 @@
 export default {
     label: 'Геоточки',
     icon: 'carbon:map',
+    types: ['/MODULES/Geo/Карта'],
     METADATA: {
         FIELDS: [
-            { id: 'name', label: 'Название', required: true },
-            { id: 'coords', label: 'Координаты', type: '/MODULES/Geo/Координаты' },
-            { id: 'address', label: 'Адрес', type: 'Text' },
+            { id: 'name', label: 'Название', type: 'string', required: true },
+            {
+                id: 'category',
+                label: 'Категория',
+                type: 'enum',
+                values: ['Офис', 'Склад', 'Магазин', 'Клиент', 'Объект', 'Маршрут'],
+            },
+            { id: 'address', label: 'Адрес', type: 'text' },
         ],
     },
 }

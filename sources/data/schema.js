@@ -24,6 +24,7 @@
  */
 import { getClass, ancestors, isLeaf, classesGeneration } from './classes.js';
 import { compile, BUILTIN_FUNCTIONS } from './expr.js';
+import { formatFio } from './fio.js';
 
 /** Семейство типа класса: схема наследуется внутри семейства. */
 export const FAMILY = Object.freeze({
@@ -495,10 +496,15 @@ export function analyticSlots(schema) {
     return schema.fields.filter(f => f.analytic && f.type === 'link');
 }
 
-/** Заголовок объекта по схеме: поле name, иначе первое строковое. */
+/** Заголовок объекта по схеме: поле name, иначе ФИО, иначе первое строковое. */
 export function objectTitle(schema, body = {}) {
     if (body.name)
         return String(body.name);
+    if (body.fio && typeof body.fio === 'object') {
+        const fioName = formatFio(body.fio, 'Именительный');
+        if (fioName)
+            return fioName;
+    }
     const f = schema?.fields.find(x => (x.type === 'string' || x.type === 'text') && body[x.id]);
     return f ? String(body[f.id]) : '';
 }
@@ -635,14 +641,19 @@ function checkRule(db, s, rule) {
         else if (!accSchema.leaf)
             errors.push(`${at}: ${acc} (${name}) — не лист, проводка возможна только на субсчёт`);
         const map = rule[side].analytics || {};
-        for (const slot of analyticSlots(accSchema)) {
-            if (map[slot.id] === undefined || map[slot.id] === '')
+        const accSlots = analyticSlots(accSchema);
+        const hasRequiredSlots = accSlots.some(x => x.required === true);
+        for (const slot of accSlots) {
+            if (map[slot.id] === undefined || map[slot.id] === '') {
+                if (slot.optional === true || (hasRequiredSlots && slot.required !== true))
+                    continue;
                 errors.push(`${at}: аналитика «${slot.id}» счёта ${accSchema.label} (${name}) не сопоставлена`);
+            }
             else
                 checkExpr(map[slot.id], `аналитика ${name} «${slot.id}»`);
         }
         for (const key of Object.keys(map)) {
-            if (!analyticSlots(accSchema).some(f => f.id === key))
+            if (!accSlots.some(f => f.id === key))
                 errors.push(`${at}: у счёта ${accSchema.label} нет аналитики «${key}» (${name})`);
         }
     }

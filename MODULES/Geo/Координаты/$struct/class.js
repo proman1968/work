@@ -5,6 +5,7 @@ export default {
         FIELDS: [
             { id: 'lat', label: 'Широта', type: 'number' },
             { id: 'lon', label: 'Долгота', type: 'number' },
+            { id: 'zoom', label: 'Масштаб', type: 'integer' },
         ],
     },
 }

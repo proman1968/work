@@ -1,12 +1,13 @@
-export default {    label: 'Доставка',
+export default {
+    label: 'Доставка / Путевой лист',
     icon: 'carbon:delivery',
     METADATA: {
         FIELDS: [
-            { id: 'client', label: 'Покупатель', type: 'Link', target: '/MODULES/Register/CATALOGS/Клиенты', required: true },
-            { id: 'vehicle', label: 'Транспорт', type: 'Link', target: '/MODULES/Register/CATALOGS/Транспорт', required: true },
-            { id: 'distance', label: 'Пробег, км', type: 'Number', required: true },
-            { id: 'fuel', label: 'Топливо', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
-            { id: 'fuel_storage', label: 'Склад ГСМ', type: 'Link', target: '/MODULES/Register/CATALOGS/Склады и резервуары', required: true },
+            { id: 'client', label: 'Покупатель / Получатель', type: 'link', target: '/MODULES/Register/CATALOGS/Клиенты', required: true },
+            { id: 'vehicle', label: 'Транспорт', type: 'link', target: '/MODULES/Register/CATALOGS/Транспорт', required: true },
+            { id: 'distance', label: 'Пробег, км', type: 'number', required: true },
+            { id: 'fuel', label: 'Топливо', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
+            { id: 'fuel_storage', label: 'Склад списания', type: 'link', target: '/MODULES/Register/CATALOGS/Склады', required: true },
         ],
         POSTINGS: [
             {

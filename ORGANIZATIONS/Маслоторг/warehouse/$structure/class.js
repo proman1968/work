@@ -7,7 +7,7 @@ export default {
             label: "Заведующий складом",
             USERS: ["8346837462394056"],
             LINKS: [
-                { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Склады и резервуары", access: "write" },
+                { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Склады", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Партии", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Номенклатура", access: "read" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "read" },
@@ -28,7 +28,7 @@ export default {
                 label: "Кладовщик",
                 USERS: ["635243546352435"],
                 LINKS: [
-                    { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Склады и резервуары", access: "write" },
+                    { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Склады", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Партии", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Номенклатура", access: "read" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "read" },

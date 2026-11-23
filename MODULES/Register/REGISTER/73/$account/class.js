@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:wallet',
     METADATA: {
         FIELDS: [
-            { id: 'employee', label: 'Сотрудник', type: 'Link', target: '/MODULES/Register/CATALOGS/Сотрудники', analytic: true },
+            { id: 'employee', label: 'Сотрудник', type: 'link', target: '/MODULES/Register/CATALOGS/Сотрудники', analytic: true },
         ],
     },
 }

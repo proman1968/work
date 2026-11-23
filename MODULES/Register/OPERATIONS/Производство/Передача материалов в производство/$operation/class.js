@@ -3,9 +3,10 @@ export default {
     icon: 'carbon:industry',
     METADATA: {
         FIELDS: [
-            { id: 'item', label: 'Материал', type: 'Link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
-            { id: 'qty', label: 'Количество', type: 'Number', required: true },
-            { id: 'sum', label: 'Сумма списания', type: 'Money', required: true },
+            { id: 'storage', label: 'Склад материалов', type: 'link', target: '/MODULES/Register/CATALOGS/Склады' },
+            { id: 'item', label: 'Материал', type: 'link', target: '/MODULES/Register/CATALOGS/Номенклатура', required: true },
+            { id: 'qty', label: 'Количество', type: 'number', required: true },
+            { id: 'sum', label: 'Сумма списания', type: 'money', required: true },
         ],
         POSTINGS: [
             {
@@ -14,7 +15,7 @@ export default {
                 qty: 'qty',
                 item: 'item',
                 debit: { account: '/MODULES/Register/REGISTER/20' },
-                credit: { account: '/MODULES/Register/REGISTER/10/01', analytics: { item: 'item' } },
+                credit: { account: '/MODULES/Register/REGISTER/10/01', analytics: { item: 'item', storage: 'storage' } },
             },
         ],
     },

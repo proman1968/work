@@ -3,7 +3,7 @@ export default {
     icon: 'carbon:calculator-check',
     METADATA: {
         FIELDS: [
-            { id: 'sum', label: 'Финансовый результат (прибыль)', type: 'Money', required: true },
+            { id: 'sum', label: 'Финансовый результат (прибыль)', type: 'money', required: true },
             { id: 'comment', label: 'Комментарий к закрытию месяца' },
         ],
         POSTINGS: [
