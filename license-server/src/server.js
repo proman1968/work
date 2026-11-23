@@ -80,9 +80,18 @@ const STATIC_ASSETS = Object.freeze({
     '/assets/landing.css': { file: 'landing.css', type: 'text/css; charset=utf-8' },
     '/assets/landing.js': { file: 'landing.js', type: 'text/javascript; charset=utf-8' },
     '/assets/admin.js': { file: 'admin.js', type: 'text/javascript; charset=utf-8' },
-    '/presentation': { file: 'ODANT-WORK-presentation.html', type: 'text/html; charset=utf-8' },
-    '/assets/ODANT-WORK-presentation.html': { file: 'ODANT-WORK-presentation.html', type: 'text/html; charset=utf-8' },
-    '/assets/ODANT-WORK-presentation.pdf': { file: 'ODANT-WORK-presentation.pdf', type: 'application/pdf' },
+    '/presentation': { file: 'ODANT-WORK-clients-presentation.html', type: 'text/html; charset=utf-8' },
+    '/presentation/clients': { file: 'ODANT-WORK-clients-presentation.html', type: 'text/html; charset=utf-8' },
+    '/presentation/franchise': { file: 'ODANT-WORK-franchise-presentation.html', type: 'text/html; charset=utf-8' },
+    '/presentation/investors': { file: 'ODANT-WORK-investors-presentation.html', type: 'text/html; charset=utf-8' },
+    '/assets/ODANT-WORK-clients-presentation.html': { file: 'ODANT-WORK-clients-presentation.html', type: 'text/html; charset=utf-8' },
+    '/assets/ODANT-WORK-clients-presentation.pdf': { file: 'ODANT-WORK-clients-presentation.pdf', type: 'application/pdf' },
+    '/assets/ODANT-WORK-franchise-presentation.html': { file: 'ODANT-WORK-franchise-presentation.html', type: 'text/html; charset=utf-8' },
+    '/assets/ODANT-WORK-franchise-presentation.pdf': { file: 'ODANT-WORK-franchise-presentation.pdf', type: 'application/pdf' },
+    '/assets/ODANT-WORK-investors-presentation.html': { file: 'ODANT-WORK-investors-presentation.html', type: 'text/html; charset=utf-8' },
+    '/assets/ODANT-WORK-investors-presentation.pdf': { file: 'ODANT-WORK-investors-presentation.pdf', type: 'application/pdf' },
+    '/assets/ODANT-WORK-presentation.html': { file: 'ODANT-WORK-clients-presentation.html', type: 'text/html; charset=utf-8' },
+    '/assets/ODANT-WORK-presentation.pdf': { file: 'ODANT-WORK-clients-presentation.pdf', type: 'application/pdf' },
 });
 const assetCache = new Map();
 let assetVersionCache = '';
@@ -318,8 +327,21 @@ export function createLicenseServerApp(options = {}) {
         sendReceipt: initSettings.yookassa.sendReceipt,
         publicOrigin: options.publicOrigin || 'https://work.odant.org',
         fetchImpl: options.fetchImpl,
-        onOrderPaid: async (order, license) => {
-            await bots?.notifyLicenseOrderPaid(order, license);
+        onOrderPaid: async (paidResult) => {
+            const ord = paidResult?.order || paidResult;
+            if (paidResult?.license) {
+                await bots?.notifyLicenseOrderPaid(ord, paidResult.license).catch(() => {});
+                await bots?.notifyAdmins('payment_received', { order: ord, source: 'ЮKassa' }).catch(() => {});
+                await bots?.notifyAdmins('license_issued', { license: paidResult.license, source: 'Автоактивация ЮKassa' }).catch(() => {});
+            }
+            else if (paidResult?.reservation) {
+                await bots?.notifyAdmins('payment_received', { order: ord, source: 'ЮKassa' }).catch(() => {});
+                await bots?.notifyAdmins('franchise_activated', {
+                    reservation: paidResult.reservation,
+                    partner: paidResult.partner || null,
+                    source: 'Автоактивация ЮKassa',
+                }).catch(() => {});
+            }
         },
     });
     bots = options.bots || new SupportBotsHub({
@@ -494,11 +516,15 @@ export function createLicenseServerApp(options = {}) {
                     return sendJson(res, 400, { error: 'Неверный код подтверждения. Проверьте письмо и попробуйте снова.' });
                 }
                 pendingOtpCodes.delete(cleanEmail);
+                const existedBefore = Boolean(store.state.users[cleanEmail]);
                 const user = store.registerOrLoginUser({
                     email: cleanEmail,
                     ofertaAccepted: true,
                     hubUrl: body.hubUrl || reqOrigin,
                 });
+                if (!existedBefore) {
+                    await bots?.notifyAdmins('registration', user).catch(() => {});
+                }
                 res.setHeader('Set-Cookie', `odant_work_session=${encodeURIComponent(user.sessionKey)}; Path=/; Max-Age=31536000; SameSite=Lax`);
                 return sendJson(res, 200, user);
             }
@@ -506,10 +532,15 @@ export function createLicenseServerApp(options = {}) {
             // 2.0.0 Прямая регистрация по API (для серверных интеграций и автотестов)
             if (req.method === 'POST' && (pathname === '/api/auth/login' || pathname === '/api/auth/register')) {
                 const body = await readJsonBody(req);
+                const cleanEmail = String(body.email || '').trim().toLowerCase();
+                const existedBefore = cleanEmail ? Boolean(store.state.users[cleanEmail]) : true;
                 const user = store.registerOrLoginUser({
                     ...body,
                     hubUrl: body.hubUrl || reqOrigin,
                 });
+                if (!existedBefore && user) {
+                    await bots?.notifyAdmins('registration', user).catch(() => {});
+                }
                 res.setHeader('Set-Cookie', `odant_work_session=${encodeURIComponent(user.sessionKey)}; Path=/; Max-Age=31536000; SameSite=Lax`);
                 return sendJson(res, 200, user);
             }
@@ -623,6 +654,9 @@ export function createLicenseServerApp(options = {}) {
             if (req.method === 'POST' && pathname === '/api/partners/issue-license') {
                 const body = await readJsonBody(req);
                 const result = store.partnerIssueLicense(body);
+                if (result?.license) {
+                    await bots?.notifyAdmins('license_issued', { license: result.license, source: 'Выпуск партнёром-франчайзи' }).catch(() => {});
+                }
                 return sendJson(res, 200, result);
             }
 
@@ -638,6 +672,7 @@ export function createLicenseServerApp(options = {}) {
                     email: body.email || user?.email || '',
                 });
                 const payment = await yookassa.createPaymentForOrder(reserved.order, { originOverride: reqOrigin });
+                await bots?.notifyAdmins('order_created', { order: reserved.order }).catch(() => {});
                 return sendJson(res, 200, {
                     ...payment,
                     reservation: reserved.reservation,
@@ -690,6 +725,7 @@ export function createLicenseServerApp(options = {}) {
                     });
                 }
                 const updatedUser = store.findUserBySessionKey(user?.sessionKey);
+                await bots?.notifyAdmins('order_created', { order }).catch(() => {});
                 return sendJson(res, 200, {
                     ok: true,
                     ...(payment || {}),
@@ -716,6 +752,7 @@ export function createLicenseServerApp(options = {}) {
                     inn: body.inn || user?.inn || '',
                 });
                 const order = created.order;
+                await bots?.notifyAdmins('order_created', { order }).catch(() => {});
                 if (order.paymentMethod === 'invoice') {
                     const updatedUser = store.findUserBySessionKey(user?.sessionKey);
                     return sendJson(res, 200, {
@@ -829,6 +866,7 @@ export function createLicenseServerApp(options = {}) {
             if (req.method === 'POST' && pathname === '/api/license/issue') {
                 const body = await readJsonBody(req);
                 const summary = store.issueOrUpdateLicense(body);
+                await bots?.notifyAdmins('license_issued', { license: summary, source: 'Прямой выпуск /api/license/issue' }).catch(() => {});
                 return sendJson(res, 200, summary);
             }
 
@@ -889,6 +927,7 @@ export function createLicenseServerApp(options = {}) {
                         phone: body.customer?.phone || user?.phone || '',
                     },
                 });
+                await bots?.notifyAdmins('order_created', { order }).catch(() => {});
                 if (order.paymentMethod === 'invoice') {
                     return sendJson(res, 200, {
                         orderId: order.orderId,
@@ -908,6 +947,13 @@ export function createLicenseServerApp(options = {}) {
                     ...payment,
                     order,
                 });
+            }
+
+            // 7.2 Двойная сверка статуса платежа ЮKassa при возврате клиента по return_url (?order=...)
+            if (req.method === 'GET' && pathname.startsWith('/api/orders/') && pathname.endsWith('/sync-payment')) {
+                const orderId = decodeURIComponent(pathname.slice('/api/orders/'.length, -'/sync-payment'.length));
+                const syncRes = await yookassa.syncOrderPayment(orderId);
+                return sendJson(res, syncRes.reason === 'order_not_found' ? 404 : 200, syncRes);
             }
 
             // 7.1 Печатная форма Счёта-договора на оплату для юридических лиц
@@ -1129,7 +1175,52 @@ export function createLicenseServerApp(options = {}) {
                 const updatedRawBots = store._ensureSettingsObject().bots;
                 bots.telegramBotSecret = updatedRawBots.telegramToken;
                 bots.maxBotSecret = updatedRawBots.maxToken;
-                return sendJson(res, 200, { ok: true, settings });
+                const webhookSync = await bots.syncWebhooks(reqOrigin).catch(() => ({}));
+                return sendJson(res, 200, { ok: true, settings, webhookSync });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/bots/bind-code') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const issued = store.createAdminBotBindCode();
+                return sendJson(res, 200, {
+                    ok: true,
+                    code: issued.code,
+                    expiresAt: issued.expiresAt,
+                    command: `/admin ${issued.code}`,
+                });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/bots/admin-chats/add') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const adminChats = store.addAdminBotChat(body);
+                return sendJson(res, 200, { ok: true, adminChats, settings: store.getAdminSettingsSummary() });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/bots/admin-chats/remove') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const adminChats = store.removeAdminBotChat(body);
+                return sendJson(res, 200, { ok: true, adminChats, settings: store.getAdminSettingsSummary() });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/bots/test') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const adminChats = store.getAdminBotChats();
+                if (!adminChats.length)
+                    return sendJson(res, 400, { error: 'Сначала привяжите хотя бы один чат MAX или Telegram командой /admin <КОД>' });
+                const record = await bots.notifyAdmins('test', {});
+                return sendJson(res, 200, { ok: true, deliveries: record.deliveries });
             }
 
             if (req.method === 'POST' && pathname === '/api/admin/settings/legal') {
@@ -1181,7 +1272,30 @@ export function createLicenseServerApp(options = {}) {
                 if (!store.verifyAdminToken(tok))
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
                 const server = store.adminManageServer(body);
+                if (body.baseActivated !== undefined || Number(body.addonSeats) > 0) {
+                    await bots?.notifyAdmins('license_issued', { license: server, source: 'Ручное управление в /admin' }).catch(() => {});
+                }
                 return sendJson(res, 200, { ok: true, server });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/franchises/manage') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const result = store.adminManageFranchise(body.reservationId, body);
+                if (result?.action === 'activate' || result?.action === 'update_discount') {
+                    await bots?.notifyAdmins('franchise_activated', {
+                        reservation: result.franchise,
+                        partner: result.partner,
+                        source: 'Ручное управление в /admin',
+                    }).catch(() => {});
+                }
+                else if (body.action === 'revoke' || body.action === 'cancel') {
+                    const fr = store.getFranchiseSummary(body.reservationId) || { reservationId: body.reservationId };
+                    await bots?.notifyAdmins('franchise_canceled', { franchise: fr }).catch(() => {});
+                }
+                return sendJson(res, 200, result);
             }
 
             if (req.method === 'POST' && pathname === '/api/admin/franchises/confirm-installment') {
@@ -1190,6 +1304,14 @@ export function createLicenseServerApp(options = {}) {
                 if (!store.verifyAdminToken(tok))
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
                 const result = store.adminConfirmFranchiseInstallment(body.reservationId, body);
+                if (result?.reservation) {
+                    await bots?.notifyAdmins('payment_received', { order: result.order, source: 'Подтверждено администратором' }).catch(() => {});
+                    await bots?.notifyAdmins('franchise_activated', {
+                        reservation: result.reservation,
+                        partner: result.partner || null,
+                        source: 'Ручное зачисление в /admin',
+                    }).catch(() => {});
+                }
                 return sendJson(res, 200, { ok: true, ...result });
             }
 
@@ -1198,7 +1320,9 @@ export function createLicenseServerApp(options = {}) {
                 const tok = extractBearerToken(req, body, url);
                 if (!store.verifyAdminToken(tok))
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const frBefore = store.getFranchiseSummary(body.reservationId) || { reservationId: body.reservationId };
                 const result = store.cancelFranchiseReservation(body.reservationId, { byAdmin: true });
+                await bots?.notifyAdmins('franchise_canceled', { franchise: frBefore }).catch(() => {});
                 return sendJson(res, 200, result);
             }
 
@@ -1218,8 +1342,17 @@ export function createLicenseServerApp(options = {}) {
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
                 const orderId = decodeURIComponent(pathname.slice('/api/admin/orders/'.length, -'/confirm-invoice'.length));
                 const confirmed = store.confirmInvoicePayment(orderId, body);
+                await bots?.notifyAdmins('payment_received', { order: confirmed.order, source: 'Подтверждение оплаты счёта в /admin' }).catch(() => {});
                 if (confirmed?.license) {
-                    await bots?.notifyLicenseOrderPaid(confirmed.order, confirmed.license);
+                    await bots?.notifyLicenseOrderPaid(confirmed.order, confirmed.license).catch(() => {});
+                    await bots?.notifyAdmins('license_issued', { license: confirmed.license, source: 'Оплата счёта в /admin' }).catch(() => {});
+                }
+                else if (confirmed?.reservation) {
+                    await bots?.notifyAdmins('franchise_activated', {
+                        reservation: confirmed.reservation,
+                        partner: confirmed.partner || null,
+                        source: 'Оплата счёта в /admin',
+                    }).catch(() => {});
                 }
                 return sendJson(res, 200, confirmed);
             }
@@ -1251,7 +1384,19 @@ export function createLicenseServerApp(options = {}) {
             const server = http.createServer(handler);
             return new Promise((resolve, reject) => {
                 server.once('error', reject);
-                server.listen(port, host, () => resolve(server));
+                server.listen(port, host, () => {
+                    if (!process.env.NODE_TEST_CONTEXT && (bots.telegramBotSecret || bots.maxBotSecret)) {
+                        const pub = String(options.publicOrigin || process.env.PUBLIC_ORIGIN || '').trim();
+                        if (/^https:\/\/[^/]+/i.test(pub) && !/localhost|127\.0\.0\.1/i.test(pub) && process.env.WORK_BOTS_POLLING !== '1') {
+                            bots.syncWebhooks(pub).catch(() => {});
+                        }
+                        if (process.env.WORK_BOTS_POLLING === '1' || !pub || /localhost|127\.0\.0\.1/i.test(pub)) {
+                            bots.startPolling();
+                        }
+                    }
+                    server.once('close', () => bots.stopPolling?.());
+                    resolve(server);
+                });
             });
         },
     };

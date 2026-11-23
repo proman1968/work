@@ -889,16 +889,24 @@
             const deadline = Number(f.depositDeadlineAt || ((f.createdAt || now) + 15 * 60_000));
             const remSec = Math.max(0, Math.floor((deadline - now) / 1000));
 
+            const partnerStatusBadge = f.partnerId
+                ? (f.partnerStatus === 'suspended'
+                    ? `<span class="tag bad">Партнёр ${esc(f.partnerId)} приостановлен</span>`
+                    : (f.partnerStatus === 'revoked'
+                        ? `<span class="tag bad">Партнёр ${esc(f.partnerId)} отозван</span>`
+                        : `<span class="tag ok">✓ Партнёр ${esc(f.partnerId)} активен · скидка ${Number(f.partnerDiscountPercent ?? 10)}%</span>`))
+                : '';
+
             const statusBadge = !f.depositPaid
-                ? `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Оплата залога: <b data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</b></span>`
+                ? `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Оплата невозвратного залога: <b data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</b></span>`
                 : (remainingRub <= 0
-                    ? `<span class="tag ok">✓ Погашена полностью (12/12)</span>`
-                    : `<span class="tag ok">✓ Залог оплачен · График ${paidMonths}/12 мес.</span>`);
+                    ? `<span class="tag ok">✓ Франшиза выкуплена полностью (12/12)</span>`
+                    : `<span class="tag ok">✓ Невозвратный залог оплачен · График ${paidMonths}/12 мес.</span>`);
 
             const depositAlertHtml = !f.depositPaid
                 ? `<div style="margin-top:10px;padding:12px 14px;border-radius:10px;border:1px solid rgba(245,158,11,.45);background:rgba(245,158,11,.08);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
                     <div class="small">
-                        <b>Оплатите начальный взнос (${rub(depositRub)}) через ЮKassa в течение <span style="font-family:monospace;font-size:13.5px" data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</span></b>, иначе резерв автоматически отменится.
+                        <b>Оплатите невозвратный залог (${rub(depositRub)}) через ЮKassa в течение <span style="font-family:monospace;font-size:13.5px" data-deposit-deadline="${deadline}">${fmtCountdown(remSec)}</span></b>, иначе резерв автоматически отменится. Сразу после оплаты статус партнёра-франчайзера активируется автоматически (залог возврату не подлежит).
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap">
                         <button class="btn btn-primary btn-sm" style="padding:6px 12px;font-size:12px" data-pay-order="${esc(f.orderId)}" data-pay-method="yookassa">Оплатить ${rub(depositRub)} (ЮKassa)</button>
@@ -952,11 +960,12 @@
                         <b style="font-size:15px">${esc(f.regionName)}</b>
                         <span class="small muted">· ${esc(f.district || f.regionCode)} · <code>${esc(rid)}</code></span>
                         ${statusBadge}
+                        ${partnerStatusBadge}
                     </div>
                     ${scheduleControlsHtml}
                 </div>
                 <div class="small muted" style="margin-top:4px">
-                    Паушальный взнос: <b>${rub(totalFeeRub)}</b> · Залог: <b>${rub(depositRub)}</b> · Оплачено: <b>${rub(totalPaidRub)}</b> (${pct}%) · Остаток: <b>${rub(remainingRub)}</b>
+                    Паушальный взнос: <b>${rub(totalFeeRub)}</b> · Невозвратный залог: <b>${rub(depositRub)}</b> · Оплачено: <b>${rub(totalPaidRub)}</b> (${pct}%) · Остаток: <b>${rub(remainingRub)}</b>
                 </div>
                 ${depositAlertHtml}
                 <table class="sec-table" style="margin-top:10px">
@@ -1777,7 +1786,7 @@
         $('#ringTxt').textContent = vac;
         const btn = $('#btnReserveSelected');
         btn.disabled = vac <= 0;
-        btn.textContent = vac > 0 ? `Зарезервировать · залог ${rub(D.franchise.reservationDepositRub)}` : 'Все франшизы субъекта заняты';
+        btn.textContent = vac > 0 ? `Зарезервировать · невозвратный залог ${rub(D.franchise.reservationDepositRub)}` : 'Все франшизы субъекта заняты';
     }
 
     const SORT = { key: 'populationMillions', dir: -1 };
@@ -2100,31 +2109,77 @@
         else requestAnimationFrame(frame);
     }
 
-    /* ================= Интерактивный плеер презентации ODANT-WORK ================= */
+    /* ================= Интерактивный плеер 3 раздельных презентаций ODANT-WORK ================= */
+    const PRES_META = {
+        clients: {
+            title: 'Презентация ODANT-WORK для клиентов',
+            sub: 'Комплекс, лицензии, ИИ-агенты и тарифы · ООО «БИС»',
+            url: '/presentation/clients',
+            pdf: '/assets/ODANT-WORK-clients-presentation.pdf',
+            slides: 9,
+        },
+        franchise: {
+            title: 'Презентация ODANT-WORK для франчайзеров',
+            sub: 'Квоты регионов РФ, невозвратный залог и экономика партнёра · ООО «БИС»',
+            url: '/presentation/franchise',
+            pdf: '/assets/ODANT-WORK-franchise-presentation.pdf',
+            slides: 9,
+        },
+        investors: {
+            title: 'Презентация ODANT-WORK для инвесторов',
+            sub: 'Актив ООО «БИС», рынок, тройная монетизация и рост сети',
+            url: '/presentation/investors',
+            pdf: '/assets/ODANT-WORK-investors-presentation.pdf',
+            slides: 9,
+        },
+    };
+    let currentPresKind = 'clients';
     let currentPresSlide = 1;
-    const PRES_TOTAL_SLIDES = 12;
+    let currentPresTotal = 9;
 
-    function syncPresIndicators(slideNum) {
-        currentPresSlide = Math.max(1, Math.min(PRES_TOTAL_SLIDES, Number(slideNum) || 1));
+    function rebuildPresDots(total) {
+        const dotsWrap = $('#presDots');
+        if (!dotsWrap) return;
+        const cnt = Math.max(1, Number(total) || 9);
+        dotsWrap.innerHTML = Array.from({ length: cnt }, (_, idx) =>
+            `<button type="button" class="pres-dot ${idx + 1 === currentPresSlide ? 'on' : ''}" data-action="pres-goto" data-slide="${idx + 1}" title="Слайд ${idx + 1}">${idx + 1}</button>`
+        ).join('');
+    }
+
+    function syncPresIndicators(slideNum, totalSlides) {
+        if (totalSlides) currentPresTotal = Math.max(1, Number(totalSlides) || 9);
+        currentPresSlide = Math.max(1, Math.min(currentPresTotal, Number(slideNum) || 1));
         const cnt = $('#presCounter');
-        if (cnt) cnt.textContent = `Слайд ${currentPresSlide} / ${PRES_TOTAL_SLIDES}`;
+        if (cnt) cnt.textContent = `Слайд ${currentPresSlide} / ${currentPresTotal}`;
         $$('#presDots .pres-dot').forEach(btn => {
             btn.classList.toggle('on', Number(btn.dataset.slide) === currentPresSlide);
         });
-        const sec = currentPresSlide >= 10 ? 'franchise' : (currentPresSlide >= 8 ? 'clients' : 'product');
         $$('#presSectionTabs .chip').forEach(btn => {
-            btn.classList.toggle('on', btn.dataset.sec === sec);
+            btn.classList.toggle('on', btn.dataset.presKind === currentPresKind);
         });
     }
 
-    function openPresentationModal(startSlide = 1) {
+    function openPresentationModal(startSlide = 1, kind = '') {
         const modal = $('#presentationModal');
         const frame = $('#presFrame');
         if (!modal || !frame) return;
-        const n = Math.max(1, Math.min(PRES_TOTAL_SLIDES, Number(startSlide) || 1));
-        syncPresIndicators(n);
-        const targetSrc = `/presentation?embed=1&slide=${n}`;
-        if (!frame.getAttribute('src')) {
+        const resolvedKind = (kind && PRES_META[kind]) ? kind : currentPresKind;
+        const kindChanged = resolvedKind !== currentPresKind || !frame.getAttribute('src');
+        currentPresKind = resolvedKind;
+        const meta = PRES_META[resolvedKind];
+        currentPresTotal = meta.slides;
+        const n = Math.max(1, Math.min(currentPresTotal, Number(startSlide) || 1));
+        if ($('#presModalTitle')) $('#presModalTitle').textContent = meta.title;
+        if ($('#presModalSub')) $('#presModalSub').textContent = meta.sub;
+        if ($('#presFullLink')) $('#presFullLink').setAttribute('href', meta.url);
+        if ($('#presPdfLink')) {
+            $('#presPdfLink').setAttribute('href', meta.pdf);
+            $('#presPdfLink').setAttribute('download', meta.pdf.split('/').pop());
+        }
+        rebuildPresDots(currentPresTotal);
+        syncPresIndicators(n, currentPresTotal);
+        const targetSrc = `${meta.url}?embed=1&slide=${n}`;
+        if (kindChanged) {
             frame.setAttribute('src', targetSrc);
         } else {
             try {
@@ -2141,7 +2196,7 @@
     }
 
     function gotoPresentationSlide(slideNum) {
-        const n = Math.max(1, Math.min(PRES_TOTAL_SLIDES, Number(slideNum) || 1));
+        const n = Math.max(1, Math.min(currentPresTotal, Number(slideNum) || 1));
         syncPresIndicators(n);
         const frame = $('#presFrame');
         try {
@@ -2156,7 +2211,11 @@
     window.addEventListener('message', (e) => {
         const d = e.data || {};
         if (d.type === 'odant-presentation-slide' && d.slide) {
-            syncPresIndicators(d.slide);
+            if (d.total && Number(d.total) !== currentPresTotal) {
+                currentPresTotal = Number(d.total);
+                rebuildPresDots(currentPresTotal);
+            }
+            syncPresIndicators(d.slide, d.total);
         } else if (d.type === 'odant-presentation-close') {
             closePresentationModal();
         }
@@ -2287,7 +2346,11 @@
                     break;
                 case 'open-presentation':
                     e.preventDefault();
-                    openPresentationModal(Number(el.dataset.slide || 1));
+                    openPresentationModal(Number(el.dataset.slide || 1), el.dataset.presKind || 'clients');
+                    break;
+                case 'pres-kind':
+                    e.preventDefault();
+                    openPresentationModal(1, el.dataset.presKind || 'clients');
                     break;
                 case 'pres-close':
                     closePresentationModal();
@@ -2387,8 +2450,32 @@
         switchStage(targetStage, { scroll: false });
         if (document.fonts?.ready) document.fonts.ready.then(moveIndicator);
         initMap().then(() => selectRegion(selectedCode || 'RU-SVE'));
-        restoreSession();
+        restoreSession().then(() => checkReturnedOrderPayment());
         refreshCatalogRegions();
+    }
+
+    async function checkReturnedOrderPayment() {
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const orderId = params.get('order');
+            if (!orderId) return;
+            const res = await api(`/api/orders/${encodeURIComponent(orderId)}/sync-payment`);
+            if (res?.status === 'paid') {
+                await refreshCabinetUser();
+                if (isUserReadyForOrders()) {
+                    switchStage('addons', { scroll: false });
+                    if (res.kind === 'franchise_reservation' || res.kind === 'franchise_installment') {
+                        switchCabinetTab('franchises');
+                    }
+                    else {
+                        switchCabinetTab('servers');
+                    }
+                }
+                const cleanUrl = window.location.pathname + (window.location.hash || '#addons');
+                history.replaceState(null, '', cleanUrl);
+            }
+        }
+        catch { /* ignore */ }
     }
 
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);

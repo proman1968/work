@@ -287,13 +287,14 @@ export function createDefaultPortalSettings() {
             telegramUsername: process.env.TELEGRAM_BOT_USERNAME || '',
             maxToken: process.env.MAX_BOT_TOKEN || '',
             maxUsername: process.env.MAX_BOT_USERNAME || '',
+            adminChats: [],
         },
         legal: {
-            companyName: 'ООО «БИС» («Бизнес Интер Софт»)',
+            companyName: 'ООО «БИС»',
             authorName: 'Перепелкин Роман Александрович',
             legalStatus: 'Правообладатель и Оператор платформы · Проприетарное ПО (Все права защищены)',
             inn: '6234049193',
-            ogrn: '',
+            ogrn: '1076234013712',
             supportEmail: 'support@odant.org',
             phone: '+7 (4912) 77-70-21',
             address: VENDOR_CONTACTS.address || '390000, г. Рязань, ул. Ленина, 47',
@@ -322,7 +323,15 @@ export function mergeStoreStates(baseState = {}, incomingState = {}) {
         settings: {
             smtp: { ...defSettings.smtp, ...(baseSet.smtp || {}), ...(incSet.smtp || {}) },
             yookassa: { ...defSettings.yookassa, ...(baseSet.yookassa || {}), ...(incSet.yookassa || {}) },
-            bots: { ...defSettings.bots, ...(baseSet.bots || {}), ...(incSet.bots || {}) },
+            bots: {
+                ...defSettings.bots,
+                ...(baseSet.bots || {}),
+                ...(incSet.bots || {}),
+                adminChats: [
+                    ...(Array.isArray(baseSet.bots?.adminChats) ? baseSet.bots.adminChats : []),
+                    ...(Array.isArray(incSet.bots?.adminChats) ? incSet.bots.adminChats : []),
+                ].filter((c, i, arr) => c && c.chatId && arr.findIndex(x => x && x.channel === c.channel && String(x.chatId) === String(c.chatId)) === i),
+            },
             legal: { ...defSettings.legal, ...(baseSet.legal || {}), ...(incSet.legal || {}) },
         },
     };
@@ -749,6 +758,8 @@ export class LicenseStore {
         this.state.settings.smtp = { ...def.smtp, ...(this.state.settings.smtp || {}) };
         this.state.settings.yookassa = { ...def.yookassa, ...(this.state.settings.yookassa || {}) };
         this.state.settings.bots = { ...def.bots, ...(this.state.settings.bots || {}) };
+        if (!Array.isArray(this.state.settings.bots.adminChats))
+            this.state.settings.bots.adminChats = [];
         this.state.settings.legal = { ...def.legal, ...(this.state.settings.legal || {}) };
         return this.state.settings;
     }
@@ -837,6 +848,7 @@ export class LicenseStore {
                 telegramUsername: String(s.bots.telegramUsername || '').replace(/^@+/, ''),
                 maxToken: maskSecret(s.bots.maxToken),
                 maxUsername: String(s.bots.maxUsername || '').replace(/^@+/, ''),
+                adminChats: Array.isArray(s.bots.adminChats) ? s.bots.adminChats : [],
             },
             legal: {
                 companyName: s.legal.companyName || '',
@@ -894,6 +906,111 @@ export class LicenseStore {
         }
         this._save();
         return this.getAdminSettingsSummary();
+    }
+
+    /**
+     * Сгенерировать одноразовый код привязки администраторского чата MAX / Telegram (команда `/admin <КОД>`).
+     */
+    createAdminBotBindCode() {
+        if (!(this.pendingAdminBindCodes instanceof Map))
+            this.pendingAdminBindCodes = new Map();
+        const now = Date.now();
+        for (const [k, v] of this.pendingAdminBindCodes.entries()) {
+            if (!v || now > v.expiresAt)
+                this.pendingAdminBindCodes.delete(k);
+        }
+        const code = 'ADM-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+        const expiresAt = now + 15 * 60_000;
+        this.pendingAdminBindCodes.set(code, { code, createdAt: now, expiresAt });
+        return { code, expiresAt };
+    }
+
+    /**
+     * Подтвердить одноразовый код привязки и сохранить чат администратора.
+     */
+    consumeAdminBotBindCode(code = '', { channel = 'telegram', chatId = '', userName = '' } = {}) {
+        const cleanCode = String(code || '').trim().toUpperCase();
+        if (!(this.pendingAdminBindCodes instanceof Map))
+            this.pendingAdminBindCodes = new Map();
+        const entry = this.pendingAdminBindCodes.get(cleanCode);
+        if (!entry || Date.now() > entry.expiresAt) {
+            this.pendingAdminBindCodes.delete(cleanCode);
+            throw new Error('Код привязки админ-чата недействителен или истёк. Получите новый код в /admin → Боты.');
+        }
+        this.pendingAdminBindCodes.delete(cleanCode);
+        return this.addAdminBotChat({ channel, chatId, userName });
+    }
+
+    /**
+     * Добавить или обновить админский чат для мгновенных уведомлений в MAX / Telegram.
+     */
+    addAdminBotChat({ channel = 'telegram', chatId = '', userName = '' } = {}) {
+        const ch = String(channel || '').trim().toLowerCase();
+        if (ch !== 'telegram' && ch !== 'max')
+            throw new Error('Для уведомлений администратора поддерживаются только каналы telegram и max');
+        const cid = String(chatId || '').trim();
+        if (!cid)
+            throw new Error('Укажите chatId');
+        const b = this._ensureSettingsObject().bots;
+        if (!Array.isArray(b.adminChats))
+            b.adminChats = [];
+        const existing = b.adminChats.find(x => x.channel === ch && String(x.chatId) === cid);
+        const now = Date.now();
+        if (existing) {
+            if (userName) existing.userName = String(userName).trim();
+            existing.enabled = true;
+            existing.updatedAt = now;
+        }
+        else {
+            b.adminChats.push({
+                channel: ch,
+                chatId: cid,
+                userName: String(userName || (ch === 'max' ? 'MAX Admin' : 'Telegram Admin')).trim(),
+                boundAt: now,
+                enabled: true,
+            });
+        }
+        this._save();
+        return this.getAdminBotChats();
+    }
+
+    /**
+     * Удалить привязанный админ-чат (MAX / Telegram).
+     */
+    removeAdminBotChat({ channel = '', chatId = '' } = {}) {
+        const ch = String(channel || '').trim().toLowerCase();
+        const cid = String(chatId || '').trim();
+        const b = this._ensureSettingsObject().bots;
+        if (Array.isArray(b.adminChats)) {
+            b.adminChats = b.adminChats.filter(x => !(x.channel === ch && String(x.chatId) === cid));
+            this._save();
+        }
+        return this.getAdminBotChats();
+    }
+
+    /**
+     * Список активных админ-чатов MAX и Telegram (из /admin + переменных окружения).
+     */
+    getAdminBotChats() {
+        const b = this._ensureSettingsObject().bots;
+        const list = Array.isArray(b.adminChats) ? b.adminChats.filter(x => x && x.enabled !== false) : [];
+        const out = list.map(x => ({ ...x }));
+        const seen = new Set(out.map(x => `${x.channel}:${x.chatId}`));
+        const envTg = String(process.env.ADMIN_TELEGRAM_CHAT_ID || '').trim();
+        if (envTg && !seen.has(`telegram:${envTg}`)) {
+            out.push({ channel: 'telegram', chatId: envTg, userName: 'ENV Telegram Admin', enabled: true, fromEnv: true });
+        }
+        const envMax = String(process.env.ADMIN_MAX_CHAT_ID || '').trim();
+        if (envMax && !seen.has(`max:${envMax}`)) {
+            out.push({ channel: 'max', chatId: envMax, userName: 'ENV MAX Admin', enabled: true, fromEnv: true });
+        }
+        return out;
+    }
+
+    isAdminBotChat(channel = '', chatId = '') {
+        const ch = String(channel || '').trim().toLowerCase();
+        const cid = String(chatId || '').trim();
+        return this.getAdminBotChats().some(x => x.channel === ch && String(x.chatId) === cid);
     }
 
     updateLegalSettings(patch = {}) {
@@ -1846,9 +1963,7 @@ export class LicenseStore {
             resv.depositPaid = true;
             resv.paidAt = ord.paidAt;
             resv.paymentId = ord.paymentId;
-            if (!resv.convertedToPartnerId)
-                resv.status = 'deposit_paid';
-            // Фиксируем 12-месячный график погашения остатка ровно от даты оплаты начального взноса
+            // Фиксируем 12-месячный график погашения остатка ровно от даты оплаты невозвратного залога
             const remainingAfterDeposit = Math.max(0, Number(resv.franchiseFeeRub || 0) - Number(resv.nonRefundableDepositRub || 100_000));
             resv.paymentSchedule = buildFranchisePaymentSchedule({
                 remainingRub: remainingAfterDeposit,
@@ -1860,10 +1975,14 @@ export class LicenseStore {
                 .reduce((s, it) => s + Number(it.amountRub || 0), 0);
             resv.totalPaidRub = Number(resv.nonRefundableDepositRub || 100_000) + resv.paidInstallmentsRub;
             resv.remainingFranchiseFeeRub = Math.max(0, Number(resv.franchiseFeeRub || 0) - resv.totalPaidRub);
+            resv.status = resv.remainingFranchiseFeeRub <= 0 ? 'paid_in_full' : 'deposit_paid';
+            // Автоматически активируем партнёра-франчайзера сразу после поступления невозвратного залога
+            const partner = this._activatePartnerFromReservation(resv, { now: ord.paidAt });
             this._save();
             return {
                 order: ord,
                 reservation: this.getFranchiseSummary(resv.reservationId),
+                partner,
                 regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
                 alreadyProcessed: false,
             };
@@ -1895,13 +2014,15 @@ export class LicenseStore {
                 .reduce((s, it) => s + Number(it.amountRub || 0), 0);
             resv.totalPaidRub = (resv.depositPaid ? Number(resv.nonRefundableDepositRub || 100_000) : 0) + resv.paidInstallmentsRub;
             resv.remainingFranchiseFeeRub = Math.max(0, Number(resv.franchiseFeeRub || 0) - resv.totalPaidRub);
-            if (resv.remainingFranchiseFeeRub <= 0 && !resv.convertedToPartnerId) {
+            if (resv.remainingFranchiseFeeRub <= 0) {
                 resv.status = 'paid_in_full';
             }
+            const partner = this._activatePartnerFromReservation(resv, { now: ord.paidAt, restoreSuspended: true });
             this._save();
             return {
                 order: ord,
                 reservation: this.getFranchiseSummary(resv.reservationId),
+                partner,
                 regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
                 alreadyProcessed: false,
             };
@@ -1963,7 +2084,7 @@ export class LicenseStore {
         const dateStr = new Date(ord.createdAt || Date.now()).toLocaleDateString('ru-RU');
         const c = ord.customer || {};
         const legal = this.getLegalSettings();
-        const vendorTitle = legal.companyName || `ООО «${VENDOR_CONTACTS.company}»`;
+        const vendorTitle = legal.companyName || VENDOR_CONTACTS.company || 'ООО «БИС»';
         const vendorAddr = legal.address || VENDOR_CONTACTS.address;
         const vendorPhone = legal.phone || VENDOR_CONTACTS.phones.join(', ');
         const custName = (c.name && !String(c.name).includes('@')) ? c.name : 'Организация (не указана)';
@@ -3054,8 +3175,14 @@ export class LicenseStore {
             .filter(o => o.reservationId === resv.reservationId && o.status !== 'canceled')
             .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
+        const partnerObj = resv.convertedToPartnerId ? this.state.partners[resv.convertedToPartnerId] : null;
         return {
             ...resv,
+            partnerId: partnerObj?.partnerId || resv.convertedToPartnerId || '',
+            partnerStatus: partnerObj?.status || '',
+            partnerDiscountPercent: partnerObj?.discountPercent ?? null,
+            partnerLevel: partnerObj?.statusLevel || '',
+            certifiedStatus: Boolean(partnerObj?.certifiedStatus),
             depositDeadlineAt,
             depositRemainingSeconds,
             paymentSchedule: schedule,
@@ -3119,7 +3246,7 @@ export class LicenseStore {
         if (summary.status === 'canceled' || summary.status === 'expired')
             throw new Error('Резерв франшизы истёк или был отменён');
         if (!summary.depositPaid)
-            throw new Error('Сначала оплатите начальный взнос за резервирование франшизы (100 000 ₽)');
+            throw new Error('Сначала оплатите невозвратный залог за резервирование франшизы (100 000 ₽)');
 
         const unpaid = (summary.paymentSchedule || []).filter(it => it.status !== 'paid');
         if (!unpaid.length || summary.remainingFranchiseFeeRub <= 0)
@@ -3366,7 +3493,7 @@ export class LicenseStore {
             licenseId: reservationId,
             regionCode: quotaStatus.regionCode,
             regionName: quotaStatus.regionName,
-            tierName: `Начальный взнос за резерв франшизы (${quotaStatus.regionName})`,
+            tierName: `Невозвратный залог за резерв франшизы (${quotaStatus.regionName})`,
             addonSeats: 1,
             years: 1,
             amountRub: depositRub,
@@ -3377,7 +3504,7 @@ export class LicenseStore {
             invoiceUrl: `/api/orders/${encodeURIComponent(orderId)}/invoice`,
             items: [
                 {
-                    title: `Начальный взнос (залог) за резервирование региональной франшизы ODANT-WORK (${quotaStatus.regionName}, паушальный взнос ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽, график погашения остатка — 12 ежемесячных платежей)`,
+                    title: `Невозвратный залог за резервирование и активацию региональной франшизы ODANT-WORK (${quotaStatus.regionName}, паушальный взнос ${quotaStatus.franchiseFeeRub.toLocaleString('ru-RU')} ₽, график погашения остатка — 12 ежемесячных платежей)`,
                     quantity: 1,
                     unitPriceRub: depositRub,
                     totalRub: depositRub,
@@ -3595,6 +3722,138 @@ export class LicenseStore {
         }
         this._save();
         return this.getPartnerSummary(id);
+    }
+
+    /**
+     * Внутренняя автоактивация партнёра-франчайзера при оплате невозвратного залога (100 000 ₽) или графика.
+     * Не затирает статус графика резерва (`deposit_paid` / `paid_in_full`), но гарантирует наличие активного партнёра.
+     */
+    _activatePartnerFromReservation(resv, { now = Date.now(), restoreSuspended = false } = {}) {
+        if (!resv)
+            return null;
+        const existingId = resv.convertedToPartnerId;
+        if (existingId && this.state.partners[existingId]) {
+            const p = this.state.partners[existingId];
+            if (restoreSuspended && p.status === 'suspended') {
+                p.status = 'active';
+                p.updatedAt = now;
+            }
+            return this.getPartnerSummary(existingId);
+        }
+        const quotaStatus = this.getRegionPartnerQuotaStatus(resv.regionCode, null, {
+            ignoreReservationId: resv.reservationId,
+        });
+        const id = 'PRT-' + quotaStatus.regionCode.replace(/^RU-/, '') + '-' + crypto.randomBytes(3).toString('hex').toUpperCase();
+        const discountInfo = calculatePartnerDiscount(0);
+        const partner = {
+            partnerId: id,
+            reservationId: resv.reservationId,
+            ownerAccountId: resv.ownerAccountId || '',
+            companyName: String(resv.companyName || resv.email || 'Партнёр ODANT-WORK').trim(),
+            inn: String(resv.inn || '').trim(),
+            regionCode: quotaStatus.regionCode,
+            regionName: quotaStatus.regionName,
+            district: quotaStatus.district,
+            populationMillions: quotaStatus.populationMillions,
+            maxRegionPartnersQuota: quotaStatus.maxPartnersQuota,
+            economicIndex: quotaStatus.economicIndex,
+            franchiseFeeRub: quotaStatus.franchiseFeeRub,
+            email: String(resv.email || '').trim(),
+            phone: String(resv.phone || '').trim(),
+            contactPerson: String(resv.contactPerson || '').trim(),
+            annualSalesRub: discountInfo.annualSalesRub,
+            discountPercent: discountInfo.discountPercent,
+            statusLevel: discountInfo.statusLevel,
+            certifiedSpecialists: [],
+            certifiedStatus: false,
+            status: 'active',
+            activatedByPaymentAt: now,
+            createdAt: now,
+            updatedAt: now,
+        };
+        this.state.partners[id] = partner;
+        resv.convertedToPartnerId = id;
+        resv.partnerId = id;
+        resv.convertedAt = resv.convertedAt || now;
+        return this.getPartnerSummary(id);
+    }
+
+    /**
+     * Ручное управление франшизой и статусом партнёра из Админ-панели (/admin) поверх автоматики ЮKassa.
+     */
+    adminManageFranchise(reservationId, {
+        action = '',
+        discountPercent = undefined,
+        comment = '',
+    } = {}) {
+        const resv = this.state.reservations[reservationId];
+        if (!resv)
+            throw new Error(`Франшиза ${reservationId} не найдена`);
+        const now = Date.now();
+        const act = String(action || '').trim().toLowerCase();
+
+        if (act === 'revoke' || act === 'cancel') {
+            return this.cancelFranchiseReservation(reservationId, { byAdmin: true });
+        }
+
+        if (act === 'suspend') {
+            const partner = resv.convertedToPartnerId
+                ? this.state.partners[resv.convertedToPartnerId]
+                : null;
+            if (partner) {
+                partner.status = 'suspended';
+                partner.updatedAt = now;
+                if (comment) partner.adminComment = String(comment).trim();
+            }
+            this._save();
+            return {
+                ok: true,
+                action: 'suspend',
+                franchise: this.getFranchiseSummary(reservationId),
+                partner: partner ? this.getPartnerSummary(partner.partnerId) : null,
+                regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
+            };
+        }
+
+        if (act === 'activate' || act === 'restore') {
+            const partner = this._activatePartnerFromReservation(resv, { now, restoreSuspended: true });
+            if (partner && this.state.partners[partner.partnerId]) {
+                this.state.partners[partner.partnerId].status = 'active';
+                this.state.partners[partner.partnerId].updatedAt = now;
+                if (comment) this.state.partners[partner.partnerId].adminComment = String(comment).trim();
+            }
+            if (resv.status === 'canceled' || resv.status === 'expired') {
+                resv.status = resv.remainingFranchiseFeeRub <= 0 ? 'paid_in_full' : (resv.depositPaid ? 'deposit_paid' : 'reserved_pending_deposit');
+            }
+            this._save();
+            return {
+                ok: true,
+                action: 'activate',
+                franchise: this.getFranchiseSummary(reservationId),
+                partner: partner ? this.getPartnerSummary(partner.partnerId) : null,
+                regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
+            };
+        }
+
+        if (discountPercent !== undefined && discountPercent !== null && discountPercent !== '') {
+            const partnerSummary = this._activatePartnerFromReservation(resv, { now, restoreSuspended: false });
+            const p = partnerSummary ? this.state.partners[partnerSummary.partnerId] : null;
+            if (p) {
+                p.discountPercent = Math.max(0, Math.min(60, Number(discountPercent)));
+                p.updatedAt = now;
+                if (comment) p.adminComment = String(comment).trim();
+            }
+            this._save();
+            return {
+                ok: true,
+                action: 'update_discount',
+                franchise: this.getFranchiseSummary(reservationId),
+                partner: p ? this.getPartnerSummary(p.partnerId) : null,
+                regionQuota: this.getRegionPartnerQuotaStatus(resv.regionCode),
+            };
+        }
+
+        throw new Error('Не указано действие ручного управления франшизой');
     }
 
     /**

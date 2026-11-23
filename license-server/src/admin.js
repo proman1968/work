@@ -374,6 +374,47 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                                 <span class="small" id="admBotsFeedback"></span>
                             </div>
                         </div>
+
+                        <div class="sec-box" style="margin-top:16px">
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+                                <h3 class="h3" style="margin:0;font-size:15.5px">Уведомления администратора (MAX и Telegram)</h3>
+                                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                                    <button type="button" class="btn btn-primary btn-sm" data-action="gen-admin-bot-code">Получить код привязки (/admin)</button>
+                                    <button type="button" class="btn btn-ghost btn-sm" data-action="test-admin-bots">Отправить тест в чаты</button>
+                                </div>
+                            </div>
+                            <p class="small muted" style="margin:0 0 12px;line-height:1.5">
+                                Привязанные админ-чаты MAX и Telegram получают мгновенные уведомления о <b>регистрациях</b>, <b>новых заявках/заказах</b>, <b>поступлениях оплат</b> (ЮKassa и безнал), <b>выдачах лицензий</b>, <b>активациях франшиз</b> и новых тикетах. В чате доступны команды <code>/stats</code>, <code>/orders</code>, <code>/franchises</code>.
+                            </p>
+                            <div id="admBotBindCodeBox" style="display:none;padding:12px 14px;border-radius:10px;border:1px solid rgba(16,185,129,.45);background:rgba(16,185,129,.08);margin-bottom:14px">
+                                <div class="small">Отправьте вашему боту в MAX или Telegram сообщение:</div>
+                                <div style="display:flex;align-items:center;gap:10px;margin-top:6px;flex-wrap:wrap">
+                                    <code id="admBotBindCommand" style="font-size:16px;font-weight:800;padding:4px 10px;border-radius:6px;background:rgba(0,0,0,.2)">/admin ADM-000000</code>
+                                    <button type="button" class="btn btn-ghost btn-sm" data-action="copy-admin-bot-code">Скопировать команду</button>
+                                    <span class="small muted">Код действует 15 минут.</span>
+                                </div>
+                            </div>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+                                <div class="adm-form-row" style="min-width:140px;margin:0">
+                                    <label class="adm-form-label" for="admNewChatChannel">Мессенджер</label>
+                                    <select id="admNewChatChannel">
+                                        <option value="telegram">Telegram</option>
+                                        <option value="max">MAX</option>
+                                    </select>
+                                </div>
+                                <div class="adm-form-row" style="min-width:180px;flex:1;margin:0">
+                                    <label class="adm-form-label" for="admNewChatId">Chat ID</label>
+                                    <input type="text" id="admNewChatId" placeholder="Например, 123456789">
+                                </div>
+                                <div class="adm-form-row" style="min-width:180px;flex:1;margin:0">
+                                    <label class="adm-form-label" for="admNewChatLabel">Имя / метка</label>
+                                    <input type="text" id="admNewChatLabel" placeholder="Руководитель (ООО «БИС»)">
+                                </div>
+                                <button type="button" class="btn btn-ghost" data-action="add-admin-bot-chat">+ Добавить чат вручную</button>
+                            </div>
+                            <div id="admBotAdminChatsList" class="small muted">Привязанных админ-чатов пока нет.</div>
+                            <div class="small" id="admBotsAdminFeedback" style="margin-top:8px"></div>
+                        </div>
                     </div>
 
                     <!-- 8. РЕКВИЗИТЫ ОФЕРТЫ -->
@@ -385,7 +426,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                             <div class="adm-form-grid">
                                 <div class="adm-form-row">
                                     <label class="adm-form-label" for="admLegalCompany">Оператор / Наименование</label>
-                                    <input type="text" id="admLegalCompany" placeholder="ООО «БИС» («Бизнес Интер Софт»)">
+                                    <input type="text" id="admLegalCompany" placeholder="ООО «БИС»">
                                 </div>
                                 <div class="adm-form-row">
                                     <label class="adm-form-label" for="admLegalAuthor">Автор ПО</label>

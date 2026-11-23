@@ -403,22 +403,31 @@ describe('ПАК WORK: спецификация, лицензирование, �
         assert.ok(!html.includes('1С'), 'В лендинге нет упоминаний 1С');
         assert.ok(html.includes('id="presentationModal"'), 'На лендинге встроен интерактивный плеер презентации');
         assert.ok(html.includes('data-action="open-presentation"'), 'Кнопки открытия презентации встроены в разделы лендинга');
-        assert.ok(html.includes('/assets/ODANT-WORK-presentation.pdf'), 'Кнопки скачивания PDF презентации встроены в лендинг');
+        assert.ok(html.includes('/assets/ODANT-WORK-clients-presentation.pdf'), 'Кнопка PDF презентации для клиентов встроена в лендинг');
+        assert.ok(html.includes('/assets/ODANT-WORK-franchise-presentation.pdf'), 'Кнопка PDF презентации для франчайзеров встроена в лендинг');
+        assert.ok(html.includes('/assets/ODANT-WORK-investors-presentation.pdf'), 'Кнопка PDF презентации для инвесторов встроена в лендинг');
+        assert.ok(html.includes('ООО «БИС»') && !html.includes('Бизнес Интер Софт'), 'На лендинге применяется сокращённое название ООО «БИС»');
+        assert.ok(html.includes('невозвратного залога') || html.includes('Невозвратный залог'), 'На лендинге явно отражён невозвратный залог для франчайзеров');
 
-        // Проверка раздачи веб-версии и PDF презентации для клиентов и франчайзи
-        const presHtmlRes = await fetch(`${hubUrl}/presentation`);
-        assert.equal(presHtmlRes.status, 200);
-        const presHtml = await presHtmlRes.text();
-        assert.ok(presHtml.includes('Презентация для клиентов и региональных партнёров (франчайзи)'));
-        assert.ok(presHtml.includes('№ 3505'), 'Указан верный номер реестровой записи СУБД Платформа Odant № 3505 от 03.05.2017');
-        assert.ok(presHtml.includes('ПАО «Россети»') && presHtml.includes('infostandart.com'), 'Указаны реальные внедрения из портфолио infostandart.com');
-        assert.ok(presHtml.includes('Слайд 12 / 12'));
-
-        const presPdfRes = await fetch(`${hubUrl}/assets/ODANT-WORK-presentation.pdf`);
-        assert.equal(presPdfRes.status, 200);
-        assert.equal(presPdfRes.headers.get('content-type'), 'application/pdf');
-        const pdfBytes = Buffer.from(await presPdfRes.arrayBuffer());
-        assert.ok(pdfBytes.length > 50_000, 'PDF презентации непустой и корректен');
+        // Проверка раздачи 3 раздельных веб-презентаций и их PDF
+        for (const kindCheck of [
+            { path: '/presentation/clients', pdf: '/assets/ODANT-WORK-clients-presentation.pdf', mustHave: ['Презентация для клиентов', '№ 3505', 'ПАО «Россети»', 'infostandart.com', 'ООО «БИС»', 'Слайд 9 / 9'] },
+            { path: '/presentation/franchise', pdf: '/assets/ODANT-WORK-franchise-presentation.pdf', mustHave: ['Презентация для франчайзеров', 'невозвратным', 'ООО «БИС»', 'Слайд 9 / 9'] },
+            { path: '/presentation/investors', pdf: '/assets/ODANT-WORK-investors-presentation.pdf', mustHave: ['Презентация для инвесторов', '№ 3505', 'ООО «БИС»', 'Слайд 9 / 9'] },
+        ]) {
+            const pRes = await fetch(`${hubUrl}${kindCheck.path}`);
+            assert.equal(pRes.status, 200);
+            const pHtml = await pRes.text();
+            for (const needle of kindCheck.mustHave) {
+                assert.ok(pHtml.includes(needle), `${kindCheck.path} должен содержать "${needle}"`);
+            }
+            assert.ok(!pHtml.includes('Бизнес Интер Софт'), `${kindCheck.path} должен использовать сокращённое название ООО «БИС»`);
+            const pdfRes = await fetch(`${hubUrl}${kindCheck.pdf}`);
+            assert.equal(pdfRes.status, 200);
+            assert.equal(pdfRes.headers.get('content-type'), 'application/pdf');
+            const pdfBytes = Buffer.from(await pdfRes.arrayBuffer());
+            assert.ok(pdfBytes.length > 50_000, `${kindCheck.pdf} непустой и корректен`);
+        }
 
         // 7.1 Отдельная страница админки /admin и обязательная защита входа администратора
         const adminHtml = await fetch(`${hubUrl}/admin`).then(r => r.text());
@@ -1701,6 +1710,243 @@ describe('ПАК WORK: спецификация, лицензирование, �
                 delete process.env.WORK_LICENSE_HOME_MIRROR;
             else
                 process.env.WORK_LICENSE_HOME_MIRROR = prevMirrorEnv;
+        }
+    });
+
+    it('18. Автоактивация лицензий и франшиз по ЮKassa (двойная сверка), ручное управление в /admin и админ-уведомления в MAX и Telegram', async () => {
+        const prevBotFetch = hubApp.bots.fetchImpl;
+        const botHttpCalls = [];
+        hubApp.bots.fetchImpl = async (url, init) => {
+            botHttpCalls.push({ url, body: init?.body });
+            return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        };
+        try {
+        const defaultAdmKey = ['odant', 'admin'].join('-');
+        const admLogin = await fetch(`${hubUrl}/api/admin/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ login: 'admin', password: defaultAdmKey }),
+        }).then(r => r.json());
+        assert.equal(admLogin.authenticated, true);
+        const admToken = admLogin.token;
+
+        // 1. Генерируем код привязки админ-чата и привязываем оба мессенджера (MAX и Telegram)
+        const bindCodeRes = await fetch(`${hubUrl}/api/admin/bots/bind-code`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admToken}` },
+            body: JSON.stringify({}),
+        }).then(r => r.json());
+        assert.equal(bindCodeRes.ok, true);
+        assert.ok(bindCodeRes.code.startsWith('ADM-'));
+
+        const tgAdminBind = await fetch(`${hubUrl}/api/bots/telegram/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: {
+                    chat: { id: 990011 },
+                    from: { id: 990011, first_name: 'Роман', username: 'bis_boss' },
+                    text: `/admin ${bindCodeRes.code}`,
+                },
+            }),
+        }).then(r => r.json());
+        assert.equal(tgAdminBind.action, 'admin_bind');
+        assert.equal(tgAdminBind.ok, true);
+
+        const bindCodeRes2 = await fetch(`${hubUrl}/api/admin/bots/bind-code`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admToken}` },
+            body: JSON.stringify({}),
+        }).then(r => r.json());
+        const maxAdminBind = await fetch(`${hubUrl}/api/bots/max/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: {
+                    recipient: { chat_id: 'max-boss-77' },
+                    sender: { user_id: 77, name: 'Роман MAX' },
+                    body: { text: `/admin ${bindCodeRes2.code}` },
+                },
+            }),
+        }).then(r => r.json());
+        assert.equal(maxAdminBind.action, 'admin_bind');
+        assert.equal(maxAdminBind.ok, true);
+
+        // Проверяем тест уведомлений и админ-команду /stats в боте
+        const testNotifyRes = await fetch(`${hubUrl}/api/admin/bots/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admToken}` },
+            body: JSON.stringify({}),
+        }).then(r => r.json());
+        assert.equal(testNotifyRes.ok, true);
+        assert.equal(testNotifyRes.deliveries.length, 2, 'Уведомление ушло в оба привязанных админ-чата: TG + MAX');
+
+        const statsRes = await fetch(`${hubUrl}/api/bots/max/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: {
+                    recipient: { chat_id: 'max-boss-77' },
+                    sender: { user_id: 77, name: 'Роман MAX' },
+                    body: { text: '/stats' },
+                },
+            }),
+        }).then(r => r.json());
+        assert.equal(statsRes.action, 'admin_stats');
+        assert.match(statsRes.reply, /ООО «БИС»/);
+
+        // 2. Регистрация нового пользователя + заказ базовой лицензии + возврат с ЮKassa (?order= -> sync-payment)
+        hubApp.bots.adminOutboxLog.length = 0;
+        const regRes = await fetch(`${hubUrl}/api/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email: 'auto-flow@bis-client.ru',
+                companyName: 'ООО «АвтоКлиент»',
+                inn: '6234112233',
+                ofertaAccepted: true,
+            }),
+        }).then(r => r.json());
+        assert.ok(regRes.sessionKey);
+
+        const licDraft = await fetch(`${hubUrl}/api/cabinet/orders/draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${regRes.sessionKey}` },
+            body: JSON.stringify({
+                licenseId: regRes.licenseId,
+                includeBaseLicenseOnly: true,
+                tier: 'enterprise',
+                addonSeats: 5,
+                years: 1,
+            }),
+        }).then(r => r.json());
+        assert.equal(licDraft.ok, true);
+        assert.equal(hubApp.store.getLicenseSummary(regRes.licenseId).baseActivated, false);
+
+        // Имитируем успешный webhook ЮKassa (или проверку return_url sync-payment)
+        const syncBefore = await fetch(`${hubUrl}/api/orders/${encodeURIComponent(licDraft.order.orderId)}/sync-payment`).then(r => r.json());
+        assert.equal(syncBefore.status, 'pending');
+
+        await fetch(`${hubUrl}/api/payments/yookassa/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'notification',
+                event: 'payment.succeeded',
+                object: {
+                    id: licDraft.paymentId,
+                    status: 'succeeded',
+                    amount: { value: Number(licDraft.order.amountRub).toFixed(2), currency: 'RUB' },
+                    metadata: { orderId: licDraft.order.orderId },
+                },
+            }),
+        });
+        const syncAfter = await fetch(`${hubUrl}/api/orders/${encodeURIComponent(licDraft.order.orderId)}/sync-payment`).then(r => r.json());
+        assert.equal(syncAfter.status, 'paid');
+        assert.equal(syncAfter.baseActivated, true);
+        assert.equal(hubApp.store.getLicenseSummary(regRes.licenseId).baseActivated, true, 'Базовая вечная лицензия автоматически включилась');
+        assert.equal(hubApp.store.getLicenseSummary(regRes.licenseId).totalSeats, 15, '10 вечных + 5 доп. мест');
+
+        // 3. Бронирование региональной франшизы и автоматическая активация партнёра-франчайзера при оплате невозвратного залога
+        const frDraft = await fetch(`${hubUrl}/api/cabinet/orders/draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${regRes.sessionKey}` },
+            body: JSON.stringify({ kind: 'franchise_reservation', regionCode: 'RU-RYA' }),
+        }).then(r => r.json());
+        assert.equal(frDraft.ok, true);
+        assert.match(frDraft.order.items[0].title, /Невозвратный залог/i);
+
+        const frWh = await fetch(`${hubUrl}/api/payments/yookassa/webhook`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                type: 'notification',
+                event: 'payment.succeeded',
+                object: {
+                    id: frDraft.paymentId,
+                    status: 'succeeded',
+                    amount: { value: '100000.00', currency: 'RUB' },
+                    metadata: { orderId: frDraft.order.orderId, reservationId: frDraft.reservation.reservationId },
+                },
+            }),
+        }).then(r => r.json());
+        assert.equal(frWh.ok, true);
+        assert.ok(frWh.partnerId.startsWith('PRT-RYA-'), 'После оплаты невозвратного залога через ЮKassa партнёр-франчайзер активирован автоматически');
+
+        const frAfter = hubApp.store.getFranchiseSummary(frDraft.reservation.reservationId);
+        assert.equal(frAfter.depositPaid, true);
+        assert.equal(frAfter.partnerId, frWh.partnerId);
+        assert.equal(frAfter.partnerStatus, 'active');
+        assert.equal(frAfter.partnerDiscountPercent, 10);
+
+        // 4. Ручное управление франшизой из /admin поверх автоматики (приостановка -> смена скидки -> восстановление)
+        const suspRes = await fetch(`${hubUrl}/api/admin/franchises/manage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admToken}` },
+            body: JSON.stringify({ reservationId: frDraft.reservation.reservationId, action: 'suspend' }),
+        }).then(r => r.json());
+        assert.equal(suspRes.ok, true);
+        assert.equal(suspRes.franchise.partnerStatus, 'suspended');
+
+        const discRes = await fetch(`${hubUrl}/api/admin/franchises/manage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admToken}` },
+            body: JSON.stringify({ reservationId: frDraft.reservation.reservationId, discountPercent: 25 }),
+        }).then(r => r.json());
+        assert.equal(discRes.franchise.partnerDiscountPercent, 25);
+
+        const actRes = await fetch(`${hubUrl}/api/admin/franchises/manage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${admToken}` },
+            body: JSON.stringify({ reservationId: frDraft.reservation.reservationId, action: 'activate' }),
+        }).then(r => r.json());
+        assert.equal(actRes.franchise.partnerStatus, 'active');
+
+        // 5. Проверяем, что в админ-чаты MAX и Telegram пришли все 5 типов уведомлений!
+        const eventsSent = hubApp.bots.adminOutboxLog.map(x => x.eventType);
+        for (const ev of ['registration', 'order_created', 'payment_received', 'license_issued', 'franchise_activated']) {
+            assert.ok(eventsSent.includes(ev), `Админ-боты MAX и Telegram получили уведомление "${ev}"`);
+        }
+        const paidLog = hubApp.bots.adminOutboxLog.find(x => x.eventType === 'franchise_activated');
+        assert.equal(paidLog.deliveries.length, 2, 'Каждое уведомление отправлено и в Telegram, и в MAX');
+        assert.ok(botHttpCalls.some(c => c.url.includes('api.telegram.org/bot')), 'Отправка в Telegram Bot API выполнена');
+        assert.ok(botHttpCalls.some(c => c.url.includes('botapi.max.ru/messages')), 'Отправка в MAX Bot API выполнена');
+
+        // 6. Проверяем live-сверку через API ЮKassa (GET /v3/payments/{id}), когда webhook ещё не пришёл
+        const liveOrder = hubApp.store.createOrder({
+            licenseId: regRes.licenseId,
+            tier: 'business',
+            addonSeats: 3,
+            years: 1,
+            customer: { email: 'auto-flow@bis-client.ru', name: 'ООО «АвтоКлиент»' },
+        });
+        hubApp.store.updateOrder(liveOrder.orderId, { paymentId: '2e991122-000f-5000-8000-111122223333', yookassaMode: 'live' });
+        const prevYkShop = hubApp.yookassa.shopId;
+        const prevYkSecret = hubApp.yookassa.secretKey;
+        const prevYkFetch = hubApp.yookassa.fetchImpl;
+        hubApp.yookassa.shopId = '999000';
+        hubApp.yookassa.secretKey = 'live_test_secret_key';
+        hubApp.yookassa.fetchImpl = async (url) => {
+            assert.match(url, /api\.yookassa\.ru\/v3\/payments\/2e991122/);
+            return {
+                ok: true,
+                status: 200,
+                json: async () => ({ id: '2e991122-000f-5000-8000-111122223333', status: 'succeeded' }),
+            };
+        };
+        try {
+            const liveSync = await fetch(`${hubUrl}/api/orders/${encodeURIComponent(liveOrder.orderId)}/sync-payment`).then(r => r.json());
+            assert.equal(liveSync.status, 'paid');
+            assert.equal(hubApp.store.getLicenseSummary(regRes.licenseId).totalSeats, 18, 'Live-сверка ЮKassa автоматически добавила ещё 3 места (15 + 3 = 18)');
+        }
+        finally {
+            hubApp.yookassa.shopId = prevYkShop;
+            hubApp.yookassa.secretKey = prevYkSecret;
+            hubApp.yookassa.fetchImpl = prevYkFetch;
+        }
+        }
+        finally {
+            hubApp.bots.fetchImpl = prevBotFetch;
         }
     });
 });

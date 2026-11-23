@@ -514,6 +514,23 @@
         if ($('#admBotMaxToken')) $('#admBotMaxToken').value = bots.maxToken || '';
         if ($('#admBotMaxUsername')) $('#admBotMaxUsername').value = bots.maxUsername || '';
 
+        const chatsBox = $('#admBotAdminChatsList');
+        if (chatsBox) {
+            const list = Array.isArray(bots.adminChats) ? bots.adminChats : [];
+            chatsBox.innerHTML = list.length
+                ? `<table class="sec-table">
+                    <thead><tr><th>Мессенджер</th><th>Chat ID</th><th>Получатель</th><th>Привязан</th><th style="text-align:right">Действие</th></tr></thead>
+                    <tbody>${list.map(c => `<tr>
+                        <td><span class="tag ok">${esc(String(c.channel || '').toUpperCase())}</span></td>
+                        <td><code>${esc(c.chatId)}</code></td>
+                        <td>${esc(c.userName || 'Администратор')}</td>
+                        <td class="small muted">${c.boundAt ? fmtDateTime(c.boundAt) : '—'}</td>
+                        <td style="text-align:right"><button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger)" data-remove-admin-chat="${esc(c.chatId)}" data-chat-channel="${esc(c.channel)}">Удалить</button></td>
+                    </tr>`).join('')}</tbody>
+                  </table>`
+                : '<div class="small muted">Привязанных админ-чатов пока нет. Сгенерируйте код и отправьте боту <code>/admin &lt;КОД&gt;</code> в MAX или Telegram.</div>';
+        }
+
         if ($('#admLegalCompany')) $('#admLegalCompany').value = legal.companyName || '';
         if ($('#admLegalAuthor')) $('#admLegalAuthor').value = legal.authorName || '';
         if ($('#admLegalStatus')) $('#admLegalStatus').value = legal.legalStatus || '';
@@ -742,24 +759,27 @@
                 const remSec = Math.max(0, Math.floor((dl - now) / 1000));
 
                 let statusAndDepositHtml = '';
+                const partnerInfoHtml = f.partnerId
+                    ? `<div class="small" style="margin-top:3px">Партнёр: <code>${esc(f.partnerId)}</code> · ${f.partnerStatus === 'suspended' ? '<span style="color:var(--danger)">приостановлен</span>' : (f.partnerStatus === 'revoked' ? '<span style="color:var(--danger)">отозван</span>' : '<span style="color:var(--ok)">активен</span>')} · скидка <b>${Number(f.partnerDiscountPercent ?? 10)}%</b></div>`
+                    : '';
                 if (isClosed) {
-                    statusAndDepositHtml = `<span class="tag bad">${f.status === 'expired' ? 'Истёк таймер залога (15 мин)' : 'Отменён / Отозван'}</span>`;
+                    statusAndDepositHtml = `<span class="tag bad">${f.status === 'expired' ? 'Истёк таймер залога (15 мин)' : 'Отменён / Отозван (залог невозвратный)'}</span>${partnerInfoHtml}`;
                 }
                 else if (!f.depositPaid) {
-                    statusAndDepositHtml = `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Ожидает залога · <b data-adm-deadline="${dl}">${fmtCountdown(remSec)}</b></span>
+                    statusAndDepositHtml = `<span class="tag" style="background:rgba(245,158,11,.18);color:var(--warn)">Ожидает невозвратного залога · <b data-adm-deadline="${dl}">${fmtCountdown(remSec)}</b></span>
                         <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-pay-deposit="${esc(rid)}">Зачесть залог (${rub(depositRub)})</button></div>`;
                 }
                 else if (remRub <= 0) {
                     statusAndDepositHtml = `<span class="tag ok">✓ Франшиза полностью выкуплена</span>
-                        <div class="small muted">Залог ${rub(depositRub)} от ${fmtDateTime(f.paidAt)}</div>`;
+                        <div class="small muted">Невозвратный залог ${rub(depositRub)} от ${fmtDateTime(f.paidAt)}</div>${partnerInfoHtml}`;
                 }
                 else if (overdueMonths > 0) {
                     statusAndDepositHtml = `<span class="tag bad">Просрочка (${overdueMonths} мес.)</span>
-                        <div class="small muted">Залог ✓ (${rub(depositRub)}) · от ${fmtDateTime(f.paidAt)}</div>`;
+                        <div class="small muted">Невозвратный залог ✓ (${rub(depositRub)}) · от ${fmtDateTime(f.paidAt)}</div>${partnerInfoHtml}`;
                 }
                 else {
                     statusAndDepositHtml = `<span class="tag ok">Активна · Погашение по графику</span>
-                        <div class="small muted">Залог ✓ (${rub(depositRub)}) · от ${fmtDateTime(f.paidAt)}</div>`;
+                        <div class="small muted">Невозвратный залог ✓ (${rub(depositRub)}) · от ${fmtDateTime(f.paidAt)}</div>${partnerInfoHtml}`;
                 }
 
                 let schedHtml = '';
@@ -787,6 +807,9 @@
                     <td style="text-align:right">
                         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
                             <button class="btn btn-primary btn-sm" data-adm-sched="${esc(rid)}">График 12 мес.</button>
+                            ${(!f.partnerId || f.partnerStatus === 'suspended' || isClosed) ? `<button class="btn btn-ok btn-sm" data-adm-fr-act="${esc(rid)}" data-fr-action="activate">Активировать</button>` : ''}
+                            ${(!isClosed && f.partnerId && f.partnerStatus === 'active') ? `<button class="btn btn-ghost btn-sm" data-adm-fr-act="${esc(rid)}" data-fr-action="suspend">Приостановить</button>` : ''}
+                            ${!isClosed ? `<button class="btn btn-ghost btn-sm" data-adm-fr-disc="${esc(rid)}" data-cur-disc="${Number(f.partnerDiscountPercent ?? 10)}">Скидка %</button>` : ''}
                             ${!isClosed ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger)" data-adm-cancel-franchise="${esc(rid)}">Отозвать</button>` : ''}
                         </div>
                     </td>
@@ -948,7 +971,7 @@
 
         $('#admSchedSummary').innerHTML = `<div style="padding:12px 14px;border-radius:10px;border:1px solid var(--border);background:rgba(255,255,255,.02);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap">
             <div>Паушальный взнос: <b>${rub(totalFeeRub)}</b></div>
-            <div>Начальный взнос (залог): <b>${rub(depositRub)}</b> (${f.depositPaid ? '<span style="color:var(--ok)">оплачен</span>' : '<span style="color:var(--warn)">не оплачен</span>'})</div>
+            <div>Невозвратный залог: <b>${rub(depositRub)}</b> (${f.depositPaid ? '<span style="color:var(--ok)">оплачен</span>' : '<span style="color:var(--warn)">не оплачен</span>'})</div>
             <div>Оплачено всего: <b style="color:var(--ok)">${rub(paidRub)}</b></div>
             <div>Остаток к погашению: <b>${rub(remRub)}</b></div>
         </div>`;
@@ -1327,10 +1350,77 @@
             });
             if (lastAdminData && res.settings) lastAdminData.settings = res.settings;
             renderPortalSettings(res.settings || {});
-            showFeedback('admBotsFeedback', '✓ Боты платформы сохранены');
+            showFeedback('admBotsFeedback', '✓ Боты платформы сохранены и webhook синхронизирован');
         }
         catch (err) {
             showFeedback('admBotsFeedback', err.message, true);
+        }
+    }
+
+    async function genAdminBotCode() {
+        try {
+            const res = await api('/api/admin/bots/bind-code', {});
+            if ($('#admBotBindCommand')) $('#admBotBindCommand').textContent = res.command || `/admin ${res.code}`;
+            if ($('#admBotBindCodeBox')) $('#admBotBindCodeBox').style.display = '';
+            showFeedback('admBotsAdminFeedback', '✓ Код привязки сгенерирован (действует 15 минут)');
+        }
+        catch (err) {
+            showFeedback('admBotsAdminFeedback', err.message, true);
+        }
+    }
+
+    async function addAdminBotChat() {
+        const channel = $('#admNewChatChannel')?.value || 'telegram';
+        const chatId = $('#admNewChatId')?.value.trim() || '';
+        const userName = $('#admNewChatLabel')?.value.trim() || '';
+        if (!chatId) {
+            showFeedback('admBotsAdminFeedback', 'Укажите Chat ID', true);
+            return;
+        }
+        try {
+            const res = await api('/api/admin/bots/admin-chats/add', { channel, chatId, userName });
+            if (lastAdminData && res.settings) lastAdminData.settings = res.settings;
+            renderPortalSettings(res.settings || {});
+            if ($('#admNewChatId')) $('#admNewChatId').value = '';
+            if ($('#admNewChatLabel')) $('#admNewChatLabel').value = '';
+            showFeedback('admBotsAdminFeedback', '✓ Чат администратора добавлен');
+        }
+        catch (err) {
+            showFeedback('admBotsAdminFeedback', err.message, true);
+        }
+    }
+
+    async function removeAdminBotChat(channel, chatId) {
+        try {
+            const res = await api('/api/admin/bots/admin-chats/remove', { channel, chatId });
+            if (lastAdminData && res.settings) lastAdminData.settings = res.settings;
+            renderPortalSettings(res.settings || {});
+            showFeedback('admBotsAdminFeedback', '✓ Чат удалён');
+        }
+        catch (err) {
+            showFeedback('admBotsAdminFeedback', err.message, true);
+        }
+    }
+
+    async function testAdminBots() {
+        try {
+            const res = await api('/api/admin/bots/test', {});
+            const okCnt = (res.deliveries || []).filter(d => d.deliveredRemote).length;
+            const total = (res.deliveries || []).length;
+            showFeedback('admBotsAdminFeedback', `✓ Отправлено в ${total} чат(а/ов), доставлено по API: ${okCnt}`);
+        }
+        catch (err) {
+            showFeedback('admBotsAdminFeedback', err.message, true);
+        }
+    }
+
+    async function adminManageFranchiseAction(payload) {
+        try {
+            await api('/api/admin/franchises/manage', payload);
+            await refreshRegistry();
+        }
+        catch (err) {
+            alert(err.message);
         }
     }
 
@@ -1358,7 +1448,7 @@
     /* ================= Привязка событий ================= */
     function bind() {
         document.addEventListener('click', (e) => {
-            const el = e.target.closest('[data-action],[data-adm-tab],[data-smtp-preset],[data-adm-add-srv-email],[data-adm-toggle-client],[data-adm-toggle-franchiser],[data-cert],[data-adm-dl-licfile],[data-adm-base],[data-adm-reset-hwid],[data-adm-open-grant],[data-adm-copy-tok],[data-adm-sched],[data-adm-pay-deposit],[data-adm-confirm-inst],[data-adm-cancel-franchise],[data-pay-order],[data-cancel-order],[data-reply-ticket],[data-close-ticket],[data-toggle-admin]');
+            const el = e.target.closest('[data-action],[data-adm-tab],[data-smtp-preset],[data-adm-add-srv-email],[data-adm-toggle-client],[data-adm-toggle-franchiser],[data-cert],[data-adm-dl-licfile],[data-adm-base],[data-adm-reset-hwid],[data-adm-open-grant],[data-adm-copy-tok],[data-adm-sched],[data-adm-pay-deposit],[data-adm-confirm-inst],[data-adm-cancel-franchise],[data-adm-fr-act],[data-adm-fr-disc],[data-remove-admin-chat],[data-pay-order],[data-cancel-order],[data-reply-ticket],[data-close-ticket],[data-toggle-admin]');
             if (!el) return;
 
             if (el.dataset.admTab) { setTab(el.dataset.admTab); return; }
@@ -1427,6 +1517,27 @@
                 adminCancelFranchise(el.dataset.admCancelFranchise);
                 return;
             }
+            if (el.dataset.admFrAct) {
+                adminManageFranchiseAction({
+                    reservationId: el.dataset.admFrAct,
+                    action: el.dataset.frAction || 'activate',
+                });
+                return;
+            }
+            if (el.dataset.admFrDisc) {
+                const nextDisc = prompt('Укажите индивидуальную скидку партнёра (% от 10 до 50):', el.dataset.curDisc || '10');
+                if (nextDisc !== null && nextDisc !== '') {
+                    adminManageFranchiseAction({
+                        reservationId: el.dataset.admFrDisc,
+                        discountPercent: Number(nextDisc),
+                    });
+                }
+                return;
+            }
+            if (el.dataset.removeAdminChat) {
+                removeAdminBotChat(el.dataset.chatChannel || 'telegram', el.dataset.removeAdminChat);
+                return;
+            }
             if (el.dataset.payOrder) { adminConfirmOrder(el.dataset.payOrder); return; }
             if (el.dataset.cancelOrder) { adminCancelOrder(el.dataset.cancelOrder); return; }
             if (el.dataset.replyTicket) { adminReplyTicket(el.dataset.replyTicket); return; }
@@ -1459,6 +1570,13 @@
                 case 'test-smtp-settings': testSmtpSettings(); break;
                 case 'save-yookassa-settings': saveYooKassaSettings(); break;
                 case 'save-bots-settings': saveBotsSettings(); break;
+                case 'gen-admin-bot-code': genAdminBotCode(); break;
+                case 'copy-admin-bot-code':
+                    navigator.clipboard?.writeText($('#admBotBindCommand')?.textContent || '');
+                    showFeedback('admBotsAdminFeedback', '✓ Команда скопирована');
+                    break;
+                case 'add-admin-bot-chat': addAdminBotChat(); break;
+                case 'test-admin-bots': testAdminBots(); break;
                 case 'save-legal-settings': saveLegalSettings(); break;
             }
         });

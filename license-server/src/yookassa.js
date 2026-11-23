@@ -18,6 +18,7 @@ export class YooKassaService {
         shopId = process.env.YOOKASSA_SHOP_ID || '',
         secretKey = process.env.YOOKASSA_SECRET_KEY || '',
         sendReceipt = true,
+        verifyWebhookViaApi = true,
         publicOrigin = process.env.PUBLIC_ORIGIN || 'https://work.odant.org',
         onOrderPaid = null,
         fetchImpl = globalThis.fetch,
@@ -26,6 +27,7 @@ export class YooKassaService {
         this.shopId = shopId;
         this.secretKey = secretKey;
         this.sendReceipt = sendReceipt !== undefined ? Boolean(sendReceipt) : true;
+        this.verifyWebhookViaApi = verifyWebhookViaApi !== false;
         this.publicOrigin = String(publicOrigin).replace(/\/+$/, '');
         this.onOrderPaid = onOrderPaid;
         this.fetchImpl = fetchImpl;
@@ -41,10 +43,14 @@ export class YooKassaService {
     buildYooKassaPaymentPayload(order) {
         const valueStr = Number(order.amountRub || 0).toFixed(2);
         const description = order.kind === 'franchise_reservation'
-            ? `Заказ ${order.orderId}: Невозвратный залог за резервирование региональной франшизы ODANT-WORK (${order.regionName})`
-            : order.includeBasePak
-                ? `Заказ ${order.orderId}: ПАК ODANT-WORK (10 вечных лицензий + 1 год Enterprise) + доп. места (${order.addonSeats} мест, ${order.tierName})`
-                : `Заказ ${order.orderId}: Годовая лицензия WORK (${order.addonSeats} польз., уровень ${order.tierName}, ${order.years} г.)`;
+            ? `Заказ ${order.orderId}: Невозвратный залог за франшизу ODANT-WORK (${order.regionName})`
+            : order.kind === 'franchise_installment'
+                ? `Заказ ${order.orderId}: Оплата паушального взноса франшизы ODANT-WORK (${order.regionName})`
+                : order.includeBasePak
+                    ? `Заказ ${order.orderId}: ПАК ODANT-WORK (10 вечных лицензий + 1 год Enterprise) + доп. места (${order.addonSeats} мест, ${order.tierName})`
+                    : order.includeBaseLicenseOnly
+                        ? `Заказ ${order.orderId}: Базовая вечная лицензия ODANT-WORK (10 мест) + доп. (${order.addonSeats} мест, ${order.tierName})`
+                        : `Заказ ${order.orderId}: Годовая лицензия WORK (${order.addonSeats} польз., уровень ${order.tierName}, ${order.years} г.)`;
 
         const payload = {
             amount: {
@@ -59,11 +65,14 @@ export class YooKassaService {
             description: description.slice(0, 128),
             metadata: {
                 orderId: order.orderId,
-                licenseId: order.licenseId,
-                tier: order.tier,
-                addonSeats: String(order.addonSeats),
-                years: String(order.years),
+                kind: order.kind || 'license',
+                licenseId: order.licenseId || '',
+                reservationId: order.reservationId || '',
+                tier: order.tier || '',
+                addonSeats: String(order.addonSeats || 0),
+                years: String(order.years || 1),
                 includeBasePak: String(!!order.includeBasePak),
+                includeBaseLicenseOnly: String(!!order.includeBaseLicenseOnly),
             },
         };
         if (this.sendReceipt !== false) {
@@ -149,12 +158,106 @@ export class YooKassaService {
     }
 
     /**
+     * Запросить актуальный статус платежа напрямую в API ЮKassa (GET /v3/payments/{id}).
+     */
+    async fetchPaymentStatus(paymentId) {
+        const pid = String(paymentId || '').trim();
+        if (!pid || !this.isLiveMode || typeof this.fetchImpl !== 'function')
+            return null;
+        const basicCreds = Buffer.from(`${this.shopId}:${this.secretKey}`, 'utf8').toString('base64');
+        const res = await this.fetchImpl(`${YOOKASSA_API_URL}/${encodeURIComponent(pid)}`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Basic ${basicCreds}`,
+                'Content-Type': 'application/json',
+            },
+        });
+        if (!res.ok) {
+            const errText = await res.text().catch(() => '');
+            throw new Error(`ЮKassa API GET /payments/${pid} вернула HTTP ${res.status}: ${errText.slice(0, 240)}`);
+        }
+        return res.json();
+    }
+
+    async _finalizePaidOrder(order, paymentId = '') {
+        const result = this.store.completePaidOrder(order.orderId, { paymentId });
+        if (!result.alreadyProcessed && typeof this.onOrderPaid === 'function') {
+            await Promise.resolve(this.onOrderPaid(result)).catch(() => {});
+        }
+        if (result.reservation) {
+            return {
+                ok: true,
+                status: 'paid',
+                kind: result.order.kind || 'franchise_reservation',
+                orderId: result.order.orderId,
+                reservationId: result.reservation.reservationId,
+                partnerId: result.partner?.partnerId || result.reservation.convertedToPartnerId || '',
+                regionCode: result.reservation.regionCode,
+                regionName: result.reservation.regionName,
+                alreadyProcessed: result.alreadyProcessed,
+            };
+        }
+        return {
+            ok: true,
+            status: 'paid',
+            kind: result.order.kind || 'license',
+            orderId: result.order.orderId,
+            licenseId: result.license?.licenseId || result.order.licenseId,
+            baseActivated: Boolean(result.license?.baseActivated),
+            totalSeats: result.license?.totalSeats ?? 0,
+            tier: result.license?.support?.tierName || result.order.tierName || '',
+            alreadyProcessed: result.alreadyProcessed,
+        };
+    }
+
+    /**
+     * Проверить и синхронизировать оплату заказа (используется при возврате пользователя с ЮKassa по return_url).
+     */
+    async syncOrderPayment(orderId) {
+        const order = this.store.getOrder(orderId);
+        if (!order)
+            return { ok: false, reason: 'order_not_found', orderId };
+
+        if (order.status === 'paid') {
+            return this._finalizePaidOrder(order, order.paymentId || '');
+        }
+        if (order.status === 'canceled') {
+            return { ok: true, status: 'canceled', orderId: order.orderId };
+        }
+
+        if (this.isLiveMode && order.paymentId && !String(order.paymentId).startsWith('yk_sandbox_')) {
+            const remote = await this.fetchPaymentStatus(order.paymentId);
+            if (remote?.status === 'succeeded') {
+                return this._finalizePaidOrder(order, remote.id || order.paymentId);
+            }
+            if (remote?.status === 'canceled') {
+                this.store.cancelOrder(order.orderId);
+                return { ok: true, status: 'canceled', orderId: order.orderId };
+            }
+            return {
+                ok: true,
+                status: remote?.status || order.status || 'pending',
+                orderId: order.orderId,
+                paymentId: order.paymentId,
+            };
+        }
+
+        return {
+            ok: true,
+            status: order.status || 'pending',
+            orderId: order.orderId,
+            paymentId: order.paymentId || '',
+        };
+    }
+
+    /**
      * Обработать входящий HTTP Webhook от ЮKassa (/api/payments/yookassa/webhook).
      */
     async handleWebhook(notification = {}) {
         const event = String(notification.event || '');
         const obj = notification.object || {};
-        const paymentId = String(obj.id || '');
+        let paymentId = String(obj.id || '');
+        let effectiveStatus = String(obj.status || '');
         const orderId = String(obj.metadata?.orderId || '');
 
         let order = orderId ? this.store.getOrder(orderId) : null;
@@ -165,39 +268,25 @@ export class YooKassaService {
             return { ok: false, reason: 'order_not_found', event, orderId, paymentId };
         }
 
-        if (event === 'payment.succeeded' || obj.status === 'succeeded') {
-            const result = this.store.completePaidOrder(order.orderId, { paymentId });
-            if (result.reservation) {
-                return {
-                    ok: true,
-                    status: 'paid',
-                    kind: 'franchise_reservation',
-                    orderId: result.order.orderId,
-                    reservationId: result.reservation.reservationId,
-                    regionCode: result.reservation.regionCode,
-                    regionName: result.reservation.regionName,
-                    alreadyProcessed: result.alreadyProcessed,
-                };
+        // В боевом режиме дополнительно перепроверяем статус платежа напрямую через API ЮKassa
+        if (this.isLiveMode && this.verifyWebhookViaApi && paymentId && !paymentId.startsWith('yk_sandbox_') && typeof this.fetchImpl === 'function') {
+            const verified = await this.fetchPaymentStatus(paymentId);
+            if (!verified) {
+                return { ok: false, reason: 'payment_verification_failed', orderId: order.orderId, paymentId };
             }
-            if (!result.alreadyProcessed && result.license && typeof this.onOrderPaid === 'function') {
-                await Promise.resolve(this.onOrderPaid(result.order, result.license)).catch(() => {});
-            }
-            return {
-                ok: true,
-                status: 'paid',
-                orderId: result.order.orderId,
-                licenseId: result.license?.licenseId || result.order.licenseId,
-                totalSeats: result.license?.totalSeats ?? 0,
-                tier: result.license?.support?.tierName || result.order.tierName || '',
-                alreadyProcessed: result.alreadyProcessed,
-            };
+            effectiveStatus = String(verified.status || '');
+            paymentId = String(verified.id || paymentId);
         }
 
-        if (event === 'payment.canceled' || obj.status === 'canceled') {
+        if (event === 'payment.succeeded' || effectiveStatus === 'succeeded') {
+            return this._finalizePaidOrder(order, paymentId);
+        }
+
+        if (event === 'payment.canceled' || effectiveStatus === 'canceled') {
             this.store.cancelOrder(order.orderId);
             return { ok: true, status: 'canceled', orderId: order.orderId };
         }
 
-        return { ok: true, status: obj.status || 'ignored', orderId: order.orderId };
+        return { ok: true, status: effectiveStatus || 'ignored', orderId: order.orderId };
     }
 }

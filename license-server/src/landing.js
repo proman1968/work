@@ -202,9 +202,11 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 </div>
                 <div>
                     <p style="margin:0 0 12px">Все данные предприятия — справочники, проводки, документы, переписка и задачи — живут в единой модели с общими правами доступа и работают автономно в вашем контуре без передачи данных наружу.</p>
-                    <div style="display:flex;gap:10px;flex-wrap:wrap">
-                        <button type="button" class="btn btn-primary btn-sm" data-action="open-presentation" data-slide="1">${icon('docs')} Смотреть презентацию (12 слайдов)</button>
-                        <a class="btn btn-ghost btn-sm" href="/assets/ODANT-WORK-presentation.pdf" download="ODANT-WORK-presentation.pdf" style="text-decoration:none">📥 Скачать PDF</a>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap">
+                        <button type="button" class="btn btn-primary btn-sm" data-action="open-presentation" data-pres-kind="clients" data-slide="1">${icon('docs')} Для клиентов</button>
+                        <button type="button" class="btn btn-ghost btn-sm" data-action="open-presentation" data-pres-kind="franchise" data-slide="1">${icon('docs')} Для франчайзеров</button>
+                        <button type="button" class="btn btn-ghost btn-sm" data-action="open-presentation" data-pres-kind="investors" data-slide="1">${icon('docs')} Для инвесторов</button>
+                        <a class="btn btn-ghost btn-sm" href="/assets/ODANT-WORK-investors-presentation.pdf" download="ODANT-WORK-investors-presentation.pdf" style="text-decoration:none" title="Скачать презентацию для инвесторов в PDF">📥 Инвесторам (PDF)</a>
                     </div>
                 </div>
             </div>
@@ -271,7 +273,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                         <div class="hero-cta" style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap">
                             <button class="btn btn-primary" data-stage="clients">Перейти к покупке →</button>
                             <button class="btn btn-ghost" data-stage="franchise">Региональная франшиза</button>
-                            <button class="btn btn-ghost" data-action="open-presentation" data-slide="1">${icon('docs')} Презентация</button>
+                            <button class="btn btn-ghost" data-action="open-presentation" data-pres-kind="clients" data-slide="1">${icon('docs')} Презентация для клиентов</button>
                         </div>
                     </div>
                     <dl class="spec">
@@ -342,8 +344,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                 <div>
                     <p style="margin:0 0 12px">Сразу после установки из <code>npm</code> система работает бесплатно в режиме настройки (1 сессия BOSS, ИИ-агенты отключены). Базовая постоянная лицензия открывает <b>${P.baseSeats} вечных одновременных сессий</b> и включает агентскую ИИ-систему.</p>
                     <div style="display:flex;gap:10px;flex-wrap:wrap">
-                        <button type="button" class="btn btn-ghost btn-sm" data-action="open-presentation" data-slide="8">${icon('docs')} Презентация для клиентов (слайд 8)</button>
-                        <a class="btn btn-ghost btn-sm" href="/assets/ODANT-WORK-presentation.pdf" download="ODANT-WORK-presentation.pdf" style="text-decoration:none">📥 Скачать PDF</a>
+                        <button type="button" class="btn btn-ghost btn-sm" data-action="open-presentation" data-pres-kind="clients" data-slide="1">${icon('docs')} Презентация для клиентов</button>
+                        <a class="btn btn-ghost btn-sm" href="/assets/ODANT-WORK-clients-presentation.pdf" download="ODANT-WORK-clients-presentation.pdf" style="text-decoration:none">📥 Скачать PDF</a>
                     </div>
                 </div>
             </div>
@@ -502,12 +504,12 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     </div>
                     <div class="kv">
                         <div><span>Паушальный взнос</span><b id="mapRegFee">—</b></div>
-                        <div><span>Залог за резерв</span><b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b></div>
+                        <div><span>Невозвратный залог</span><b>${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b></div>
                         <div><span>Индекс экономики</span><b id="mapRegIndex">—</b></div>
                         <div><span>Остаток (в течение года)</span><b id="mapRegRest">—</b></div>
                     </div>
-                    <button class="btn btn-primary" style="width:100%;margin-top:8px" id="btnReserveSelected" data-action="reserve-selected" disabled>Зарезервировать · залог ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</button>
-                    <p class="small muted" style="margin:8px 0 0;text-align:center">Не более 1 франшизы в одном регионе. После резервирования даётся <b>15 минут</b> на оплату начального взноса через ЮKassa; далее — годовой график погашения (раз в месяц).</p>
+                    <button class="btn btn-primary" style="width:100%;margin-top:8px" id="btnReserveSelected" data-action="reserve-selected" disabled>Зарезервировать · невозвратный залог ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</button>
+                    <p class="small muted" style="margin:8px 0 0;text-align:center">Не более 1 франшизы в одном регионе. После резервирования даётся <b>15 минут</b> на оплату <b>невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}</b> через ЮKassa — сразу после оплаты статус франчайзера активируется автоматически. При отказе или просрочке квота освобождается, залог не возвращается.</p>
                     <div class="status" id="partnerActionMsg"></div>
                 </aside>
             </div>
@@ -515,10 +517,10 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="sec-head" style="margin-top:8px">
                 <div><span class="kicker">Партнёрская программа</span><h2 class="h2">Условия региональной франшизы ODANT-WORK</h2></div>
                 <div>
-                    <p style="margin:0 0 12px">Число франшиз в субъекте пропорционально населению, паушальный взнос — экономике региона. Резерв закрепляется сразу после невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)}, полная оплата паушального взноса — в течение 1 года.</p>
+                    <p style="margin:0 0 12px">Число франшиз в субъекте пропорционально населению, паушальный взнос — экономике региона. Франшиза активируется сразу после оплаты невозвратного залога ${rub(FRANCHISE_PROGRAM.reservationDepositRub)} через ЮKassa, остаток паушального взноса погашается в течение 1 года.</p>
                     <div style="display:flex;gap:10px;flex-wrap:wrap">
-                        <button type="button" class="btn btn-ghost btn-sm" data-action="open-presentation" data-slide="10">${icon('docs')} Презентация франшизы (слайд 10)</button>
-                        <a class="btn btn-ghost btn-sm" href="/assets/ODANT-WORK-presentation.pdf" download="ODANT-WORK-presentation.pdf" style="text-decoration:none">📥 Скачать PDF</a>
+                        <button type="button" class="btn btn-ghost btn-sm" data-action="open-presentation" data-pres-kind="franchise" data-slide="1">${icon('docs')} Презентация для франчайзеров</button>
+                        <a class="btn btn-ghost btn-sm" href="/assets/ODANT-WORK-franchise-presentation.pdf" download="ODANT-WORK-franchise-presentation.pdf" style="text-decoration:none">📥 Скачать PDF</a>
                     </div>
                 </div>
             </div>
@@ -567,7 +569,8 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     <h4>${esc(VENDOR_CONTACTS.company)}</h4>
                     <p>${esc(VENDOR_CONTACTS.address)}</p>
                     <p>${VENDOR_CONTACTS.phones.map(esc).join(', ')}</p>
-                    <p><a href="${esc(VENDOR_CONTACTS.site)}" target="_blank" rel="noopener">${esc(VENDOR_CONTACTS.site.replace(/^https?:\/\//, ''))}</a> · <a href="#" data-action="open-oferta">Публичная оферта</a> · <a href="#" data-action="open-presentation" data-slide="1">Презентация</a> · <a href="/assets/ODANT-WORK-presentation.pdf" download="ODANT-WORK-presentation.pdf">PDF</a></p>
+                    <p><a href="${esc(VENDOR_CONTACTS.site)}" target="_blank" rel="noopener">${esc(VENDOR_CONTACTS.site.replace(/^https?:\/\//, ''))}</a> · <a href="#" data-action="open-oferta">Публичная оферта</a></p>
+                    <p>Презентации: <a href="#" data-action="open-presentation" data-pres-kind="clients" data-slide="1">Клиентам</a> (<a href="/assets/ODANT-WORK-clients-presentation.pdf" download="ODANT-WORK-clients-presentation.pdf">PDF</a>) · <a href="#" data-action="open-presentation" data-pres-kind="franchise" data-slide="1">Франчайзерам</a> (<a href="/assets/ODANT-WORK-franchise-presentation.pdf" download="ODANT-WORK-franchise-presentation.pdf">PDF</a>) · <a href="#" data-action="open-presentation" data-pres-kind="investors" data-slide="1">Инвесторам</a> (<a href="/assets/ODANT-WORK-investors-presentation.pdf" download="ODANT-WORK-investors-presentation.pdf">PDF</a>)</p>
                 </div>
             </div>
             <div class="footer-bottom">
@@ -686,7 +689,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
         </div>
     </div>
 
-    <!-- Интерактивный просмотр презентации ODANT-WORK (для клиентов и франчайзи) -->
+    <!-- Интерактивный просмотр 3 раздельных презентаций ODANT-WORK (Клиенты · Франчайзеры · Инвесторы) -->
     <div class="modal pres-modal" id="presentationModal" role="dialog" aria-modal="true" aria-labelledby="presModalTitle">
         <div class="card pres-card">
             <div class="pres-top">
@@ -694,17 +697,17 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                     <img src="/assets/odant-logo.png" alt="">
                     <div>
                         <b id="presModalTitle">Презентация ODANT-WORK</b>
-                        <span class="small muted">Для клиентов и региональных партнёров (франчайзи)</span>
+                        <span class="small muted" id="presModalSub">Для клиентов · ООО «БИС»</span>
                     </div>
                 </div>
                 <div class="pres-sections" id="presSectionTabs">
-                    <button type="button" class="chip on" data-action="pres-goto" data-slide="1" data-sec="product">1. О платформе (1–7)</button>
-                    <button type="button" class="chip" data-action="pres-goto" data-slide="8" data-sec="clients">2. Клиентам (8–9)</button>
-                    <button type="button" class="chip" data-action="pres-goto" data-slide="10" data-sec="franchise">3. Франшиза (10–12)</button>
+                    <button type="button" class="chip on" data-action="pres-kind" data-pres-kind="clients">1. Для клиентов</button>
+                    <button type="button" class="chip" data-action="pres-kind" data-pres-kind="franchise">2. Для франчайзеров</button>
+                    <button type="button" class="chip" data-action="pres-kind" data-pres-kind="investors">3. Для инвесторов</button>
                 </div>
                 <div class="pres-actions">
-                    <a class="btn btn-ghost btn-sm" href="/presentation" target="_blank" rel="noopener" style="text-decoration:none" title="Открыть в отдельном окне">${icon('expand')} Во весь экран</a>
-                    <a class="btn btn-primary btn-sm" href="/assets/ODANT-WORK-presentation.pdf" download="ODANT-WORK-presentation.pdf" style="text-decoration:none">📥 Скачать PDF</a>
+                    <a class="btn btn-ghost btn-sm" id="presFullLink" href="/presentation/clients" target="_blank" rel="noopener" style="text-decoration:none" title="Открыть в отдельном окне">${icon('expand')} Во весь экран</a>
+                    <a class="btn btn-primary btn-sm" id="presPdfLink" href="/assets/ODANT-WORK-clients-presentation.pdf" download="ODANT-WORK-clients-presentation.pdf" style="text-decoration:none">📥 Скачать PDF</a>
                     <button type="button" class="icon-btn" data-action="pres-close" aria-label="Закрыть презентацию">${icon('close')}</button>
                 </div>
             </div>
@@ -716,11 +719,11 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
             <div class="pres-bottom">
                 <div style="display:flex;align-items:center;gap:8px">
                     <button type="button" class="btn btn-ghost btn-sm" data-action="pres-prev">← Назад</button>
-                    <span class="pres-counter" id="presCounter">Слайд 1 / 12</span>
+                    <span class="pres-counter" id="presCounter">Слайд 1 / 9</span>
                     <button type="button" class="btn btn-ghost btn-sm" data-action="pres-next">Вперёд →</button>
                 </div>
                 <div class="pres-dots" id="presDots">
-                    ${Array.from({ length: 12 }, (_, idx) => `<button type="button" class="pres-dot ${idx === 0 ? 'on' : ''}" data-action="pres-goto" data-slide="${idx + 1}" title="Слайд ${idx + 1}">${idx + 1}</button>`).join('')}
+                    ${Array.from({ length: 9 }, (_, idx) => `<button type="button" class="pres-dot ${idx === 0 ? 'on' : ''}" data-action="pres-goto" data-slide="${idx + 1}" title="Слайд ${idx + 1}">${idx + 1}</button>`).join('')}
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <button type="button" class="btn btn-ghost btn-sm" data-action="pres-jump-stage" data-target-stage="clients">К калькулятору клиентов →</button>

@@ -36,6 +36,11 @@ export class SupportBotsHub {
         this.publicOrigin = String(publicOrigin).replace(/\/+$/, '');
         this.fetchImpl = fetchImpl;
         this.outboxLog = [];
+        this.adminOutboxLog = [];
+        this._tgUpdateOffset = 0;
+        this._maxMarker = null;
+        this._pollTimer = null;
+        this._polling = false;
     }
 
     /**
@@ -47,21 +52,111 @@ export class SupportBotsHub {
         const cleanText = String(text || '').trim();
 
         if (!cleanText || /^\/(start|help|помощь)$/i.test(cleanText)) {
+            const isAdmin = this.store.isAdminBotChat?.(ch, cid);
             const bound = this.store.getBoundLicenseForChat(ch, cid);
-            const greeting = [
-                `Здравствуйте, ${userName}! Это служба поддержки и лицензирования ПАК WORK (${ch.toUpperCase()}).`,
+            const lines = [
+                `Здравствуйте, ${userName}! Это служба поддержки и лицензирования ODANT-WORK · ООО «БИС» (${ch.toUpperCase()}).`,
                 bound
-                    ? `Ваш чат привязан к лицензии: ${bound.licenseId} (${bound.customer?.name || 'ПАК WORK'}, уровень ${bound.support.tierName}, мест: ${bound.totalSeats}).`
-                    : 'Для начала работы привяжите ваш ПАК WORK командой:\n/bind <НОМЕР_ЛИЦЕНЗИИ_ИЛИ_КОД>',
+                    ? `Ваш чат привязан к лицензии: ${bound.licenseId} (${bound.customer?.name || 'ODANT-WORK'}, уровень ${bound.support.tierName}, мест: ${bound.totalSeats}).`
+                    : 'Для клиентской работы привяжите ваш ПАК WORK командой:\n/bind <НОМЕР_ЛИЦЕНЗИИ_ИЛИ_КОД>',
                 '',
                 'Доступные команды:',
                 '• /bind <КОД> — привязать ПАК WORK к этому чату',
                 '• /status — проверить рабочие места (10 вечных + годовые), SLA и остаток обращений',
                 '• /buy <start|business|enterprise> <кол-во_мест> — докупить годовые лицензии через ЮKassa',
+                '• /admin <КОД> — привязать чат администратора (код из /admin → Боты)',
                 '• Любое другое сообщение — создать обращение в инженерную поддержку по вашему SLA.',
-            ].join('\n');
+            ];
+            if (isAdmin) {
+                lines.push('', 'Команды администратора:', '• /stats — сводка по клиентам, заказам и франшизам', '• /orders — последние заказы', '• /franchises — активные франшизы и резервы');
+            }
+            const greeting = lines.join('\n');
             await this.sendExternalMessage(ch, cid, greeting);
             return { action: 'help', reply: greeting };
+        }
+
+        // Команда /admin <код> (или /admin_bind <код>) — привязка админ-чата MAX / Telegram
+        const adminBindMatch = cleanText.match(/^\/(?:admin|admin_bind)\s+(\S+)/i);
+        if (adminBindMatch) {
+            const code = adminBindMatch[1].trim();
+            if (ch !== 'max' && ch !== 'telegram') {
+                const reply = 'Административные уведомления поддерживаются только для MAX и Telegram.';
+                await this.sendExternalMessage(ch, cid, reply);
+                return { action: 'admin_bind', ok: false, reply };
+            }
+            try {
+                const chats = this.store.consumeAdminBotBindCode(code, { channel: ch, chatId: cid, userName });
+                const reply = [
+                    `Чат (${ch.toUpperCase()}, ID: ${cid}) успешно привязан к Админ-панели ODANT-WORK (ООО «БИС»)!`,
+                    'Теперь вы будете мгновенно получать уведомления о:',
+                    '• регистрациях пользователей;',
+                    '• новых заявках и заказах;',
+                    '• поступлениях оплат (ЮKassa и безнал);',
+                    '• выдачах и активациях лицензий;',
+                    '• резервированиях и активациях франшиз.',
+                    '',
+                    'Админ-команды: /stats · /orders · /franchises',
+                ].join('\n');
+                await this.sendExternalMessage(ch, cid, reply);
+                return { action: 'admin_bind', ok: true, channel: ch, chatId: cid, adminChatsCount: chats.length, reply };
+            }
+            catch (err) {
+                const reply = `Ошибка привязки админ-чата: ${err.message || err}`;
+                await this.sendExternalMessage(ch, cid, reply);
+                return { action: 'admin_bind', ok: false, reply };
+            }
+        }
+
+        // Админ-команды чтения сводки (/stats, /orders, /franchises)
+        if (/^\/(stats|orders|franchises)$/i.test(cleanText)) {
+            if (!this.store.isAdminBotChat?.(ch, cid)) {
+                const reply = 'Команда доступна только привязанным админ-чатам. Получите код в /admin → Боты и отправьте /admin <КОД>.';
+                await this.sendExternalMessage(ch, cid, reply);
+                return { action: 'admin_denied', ok: false, reply };
+            }
+            const cmd = cleanText.slice(1).toLowerCase();
+            if (cmd === 'stats') {
+                const counts = this.store.getStoreCounts?.() || {};
+                const lics = this.store.listLicenses?.() || [];
+                const orders = Object.values(this.store.state?.orders || {});
+                const paidOrders = orders.filter(o => o && o.status === 'paid');
+                const pendingOrders = orders.filter(o => o && o.status === 'pending');
+                const totalRevenueRub = paidOrders.reduce((s, o) => s + Number(o.amountRub || 0), 0);
+                const frs = (this.store.listAllFranchises?.() || []).filter(f => f.status !== 'canceled' && f.status !== 'expired');
+                const openTickets = (this.store.listTickets?.() || []).filter(t => t.status === 'open').length;
+                const reply = [
+                    'Сводка ODANT-WORK · ООО «БИС»:',
+                    `• Пользователей: ${counts.users ?? 0}`,
+                    `• Серверов/лицензий: ${lics.length} (активных базовых: ${lics.filter(l => l.baseActivated).length})`,
+                    `• Оплачено заказов: ${paidOrders.length} на сумму ${totalRevenueRub.toLocaleString('ru-RU')} ₽`,
+                    `• Ожидают оплаты: ${pendingOrders.length}`,
+                    `• Активных франшиз/партнёров: ${(this.store.listPartners?.() || []).filter(p => p.status === 'active').length} (резервов/графиков: ${frs.length})`,
+                    `• Открытых тикетов: ${openTickets}`,
+                    `Админ-панель: ${this.publicOrigin}/admin`,
+                ].join('\n');
+                await this.sendExternalMessage(ch, cid, reply);
+                return { action: 'admin_stats', ok: true, reply };
+            }
+            if (cmd === 'orders') {
+                const orders = Object.values(this.store.state?.orders || {})
+                    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+                    .slice(0, 8);
+                const lines = orders.length
+                    ? orders.map(o => `• ${o.orderId} · ${Number(o.amountRub || 0).toLocaleString('ru-RU')} ₽ · ${o.status === 'paid' ? 'ОПЛАЧЕН' : (o.status === 'canceled' ? 'ОТМЕНЁН' : 'ЖДЁТ')} · ${o.customer?.name || o.customer?.email || '—'}`)
+                    : ['Заказов пока нет.'];
+                const reply = ['Последние заказы ODANT-WORK:', ...lines].join('\n');
+                await this.sendExternalMessage(ch, cid, reply);
+                return { action: 'admin_orders', ok: true, reply };
+            }
+            if (cmd === 'franchises') {
+                const frs = (this.store.listAllFranchises?.() || []).filter(f => f.status !== 'canceled' && f.status !== 'expired').slice(0, 10);
+                const lines = frs.length
+                    ? frs.map(f => `• ${f.regionName} (${f.reservationId}) · ${f.companyName || f.email} · ${f.depositPaid ? `залог ✓, оплачено ${f.paidMonthsCount}/12` : 'ожидает залога 100 000 ₽'}${f.partnerId ? ` · партнёр ${f.partnerId}` : ''}`)
+                    : ['Активных франшиз и резервов нет.'];
+                const reply = ['Региональные франшизы ODANT-WORK:', ...lines].join('\n');
+                await this.sendExternalMessage(ch, cid, reply);
+                return { action: 'admin_franchises', ok: true, reply };
+            }
         }
 
         // Команда /bind <код>
@@ -171,6 +266,7 @@ export class SupportBotsHub {
                 'Инженер поддержки ответит вам прямо в этот чат.',
             ].join('\n');
             await this.sendExternalMessage(ch, cid, reply);
+            await this.notifyAdmins('ticket_created', { ticket }).catch(() => {});
             return { action: 'ticket_created', ok: true, ticket, reply };
         }
         catch (err) {
@@ -218,6 +314,129 @@ export class SupportBotsHub {
         const text = String(obj.text || payload.text || '');
         const result = await this.handleIncomingMessage({ channel: 'vk', chatId, userName, text, originOverride });
         return { isVkConfirmation: false, result, body: 'ok' };
+    }
+
+    /**
+     * Мгновенно отправить структурированное уведомление всем привязанным админ-чатам (MAX и Telegram).
+     */
+    async notifyAdmins(eventType, data = {}) {
+        const chats = this.store?.getAdminBotChats?.() || [];
+        const fmtRub = (n) => `${Number(n || 0).toLocaleString('ru-RU')} ₽`;
+        let text = '';
+
+        switch (eventType) {
+            case 'registration': {
+                const email = data.email || '—';
+                const company = data.companyName && !String(data.companyName).includes('@') ? data.companyName : '';
+                text = [
+                    '🆕 Новая регистрация на ODANT-WORK (ООО «БИС»)',
+                    `• Email: ${email}`,
+                    company ? `• Организация: ${company}` : '',
+                    data.inn ? `• ИНН: ${data.inn}` : '',
+                    data.licenseId ? `• Выделенный сервер: ${data.licenseId}` : '',
+                    `• Оферта ПЭП: ${data.ofertaAccepted ? 'принята' : 'ожидает'}`,
+                ].filter(Boolean).join('\n');
+                break;
+            }
+            case 'order_created': {
+                const o = data.order || data;
+                const kindLabel = o.kind === 'franchise_reservation'
+                    ? `Бронь франшизы (${o.regionName || o.regionCode}) — невозвратный залог`
+                    : o.kind === 'franchise_installment'
+                        ? `Погашение франшизы (${o.regionName || o.regionCode})`
+                        : (o.tierName || 'Заказ лицензий');
+                text = [
+                    '📝 Новая заявка / заказ на ODANT-WORK',
+                    `• Заказ: ${o.orderId || '—'}`,
+                    `• Назначение: ${kindLabel}`,
+                    `• Сумма: ${fmtRub(o.amountRub)}`,
+                    `• Способ оплаты: ${o.paymentMethod === 'invoice' ? 'Счёт-договор (безнал)' : 'ЮKassa'}`,
+                    `• Плательщик: ${o.customer?.name || o.customer?.email || '—'}${o.customer?.inn ? ` (ИНН ${o.customer.inn})` : ''}`,
+                ].filter(Boolean).join('\n');
+                break;
+            }
+            case 'payment_received': {
+                const o = data.order || data;
+                text = [
+                    '💳 Получена оплата!',
+                    `• Заказ: ${o.orderId || '—'}`,
+                    `• Сумма: ${fmtRub(o.amountRub)}`,
+                    `• Канал: ${o.paymentMethod === 'invoice' ? 'Безналичный счёт' : 'ЮKassa'}${o.paymentId ? ` (${o.paymentId})` : ''}`,
+                    `• Плательщик: ${o.customer?.name || o.customer?.email || '—'}${o.customer?.inn ? ` (ИНН ${o.customer.inn})` : ''}`,
+                    data.source ? `• Подтверждение: ${data.source}` : '',
+                ].filter(Boolean).join('\n');
+                break;
+            }
+            case 'license_issued': {
+                const lic = data.license || data;
+                text = [
+                    '🔑 Выдача / активация лицензии ODANT-WORK',
+                    `• Сервер (License ID): ${lic.licenseId || '—'}`,
+                    `• Статус базы (10 вечных): ${lic.baseActivated ? 'АКТИВНА' : 'не активирована'}`,
+                    `• Всего рабочих мест: ${lic.totalSeats ?? 0} (${lic.baseSeats || 0} вечных + ${lic.addonSeats || 0} годовых)`,
+                    lic.support?.tierName ? `• Тариф SLA: ${lic.support.tierName}` : '',
+                    lic.hardware?.hwid ? `• HWID: ${lic.hardware.hwid}${lic.hardware.hwidBound ? ' (привязан)' : ''}` : '',
+                    lic.customer?.name || lic.ownerEmail ? `• Клиент: ${lic.customer?.name || lic.ownerEmail}` : '',
+                    data.source ? `• Источник: ${data.source}` : '',
+                ].filter(Boolean).join('\n');
+                break;
+            }
+            case 'franchise_activated': {
+                const fr = data.reservation || data.franchise || data;
+                const prt = data.partner || null;
+                text = [
+                    '🏛️ Активация / оплата региональной франшизы',
+                    `• Регион: ${fr.regionName || fr.regionCode || '—'} (${fr.reservationId || '—'})`,
+                    prt?.partnerId || fr.partnerId ? `• Партнёр ID: ${prt?.partnerId || fr.partnerId} (скидка ${prt?.discountPercent ?? fr.partnerDiscountPercent ?? 10}%)` : '',
+                    `• Компания: ${fr.companyName || fr.email || '—'}${fr.inn ? ` (ИНН ${fr.inn})` : ''}`,
+                    `• Невозвратный залог: ${fmtRub(fr.nonRefundableDepositRub || 100_000)} (${fr.depositPaid ? 'ОПЛАЧЕН' : 'ожидает'})`,
+                    `• Оплачено всего: ${fmtRub(fr.totalPaidRub)} из ${fmtRub(fr.franchiseFeeRub)} (остаток: ${fmtRub(fr.remainingFranchiseFeeRub)})`,
+                    `• График 12 мес.: закрыто ${fr.paidMonthsCount || 0} / 12`,
+                    data.source ? `• Источник: ${data.source}` : '',
+                ].filter(Boolean).join('\n');
+                break;
+            }
+            case 'franchise_canceled': {
+                const fr = data.franchise || data;
+                text = [
+                    '⚠️ Франшиза отозвана / отменена',
+                    `• Регион: ${fr.regionName || fr.regionCode || '—'} (${fr.reservationId || '—'})`,
+                    `• Компания: ${fr.companyName || fr.email || '—'}`,
+                    '• Квота субъекта РФ освобождена (уплаченный залог не возвращается).',
+                ].filter(Boolean).join('\n');
+                break;
+            }
+            case 'ticket_created': {
+                const t = data.ticket || data;
+                const firstMsg = t.messages?.[t.messages.length - 1]?.text || '';
+                text = [
+                    '🎫 Новое обращение в техподдержку',
+                    `• Тикет: ${t.ticketId || '—'} (${String(t.channel || '').toUpperCase()})`,
+                    `• Клиент: ${t.customerName || t.userName || '—'} (сервер ${t.licenseId || '—'})`,
+                    `• SLA: ${t.tierName || 'Start'} (${t.reactionLabel || ''})`,
+                    firstMsg ? `• Сообщение: ${firstMsg.slice(0, 300)}` : '',
+                ].filter(Boolean).join('\n');
+                break;
+            }
+            case 'test': {
+                text = `✅ Тестовое уведомление Админ-панели ODANT-WORK (ООО «БИС»).\nСвязь с сервером ${this.publicOrigin} работает корректно.`;
+                break;
+            }
+            default: {
+                text = String(data.text || `Событие ODANT-WORK (${eventType})`);
+            }
+        }
+
+        const record = { eventType, text, time: Date.now(), deliveries: [] };
+        this.adminOutboxLog.push(record);
+        if (this.adminOutboxLog.length > 100)
+            this.adminOutboxLog.shift();
+
+        for (const c of chats) {
+            const sent = await this.sendExternalMessage(c.channel, c.chatId, text);
+            record.deliveries.push(sent);
+        }
+        return record;
     }
 
     /**
@@ -276,19 +495,33 @@ export class SupportBotsHub {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ chat_id: entry.chatId, text: entry.text }),
+                    signal: AbortSignal.timeout(4000),
                 });
                 entry.deliveredRemote = res.ok;
             }
             else if (entry.channel === 'max' && this.maxBotSecret) {
-                const url = `https://botapi.max.ru/messages?chat_id=${encodeURIComponent(entry.chatId)}`;
-                const res = await this.fetchImpl(url, {
+                let url = `https://botapi.max.ru/messages?chat_id=${encodeURIComponent(entry.chatId)}`;
+                let res = await this.fetchImpl(url, {
                     method: 'POST',
                     headers: {
                         'Authorization': this.maxBotSecret,
                         'Content-Type': 'application/json',
                     },
                     body: JSON.stringify({ text: entry.text }),
+                    signal: AbortSignal.timeout(4000),
                 });
+                if (!res.ok) {
+                    url = `https://botapi.max.ru/messages?user_id=${encodeURIComponent(entry.chatId)}`;
+                    res = await this.fetchImpl(url, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': this.maxBotSecret,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ text: entry.text }),
+                        signal: AbortSignal.timeout(4000),
+                    });
+                }
                 entry.deliveredRemote = res.ok;
             }
             else if (entry.channel === 'vk' && this.vkBotSecret) {
@@ -300,12 +533,120 @@ export class SupportBotsHub {
                     v: '5.199',
                     access_token: this.vkBotSecret,
                 });
-                const res = await this.fetchImpl(`${url}?${params.toString()}`, { method: 'POST' });
+                const res = await this.fetchImpl(`${url}?${params.toString()}`, {
+                    method: 'POST',
+                    signal: AbortSignal.timeout(4000),
+                });
                 entry.deliveredRemote = res.ok;
             }
         }
         catch { /* в локальном/тестовом режиме остаётся в outboxLog */ }
 
         return entry;
+    }
+
+    /**
+     * Зарегистрировать webhook для Telegram (если publicOrigin публичный HTTPS) и/или MAX.
+     */
+    async syncWebhooks(origin = '') {
+        const base = String(origin || this.publicOrigin || '').replace(/\/+$/, '');
+        const results = { telegram: null, max: null };
+        if (!/^https:\/\/[^/]+/i.test(base) || /localhost|127\.0\.0\.1/i.test(base) || typeof this.fetchImpl !== 'function') {
+            return results;
+        }
+        if (this.telegramBotSecret) {
+            try {
+                const res = await this.fetchImpl(`https://api.telegram.org/bot${encodeURIComponent(this.telegramBotSecret)}/setWebhook`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: `${base}/api/bots/telegram/webhook` }),
+                });
+                results.telegram = await res.json().catch(() => ({ ok: res.ok }));
+            }
+            catch { /* ignore */ }
+        }
+        if (this.maxBotSecret) {
+            try {
+                const res = await this.fetchImpl('https://botapi.max.ru/subscriptions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': this.maxBotSecret,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ url: `${base}/api/bots/max/webhook` }),
+                });
+                results.max = await res.json().catch(() => ({ ok: res.ok }));
+            }
+            catch { /* ignore */ }
+        }
+        return results;
+    }
+
+    /**
+     * Разовый цикл long-polling для Telegram и MAX (удобно, когда сервер без белого HTTPS-домена).
+     */
+    async pollOnce() {
+        if (this._polling || typeof this.fetchImpl !== 'function')
+            return;
+        this._polling = true;
+        try {
+            if (this.telegramBotSecret) {
+                try {
+                    const r = await this.fetchImpl(`https://api.telegram.org/bot${encodeURIComponent(this.telegramBotSecret)}/getUpdates?timeout=0&offset=${this._tgUpdateOffset}`, {
+                        signal: AbortSignal.timeout(5000),
+                    });
+                    if (r.ok) {
+                        const j = await r.json().catch(() => ({}));
+                        for (const upd of (j.result || [])) {
+                            if (upd.update_id >= this._tgUpdateOffset)
+                                this._tgUpdateOffset = upd.update_id + 1;
+                            if (upd.message || upd.edited_message || upd.callback_query) {
+                                await this.handleTelegramWebhook(upd, this.publicOrigin).catch(() => {});
+                            }
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+            }
+            if (this.maxBotSecret) {
+                try {
+                    const qs = this._maxMarker ? `?marker=${encodeURIComponent(this._maxMarker)}&timeout=0` : '?timeout=0';
+                    const r = await this.fetchImpl(`https://botapi.max.ru/updates${qs}`, {
+                        headers: { 'Authorization': this.maxBotSecret },
+                        signal: AbortSignal.timeout(5000),
+                    });
+                    if (r.ok) {
+                        const j = await r.json().catch(() => ({}));
+                        if (j.marker != null)
+                            this._maxMarker = j.marker;
+                        for (const upd of (j.updates || [])) {
+                            if (upd.message || upd.update_type === 'message_created') {
+                                await this.handleMaxWebhook(upd, this.publicOrigin).catch(() => {});
+                            }
+                        }
+                    }
+                }
+                catch { /* ignore */ }
+            }
+        }
+        finally {
+            this._polling = false;
+        }
+    }
+
+    startPolling(intervalMs = 4000) {
+        if (this._pollTimer || process.env.NODE_TEST_CONTEXT)
+            return;
+        this._pollTimer = setInterval(() => {
+            this.pollOnce().catch(() => {});
+        }, Math.max(2000, Number(intervalMs) || 4000));
+        this._pollTimer.unref?.();
+    }
+
+    stopPolling() {
+        if (this._pollTimer) {
+            clearInterval(this._pollTimer);
+            this._pollTimer = null;
+        }
     }
 }

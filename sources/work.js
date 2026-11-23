@@ -126,15 +126,36 @@ if (process.env.WORK_AUTO_UPDATE !== '0' && !process.env.WORK_TEST) {
         .then(m => m.startAutoUpdateDaemon())
         .catch(e => console.warn('[auto-updater]', e?.message || e));
 
-    setInterval(async () => {
-        try {
-            const { loadOwnerTokenBinding, syncWithLicenseHub } = await import('./modules/license/index.js');
-            if (loadOwnerTokenBinding()?.token) {
-                await syncWithLicenseHub();
+    // Первичная и адаптивная автосинхронизация лицензий (Q10):
+    // через 5 с после старта; каждые 30 с пока базовая лицензия ожидает активации, затем каждые 15 мин.
+    let _licSyncTimer = null;
+    const scheduleLicenseSync = (delayMs) => {
+        if (_licSyncTimer) clearTimeout(_licSyncTimer);
+        _licSyncTimer = setTimeout(async () => {
+            let nextDelayMs = 15 * 60_000;
+            try {
+                const { loadOwnerTokenBinding, syncWithLicenseHub, getFullLicenseStatus } = await import('./modules/license/index.js');
+                if (loadOwnerTokenBinding()?.token) {
+                    const st = await syncWithLicenseHub();
+                    if (st && st.baseLicensed === false)
+                        nextDelayMs = 30_000;
+                }
+                else {
+                    const st = getFullLicenseStatus();
+                    if (st && st.baseLicensed === false)
+                        nextDelayMs = 15 * 60_000;
+                }
             }
-        }
-        catch { /* сервер поддержки временно недоступен — работаем по локальным файлам в #system */ }
-    }, 60 * 60_000).unref?.();
+            catch {
+                nextDelayMs = 60_000;
+            }
+            finally {
+                scheduleLicenseSync(nextDelayMs);
+            }
+        }, delayMs);
+        _licSyncTimer.unref?.();
+    };
+    scheduleLicenseSync(5000);
 }
 
 globalThis.ODA = function (prototype) {};
