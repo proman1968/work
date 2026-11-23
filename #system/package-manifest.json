@@ -1,12 +1,12 @@
 {
   "packageName": "odant-work",
-  "version": "1.0.60",
+  "version": "1.0.61",
   "createdAt": 1795100682741,
-  "updatedAt": 1795421315435,
+  "updatedAt": 1795422447792,
   "files": {
     "run.mjs": "f8918c612e8641e9beee06221be6680aa6fd21f25468451f2ac857fd51772266",
-    "package.json": "39ba2c798d0d7162fabb3263cdd94fd618f90daaf8af4e09af6f2769979de2d0",
-    "package-lock.json": "e45bf07c8511334f33f2f23f0042f6a451b0163c4e4bae6c6407c6a66bc0bac6",
+    "package.json": "696e28e17d134c1fcd6faffcb278911f02205b772297c431add1b91a82a64fda",
+    "package-lock.json": "ad95a36286f7aaf573ff4245a027df6e4725b11e68c1013a4fd3a9b74d2b8287",
     "sources/client/class.js": "c3fb8f143fc83aaa2df1ddeddd412d2d4dfe88656578095babe2df34fb3b3922",
     "sources/client/field.js": "ffdd50fa8b6ec515cc42da5fca96658ff2b20e274601a1f926e0031372467a19",
     "sources/client/file.js": "667101d75fa30840370d5be232e518aaac7c1fd52ca05a12da560eef6c0848b0",
