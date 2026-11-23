@@ -2,10 +2,11 @@
 export default {
     icon: 'odant:grid',
     label: 'Объекты',
+    order: 1,
     allowSave: false,
     roles: ['BOSS', 'USER'],
     /**
-     * Только классы с полями объектов (у групп и служебных классов формы нет).
+     * Только классы с полями объектов (у групп и служебных/абстрактных классов формы нет).
      * Поля лист справочника или операции может наследовать (собственных `FIELDS` нет) —
      * их собирает ядро данных (`db_schema`), поэтому смотрим на схему, а без неё — на METADATA.
      */
@@ -15,12 +16,17 @@ export default {
             return false;
         try {
             const s = (await $context?.db_schema?.({ session: params?.session }))?.schema;
-            if (s)
+            if (s) {
+                if (s.abstract)
+                    return false;
                 return (s.family === 'operation' || s.family === 'catalog') && s.type !== '$virtual' && (s.fields.length > 0 || !s.leaf);
+            }
         }
         catch {
             return false;
         }
+        if ($context?.DATA?.abstract)
+            return false;
         const md = await $context?.METADATA;
         return Array.isArray(md?.FIELDS) && md.FIELDS.length > 0;
     },

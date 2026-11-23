@@ -816,8 +816,38 @@ ODA({is: 'work-form',
                     return view;
             }
         }
-        return (views || []).find(v => v.id === $item?.form) || views?.[0];
+        const ownDefault = (views || []).find(v => v.id === $item?.form);
+        if (ownDefault)
+            return ownDefault;
+        const preferred = ['objects', 'virtual', 'sheet', 'turnovers', 'postings', 'map', 'bpmn'];
+        for (const prefId of preferred) {
+            const hit = (views || []).find(v => v.id === prefId);
+            if (hit)
+                return hit;
+        }
+        return views?.[0];
     },
+    async _detectHasChildClasses(item) {
+        if (!item)
+            return false;
+        const t = item.type;
+        if (!['$operation', '$catalog', '$register', '$account', '$struct', '$virtual'].includes(t))
+            return false;
+        if (item.hasItems === false)
+            return false;
+        try {
+            if (typeof item.fetch === 'function') {
+                const info = await item.fetch('info', { deep: 1, branch: 'classes' });
+                if (info && Array.isArray(info.items)) {
+                    const clsTypes = new Set(['$catalog', '$operation', '$register', '$account', '$struct', '$virtual']);
+                    return info.items.some(c => c && c.id?.[0] !== '$' && clsTypes.has(c.type));
+                }
+            }
+        }
+        catch { /* ignore */ }
+        return Boolean(item.hasItems);
+    },
+    _rootHasChildClasses: false,
     $item: {
         $def: null,
         async set(n) {
@@ -832,6 +862,7 @@ ODA({is: 'work-form',
                     await n.ensureRole?.();
                     this._appliedRoleItem = n;
                     this._appliedRole = n.role || '';
+                    this._rootHasChildClasses = await this._detectHasChildClasses(n);
                 }
                 finally {
                     this._initializingItem = false;
@@ -873,6 +904,8 @@ ODA({is: 'work-form',
         const t = root.type;
         if (t === '$file' || t === '$handler' || t === '$structure' || t === '$base' || t === '$project' || t === '$server' || t === '$user')
             return false;
+        if (!this._rootHasChildClasses)
+            return false;
         if (['$operation', '$catalog', '$register', '$account', '$struct', '$virtual'].includes(t))
             return true;
         const short = root.short || root.path || '';
@@ -896,6 +929,16 @@ ODA({is: 'work-form',
             const old = this.querySelector?.('item-tree#formClassTree');
             if (old)
                 old.remove();
+            if (this.left_drawer) {
+                this._applyingClassTreeState = true;
+                try {
+                    this.left_drawer.closed = true;
+                    this.classTreeClosed = true;
+                }
+                finally {
+                    this._applyingClassTreeState = false;
+                }
+            }
             return;
         }
         let tree = this.querySelector?.('item-tree#formClassTree');

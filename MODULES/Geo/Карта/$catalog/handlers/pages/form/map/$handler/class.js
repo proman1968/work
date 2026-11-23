@@ -11,11 +11,15 @@ export default {
         try {
             const s = (await $context?.db_schema?.({ session: params?.session }))?.schema;
             if (s) {
+                if (s.abstract)
+                    return false;
                 return (s.types || []).some(x => x.endsWith('/Карта'))
                     || (s.fields || []).some(f => f.id === 'coords' || f.id === 'shape');
             }
         }
         catch { /* ignore */ }
+        if ($context?.DATA?.abstract)
+            return false;
         return true;
     },
 }

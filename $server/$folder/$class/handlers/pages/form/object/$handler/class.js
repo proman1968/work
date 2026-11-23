@@ -16,12 +16,17 @@ export default {
             return false;
         try {
             const s = (await $context?.db_schema?.({ session: params?.session }))?.schema;
-            if (s)
+            if (s) {
+                if (s.abstract)
+                    return false;
                 return (s.family === 'operation' || s.family === 'catalog') && s.type !== '$virtual' && (s.fields.length > 0 || !s.leaf);
+            }
         }
         catch {
             return false;
         }
+        if ($context?.DATA?.abstract)
+            return false;
         const md = await $context?.METADATA;
         return Array.isArray(md?.FIELDS) && md.FIELDS.length > 0;
     },

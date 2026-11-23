@@ -1,6 +1,9 @@
 export default {
     label: 'Геоточки',
     icon: 'carbon:map',
+    $public: {
+        form: 'objects',
+    },
     types: ['/MODULES/Geo/Карта'],
     METADATA: {
         FIELDS: [

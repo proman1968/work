@@ -475,6 +475,7 @@ export function classSchema(db, ref, seenStructs = new Set()) {
         family,
         label: cls.label,
         leaf,
+        abstract: Boolean(cls.own?.abstract),
         ancestor: directAnc ? directAnc.cid : null,
         types: typeRefs,
         fields: fields.map(f => normalizeField(db, f, basePath, seenStructs)),

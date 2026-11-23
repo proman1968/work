@@ -1,6 +1,7 @@
 export default {
-    label: 'Карта (миксин)',
+    label: 'Карта',
     icon: 'carbon:map',
+    abstract: true,
     METADATA: {
         FIELDS: [
             { id: 'coords', label: 'Координаты', type: '/MODULES/Geo/Координаты' },

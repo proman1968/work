@@ -38,7 +38,7 @@ import {
 const ROOT = path.resolve(import.meta.dirname, '..');
 
 describe('Очередь 2: Модули Geo (миксин Карта + form/map), KLADR (+ МВД в Паспорт), Process (BPMN + Планировщик + Гант)', () => {
-    it('1. /MODULES/Geo: миксин Карта передаёт поля coords/shape и представление form/map в Склады, Транспорт и Геоточки', async () => {
+    it('1. /MODULES/Geo: класс Карта (abstract) передаёт поля coords/shape и представление form/map в Склады, Транспорт и Геоточки', async () => {
         const db = await openDataDb(':memory:');
         try {
             const res = await refreshClasses(db, ROOT);
@@ -47,7 +47,10 @@ describe('Очередь 2: Модули Geo (миксин Карта + form/map
                 assert.ok(getClass(db, p), `${p} должен существовать`);
                 assert.deepEqual(checkSchema(db, p), [], `${p} без ошибок схемы`);
             }
+            const kartaSchema = classSchema(db, '/MODULES/Geo/Карта');
+            assert.equal(kartaSchema.abstract, true, 'Класс Карта отмечен как abstract: true');
             const whSchema = classSchema(db, '/MODULES/Register/CATALOGS/Склады');
+            assert.equal(whSchema.abstract, false, 'abstract не наследуется через types на Склады');
             assert.ok(whSchema.types.includes('/MODULES/Geo/Карта'));
             assert.ok(whSchema.fields.some(f => f.id === 'coords' && f.type === 'struct'));
             assert.ok(whSchema.fields.some(f => f.id === 'shape' && f.type === 'struct'));
@@ -55,12 +58,18 @@ describe('Очередь 2: Модули Geo (миксин Карта + form/map
             const prevWork = globalThis.WORK;
             globalThis.WORK = new $server();
             try {
+                const kartaCls = await WORK.get_item('/MODULES/Geo/Карта');
                 const geoPts = await WORK.get_item('/MODULES/Geo/Геоточки');
                 const wh = await WORK.get_item('/MODULES/Register/CATALOGS/Склады');
-                const geoViews = ((await geoPts.handlers({ path: '//form', role: 'USER' }))?.items || []).map(i => i.id);
-                const whViews = ((await wh.handlers({ path: '//form', role: 'USER' }))?.items || []).map(i => i.id);
-                assert.ok(geoViews.includes('map'), `Геоточки должны иметь представление map (получено: ${geoViews.join(', ')})`);
-                assert.ok(whViews.includes('map'), `Склады с миксином Карта должны наследовать представление map (получено: ${whViews.join(', ')})`);
+                const kartaViews = ((await kartaCls.handlers({ path: '//form', role: 'BOSS' }))?.items || []).filter(i => i.usable !== false).map(i => i.id);
+                const geoViews = ((await geoPts.handlers({ path: '//form', role: 'USER' }))?.items || []).filter(i => i.usable !== false).map(i => i.id);
+                const whViews = ((await wh.handlers({ path: '//form', role: 'USER' }))?.items || []).filter(i => i.usable !== false).map(i => i.id);
+                assert.ok(!kartaViews.includes('objects') && !kartaViews.includes('map'), `Абстрактный класс Карта не открывает objects/map (${kartaViews.join(', ')})`);
+                assert.ok(geoViews.includes('map') && geoViews.includes('objects'), `Геоточки должны иметь map и objects (получено: ${geoViews.join(', ')})`);
+                assert.ok(whViews.includes('map') && whViews.includes('objects'), `Склады с классом Карта в types должны наследовать map (получено: ${whViews.join(', ')})`);
+
+                const workMethods = ((await WORK.handlers({ path: '//methods', role: 'BOSS' }))?.items || []).map(i => i.id);
+                assert.ok(!workMethods.includes('npm'), 'Хендлер npm удалён из меню WORK');
             }
             finally {
                 globalThis.WORK = prevWork;
@@ -172,6 +181,64 @@ describe('Очередь 2: Модули Geo (миксин Карта + form/map
         }
         finally {
             db.close();
+        }
+    });
+
+    it('4. UI-исправления: скрытие левого дерева при отсутствии детей, objects по умолчанию, Карта (abstract)', async () => {
+        const captured = {};
+        const prevOda = globalThis.ODA;
+        globalThis.ODA = (spec) => { if (spec?.is) captured[spec.is] = spec; };
+        try {
+            await import(`../$server/$folder/handlers/pages/form/$handler/form.js?t=${Date.now()}`);
+        }
+        finally {
+            globalThis.ODA = prevOda;
+        }
+        const formMod = captured['work-form'];
+        assert.ok(formMod, 'Компонент work-form зарегистрирован');
+        assert.equal(typeof formMod.resolveView, 'function');
+        assert.equal(typeof formMod._detectHasChildClasses, 'function');
+
+        // 1. Для класса без дочерних классов _detectHasChildClasses возвращает false
+        const leafMock = {
+            type: '$catalog',
+            hasItems: false,
+            async fetch() { return { items: [] }; },
+        };
+        assert.equal(await formMod._detectHasChildClasses(leafMock), false, 'У одиночного класса левое дерево не нужно');
+
+        // 2. Для класса с дочерним классом _detectHasChildClasses возвращает true
+        const groupMock = {
+            type: '$catalog',
+            hasItems: true,
+            async fetch() { return { items: [{ id: 'Юр. лица', type: '$catalog' }] }; },
+        };
+        assert.equal(await formMod._detectHasChildClasses(groupMock), true, 'У группы с подклассами левое дерево включено');
+
+        // 3. resolveView: если у класса с полями запрошено 'chat' (от $class), но его нет среди views, выбирает 'objects', а не 'builder'
+        const views = [{ id: 'builder', order: 20 }, { id: 'objects', order: 1 }, { id: 'folder', order: 99 }];
+        const fakeForm = {
+            currentItem: { form: 'chat' },
+            activeRole: 'BOSS',
+            loadFormViews: async () => views,
+            resolveView: formMod.resolveView,
+        };
+        const chosen = await fakeForm.resolveView('chat', { form: 'chat', role: 'BOSS' });
+        assert.equal(chosen?.id, 'objects', 'Представлением по умолчанию выбирается objects, а не Конструктор');
+
+        // 4. В /MODULES/KLADR/Населённые пункты и /MODULES/Geo/Геоточки и /MODULES/Process/Задачи и этапы form === 'objects'
+        const prevWork = globalThis.WORK;
+        globalThis.WORK = new $server();
+        try {
+            const np = await WORK.get_item('/MODULES/KLADR/Населённые пункты');
+            await np.init;
+            assert.equal(np.form, 'objects');
+            const gp = await WORK.get_item('/MODULES/Geo/Геоточки');
+            await gp.init;
+            assert.equal(gp.form, 'objects');
+        }
+        finally {
+            globalThis.WORK = prevWork;
         }
     });
 });
