@@ -31,6 +31,8 @@ export default {
     bookmarks: [],
     focusedPage: '',
     get hasBookmarks() {
+        if (typeof window !== 'undefined' && window !== window.top)
+            return false;
         return !this.mobile && Array.isArray(this.bookmarks) && this.bookmarks.length > 0 && this.visibleMode === 'main';
     },
     get bookmarkTabItems() {
@@ -101,6 +103,8 @@ export default {
      * через ~props логический `hidden` не применяет, поэтому кнопка висела всегда.
      */
     _buildLeftButtons() {
+        if (typeof window !== 'undefined' && window !== window.top)
+            return [];
         const user = WORK.USER;
         const buttons = [];
         if (top.RTCCaller?.current_call) {
@@ -197,7 +201,7 @@ export default {
     get icon() {
         return this.$handler?.icon;
     },
-    hideRoots: 1,
+    hideRoots: 2,
     hideTops: 0,
     itemsSelector: 'items',
 
@@ -373,7 +377,7 @@ export default {
         }
         catch { /* ignore */ }
     },
-    _upsertBookmarkForUrl(pageUrl, $item = null, pagePrefix = '', pageIcon = '') {
+    _upsertBookmarkForUrl(pageUrl, $item = null) {
         if (!pageUrl)
             return null;
         const short = $item?.short || $item?.path || this._extractShortFromUrl(pageUrl);
@@ -384,8 +388,7 @@ export default {
         if (!bm) {
             const lastSeg = String(short || '').split('/').filter(Boolean).pop() || '';
             const dated = CORE?.$file?.formatDatedFileLabel?.($item?.id || lastSeg, $item?.DATA?.label);
-            const baseLabel = dated || $item?.DATA?.label || $item?.label || this._defaultLabelForShort(short);
-            const label = pagePrefix ? `${pagePrefix} · ${baseLabel}` : baseLabel;
+            const label = dated || $item?.DATA?.label || $item?.label || this._defaultLabelForShort(short);
             bm = {
                 url: pageUrl,
                 hash,
@@ -393,17 +396,15 @@ export default {
                 stateKey: itemStateKey,
                 label,
                 title: `${label} (${short})`,
-                icon: pageIcon || this._defaultIconForItem($item, short),
+                icon: this._defaultIconForItem($item, short),
             };
             list.push(bm);
             this.bookmarks = list;
-            if (!pagePrefix)
-                setTimeout(() => this._hydrateBookmarkMeta(bm, { cachedOnly: true }), 800);
+            setTimeout(() => this._hydrateBookmarkMeta(bm, { cachedOnly: true }), 800);
         }
         else if ($item) {
-            const baseLabel = $item?.DATA?.label || $item?.label || bm.label;
-            const label = pagePrefix ? `${pagePrefix} · ${baseLabel}` : baseLabel;
-            const icon = pageIcon || this._defaultIconForItem($item, short);
+            const label = $item?.DATA?.label || $item?.label || bm.label;
+            const icon = this._defaultIconForItem($item, short);
             if (itemStateKey)
                 bm.stateKey = itemStateKey;
             if (bm.label !== label || bm.icon !== icon) {
@@ -676,30 +677,22 @@ export default {
         window.execute = async ($item, nav) => {
             if (!$item)
                 return;
-            let pageHandlerMeta = null;
             if ($item.type === '$handler') {
                 const rawHPath = String($item.path || $item.short || '');
-                const mPage = rawHPath.match(/^(.*?)\/(?:~|\$[^/]+(?:\/\$[^/]+)*)\/handlers\/pages\/([^/$]+)(?:\/([^/$]+))?/);
+                const mForm = rawHPath.match(/^(.*?)\/(?:~|\$[^/]+(?:\/\$[^/]+)*)\/handlers\/pages\/form(?:\/([^/$]+))?/);
                 const rawSelf = $item[R]?.target || $item;
                 const ctx = (Object.prototype.hasOwnProperty.call(rawSelf, '$context') || Object.prototype.hasOwnProperty.call($item, '$context'))
                     ? await $item.$context
                     : null;
                 if (ctx && ctx.type !== '$handler') {
-                    const pageName = mPage?.[2] || 'form';
-                    const viewId = pageName === 'form' ? (mPage?.[3] || ($item.id && $item.id !== 'form' ? $item.id : '')) : '';
-                    pageHandlerMeta = pageName !== 'form'
-                        ? { page: pageName, label: $item.DATA?.label || $item.label || pageName, icon: $item.DATA?.icon || $item.icon || '' }
-                        : null;
+                    const viewId = mForm?.[2] || ($item.id && $item.id !== 'form' ? $item.id : '');
                     $item = ctx;
-                    nav = {
-                        ...(nav && typeof nav === 'object' ? nav : {}),
-                        ...(pageName !== 'form' ? { page: pageName } : (viewId ? { view: viewId } : {})),
-                    };
+                    if (viewId)
+                        nav = { ...(nav && typeof nav === 'object' ? nav : {}), view: viewId };
                 }
             }
-            const pageName = ($item.type !== '$handler' && nav?.page) ? String(nav.page) : ($item.page || 'form');
             const short = $item?.short ?? $item?.path ?? '';
-            const dataRoot = ($item?.type !== '$handler' && pageName === 'form') ? this._resolveDataRootPath(short, $item) : '';
+            const dataRoot = ($item?.type !== '$handler') ? this._resolveDataRootPath(short, $item) : '';
             const openShort = dataRoot || short;
             const navKey = openShort || '/';
             const effectiveNav = dataRoot
@@ -714,13 +707,12 @@ export default {
             }
             let hash = '#' + openShort;
             if ($item.type !== '$handler')
-                hash += '/~/handlers/pages/' + pageName;
-            history.replaceState(null, '', window.location.pathname + hash);
-            const fullUrl = encodeURI(window.location.origin + openShort + ($item.type !== '$handler' ? '/~/handlers/pages/' + pageName : '') + '/index.html');
-            const pageLabelPrefix = pageName !== 'form'
-                ? (pageHandlerMeta?.label || ({ data: 'Данные', site: 'Сайт', storage: 'Хранилище', explorer: 'Проводник' }[pageName]) || pageName)
-                : '';
-            const bm = this._upsertBookmarkForUrl(fullUrl, openShort === short ? $item : null, pageLabelPrefix, pageHandlerMeta?.icon || (pageName === 'data' ? 'carbon:data-base' : ''));
+                hash += '/~/handlers/pages/' + ($item.page || 'form');
+            const isTop = typeof window === 'undefined' || window === window.top;
+            if (isTop)
+                history.replaceState(null, '', window.location.pathname + hash);
+            const fullUrl = encodeURI(window.location.origin + openShort + ($item.type !== '$handler' ? '/~/handlers/pages/' + ($item.page || 'form') : '') + '/index.html');
+            const bm = isTop ? this._upsertBookmarkForUrl(fullUrl, openShort === short ? $item : null) : null;
             if (openShort !== short && bm) {
                 const itemStateKey = ($item && ('_stateKey' in Object($item)) && $item._stateKey) ? String($item._stateKey) : '';
                 if (itemStateKey && itemStateKey.includes('#place:') && itemStateKey.includes('->')) {
@@ -785,6 +777,11 @@ export default {
                     window.open(nextHash, '_self');
                 }
             }
+        }
+        const isTop = typeof window === 'undefined' || window === window.top;
+        if (!isTop) {
+            this.load_page();
+            return;
         }
         const restored = this._restoreBookmarksState();
         const hasInitialHash = Boolean(window.location.hash && window.location.hash !== '#');

@@ -913,9 +913,10 @@ ODA({is: 'work-form',
     },
     openDataPage() {
         const target = this.currentItem;
-        const execFn = (typeof window !== 'undefined' && (window.top?.execute || window.execute)) || null;
-        if (target && execFn)
-            execFn(target, { page: 'data' });
+        if (!target)
+            return;
+        const short = target.short || target.path || '';
+        window.open(encodeURI(`${short}/~/handlers/pages/data/index.html`), '_blank');
     },
     get hasClassTree() {
         if (this._noClassTreeFlag)

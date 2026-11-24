@@ -372,7 +372,7 @@ await test('Проводник: порядок вкладок [контекст,
         WORK.usersByIds = prevByIds;
     }
 
-    // Проверка открытия handlers/pages/* через навигатор (window.execute), а не window.open
+    // Проверка: pages/form открывается в навигаторе (window.execute), остальные pages/* (pages/data, pages/storage) — в новой вкладке (window.open)
     const prevExec = window.execute;
     const prevOpen = window.open;
     const execCalls = [];
@@ -381,6 +381,17 @@ await test('Проводник: порядок вкладок [контекст,
     window.open = (url, target) => openCalls.push({ url, target });
     try {
         const ctxNode = WORK.__bind({ path: '/ORGANIZATIONS/O1', id: 'O1', type: '$base' });
+        const formViewHandler = WORK.__bind({
+            path: '/ORGANIZATIONS/O1/~/handlers/pages/form/chat/$handler',
+            short: '/ORGANIZATIONS/O1/~/handlers/pages/form/chat',
+            id: 'chat',
+            type: '$handler',
+        });
+        formViewHandler.$context = ctxNode;
+        await formViewHandler.execute();
+        eq(execCalls.length, 1, 'pages/form открывается в навигаторе через window.execute');
+        eq(execCalls[0].nav?.view, 'chat', 'передан { view: "chat" }');
+
         const dataPageHandler = WORK.__bind({
             path: '/ORGANIZATIONS/O1/~/handlers/pages/data/$handler',
             short: '/ORGANIZATIONS/O1/~/handlers/pages/data',
@@ -388,18 +399,18 @@ await test('Проводник: порядок вкладок [контекст,
             type: '$handler',
         });
         dataPageHandler.$context = ctxNode;
+        dataPageHandler.getModule = async () => ({});
         await dataPageHandler.execute();
-        eq(execCalls.length, 1, 'pages/data открывается в навигаторе через window.execute');
-        eq(execCalls[0].item, ctxNode, 'передан контекст узла');
-        eq(execCalls[0].nav?.page, 'data', 'передан { page: "data" }');
-        eq(openCalls.length, 0, 'window.open не вызывается при обычном клике');
-        await dataPageHandler.execute({ ctrlKey: true });
-        eq(openCalls.length, 1, 'при Ctrl-клике открывается в новой вкладке');
+        eq(openCalls.length, 1, 'pages/data открывается в новой вкладке через window.open');
+        assert(openCalls[0].url.includes('/ORGANIZATIONS/O1/~/handlers/pages/data/'), 'URL страницы data привязан к контексту узла');
     }
     finally {
         window.execute = prevExec;
         window.open = prevOpen;
     }
+
+    const storageProto = (await import('/$server/$folder/$class/handlers/pages/storage/$handler/storage.js')).default;
+    eq(storageProto.extends, 'item-explorer', 'pages/storage открывается в новой вкладке как полноценный item-explorer');
 
     const { isChatModel, setUserPreferredModel, getUserPreferredModel } = await import('/$server/$folder/lib/prompt-bar/prompt-bar.js');
     eq(isChatModel({ type: '$ai', id: 'Qwen3-14B', DATA: { modality: 'llm', capabilities: ['chat'] } }), true, 'Qwen3-14B — языковая модель для чата');

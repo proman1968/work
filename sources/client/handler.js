@@ -67,36 +67,17 @@ export class $handler extends $class{
     }
     async execute(...params) {
         const rawPath = String(this.path || this.short || '');
-        const pageMatch = rawPath.match(/\/handlers\/pages\/([^/$]+)(?:\/([^/$]+))?/);
-        const execFn = (typeof window !== 'undefined' && (window.execute || window.top?.execute)) || null;
-        if (pageMatch && execFn) {
-            const pageName = pageMatch[1];
-            const subView = pageMatch[2] || '';
+        const formViewMatch = rawPath.match(/\/handlers\/pages\/form(?:\/([^/$]+))?/);
+        if (formViewMatch && window.execute) {
+            const viewId = formViewMatch[1] || (this.id && this.id !== 'form' ? this.id : '');
             const rawSelf = this[R]?.target || this;
             const hasOwnCtx = Object.prototype.hasOwnProperty.call(rawSelf, '$context') || Object.prototype.hasOwnProperty.call(this, '$context');
             const ctx = hasOwnCtx ? await this.$context : null;
-            const ev = params?.[0];
-            if (ev?.ctrlKey || ev?.shiftKey || ev?.metaKey) {
-                const targetShort = (ctx && ctx.type !== '$handler' ? ctx.short : this.short) || '';
-                const url = (ctx && ctx.type !== '$handler')
-                    ? `${targetShort}/~/handlers/pages/${pageName}/`
-                    : `${this.short}/`;
-                window.open(encodeURI(url), '_blank');
-                return;
-            }
-            let nav;
-            if (pageName === 'form') {
-                const viewId = subView || (this.id && this.id !== 'form' ? this.id : '');
-                nav = viewId ? { view: viewId } : undefined;
-            }
-            else {
-                nav = { page: pageName };
-            }
             if (ctx && ctx.type !== '$handler') {
-                execFn(ctx, nav);
+                window.execute(ctx, viewId ? { view: viewId } : undefined);
                 return;
             }
-            execFn(this, nav);
+            window.execute(this, viewId ? { view: viewId } : undefined);
             return;
         }
 
@@ -106,11 +87,18 @@ export class $handler extends $class{
             return;
         }
 
-        if (this.short.includes('form') && execFn) {
-            execFn(this);
+        if (this.short.includes('form') && window.execute) {
+            window.execute(this);
             return;
         }
-        window.open(this.short + '/');
+        const pageMatch = rawPath.match(/\/handlers\/pages\/([^/$]+)/);
+        const rawSelf = this[R]?.target || this;
+        const hasOwnCtx = Object.prototype.hasOwnProperty.call(rawSelf, '$context') || Object.prototype.hasOwnProperty.call(this, '$context');
+        const ctx = hasOwnCtx ? await this.$context : null;
+        const url = (pageMatch && ctx && ctx.type !== '$handler')
+            ? `${ctx.short || ctx.path || ''}/~/handlers/pages/${pageMatch[1]}/`
+            : `${this.short}/`;
+        window.open(encodeURI(url), '_blank');
     }
     async showSettings(...params) {
         const module = await this.getModule();

@@ -15,7 +15,7 @@ export default {
     },
     $public: {
         get allowUse() {
-            return this.$item?.connstructor?.name !== '$file'
+            return this.$item?.constructor?.name !== '$file';
         }
     }
 }
