@@ -150,6 +150,7 @@ export async function loadDocs(place, sub) {
         const folder = await safe(() => dir.get_item(sub));
         if (!folder || Array.isArray(folder))
             continue;
+        folder.reset?.();
         const kids = (await safe(() => folder.children, [])) || [];
         for (const f of kids) {
             if (!/\.md$/i.test(f?.id || '') || /^readme\.md$/i.test(f.id))

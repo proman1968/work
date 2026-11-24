@@ -3,6 +3,7 @@ import messengersProto from './tabs/messengers.js';
 import databaseProto from './tabs/database.js';
 import searchProto from './tabs/search.js';
 import licenseProto from './tabs/license.js';
+import agentProto from './tabs/agent.js';
 
 function cloneProto(raw) {
     const proto = Object.defineProperties(
@@ -29,6 +30,7 @@ regTab('system-tab-messengers', messengersProto);
 regTab('system-tab-database', databaseProto);
 regTab('system-tab-search', searchProto);
 regTab('system-tab-license', licenseProto);
+regTab('system-tab-agent', agentProto);
 
 export default {
     imports: 'oda//icon, oda//button, ~/lib//editor-form, ~/lib//tree.js',
@@ -130,6 +132,7 @@ export default {
             <system-tab-database ~if="currentTabId === 'database'" flex :$item="$item"></system-tab-database>
             <system-tab-search ~if="currentTabId === 'search'" flex :$item="$item" :initial-query="pendingQuery"></system-tab-search>
             <system-tab-license ~if="currentTabId === 'license'" flex :$item="$item"></system-tab-license>
+            <system-tab-agent ~if="currentTabId === 'agent'" flex :$item="$item"></system-tab-agent>
         </div>
     `,
     activeTab: '',
@@ -167,6 +170,8 @@ export default {
         if (t === '$server' || t === '$base' || t === '$project')
             tabs.push({ id: 'database', label: 'База данных', icon: 'carbon:data-base' });
         tabs.push({ id: 'search', label: 'Поиск', icon: 'icons:search' });
+        if (t !== '$user')
+            tabs.push({ id: 'agent', label: 'Агент и правила', icon: 'bootstrap:robot' });
         if (t === '$server')
             tabs.push({ id: 'license', label: 'Лицензия', icon: 'carbon:certificate' });
         return tabs;

@@ -467,6 +467,17 @@ async function logOperationFact(db, item, op, action, uid, p) {
     }
 }
 
+let _triggersMod = null;
+function emitDbTrigger(eventName, payload) {
+    globalThis.__workPendingTriggers = (globalThis.__workPendingTriggers || 0) + 1;
+    (_triggersMod ??= import('../modules/agent/triggers.js'))
+        .then(m => m.onDbEvent?.(eventName, payload))
+        .catch(() => {})
+        .finally(() => {
+            globalThis.__workPendingTriggers = Math.max(0, (globalThis.__workPendingTriggers || 1) - 1);
+        });
+}
+
 /**
  * Схема для форм: у полей-ссылок (и в строках табличных частей, и в расширениях) к `target` (cid)
  * добавлен `targetPath` — форма и поле-ссылка открывают класс по пути дерева (`WORK.get_item`), а не по cid.
@@ -831,8 +842,10 @@ export const DATA_METHODS = Object.freeze({
             cid: cls.cid, body: bodyOf(p) ?? {}, time: p.time, unit: at.unit, place: at.place,
             ext_of: p.ext_of, valid_from: p.valid_from, basis_id: p.basis_id, basis_note: p.basis_note, author: uid,
         });
-        if (obj)
+        if (obj) {
             await logOperationFact(db, item, obj, obj.status === 'registered' ? 'Проведено' : 'Создано', uid, p);
+            emitDbTrigger(obj.status === 'registered' ? 'db:register' : 'db:create', { basePath: resolveBasePath(item.path), cls, obj, params: p });
+        }
         return obj;
     }) },
 
@@ -849,10 +862,15 @@ export const DATA_METHODS = Object.freeze({
     db_versions: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => objectVersions(db, await visibleObject(db, cls, p.id, vis, p))) },
 
     /** Изменить объект: { id, post|body, replace?, time?, valid_from?, version? }. */
-    db_update: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => updateObject(db, {
-        id: ownObject(db, cls, p.id, vis), body: bodyOf(p), replace: flag(p.replace), time: p.time,
-        valid_from: p.valid_from, version: p.version, author: uid,
-    })) },
+    db_update: { level: 'write', fn: method('write', ({ db, cls, item, p, uid, vis }) => {
+        const obj = updateObject(db, {
+            id: ownObject(db, cls, p.id, vis), body: bodyOf(p), replace: flag(p.replace), time: p.time,
+            valid_from: p.valid_from, version: p.version, author: uid,
+        });
+        if (obj)
+            emitDbTrigger('db:update', { basePath: resolveBasePath(item.path), cls, obj, params: p });
+        return obj;
+    }) },
 
     /** Удалить объект (отметка): { id, version? }. */
     db_delete: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => deleteObject(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid })) },
@@ -886,6 +904,8 @@ export const DATA_METHODS = Object.freeze({
     db_register: { level: 'write', fn: method('write', async ({ db, cls, item, p, uid, vis }) => {
         const op = registerOperation(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid });
         await logOperationFact(db, item, op, 'Проведено', uid, p);
+        if (op)
+            emitDbTrigger('db:register', { basePath: resolveBasePath(item.path), cls, obj: op, params: p });
         return op;
     }) },
 

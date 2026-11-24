@@ -9,6 +9,7 @@
 import { log } from './log.js';
 import { runLoop, pickAllowedEffort } from './loop.js';
 import { workTools, accountingTools, classTools, contextConeOf } from './tools/work.js';
+import { twinTools } from './twin-bus.js';
 import { webTools, serviceTools, mcpTools } from './tools/services.js';
 import { metaTools, listing, MAX_DEPTH } from './tools/meta.js';
 import { connectTools } from './tools/connect.js';
@@ -448,7 +449,7 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
          * restrict — ограничение call родителя, пережившее перезапуск (body.callRestrict дочерней задачи, R3/8.31).
          */
         async makeTools(def, depth = 0, parent = null, restrict = null) {
-            let all = [...workTools, ...accountingTools, ...classTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...pluginTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
+            let all = [...workTools, ...accountingTools, ...classTools, ...twinTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...pluginTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);
@@ -471,6 +472,15 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
                 all = all.filter(t => !egressToolName(t.name));
             if (depth >= MAX_DEPTH)
                 all = all.filter(t => t.name !== 'task');
+            if (session?.twinCall) {
+                const TWIN_SERVICE_DENY = new Set([
+                    'create_class', 'update_class', 'move_class', 'delete_class',
+                    'assign', 'escalate', 'delete',
+                    'dev_write', 'dev_edit', 'dev_patch', 'dev_git', 'dev_shell',
+                    'shell', 'restart_server', 'os_write', 'os_rm',
+                ]);
+                all = all.filter(t => !t.system && !TWIN_SERVICE_DENY.has(t.name));
+            }
             if (!def)
                 return all;
             all = all.filter(t => !SUBAGENT_DENY.has(t.name));

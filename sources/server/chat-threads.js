@@ -393,6 +393,15 @@ export async function sendMessage(storage, params = {}) {
         nodePath: thread.nodePath,
         message: saved,
     });
+    if (!isTwinBot && thread.kind === 'twin') {
+        globalThis.__workPendingTriggers = (globalThis.__workPendingTriggers || 0) + 1;
+        import('../modules/agent/triggers.js')
+            .then(m => m.onChatEvent?.({ storage, thread, message: saved, params }))
+            .catch(() => {})
+            .finally(() => {
+                globalThis.__workPendingTriggers = Math.max(0, (globalThis.__workPendingTriggers || 1) - 1);
+            });
+    }
     return saved;
 }
 
@@ -577,4 +586,55 @@ export async function visibleContacts(storage, params = {}) {
         });
     }
     return out;
+}
+
+/**
+ * Подтвердить или отклонить карточку действия (kind = 'approval') в беседе.
+ */
+export async function resolveApproval(storage, params = {}) {
+    const uid = resolveActorUid(storage, params);
+    if (!uid)
+        throw new Error(ACCESS_DENIED);
+    const threadId = String(params.threadId || '').trim();
+    const messageId = Number(params.messageId);
+    const action = params.action === 'approve' ? 'approve' : (params.action === 'reject' ? 'reject' : '');
+    if (!threadId || !Number.isFinite(messageId) || !action)
+        throw new Error('Требуются threadId, messageId и action (approve|reject)');
+
+    const kindHint = threadId.startsWith('dm:') ? 'dm' : 'twin';
+    const db = await dbForThreadStorage(storage, kindHint);
+    const thread = getThreadWithMeta(db, threadId, uid);
+    if (!thread)
+        throw new Error('Беседа не найдена');
+
+    const isParticipant = thread.participants.some(p => p.uid === uid);
+    const isBoss = thread.kind === 'twin'
+        && thread.nodePath === LOGS.feedPathOf(storage)
+        && await storage._canViewLocalFeed?.(params);
+    if (!isParticipant && !isBoss)
+        throw new Error(ACCESS_DENIED);
+
+    const row = db.prepare('SELECT * FROM chat_messages WHERE id = ? AND thread_id = ?').get(messageId, threadId);
+    if (!row)
+        throw new Error('Сообщение не найдено');
+    if (row.kind !== 'approval')
+        throw new Error('Сообщение не является карточкой подтверждения');
+    const meta = parseJsonSafe(row.meta, {});
+    if (meta.status && meta.status !== 'pending')
+        return { ok: true, alreadyResolved: true, message: formatMessageRow(row) };
+
+    const nextMeta = {
+        ...meta,
+        status: action === 'approve' ? 'approved' : 'rejected',
+        resolvedBy: uid,
+        resolvedAt: Date.now(),
+    };
+    db.prepare('UPDATE chat_messages SET meta = ? WHERE id = ?').run(JSON.stringify(nextMeta), messageId);
+    const updated = formatMessageRow(db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(messageId));
+    notifyChatEvent(thread.participants.map(p => p.uid), {
+        type: 'chat:action',
+        threadId,
+        message: updated,
+    });
+    return { ok: true, message: updated };
 }

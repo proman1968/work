@@ -16,7 +16,8 @@ registerSchema(`
 CREATE TABLE IF NOT EXISTS agent_schedules(
     id TEXT PRIMARY KEY,
     uid TEXT NOT NULL,
-    task TEXT NOT NULL,
+    task TEXT NOT NULL DEFAULT '',
+    node_path TEXT NOT NULL DEFAULT '',
     label TEXT,
     prompt TEXT NOT NULL,
     rule TEXT NOT NULL,
@@ -269,23 +270,34 @@ export function describeRule(rule) {
 function row2obj(r) {
     const rule = JSON.parse(r.rule);
     return {
-        id: r.id, uid: r.uid, task: r.task, label: r.label, prompt: r.prompt, rule, when: describeRule(rule), tz: r.tz,
+        id: r.id, uid: r.uid, task: r.task || '', nodePath: r.node_path || '',
+        label: r.label, prompt: r.prompt, rule, when: describeRule(rule), tz: r.tz,
         next: r.next ? new Date(r.next).toISOString() : null,
         last: r.last ? new Date(r.last).toISOString() : null,
         lastError: r.last_error || undefined, enabled: !!r.enabled,
     };
 }
 
+let _colChecked = false;
 async function db() {
     const d = await indexDb();
     if (!d)
         throw new Error('расписание недоступно: нет локальной БД (node:sqlite)');
+    if (!_colChecked) {
+        _colChecked = true;
+        try {
+            const cols = d.prepare('PRAGMA table_info(agent_schedules)').all().map(c => c.name);
+            if (!cols.includes('node_path'))
+                d.exec("ALTER TABLE agent_schedules ADD COLUMN node_path TEXT NOT NULL DEFAULT ''");
+        }
+        catch { /* ignore */ }
+    }
     return d;
 }
 
-export async function createSchedule({ uid, task, label, prompt, rule, tz }) {
-    if (!uid || !task)
-        throw new Error('расписание: нужны владелец и задача');
+export async function createSchedule({ uid, task = '', nodePath = '', label, prompt, rule, tz }) {
+    if (!uid || (!task && !nodePath))
+        throw new Error('расписание: нужны владелец и задача или узел (nodePath)');
     const text = String(prompt || '').trim();
     if (!text || text.length > 4000)
         throw new Error('prompt: 1–4000 символов');
@@ -298,17 +310,32 @@ export async function createSchedule({ uid, task, label, prompt, rule, tz }) {
     if (!next)
         throw new Error('время запуска уже прошло');
     const id = randomUUID().slice(0, 8);
-    d.prepare('INSERT INTO agent_schedules(id, uid, task, label, prompt, rule, tz, next, enabled, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
-        .run(id, uid, task, String(label || text.split('\n')[0]).slice(0, 120), text, JSON.stringify(r), tz, next, Date.now());
+    d.prepare('INSERT INTO agent_schedules(id, uid, task, node_path, label, prompt, rule, tz, next, enabled, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)')
+        .run(id, uid, String(task || ''), String(nodePath || ''), String(label || text.split('\n')[0]).slice(0, 120), text, JSON.stringify(r), tz, next, Date.now());
     return row2obj(d.prepare('SELECT * FROM agent_schedules WHERE id = ?').get(id));
 }
 
-export async function listSchedules({ uid, task } = {}) {
+export async function listSchedules({ uid, task, nodePath } = {}) {
     const d = await db();
+    if (nodePath) {
+        const rows = d.prepare('SELECT * FROM agent_schedules WHERE node_path = ? ORDER BY next').all(String(nodePath));
+        return rows.map(row2obj);
+    }
     const rows = task
         ? d.prepare('SELECT * FROM agent_schedules WHERE uid = ? AND task = ? ORDER BY next').all(uid, task)
         : d.prepare('SELECT * FROM agent_schedules WHERE uid = ? ORDER BY next').all(uid);
     return rows.map(row2obj);
+}
+
+export async function toggleSchedule({ id, enabled }) {
+    const d = await db();
+    const row = d.prepare('SELECT * FROM agent_schedules WHERE id = ?').get(String(id));
+    if (!row)
+        throw new Error('расписание ' + id + ' не найдено');
+    const nextEnabled = enabled == null ? (row.enabled ? 0 : 1) : (enabled ? 1 : 0);
+    const next = nextEnabled ? nextRun(JSON.parse(row.rule), row.tz) : row.next;
+    d.prepare('UPDATE agent_schedules SET enabled = ?, next = ? WHERE id = ?').run(nextEnabled, next, String(id));
+    return row2obj(d.prepare('SELECT * FROM agent_schedules WHERE id = ?').get(String(id)));
 }
 
 export async function cancelSchedule({ uid, id }) {
@@ -352,6 +379,46 @@ async function defaultRunner(r) {
         user = user[0];
     if (!user)
         throw new Error('нет пользователя ' + r.uid);
+    const sendToUser = (msg) => {
+        const sessions = WORK?.constructor?.sessions || {};
+        for (const s of Object.values(sessions)) {
+            if (s?.uid === r.uid && typeof s.send === 'function') {
+                try { s.send(msg); } catch { /* ignore */ }
+            }
+        }
+    };
+    const session = { uid: r.uid, $user: user, principal: Object.freeze({ kind: 'user', id: r.uid }), scheduled: true, sockets: {}, send: sendToUser };
+
+    // Расписание уровня узла $structure (без привязки к файлу .task)
+    if (r.node_path && !r.task) {
+        let nodeItem = await WORK.get_item(r.node_path).catch(() => null);
+        if (Array.isArray(nodeItem))
+            nodeItem = nodeItem.at(-1);
+        if (!nodeItem)
+            throw new Error('нет узла ' + r.node_path);
+        const roles = await nodeItem.roles?.({ session }).catch(() => []);
+        if (!roles.length)
+            throw new Error('Доступ запрещён');
+        const stamp = new Date().toLocaleString('ru-RU', { timeZone: r.tz || undefined });
+        const { runOnce } = await import('./index.js');
+        const res = await runOnce({
+            place: nodeItem,
+            session,
+            prompt: '[по расписанию «' + r.label + '», ' + stamp + ']\n' + r.prompt,
+            mode: 'ask',
+            signal: AbortSignal.timeout(10 * 60_000),
+        });
+        const answer = String(res?.content || '').trim() || (res?.status === 'error' ? 'ошибка выполнения' : 'без результата');
+        const CHAT = await import('../../server/chat-threads.js');
+        await CHAT.sendMessage(nodeItem, {
+            uid: r.uid,
+            asTwin: true,
+            kind: 'text',
+            message: `[по расписанию «${r.label}»] ${answer}`,
+        }).catch(() => {});
+        return;
+    }
+
     let file = await WORK.get_item(r.task);
     if (Array.isArray(file))
         file = file.at(-1);
@@ -362,15 +429,6 @@ async function defaultRunner(r) {
     }
     // сессия владельца (внутренняя, без cookie): те же права, что при ручном сообщении;
     // события стрима пробрасываем во все живые WS-сессии владельца, чтобы открытый чат сразу видел ответ
-    const sendToUser = (msg) => {
-        const sessions = WORK?.constructor?.sessions || {};
-        for (const s of Object.values(sessions)) {
-            if (s?.uid === r.uid && typeof s.send === 'function') {
-                try { s.send(msg); } catch { /* ignore */ }
-            }
-        }
-    };
-    const session = { uid: r.uid, $user: user, principal: Object.freeze({ kind: 'user', id: r.uid }), scheduled: true, sockets: {}, send: sendToUser };
     await file.assertAccess({ session }, 'read');
     const { getBody, idle } = await import('./session.js');
     const beforeBody = await getBody(file).catch(() => null);

@@ -198,9 +198,32 @@ export const classFeedMethods = {
         return CHAT.unreadSummary(this, params);
     },
 
+    /** Подтвердить/отклонить карточку действия (kind = 'approval') в беседе. */
+    async chat_action(params = {}) {
+        return CHAT.resolveApproval(this, params);
+    },
+
     /** Вычисляемый список видимых контактов («Люди»). */
     async visible_contacts(params = {}) {
         return CHAT.visibleContacts(this, params);
+    },
+
+    /** Список проактивных правил и расписаний узла (только BOSS). */
+    async agent_rules_list(params = {}) {
+        const { listNodeRules } = await import('../../modules/agent/node-rules.js');
+        return listNodeRules(this, params);
+    },
+
+    /** Сохранить/удалить правило проактивности узла (только BOSS). */
+    async agent_rule_save(params = {}) {
+        const { saveNodeRule } = await import('../../modules/agent/node-rules.js');
+        return saveNodeRule(this, params);
+    },
+
+    /** Сохранить/переключить/удалить расписание узла (только BOSS). */
+    async agent_schedule_save(params = {}) {
+        const { saveNodeSchedule } = await import('../../modules/agent/node-rules.js');
+        return saveNodeSchedule(this, params);
     },
 
     /** @deprecated используй append_log_includes({ entryPath, includePaths }) */

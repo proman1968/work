@@ -390,6 +390,12 @@ ODA({is: 'oda-chat',
                         <span>{{new Date($for.item.created).toLocaleString()}}</span>
                     </div>
                     <div style="white-space:pre-wrap;">{{$for.item.content || ($for.item.taskPath ? 'Задача: ' + $for.item.taskPath : '')}}</div>
+                    <div ~if="$for.item.kind === 'approval'" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+                        <span ~if="$for.item.meta?.status === 'approved'" style="font-size:11.5px;font-weight:700;color:#059669;">✓ Утверждено</span>
+                        <span ~if="$for.item.meta?.status === 'rejected'" style="font-size:11.5px;font-weight:700;color:#dc2626;">✕ Отклонено</span>
+                        <oda-button ~if="$for.item.meta?.status === 'pending'" icon="icons:check" info-invert @tap="resolveApprovalMsg($for.item, 'approve')">Утвердить</oda-button>
+                        <oda-button ~if="$for.item.meta?.status === 'pending'" icon="icons:close" @tap="resolveApprovalMsg($for.item, 'reject')">Отклонить</oda-button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -719,6 +725,15 @@ ODA({is: 'oda-chat',
         catch {
             this.auditMessages = [];
         }
+    },
+    async resolveApprovalMsg(msg, action) {
+        if (!msg?.id || !this.auditSelectedId || !this.$item?.fetch)
+            return;
+        try {
+            await this.$item.fetch('chat_action', { threadId: this.auditSelectedId, messageId: msg.id, action });
+            await this.openAuditThread({ id: this.auditSelectedId });
+        }
+        catch { /* ignore */ }
     },
     async _ownCabinet() {
         const uid = globalThis.WORK?.uid;
