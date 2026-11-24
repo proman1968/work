@@ -102,9 +102,8 @@ export class $handler extends $class {
             data.service = true;
             data.isService = true;
         }
-        if (this.DATA?.isButton || this.DATA?.button) {
+        if (this.DATA?.isButton) {
             data.isButton = true;
-            data.button = true;
         }
         if (this.DATA?.allowList)
             data.allowList = true;

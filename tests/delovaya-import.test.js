@@ -227,7 +227,8 @@ describe('Архивация $base и развёртывание из архив
         const restoreHandler = (domainMethods?.items || []).find(i => i.id === 'restore');
         assert.ok(restoreHandler, 'У /ORGANIZATIONS должен быть хендлер restore');
         assert.equal(restoreHandler.label, 'Загрузить из архива');
-        assert.equal(restoreHandler.isButton, true);
+        assert.equal(restoreHandler.isButton, undefined);
+        assert.equal('button' in restoreHandler, false);
 
         // Полный цикл export_archive -> import_archive под новым именем
         const tempName = 'Маслоторг_Копия_Тест';
@@ -255,5 +256,64 @@ describe('Архивация $base и развёртывание из архив
                 fs.rmSync(tempDir, { recursive: true, force: true });
             orgsDomain.reset();
         }
+    });
+});
+
+describe('Единое наследование restore / archive и отказ от button-дублей', () => {
+    before(async () => {
+        globalThis.WORK ??= new $server();
+        await WORK.init;
+    });
+
+    it('restore наследуется от /$server/$folder/$class/$domain, работает только при archiveType и без isButton/button', async () => {
+        const orgsDomain = await WORK.get_item('/ORGANIZATIONS');
+        const projectsDomain = await WORK.get_item('/PROJECTS');
+        const modulesDomain = await WORK.get_item('/MODULES');
+        assert.ok(orgsDomain && projectsDomain && modulesDomain);
+
+        await orgsDomain.init;
+        await projectsDomain.init;
+        await modulesDomain.init;
+        assert.equal(orgsDomain.DATA?.archiveType, '$base');
+        assert.equal(projectsDomain.DATA?.archiveType, '$project');
+        assert.equal(modulesDomain.DATA?.archiveType, undefined);
+
+        for (const dom of [orgsDomain, projectsDomain]) {
+            const res = await dom.handlers({ path: '/methods', role: 'BOSS' });
+            const restore = (res?.items || []).find(i => i.id === 'restore');
+            assert.ok(restore, `У ${dom.path} должен быть унаследованный хендлер restore`);
+            assert.notEqual(restore.usable, false);
+            assert.equal(restore.isButton, undefined);
+            assert.equal('button' in restore, false);
+        }
+
+        const modRes = await modulesDomain.handlers({ path: '/methods', role: 'BOSS' });
+        const modRestore = (modRes?.items || []).find(i => i.id === 'restore');
+        assert.ok(!modRestore || modRestore.usable === false, 'У /MODULES без archiveType хендлер restore не должен быть активен');
+
+        await assert.rejects(
+            () => modulesDomain.import_archive({ post: Buffer.from('PK'), session: { $user: WORK } }),
+            /archiveType/i,
+            'import_archive в домене без archiveType должен отклоняться'
+        );
+    });
+
+    it('archive наследуется от /$server/$folder/$class/$structure только для $base/$project, distro без isButton/button', async () => {
+        const maslotorg = await WORK.get_item('/ORGANIZATIONS/Маслоторг');
+        assert.ok(maslotorg, 'Организация Маслоторг должна существовать');
+        const baseMethods = await maslotorg.handlers({ path: '/methods', role: 'BOSS' });
+        const archive = (baseMethods?.items || []).find(i => i.id === 'archive');
+        assert.ok(archive && archive.usable !== false, 'У $base должен быть активен единый archive');
+        assert.equal(archive.isButton, undefined);
+        assert.equal('button' in archive, false);
+
+        const rootMethods = await WORK.handlers({ path: '/methods', role: 'BOSS' });
+        const rootArchive = (rootMethods?.items || []).find(i => i.id === 'archive');
+        assert.ok(!rootArchive || rootArchive.usable === false, 'У корневого $server хендлер archive не должен быть активен');
+
+        const distro = (rootMethods?.items || []).find(i => i.id === 'distro');
+        assert.ok(distro, 'У корневого $server должен быть хендлер distro');
+        assert.equal(distro.isButton, undefined);
+        assert.equal('button' in distro, false);
     });
 });

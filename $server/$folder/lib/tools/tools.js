@@ -148,7 +148,7 @@ export default {
                 type: h.type || '$handler',
                 service: Boolean(h.DATA?.service || h.DATA?.isService || h.service === true || h.isService === true),
                 isService: Boolean(h.DATA?.isService || h.DATA?.service || h.isService === true || h.service === true),
-                isButton: Boolean(h.DATA?.isButton || h.DATA?.button || h.isButton === true || h.button === true),
+                isButton: Boolean(h.DATA?.isButton || h.isButton === true),
                 allowList: Boolean(h.DATA?.allowList || h.allowList === true),
                 order: h.DATA?.order ?? (typeof h.order === 'number' ? h.order : 99),
                 disabled,
@@ -249,9 +249,9 @@ export default {
                 if (seenIds.has(item.id))
                     return false;
                 const match = filter === 'service'
-                    ? (item.id !== 'archive' && item.id !== 'restore' && Boolean(item.DATA?.service || item.DATA?.isService || item.service === true || item.isService === true))
+                    ? Boolean(item.DATA?.service || item.DATA?.isService || item.service === true || item.isService === true)
                     : filter === 'button'
-                        ? Boolean(item.DATA?.isButton || item.DATA?.button || item.isButton === true || item.button === true)
+                        ? Boolean(item.DATA?.isButton || item.isButton === true)
                         : false;
                 if (match)
                     seenIds.add(item.id);

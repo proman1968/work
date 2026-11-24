@@ -1,7 +1,8 @@
 /**
- * Загрузка проекта ($project) из ZIP-архива в домен /PROJECTS.
+ * Загрузка организации ($base) или проекта ($project) из ZIP-архива
+ * в домен с объявленным свойством archiveType ('$base' | '$project').
  */
-const sanitizeProjectName = (name = '') => String(name)
+const sanitizeTargetName = (name = '') => String(name)
     .replace(/\.zip$/i, '')
     .replace(/[<>:"/\\|?*]/g, '_')
     .replace(/\s+/g, ' ')
@@ -31,55 +32,68 @@ export default {
     icon: 'icons:file-upload',
     label: 'Загрузить из архива',
     roles: ['BOSS'],
-    button: true,
-    isButton: true,
     order: 1,
+    async allowUse($context) {
+        if (!$context || $context.type !== '$domain')
+            return false;
+        await $context.init;
+        const archiveType = $context.DATA?.archiveType;
+        return archiveType === '$base' || archiveType === '$project';
+    },
     async execute(directFile, directOpts) {
-        const ctx = await (this.$context || this.$item?.$context || WORK.get_item('/PROJECTS'));
-        const target = (ctx?.id === 'PROJECTS' || ctx?.type === '$domain')
-            ? ctx
-            : await WORK.get_item('/PROJECTS');
-        if (!target)
+        const ctx = await (this.$context || this.$item?.$context);
+        if (!ctx || ctx.type !== '$domain')
+            return;
+        await ctx.init?.catch?.(() => {});
+        const archiveType = ctx.DATA?.archiveType || ctx.archiveType
+            || (ctx.id === 'PROJECTS' ? '$project' : ctx.id === 'ORGANIZATIONS' ? '$base' : '');
+        if (archiveType !== '$base' && archiveType !== '$project')
             return;
 
+        const isProject = archiveType === '$project';
         const file = (directFile instanceof File || directFile instanceof Blob)
             ? directFile
             : await pickZipFile();
         if (!file)
             return;
 
-        let projectName = sanitizeProjectName(directOpts?.name || file.name || '');
+        let targetName = sanitizeTargetName(directOpts?.name || file.name || '');
         let overwrite = directOpts?.overwrite ?? true;
 
         if (!(directFile instanceof File || directFile instanceof Blob) && typeof WORK?.showDialog === 'function') {
-            const dlg = ODA.createElement('project-archive-restore-dialog', {
+            const domainPath = ctx.path || `/${ctx.id}`;
+            const dlg = ODA.createElement('domain-archive-restore-dialog', {
                 fileName: file.name || 'archive.zip',
                 fileSize: file.size || 0,
-                projectName,
+                targetName,
                 overwrite,
+                nameLegend: isProject ? `Имя проекта в ${domainPath}:` : `Имя организации в ${domainPath}:`,
+                overwriteText: isProject
+                    ? 'Заменить существующий проект при совпадении имени'
+                    : 'Заменить существующую организацию при совпадении имени',
             });
             const res = await WORK.showDialog(dlg, {
                 $item: this,
-                TITLE: { label: 'Загрузить проект из архива' },
+                TITLE: { label: isProject ? 'Загрузить проект из архива' : 'Загрузить организацию из архива' },
                 OK: { label: 'Загрузить', icon: 'icons:check', result: 'ok', infoInvert: true },
             });
             if (res !== 'ok')
                 return;
-            projectName = sanitizeProjectName(dlg.projectName || file.name);
+            targetName = sanitizeTargetName(dlg.targetName || file.name);
             overwrite = Boolean(dlg.overwrite);
         }
 
         const formData = new FormData();
-        formData.append('file', file, file.name || `${projectName || 'project'}.zip`);
+        formData.append('file', file, file.name || `${targetName || (isProject ? 'project' : 'organization')}.zip`);
 
-        const result = await target.fetch('import_archive', {
-            name: projectName,
+        const result = await ctx.fetch('import_archive', {
+            name: targetName,
             overwrite: overwrite ? 'true' : 'false',
         }, formData);
 
-        await target.reset?.();
+        await ctx.reset?.();
         try {
-            await target.fetch('info', { deep: 1, items: 'items' });
+            await ctx.fetch('info', { deep: 1, items: 'items' });
         }
         catch { /* ignore */ }
 
@@ -93,7 +107,7 @@ export default {
 }
 
 ODA({
-    is: 'project-archive-restore-dialog',
+    is: 'domain-archive-restore-dialog',
     imports: '/oda//icon.js',
     template: /*html*/`
         <style>
@@ -150,18 +164,20 @@ ODA({
             <span style="opacity:0.65;font-size:12px;">{{sizeText}}</span>
         </div>
         <fieldset>
-            <legend>Имя проекта в /PROJECTS:</legend>
-            <input type="text" :value="projectName" @input="projectName = $event.target.value" placeholder="Имя из архива">
+            <legend>{{nameLegend}}</legend>
+            <input type="text" :value="targetName" @input="targetName = $event.target.value" placeholder="Имя из архива">
         </fieldset>
         <label class="chk">
             <input type="checkbox" :checked="overwrite" @change="overwrite = $event.target.checked">
-            <span>Заменить существующий проект при совпадении имени</span>
+            <span>{{overwriteText}}</span>
         </label>
     `,
     fileName: '',
     fileSize: 0,
-    projectName: '',
+    targetName: '',
     overwrite: true,
+    nameLegend: 'Имя в домене:',
+    overwriteText: 'Заменить существующий элемент при совпадении имени',
     get sizeText() {
         const b = Number(this.fileSize) || 0;
         if (b >= 1024 * 1024)

@@ -17,8 +17,6 @@ export default {
     icon: 'icons:archive',
     label: 'Создать дистрибутив…',
     roles: ['BOSS'],
-    button: true,
-    isButton: true,
     order: 5,
     async execute() {
         let info = null;

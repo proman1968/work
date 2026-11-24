@@ -96,8 +96,10 @@ export const classArchiveMethods = {
      */
     async import_archive(params = {}) {
         await this.init;
-        if (this.id !== 'ORGANIZATIONS' && this.id !== 'PROJECTS' && this.type !== '$domain')
-            throw new Error('Загрузка из архива выполняется в разделе /ORGANIZATIONS или /PROJECTS');
+        const expectedMeta = this.DATA?.archiveType
+            || (this.id === 'PROJECTS' ? '$project' : this.id === 'ORGANIZATIONS' ? '$base' : '');
+        if (this.type !== '$domain' || (expectedMeta !== '$base' && expectedMeta !== '$project'))
+            throw new Error('Загрузка из архива выполняется в домене с archiveType ($base или $project)');
         await this.assertAccess(params, this.constructor.ACCESS_LEVEL.ADMIN);
 
         let buf = null;
@@ -146,7 +148,6 @@ export const classArchiveMethods = {
         if (!fileEntries.length)
             throw new Error('Архив пуст');
 
-        const expectedMeta = this.id === 'PROJECTS' ? '$project' : '$base';
         // Проверим, лежат ли файлы сразу в корне ($base/class.js или $project/class.js) или в одной общей папке
         let prefix = '';
         let folderFromZip = '';
