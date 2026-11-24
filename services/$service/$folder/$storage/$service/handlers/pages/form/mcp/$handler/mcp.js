@@ -610,7 +610,7 @@ ODA({
         try {
             const item = await WORK.get_item(srv.path);
             if (item && typeof window?.execute === 'function')
-                window.execute(item, { view: 'builder' });
+                window.execute(item, { view: 'editor' });
         }
         catch (e) {
             this.showNotice(e?.message || String(e), true);

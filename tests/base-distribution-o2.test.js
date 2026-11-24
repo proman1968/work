@@ -215,8 +215,8 @@ describe('Очередь 2: Модули Geo (миксин Карта + form/map
         };
         assert.equal(await formMod._detectHasChildClasses(groupMock), true, 'У группы с подклассами левое дерево включено');
 
-        // 3. resolveView: если у класса с полями запрошено 'chat' (от $class), но его нет среди views, выбирает 'objects', а не 'builder'
-        const views = [{ id: 'builder', order: 20 }, { id: 'objects', order: 1 }, { id: 'folder', order: 99 }];
+        // 3. resolveView: если у класса с полями запрошено 'chat' (от $class), но его нет среди views, выбирает 'objects', а не 'editor'
+        const views = [{ id: 'editor', order: 20 }, { id: 'objects', order: 1 }, { id: 'folder', order: 99 }];
         const fakeForm = {
             currentItem: { form: 'chat' },
             activeRole: 'BOSS',
@@ -224,7 +224,7 @@ describe('Очередь 2: Модули Geo (миксин Карта + form/map
             resolveView: formMod.resolveView,
         };
         const chosen = await fakeForm.resolveView('chat', { form: 'chat', role: 'BOSS' });
-        assert.equal(chosen?.id, 'objects', 'Представлением по умолчанию выбирается objects, а не Конструктор');
+        assert.equal(chosen?.id, 'objects', 'Представлением по умолчанию выбирается objects, а не Свойства');
 
         // 4. В /MODULES/KLADR/Населённые пункты и /MODULES/Geo/Геоточки и /MODULES/Process/Задачи и этапы form === 'objects'
         const prevWork = globalThis.WORK;

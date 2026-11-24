@@ -1331,10 +1331,10 @@ describe('архитектура представлений формы (VIEW п�
                     .map(i => i.id);
             };
 
-            assert.deepEqual(await viewsOf(reg, 'BOSS'), ['builder', 'folder', 'journal', 'sheet'], 'Журнал проводок: у BOSS отчёты, файлы и конфигуратор');
-            assert.deepEqual(await viewsOf(reg, 'USER'), ['journal', 'sheet'], 'Журнал проводок: у USER рабочие виды без folder и builder');
+            assert.deepEqual(await viewsOf(reg, 'BOSS'), ['folder', 'journal', 'sheet'], 'Журнал проводок: у BOSS отчёты и файлы');
+            assert.deepEqual(await viewsOf(reg, 'USER'), ['journal', 'sheet'], 'Журнал проводок: у USER рабочие виды без folder');
 
-            assert.deepEqual(await viewsOf(acc, 'BOSS'), ['turnovers', 'analysis', 'postings', 'builder', 'editor', 'folder'], 'Счёт: у BOSS Обороты, Анализ, Проводки, Конструктор, Свойства и Файлы');
+            assert.deepEqual(await viewsOf(acc, 'BOSS'), ['turnovers', 'analysis', 'postings', 'editor', 'folder'], 'Счёт: у BOSS Обороты, Анализ, Проводки, Свойства и Файлы');
             assert.deepEqual(await viewsOf(acc, 'USER'), ['turnovers', 'analysis', 'postings'], 'Счёт: у USER Обороты, Анализ, Проводки');
 
             const accBossRoot = await acc.handlers({ path: '//form', role: 'BOSS' });
@@ -1344,7 +1344,7 @@ describe('архитектура представлений формы (VIEW п�
                 .map(i => i.id);
             assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
 
-            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['builder', 'calendar', 'chat', 'email', 'folder', 'messengers', 'search', 'staff'], 'Подразделение: у BOSS все управленческие и рабочие виды');
+            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['calendar', 'chat', 'email', 'folder', 'messengers', 'search', 'staff'], 'Подразделение: у BOSS все управленческие и рабочие виды');
             assert.deepEqual(await viewsOf(sales, 'USER'), ['calendar', 'chat', 'email'], 'Подразделение: у USER рабочие инструменты');
         }
         finally {

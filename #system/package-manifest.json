@@ -681,8 +681,6 @@
     "$server/$folder/$class/ai/skills/work-scenarios.md": "1361dde4c593068831f41da203c8860b5ddb5af8f93a5973cafedbe7f121dd03",
     "$server/$folder/$class/ai/system.md": "467205ca7ae66f93ae28ff113e68e3e908f566e6605fc295e372781ddebb20d7",
     "$server/$folder/$class/class.js": "5b158515ae39bebb0f132dd807a07242cf1094190ed74fb8ef0f03d8036c5878",
-    "$server/$folder/$class/handlers/pages/form/builder/$handler/builder.js": "d04a5d3e669786a9b55c39c65477a1f7f91d6fc865aa50ff6f429fcbc10d6531",
-    "$server/$folder/$class/handlers/pages/form/builder/$handler/class.js": "9077341cf7c41fe63b7e3f8468d656bd74c659d045dcb20d4bad49472cf162d9",
     "$server/$folder/$class/handlers/pages/form/editor/$handler/class.js": "24b185057a09f545d3f4c373f3774760f2f0f76cce166e41cc6da146ce70522a",
     "$server/$folder/$class/handlers/pages/form/editor/$handler/editor.js": "cd512a7b4a4d693f6326ab6869542bbb76fd347f46fec2144779699a373d60e5",
     "$server/$folder/$class/handlers/pages/form/folder/$handler/class.js": "3aebdc7941f07893e3d94a738f9a001d3199a7ea931b345cd281931f6bf58ed8",

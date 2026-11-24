@@ -11,7 +11,7 @@ description: Типовые сценарии работы в платформе 
 - **Модули внутри организации:** `/ORGANIZATIONS/<Организация>/MODULES/Register` (`CATALOGS`, `OPERATIONS`, `REGISTER`, `STRUCTS`) и `MODULES/Geo`.
 - **Подразделения (`$structure`):** лежат внутри `$base`. Настройка прав и рабочих мест — представление **«Роли и места» (`form/staff`)** или инструменты `access`, `assign`.
 - **Модель ролей:**
-  - `BOSS` — руководитель и владелец точки и её поддерева (полный доступ к структуре, `class.js`, `#secret`, `builder`, `editor`, `staff`, `database` и всей ленте логов открытой точки).
+  - `BOSS` — руководитель и владелец точки и её поддерева (полный доступ к структуре, `class.js`, `#secret`, `editor`, `staff`, `database` и всей ленте логов открытой точки).
   - `USER` — исполнитель на рабочем месте (`ROLES`). Видит рабочие представления (`objects`, `virtual`, `turnovers`, `analysis`, `postings`, `journal`, `sheet`, `chat`, `calendar`, `email`) и свои личные логи (`/USERS/<uid>`).
   - На рабочие места (`ROLES[i].USERS`) можно назначать как конкретных пользователей, так и групповые маркеры **`USERS`** (все вошедшие пользователи) и **`GUESTS`** (все внешние посетители, включая неавторизованных).
 - **Инструменты агента:** `ls path=/ORGANIZATIONS depth=2`, `access path=<путь>`, `assign path=<путь> role=BOSS`.
@@ -42,7 +42,7 @@ description: Типовые сценарии работы в платформе 
 - **Локальный офисный пакет (`oda-office-editor`):** редактирование `.xlsx/.xls/.csv` (с формулами), `.docx/.rtf` (страницы А4) и `.pptx` (холст 16:9) прямо в браузере или в настольном MS Office по протоколу WebDAV.
 - **Инструменты агента:** `logs path=<точка>`, `send path=<точка> kind=order`, `write_table`, `render_doc`, `pdf_report` (навыки `office-documents`, `delegate-task`, `summarize-feed`).
 
-## 6. Конструктор, база данных и локальный ИИ
-- **Конструктор (`form/builder`) и дизайнер формы (`designMode` в `form/object`):** добавление полей/аналитик и настройка 12-колоночной сетки карточки объекта.
+## 6. Конструирование через ИИ, база данных и локальный ИИ
+- **Моделирование классов через ИИ (`update_class`, `create_class`, субагент `builder`) и дизайнер формы (`designMode` в `form/object`):** добавление полей/аналитик, настройка раскладки 12-колоночной сетки карточки объекта и `form/editor` для просмотра свойств класса.
 - **Инспектор БД (`form/database`):** просмотр и правка таблиц SQLite на `$server` и `$base`.
 - **Локальный ИИ и дообучение (`form/trainer` на `/MODELS/Local` и `/MODELS/Halogen`):** загрузка моделей с Hugging Face, сбор датасета `buildWorkDataset` и дообучение `LoRA / SFT / GRPO`.
