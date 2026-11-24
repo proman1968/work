@@ -173,7 +173,7 @@ describe('Очередь 2: Модули Geo (миксин Карта + form/map
 
                 assert.ok(schemaViews.includes('bpmn'), `У Схем процессов должно быть представление bpmn (получено: ${schemaViews.join(', ')})`);
                 assert.ok(taskViews.includes('scheduler') && taskViews.includes('gantt'), `У Задач и этапов должны быть scheduler и gantt (получено: ${taskViews.join(', ')})`);
-                assert.ok(rootViews.includes('scheduler') && rootViews.includes('gantt'), `В корне WORK (соло-режим) должны быть scheduler и gantt (получено: ${rootViews.join(', ')})`);
+                assert.ok(!rootViews.includes('scheduler') && !rootViews.includes('gantt'), `У корневого $server базовые представления без классовых scheduler/gantt (получено: ${rootViews.join(', ')})`);
             }
             finally {
                 globalThis.WORK = prevWork;

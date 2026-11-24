@@ -2,6 +2,7 @@
 export default {
     icon: 'enterprise:email',
     label: 'Почта',
+    order: 4,
     roles: ['BOSS', 'USER'],
     async showSettings(...params) {
         return runEmailSettingsDialog(this);

@@ -102,6 +102,21 @@ export default {
                 align-self: center;
                 opacity: .85;
             }
+            .unread-badge{
+                @apply --no-flex;
+                min-width: 18px;
+                height: 18px;
+                padding: 0 5px;
+                border-radius: 999px;
+                background: var(--accent-color, #2563eb);
+                color: #fff;
+                font-size: 11px;
+                font-weight: 700;
+                line-height: 18px;
+                text-align: center;
+                align-self: center;
+                margin-right: 4px;
+            }
         </style>
         <div horizontal flex style="align-items: center; min-width: 0; width: 100%;">
             <div vertical flex style="min-width: 0;">
@@ -112,6 +127,7 @@ export default {
                     <span class="history-time" ~if="historyTime" ~show="!hideLabel">{{historyTime}}</span>
                 </div>
             </div>
+            <span class="unread-badge" ~if="unreadCount > 0">{{unreadCount > 99 ? '99+' : unreadCount}}</span>
             <span class="obj-count" ~if="objectCount">{{objectCount}}</span>
             <span class="size" ~if="showSize && !($item instanceof CORE.$class) && !isPlace" ~show="$item?.size">{{$item?.size}}</span>
             <slot></slot>
@@ -255,5 +271,36 @@ export default {
             return 24;
         }
     },
-    showStatus: false
+    showStatus: false,
+    _unreadVer: 0,
+    attached() {
+        if (!this._onChatUnreadEvt && globalThis.WORK) {
+            globalThis.WORK.chatEvents ??= new EventTarget();
+            this._onChatUnreadEvt = () => { this._unreadVer++; };
+            globalThis.WORK.chatEvents.addEventListener('chat:message', this._onChatUnreadEvt);
+            globalThis.WORK.chatEvents.addEventListener('chat:read', this._onChatUnreadEvt);
+        }
+    },
+    detached() {
+        if (this._onChatUnreadEvt && globalThis.WORK?.chatEvents) {
+            globalThis.WORK.chatEvents.removeEventListener('chat:message', this._onChatUnreadEvt);
+            globalThis.WORK.chatEvents.removeEventListener('chat:read', this._onChatUnreadEvt);
+            this._onChatUnreadEvt = null;
+        }
+    },
+    get unreadCount() {
+        void this._unreadVer;
+        if (this.isLink)
+            return 0;
+        const u = globalThis.WORK?.chatUnread;
+        if (!u)
+            return 0;
+        const it = this.$item;
+        if (!it)
+            return 0;
+        if (this.isUser || it.type === '$user')
+            return Number(u.byPeer?.[it.id]) || 0;
+        const p = String(it.path || '/').replace(/\/+$/, '') || '/';
+        return Number(u.byNode?.[p]) || 0;
+    },
 }

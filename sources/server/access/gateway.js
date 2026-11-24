@@ -40,6 +40,8 @@ export const MEMBERS = Object.freeze({
     semantic_search: L.READ, search: L.READ, query_objects: L.READ, rag_status: L.READ,
     logs: L.READ, logs_dates: L.READ, log_files: L.READ, read_log_bodies: L.READ,
     read_log_entry: L.READ, log_index: L.READ, chatSource: L.READ,
+    chat_thread_open: L.CALL, chat_threads_list: L.READ, chat_messages_list: L.READ,
+    chat_send: L.WRITE, chat_mark_read: L.WRITE, chat_unread_summary: L.USER, visible_contacts: L.USER,
     roles: L.READ, members: L.READ, is_data_type: L.READ, reset: L.READ,
     work_zone: L.READ, places: L.READ,
     data_access: L.READ, link_tree: L.READ, search_tree: L.USER,

@@ -198,7 +198,10 @@ export default {
     get showNodes() {
         return this.scopeTab === 'all' || this.scopeTab === 'nodes';
     },
+    initialQuery: '',
     async attached() {
+        if (!this.query && this.initialQuery)
+            this.query = this.initialQuery;
         if (this.query)
             await this.runSearch();
     },
@@ -258,7 +261,7 @@ export default {
         if (!item)
             return;
         if (node.type === '$place' && node.place)
-            window.execute?.(item, { view: 'staff', place: node.place });
+            window.execute?.(item, { view: 'system', tab: 'staff', place: node.place });
         else
             window.execute?.(item);
     },

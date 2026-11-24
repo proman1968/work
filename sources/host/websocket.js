@@ -41,6 +41,28 @@ export function broadcastUserPath($user) {
     }
 }
 
+/**
+ * Адресная рассылка событий мессенджера (chat:message, chat:read)
+ * только активным сокетам указанных пользователей.
+ * @param {Iterable<string>} uids
+ * @param {object} payload
+ */
+export function broadcastChatEvent(uids, payload) {
+    const targets = new Set([...(uids || [])].filter(Boolean));
+    if (!targets.size || !payload || typeof payload !== 'object')
+        return;
+    const raw = JSON.stringify(payload);
+    for (const session of Object.values($server.sessions || {})) {
+        const uid = session?.$user?.id;
+        if (!uid || !targets.has(uid))
+            continue;
+        for (const sock of Object.values(session.sockets || {})) {
+            if (sock?.ws?.readyState === 1)
+                sock.ws.send(raw);
+        }
+    }
+}
+
 function notifyUserOnline(session) {
     if (!session?.$user)
         return;

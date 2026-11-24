@@ -184,11 +184,25 @@ ODA({ is: 'work-dot',
         // аксессуар
         if (this._accKey !== this.accessory) {
             this._accKey = this.accessory;
-            el('acc').innerHTML = this.accessory === 'glasses'
-                ? '<circle class="glasses" cx="-16" cy="-5" r="11"></circle><circle class="glasses" cx="16" cy="-5" r="11"></circle><line class="glasses" x1="-5" y1="-5" x2="5" y2="-5"></line>'
-                : this.accessory === 'cap'
-                    ? '<path class="cap-top" d="M-30 -22Q0 -62 30 -22Z"></path><path class="cap-brim" d="M12 -24L44 -20"></path>'
-                    : '';
+            el('acc').innerHTML = this._accessorySvg(this.accessory);
+        }
+    },
+    _accessorySvg(acc) {
+        switch (acc) {
+            case 'glasses':
+                return '<circle class="glasses" cx="-16" cy="-5" r="11"></circle><circle class="glasses" cx="16" cy="-5" r="11"></circle><line class="glasses" x1="-5" y1="-5" x2="5" y2="-5"></line>';
+            case 'cap':
+                return '<path class="cap-top" d="M-30 -22Q0 -62 30 -22Z"></path><path class="cap-brim" d="M12 -24L44 -20"></path>';
+            case 'wrench':
+                return '<path class="stroke" d="M22 -30L36 -16" stroke-width="4.2"></path><circle class="glasses" cx="20" cy="-32" r="5.5"></circle><path class="stroke" d="M33 -19L39 -13" stroke-width="4.5"></path>';
+            case 'tie':
+                return '<path class="cap-top" d="M-5 24L5 24L3 33L7 47L0 54L-7 47L-3 33Z"></path>';
+            case 'calc':
+                return '<rect class="glasses" x="18" y="14" width="18" height="22" rx="3"></rect><line class="glasses" x1="22" y1="20" x2="32" y2="20"></line><circle class="ink" cx="23" cy="26" r="1.5"></circle><circle class="ink" cx="29" cy="26" r="1.5"></circle><circle class="ink" cx="23" cy="31" r="1.5"></circle><circle class="ink" cx="29" cy="31" r="1.5"></circle>';
+            case 'headphones':
+                return '<path class="stroke" d="M-38 -4C-38 -36 38 -36 38 -4"></path><rect class="cap-top" x="-44" y="-12" width="10" height="20" rx="5"></rect><rect class="cap-top" x="34" y="-12" width="10" height="20" rx="5"></rect>';
+            default:
+                return '';
         }
     },
 });

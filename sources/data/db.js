@@ -194,6 +194,45 @@ export const MIGRATIONS = [
     CREATE INDEX IF NOT EXISTS doc_links_source ON doc_links(source_id);
     CREATE INDEX IF NOT EXISTS doc_links_target ON doc_links(target_id);
     `,
+    // 6 — ядро бесед мессенджера (DM 1:1, диалоги с Агентами $structure и группы) с непрочитанным
+    `
+    CREATE TABLE IF NOT EXISTS chat_threads (
+        id         TEXT PRIMARY KEY,
+        kind       TEXT NOT NULL,                 -- 'twin' | 'dm' | 'group'
+        node_path  TEXT NOT NULL DEFAULT '',
+        title      TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL DEFAULT '',
+        created    INTEGER NOT NULL,
+        updated    INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_threads_kind_node ON chat_threads(kind, node_path);
+    CREATE INDEX IF NOT EXISTS chat_threads_updated   ON chat_threads(updated DESC);
+
+    CREATE TABLE IF NOT EXISTS chat_participants (
+        thread_id    TEXT NOT NULL,
+        uid          TEXT NOT NULL,
+        role         TEXT NOT NULL DEFAULT 'member',
+        last_read_id INTEGER NOT NULL DEFAULT 0,
+        joined       INTEGER NOT NULL,
+        PRIMARY KEY (thread_id, uid)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS chat_participants_uid ON chat_participants(uid, thread_id);
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        thread_id   TEXT NOT NULL,
+        sender      TEXT NOT NULL,
+        kind        TEXT NOT NULL DEFAULT 'text',
+        content     TEXT NOT NULL DEFAULT '',
+        reply_to    INTEGER,
+        mentions    TEXT NOT NULL DEFAULT '[]',
+        attachments TEXT NOT NULL DEFAULT '[]',
+        task_path   TEXT NOT NULL DEFAULT '',
+        meta        TEXT NOT NULL DEFAULT '{}',
+        created     INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS chat_messages_thread_id ON chat_messages(thread_id, id DESC);
+    `,
 ];
 
 /** Применить недостающие миграции. @returns {number} версия схемы после миграции */

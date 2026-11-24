@@ -368,6 +368,47 @@ ODA({is: 'oda-chat',
         <div class="feed-mode-bar" ~if="showFeedModeToggle">
             <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'own' }" @tap="setFeedMode('own')" title="Мои записи из личного кабинета (/USERS)">Мои записи</button>
             <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'local' }" @tap="setFeedMode('local')" title="Местный лог открытой точки (доступно только BOSS)">Местный лог</button>
+            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'audit' }" @tap="setFeedMode('audit')" title="Взаимодействия пользователей и клиентов с Агентом (доступно только BOSS)">Взаимодействия</button>
+        </div>
+        <div ~if="feedMode === 'audit' && showFeedModeToggle" style="position:absolute;inset:44px 12px 68px 12px;z-index:11;background:var(--content-background,#fff);border:1px solid var(--border-color,#cbd5e1);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,0.14);display:flex;overflow:hidden;">
+            <div style="width:260px;border-right:1px solid var(--subtle-border,#e2e8f0);overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:4px;background:var(--subtle-background,#f8fafc);">
+                <div style="font-size:12px;font-weight:700;padding:4px 6px;color:var(--muted-color);">Диалоги с Агентом ({{auditThreads.length}})</div>
+                <div ~if="!auditThreads.length" style="font-size:12.5px;color:var(--muted-color);padding:8px 6px;">Взаимодействий пока нет</div>
+                <div ~for="auditThreads" @tap="openAuditThread($for.item)" ~class="{ active: auditSelectedId === $for.item.id }" style="padding:7px 9px;border-radius:7px;cursor:pointer;border:1px solid var(--subtle-border,transparent);background:var(--content-background,#fff);font-size:12.5px;">
+                    <div style="font-weight:600;display:flex;justify-content:space-between;gap:6px;">
+                        <span>{{$for.item.peerLabel}}</span>
+                        <span style="font-size:11px;opacity:0.7;">{{$for.item.messageCount}}</span>
+                    </div>
+                    <div ~if="$for.item.lastMessage" style="font-size:11.5px;color:var(--muted-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">{{$for.item.lastMessage.content || ($for.item.lastMessage.taskPath ? 'Задача' : 'Вложение')}}</div>
+                </div>
+            </div>
+            <div style="flex:1;display:flex;flex-direction:column;overflow-y:auto;padding:12px 16px;gap:8px;">
+                <div ~if="!auditSelectedId" style="color:var(--muted-color);font-size:13px;margin:auto;">Выберите пользователя слева для просмотра истории взаимодействия с Агентом</div>
+                <div ~for="auditMessages" style="padding:8px 11px;border-radius:8px;border:1px solid var(--subtle-border,#e2e8f0);background:var(--subtle-background,#f8fafc);font-size:13px;">
+                    <div style="font-size:11px;color:var(--muted-color);display:flex;justify-content:space-between;margin-bottom:3px;">
+                        <b>{{$for.item.sender === '$twin' ? 'Агент узла' : $for.item.sender}}</b>
+                        <span>{{new Date($for.item.created).toLocaleString()}}</span>
+                    </div>
+                    <div style="white-space:pre-wrap;">{{$for.item.content || ($for.item.taskPath ? 'Задача: ' + $for.item.taskPath : '')}}</div>
+                </div>
+            </div>
+        </div>
+        <div class="feed-mode-bar" ~if="$item && $item.type !== '$user'" :style="showFeedModeToggle ? 'top: 42px;' : 'top: 8px;'">
+            <button type="button" class="feed-mode-btn" ~class="{ active: showParticipants }" @tap="toggleParticipants()" title="Участники и рабочие места подразделения">Участники ({{participantsCount}})</button>
+        </div>
+        <div ~if="showParticipants && $item && $item.type !== '$user'" style="position:absolute;top:44px;right:12px;z-index:12;width:280px;max-height:360px;overflow-y:auto;background:var(--content-background,#fff);border:1px solid var(--border-color,#cbd5e1);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.16);padding:10px 12px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;font-weight:700;">
+                <span>Участники ({{participantsCount}})</span>
+                <oda-button icon="icons:close" :icon-size="14" @tap="showParticipants = false"></oda-button>
+            </div>
+            <div ~if="!participantsList.length" style="color:var(--muted-color);">Назначенных участников нет</div>
+            <div ~for="participantsList" @tap="openParticipant($for.item)" style="display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:7px;cursor:pointer;border:1px solid var(--subtle-border,transparent);">
+                <item-icon :$item="$for.item" icon-size="22" default="icons:person"></item-icon>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{$for.item.label || $for.item.id}}</div>
+                    <div ~if="$for.item._placeLabel" style="font-size:11px;color:var(--muted-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{$for.item._placeLabel}}</div>
+                </div>
+            </div>
         </div>
         <chat-ribbon id="ribbon" :$item @chat-item-expanded="onCardExpanded($event)"></chat-ribbon>
         <div class="mover" vertical hidden>
@@ -552,13 +593,56 @@ ODA({is: 'oda-chat',
         }, 100);
         this.$pdp?._hydrateModel?.();
         this._geo();
+        this._bindChatSocket();
+    },
+    detached() {
+        if (this._onWsChatMsg && globalThis.WORK?.chatEvents) {
+            globalThis.WORK.chatEvents.removeEventListener('chat:message', this._onWsChatMsg);
+            this._onWsChatMsg = null;
+        }
+    },
+    _bindChatSocket() {
+        if (this._onWsChatMsg)
+            return;
+        globalThis.WORK.chatEvents ??= new EventTarget();
+        this._onWsChatMsg = (ev) => {
+            const d = ev?.detail;
+            const cur = this.$item;
+            if (!d || !cur)
+                return;
+            const curPath = String(cur.path || '/').replace(/\/+$/, '') || '/';
+            const hitTwin = d.kind === 'twin' && d.nodePath === curPath;
+            const hitDm = d.kind === 'dm' && cur.type === '$user' && (d.message?.sender === cur.id || d.message?.sender === WORK.uid);
+            if (hitTwin || hitDm) {
+                this.$('#ribbon')?.refreshFeed?.();
+                if (d.threadId)
+                    cur.fetch?.('chat_mark_read', { threadId: d.threadId })?.catch?.(() => {});
+            }
+        };
+        globalThis.WORK.chatEvents.addEventListener('chat:message', this._onWsChatMsg);
     },
     focusInput(){
         this.$('work-prompt-bar')?.focusInput();
     },
     focusedItem: null,
     feedMode: 'own',
+    showParticipants: false,
     _canLocalFeed: false,
+    get participantsList() {
+        return Array.isArray(this.$pdp?.deptUsers) ? this.$pdp.deptUsers : [];
+    },
+    get participantsCount() {
+        return this.participantsList.length;
+    },
+    toggleParticipants() {
+        this.showParticipants = !this.showParticipants;
+    },
+    openParticipant(u) {
+        if (!u?.id || typeof window?.execute !== 'function')
+            return;
+        this.showParticipants = false;
+        window.execute(u);
+    },
     get showFeedModeToggle() {
         return Boolean(this.$item && this.$item.type !== '$user' && this._canLocalFeed);
     },
@@ -586,12 +670,55 @@ ODA({is: 'oda-chat',
                 this._canLocalFeed = false;
         }
     },
+    auditThreads: [],
+    auditSelectedId: '',
+    auditMessages: [],
     setFeedMode(mode) {
-        const next = mode === 'local' && this.showFeedModeToggle ? 'local' : 'own';
+        const next = (mode === 'local' || mode === 'audit') && this.showFeedModeToggle ? mode : 'own';
         if (this.feedMode === next)
             return;
         this.feedMode = next;
+        if (next === 'audit') {
+            this.loadAuditThreads();
+            return;
+        }
         this.$('#ribbon')?.refreshFeed?.();
+    },
+    async loadAuditThreads() {
+        if (!this.$item?.fetch)
+            return;
+        try {
+            const list = await this.$item.fetch('chat_threads_list', { mode: 'audit' });
+            const raw = Array.isArray(list) ? list : [];
+            const uids = [...new Set(raw.flatMap(t => (t.participants || []).map(p => p.uid)).filter(Boolean))];
+            const users = uids.length && typeof WORK.usersByIds === 'function' ? await WORK.usersByIds(uids).catch(() => []) : [];
+            const nameMap = Object.fromEntries((users || []).filter(Boolean).map(u => [u.id, u.label || u.DATA?.label || u.id]));
+            this.auditThreads = raw.map(t => {
+                const peer = (t.participants || []).find(p => p.uid !== '$twin') || t.participants?.[0];
+                const roleHint = peer?.role === 'client' ? ' (Клиент)' : '';
+                return {
+                    ...t,
+                    peerLabel: (nameMap[peer?.uid] || peer?.uid || t.title || t.id) + roleHint,
+                };
+            });
+            if (this.auditThreads.length && !this.auditSelectedId)
+                await this.openAuditThread(this.auditThreads[0]);
+        }
+        catch {
+            this.auditThreads = [];
+        }
+    },
+    async openAuditThread(thread) {
+        if (!thread?.id || !this.$item?.fetch)
+            return;
+        this.auditSelectedId = thread.id;
+        try {
+            const res = await this.$item.fetch('chat_messages_list', { threadId: thread.id, limit: 100 });
+            this.auditMessages = Array.isArray(res?.messages) ? res.messages : [];
+        }
+        catch {
+            this.auditMessages = [];
+        }
     },
     async _ownCabinet() {
         const uid = globalThis.WORK?.uid;
@@ -754,6 +881,16 @@ ODA({is: 'oda-chat',
                             msgParams.includes = JSON.stringify(uploadedPaths);
                         await target.fetch('save_message', msgParams);
                     }
+                    const chatTarget = this.$pdp.$item || target;
+                    if (chatTarget?.fetch && (text || uploadedPaths.length)) {
+                        const chatPayload = {
+                            kind: this.$pdp.isPrivate ? 'dm' : 'twin',
+                            ...(this.$pdp.isPrivate ? { peerId: this.$pdp.$item?.id || WORK.uid } : {}),
+                            message: text,
+                            attachments: uploadedPaths.map(p => ({ path: p, name: p.split('/').pop() || 'file' })),
+                        };
+                        chatTarget.fetch('chat_send', {}, JSON.stringify(chatPayload))?.catch?.(() => {});
+                    }
                 });
                 this.clear();
                 this.$('#ribbon')?.refreshFeed?.();
@@ -877,6 +1014,13 @@ ODA({is: 'oda-chat',
                 }
             }
             if (path) {
+                const threadItem = this.$pdp?.$item || item;
+                threadItem?.fetch?.('chat_send', {}, JSON.stringify({
+                    kind: threadItem.type === '$user' ? 'dm' : 'twin',
+                    ...(threadItem.type === '$user' ? { peerId: threadItem.id } : {}),
+                    message: text,
+                    taskPath: path,
+                }))?.catch?.(() => {});
                 this._awaitTaskPath = String(path);
                 this._awaitTaskKey = taskKeyOf(path);
                 await this._openCreated(path);

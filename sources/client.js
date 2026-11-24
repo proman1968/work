@@ -466,6 +466,7 @@ WORK.login = async function(force = false){
                 }
                 WORK.uid = uid;
                 await WORK.syncAuthUI();
+                WORK.refreshChatUnread?.();
                 WORK.notifyAuth?.({ uid, reason: 'login' });
                 return res;
             }
@@ -473,11 +474,28 @@ WORK.login = async function(force = false){
                 await WORK.removeCurrentPushSubscription?.();
             WORK.uid = '';
             WORK.USER = undefined;
+            WORK.chatUnread = { total: 0, byThread: {}, byNode: {}, byPeer: {} };
             await WORK.fetch("/", 'user_exit', {}, {}).catch(() => {});
             await WORK.syncAuthUI();
             WORK.notifyAuth?.({ uid: '', reason: 'logout' });
         })();
 }
+WORK.refreshChatUnread = async function () {
+    if (!WORK.uid || typeof WORK.fetch !== 'function')
+        return null;
+    try {
+        const res = await WORK.fetch('/', 'chat_unread_summary');
+        if (res && typeof res === 'object') {
+            WORK.chatUnread = res;
+            WORK.chatEvents ??= new EventTarget();
+            WORK.chatEvents.dispatchEvent(new CustomEvent('chat:read', { detail: res }));
+        }
+        return res;
+    }
+    catch {
+        return null;
+    }
+};
 WORK.requestNotificationPermission = async function () {
     let result = false;
     switch (Notification.permission) {
@@ -612,6 +630,24 @@ class WebSocketEvents {
                 }
                 if(item)
                     item.fire(data.type, data);
+            } break;
+            case 'chat:message':
+            case 'chat:read': {
+                WORK.chatEvents ??= new EventTarget();
+                if (data.type === 'chat:message' && data.message?.sender !== WORK.uid) {
+                    WORK.chatUnread ??= { total: 0, byThread: {}, byNode: {}, byPeer: {} };
+                    if (data.threadId)
+                        WORK.chatUnread.byThread[data.threadId] = (WORK.chatUnread.byThread[data.threadId] || 0) + 1;
+                    if (data.kind === 'twin' && data.nodePath)
+                        WORK.chatUnread.byNode[data.nodePath] = (WORK.chatUnread.byNode[data.nodePath] || 0) + 1;
+                    WORK.chatUnread.total = (WORK.chatUnread.total || 0) + 1;
+                }
+                else if (data.type === 'chat:read' && data.threadId && WORK.chatUnread?.byThread) {
+                    const prev = WORK.chatUnread.byThread[data.threadId] || 0;
+                    delete WORK.chatUnread.byThread[data.threadId];
+                    WORK.chatUnread.total = Math.max(0, (WORK.chatUnread.total || 0) - prev);
+                }
+                WORK.chatEvents.dispatchEvent(new CustomEvent(data.type, { detail: data }));
             } break;
             default:{
                 if(!("path" in data)){

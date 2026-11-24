@@ -227,7 +227,7 @@ export default {
             label: 'Роли и рабочие места…',
             execute: () => {
                 if (typeof window?.execute === 'function')
-                    window.execute(owner, { view: 'staff', place: this.place || '' });
+                    window.execute(owner, { view: 'system', tab: 'staff', place: this.place || '' });
             },
         }];
         if (canEdit) {

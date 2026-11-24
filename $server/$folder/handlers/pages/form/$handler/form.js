@@ -818,7 +818,10 @@ ODA({is: 'work-form',
         const ownDefault = (views || []).find(v => v.id === $item?.form);
         if (ownDefault)
             return ownDefault;
-        const preferred = ['objects', 'virtual', 'sheet', 'turnovers', 'postings', 'map', 'bpmn'];
+        const isStruct = ['$server', '$base', '$project', '$structure', '$user'].includes($item?.type);
+        const preferred = isStruct
+            ? ['chat', 'data', 'calendar', 'email', 'system']
+            : ['objects', 'virtual', 'sheet', 'turnovers', 'postings', 'map', 'bpmn'];
         for (const prefId of preferred) {
             const hit = (views || []).find(v => v.id === prefId);
             if (hit)

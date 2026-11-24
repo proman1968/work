@@ -536,7 +536,7 @@ export default {
             return;
         const target = this.$item || globalThis.WORK;
         if (target && typeof window?.execute === 'function')
-            window.execute(target, { view: 'search', q });
+            window.execute(target, { view: 'system', tab: 'search', q });
     },
     _onTreeScroll() {
         if (this._scrollRaf)
@@ -1025,6 +1025,18 @@ ODA({is: 'oda-tree-node',
             }
             if (this.$pdp?.cleanStructure && (this.$item?.type === '$base' || this.$item?.type === '$structure' || this.$item?.type === '$project')) {
                 items = Array.isArray(items) ? items.filter(f => f?.type === '$structure') : [];
+            }
+            if (this.$pdp?.cleanStructure && this.$item?.path === '/USERS' && Array.isArray(items) && globalThis.WORK?.uid) {
+                try {
+                    const contacts = await globalThis.WORK.fetch('/', 'visible_contacts').catch(() => null);
+                    if (Array.isArray(contacts) && contacts.length) {
+                        const order = new Map(contacts.map((c, idx) => [c.id, idx]));
+                        items = items
+                            .filter(u => order.has(u?.id))
+                            .sort((a, b) => (order.get(a.id) ?? 9999) - (order.get(b.id) ?? 9999));
+                    }
+                }
+                catch { /* оставляем исходный список */ }
             }
             // Места и ссылки подразделения скрыты из левого дерева по умолчанию (перенесены в form/staff и form/data).
             try {

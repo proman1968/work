@@ -184,8 +184,8 @@ describe('Инспектор и редактор SQL-баз (sql-inspector + for
 
             const serverBossViews = await viewsOf(WORK, 'BOSS');
             const serverUserViews = await viewsOf(WORK, 'USER');
-            assert.ok(serverBossViews.includes('database'), 'на $server у BOSS должно быть представление database');
-            assert.ok(!serverUserViews.includes('database'), 'на $server у USER не должно быть представления database');
+            assert.ok(serverBossViews.includes('system'), 'на $server у BOSS должно быть единое системное представление system (включающее Базу данных)');
+            assert.ok(!serverUserViews.includes('system'), 'на $server у USER не должно быть представления system');
 
             // Проверяем полное дерево контекстного меню handlers (без path: '//form') на WORK
             const fullMenu = await WORK.handlers({ role: 'BOSS' });
@@ -197,15 +197,15 @@ describe('Инспектор и редактор SQL-баз (sql-inspector + for
             assert.equal(formNode?.type, '$handler', 'pages/form должен быть $handler, а не $folder');
             assert.equal(formNode?.label, 'VIEWS', 'pages/form должен иметь label VIEWS');
             const formChildIds = (formNode?.items || []).map(i => i.id);
-            assert.ok(formChildIds.includes('database'), 'в контекстном меню WORK внутри VIEWS должно быть представление database');
+            assert.ok(formChildIds.includes('system'), 'в контекстном меню WORK внутри VIEWS должно быть представление system');
 
             const baseBossViews = await viewsOf(baseItem, 'BOSS');
             const baseUserViews = await viewsOf(baseItem, 'USER');
-            assert.ok(baseBossViews.includes('database'), 'на $base у BOSS должно быть представление database');
-            assert.ok(!baseUserViews.includes('database'), 'на $base у USER не должно быть представления database');
+            assert.ok(baseBossViews.includes('system'), 'на $base у BOSS должно быть представление system');
+            assert.ok(!baseUserViews.includes('system'), 'на $base у USER не должно быть представления system');
 
             const salesBossViews = await viewsOf(salesItem, 'BOSS');
-            assert.ok(!salesBossViews.includes('database'), 'на подразделении $structure не должно быть представления database');
+            assert.ok(salesBossViews.includes('system') && !salesBossViews.includes('database'), 'на подразделении $structure админка объединена в system без отдельной вкладки database');
         }
         finally {
             globalThis.WORK = prevWork;

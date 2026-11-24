@@ -4,6 +4,7 @@
 import * as fs from 'node:fs';
 import { FS } from '../index.js';
 import * as LOGS from '../logs.js';
+import * as CHAT from '../chat-threads.js';
 import * as POLICY from '../access/policy.js';
 import { DEV_MODE } from '../../host/config.js';
 
@@ -165,6 +166,41 @@ export const classFeedMethods = {
                 throw new Error(ACCESS_DENIED);
         }
         return LOGS.deleteLogEntry(this, params);
+    },
+
+    /** Открыть/создать беседу мессенджера (twin на $structure, dm на $user, group). */
+    async chat_thread_open(params = {}) {
+        return CHAT.openThread(this, params);
+    },
+
+    /** Список бесед (mine — свои, audit — взаимодействия пользователей с Агентом для BOSS). */
+    async chat_threads_list(params = {}) {
+        return CHAT.listThreads(this, params);
+    },
+
+    /** Сообщения беседы с проверкой прав (участник или BOSS для twin-аудита). */
+    async chat_messages_list(params = {}) {
+        return CHAT.listMessages(this, params);
+    },
+
+    /** Отправить сообщение в беседу + рассылка по WebSocket. */
+    async chat_send(params = {}) {
+        return CHAT.sendMessage(this, params);
+    },
+
+    /** Отметить беседу прочитанной. */
+    async chat_mark_read(params = {}) {
+        return CHAT.markRead(this, params);
+    },
+
+    /** Сводка непрочитанного. */
+    async chat_unread_summary(params = {}) {
+        return CHAT.unreadSummary(this, params);
+    },
+
+    /** Вычисляемый список видимых контактов («Люди»). */
+    async visible_contacts(params = {}) {
+        return CHAT.visibleContacts(this, params);
     },
 
     /** @deprecated используй append_log_includes({ entryPath, includePaths }) */

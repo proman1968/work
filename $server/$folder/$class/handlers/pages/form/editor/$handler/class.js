@@ -13,6 +13,9 @@ export default {
      * @returns {Promise<boolean>} Есть ли поля для редактора
      */
     async allowUse($context) {
+        const t = $context?.type;
+        if (t === '$server' || t === '$base' || t === '$project' || t === '$structure' || t === '$user')
+            return false;
         const md = await $context?.METADATA;
         const raw = md?.STATIC?.length ? md.STATIC : md?.FIELDS;
         const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.fields) ? raw.fields : []);

@@ -2,5 +2,6 @@
 export default {
     icon: 'enterprise:calendar',
     label: 'Календарь',
+    order: 3,
     roles: ['BOSS', 'USER'],
 }

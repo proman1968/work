@@ -3,4 +3,8 @@ export default {
     icon: 'fontawesome:r-folder-open',
     label: 'Файлы',
     roles: ['BOSS'],
+    allowUse($context) {
+        const t = $context?.type;
+        return t !== '$server' && t !== '$base' && t !== '$project' && t !== '$structure' && t !== '$user';
+    },
 }

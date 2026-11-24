@@ -6,7 +6,7 @@
 
 export const STATES = ['idle', 'listening', 'hearing', 'thinking', 'speaking', 'waiting', 'done', 'error', 'muted'];
 export const EYES = ['round', 'sleepy', 'happy'];
-export const ACCESSORIES = ['none', 'glasses', 'cap'];
+export const ACCESSORIES = ['none', 'glasses', 'cap', 'wrench', 'tie', 'calc', 'headphones'];
 export const POINTS = 12;
 
 /** Лицо по состоянию: openness глаз (0..1.3), взгляд, рот, брови, дыхание, колыхание, чувствительность к громкости. */

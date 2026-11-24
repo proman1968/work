@@ -1344,8 +1344,8 @@ describe('архитектура представлений формы (VIEW п�
                 .map(i => i.id);
             assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
 
-            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['calendar', 'chat', 'data', 'email', 'folder', 'messengers', 'search', 'staff'], 'Подразделение: у BOSS все управленческие и рабочие виды');
-            assert.deepEqual(await viewsOf(sales, 'USER'), ['calendar', 'chat', 'data', 'email', 'staff'], 'Подразделение: у USER рабочие инструменты, команда и данные');
+            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'data', 'calendar', 'email', 'system'], 'Подразделение: у BOSS ровно 5 базовых представлений $structure');
+            assert.deepEqual(await viewsOf(sales, 'USER'), ['chat', 'data', 'calendar', 'email'], 'Подразделение: у USER ровно 4 рабочих представления');
             assert.deepEqual(await viewsOf(sales, 'CLIENT'), ['chat', 'data'], 'Подразделение: у внешнего CLIENT только диалог и разрешённые данные');
         }
         finally {
