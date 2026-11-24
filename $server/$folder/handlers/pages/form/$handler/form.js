@@ -184,6 +184,7 @@ ODA({is: 'work-form',
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item="rootItem"></item-node-explorer>
                 <div flex></div>
+                <oda-button ~if="canOpenDataPage" shadow icon="carbon:data-base" @tap="openDataPage" title="Открыть проводник данных узла" label="Данные" :icon-size info-invert style="border-radius: 999px; padding: 0 10px; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
@@ -730,6 +731,10 @@ ODA({is: 'work-form',
             this._pendingInitialNav = nav;
             return;
         }
+        if (nav.noClassTree) {
+            this._noClassTreeFlag = true;
+            this._initClassTreeDrawer();
+        }
         if (nav.targetClassPath || nav.create || nav.copyFrom || (nav.id && this.hasClassTree)) {
             await this._handleNavigationTarget(nav, { isInitial: false });
             return;
@@ -820,7 +825,7 @@ ODA({is: 'work-form',
             return ownDefault;
         const isStruct = ['$server', '$base', '$project', '$structure', '$user'].includes($item?.type);
         const preferred = isStruct
-            ? ['chat', 'data', 'calendar', 'email', 'system']
+            ? ['chat', 'calendar', 'email', 'system']
             : ['objects', 'virtual', 'sheet', 'turnovers', 'postings', 'map', 'bpmn'];
         for (const prefId of preferred) {
             const hit = (views || []).find(v => v.id === prefId);
@@ -870,9 +875,11 @@ ODA({is: 'work-form',
                     this._initializingItem = false;
                 }
                 this._applyRoleColor(n, this._appliedRole);
-                this._initClassTreeDrawer();
                 const nav = this._takeNav(n.short || n.path) || this._pendingInitialNav;
                 this._pendingInitialNav = null;
+                if (nav?.noClassTree || (typeof location !== 'undefined' && new URLSearchParams(location.search).get('noTree') === '1'))
+                    this._noClassTreeFlag = true;
+                this._initClassTreeDrawer();
                 if (nav) {
                     if (nav.view === 'objects' && nav.id)
                         nav.view = 'object';
@@ -899,7 +906,22 @@ ODA({is: 'work-form',
     _appliedRole: '',
     _syncingClassTreeFocus: false,
     view_control: null,
+    _noClassTreeFlag: false,
+    get canOpenDataPage() {
+        const t = this.currentItem?.type;
+        return t === '$base' || t === '$project' || t === '$structure';
+    },
+    openDataPage() {
+        const target = this.currentItem;
+        const execFn = (typeof window !== 'undefined' && (window.top?.execute || window.execute)) || null;
+        if (target && execFn)
+            execFn(target, { page: 'data' });
+    },
     get hasClassTree() {
+        if (this._noClassTreeFlag)
+            return false;
+        if (typeof location !== 'undefined' && new URLSearchParams(location.search).get('noTree') === '1')
+            return false;
         const root = this._rootItem || this.$item;
         if (!root)
             return false;

@@ -1344,9 +1344,20 @@ describe('архитектура представлений формы (VIEW п�
                 .map(i => i.id);
             assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
 
-            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'data', 'calendar', 'email', 'system'], 'Подразделение: у BOSS ровно 5 базовых представлений $structure');
-            assert.deepEqual(await viewsOf(sales, 'USER'), ['chat', 'data', 'calendar', 'email'], 'Подразделение: у USER ровно 4 рабочих представления');
-            assert.deepEqual(await viewsOf(sales, 'CLIENT'), ['chat', 'data'], 'Подразделение: у внешнего CLIENT только диалог и разрешённые данные');
+            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'calendar', 'email', 'system'], 'Подразделение: у BOSS 4 представления формы $structure');
+            assert.deepEqual(await viewsOf(sales, 'USER'), ['chat', 'calendar', 'email'], 'Подразделение: у USER 3 рабочих представления формы');
+            assert.deepEqual(await viewsOf(sales, 'CLIENT'), ['chat'], 'Подразделение: у внешнего CLIENT в форме только диалог');
+
+            const pagesOf = async (item, role) => {
+                const root = await item.handlers({ path: '/pages', role });
+                return (root?.items || [])
+                    .filter(i => i.type === '$handler' && i.usable !== false)
+                    .map(i => i.id);
+            };
+            for (const r of ['BOSS', 'USER', 'CLIENT']) {
+                const pIds = await pagesOf(sales, r);
+                assert.ok(pIds.includes('data'), `У подразделения для ${r} доступна отдельная страница навигатора pages/data (получено: ${pIds.join(', ')})`);
+            }
         }
         finally {
             globalThis.WORK = prevWork;

@@ -373,7 +373,7 @@ export default {
         }
         catch { /* ignore */ }
     },
-    _upsertBookmarkForUrl(pageUrl, $item = null) {
+    _upsertBookmarkForUrl(pageUrl, $item = null, pagePrefix = '', pageIcon = '') {
         if (!pageUrl)
             return null;
         const short = $item?.short || $item?.path || this._extractShortFromUrl(pageUrl);
@@ -384,7 +384,8 @@ export default {
         if (!bm) {
             const lastSeg = String(short || '').split('/').filter(Boolean).pop() || '';
             const dated = CORE?.$file?.formatDatedFileLabel?.($item?.id || lastSeg, $item?.DATA?.label);
-            const label = dated || $item?.DATA?.label || $item?.label || this._defaultLabelForShort(short);
+            const baseLabel = dated || $item?.DATA?.label || $item?.label || this._defaultLabelForShort(short);
+            const label = pagePrefix ? `${pagePrefix} · ${baseLabel}` : baseLabel;
             bm = {
                 url: pageUrl,
                 hash,
@@ -392,15 +393,17 @@ export default {
                 stateKey: itemStateKey,
                 label,
                 title: `${label} (${short})`,
-                icon: this._defaultIconForItem($item, short),
+                icon: pageIcon || this._defaultIconForItem($item, short),
             };
             list.push(bm);
             this.bookmarks = list;
-            setTimeout(() => this._hydrateBookmarkMeta(bm, { cachedOnly: true }), 800);
+            if (!pagePrefix)
+                setTimeout(() => this._hydrateBookmarkMeta(bm, { cachedOnly: true }), 800);
         }
         else if ($item) {
-            const label = $item?.DATA?.label || $item?.label || bm.label;
-            const icon = this._defaultIconForItem($item, short);
+            const baseLabel = $item?.DATA?.label || $item?.label || bm.label;
+            const label = pagePrefix ? `${pagePrefix} · ${baseLabel}` : baseLabel;
+            const icon = pageIcon || this._defaultIconForItem($item, short);
             if (itemStateKey)
                 bm.stateKey = itemStateKey;
             if (bm.label !== label || bm.icon !== icon) {
@@ -673,22 +676,30 @@ export default {
         window.execute = async ($item, nav) => {
             if (!$item)
                 return;
+            let pageHandlerMeta = null;
             if ($item.type === '$handler') {
                 const rawHPath = String($item.path || $item.short || '');
-                const mForm = rawHPath.match(/^(.*?)\/(?:~|\$[^/]+(?:\/\$[^/]+)*)\/handlers\/pages\/form(?:\/([^/$]+))?/);
+                const mPage = rawHPath.match(/^(.*?)\/(?:~|\$[^/]+(?:\/\$[^/]+)*)\/handlers\/pages\/([^/$]+)(?:\/([^/$]+))?/);
                 const rawSelf = $item[R]?.target || $item;
                 const ctx = (Object.prototype.hasOwnProperty.call(rawSelf, '$context') || Object.prototype.hasOwnProperty.call($item, '$context'))
                     ? await $item.$context
                     : null;
                 if (ctx && ctx.type !== '$handler') {
-                    const viewId = mForm?.[2] || ($item.id && $item.id !== 'form' ? $item.id : '');
+                    const pageName = mPage?.[2] || 'form';
+                    const viewId = pageName === 'form' ? (mPage?.[3] || ($item.id && $item.id !== 'form' ? $item.id : '')) : '';
+                    pageHandlerMeta = pageName !== 'form'
+                        ? { page: pageName, label: $item.DATA?.label || $item.label || pageName, icon: $item.DATA?.icon || $item.icon || '' }
+                        : null;
                     $item = ctx;
-                    if (viewId)
-                        nav = { ...(nav && typeof nav === 'object' ? nav : {}), view: viewId };
+                    nav = {
+                        ...(nav && typeof nav === 'object' ? nav : {}),
+                        ...(pageName !== 'form' ? { page: pageName } : (viewId ? { view: viewId } : {})),
+                    };
                 }
             }
+            const pageName = ($item.type !== '$handler' && nav?.page) ? String(nav.page) : ($item.page || 'form');
             const short = $item?.short ?? $item?.path ?? '';
-            const dataRoot = ($item?.type !== '$handler') ? this._resolveDataRootPath(short, $item) : '';
+            const dataRoot = ($item?.type !== '$handler' && pageName === 'form') ? this._resolveDataRootPath(short, $item) : '';
             const openShort = dataRoot || short;
             const navKey = openShort || '/';
             const effectiveNav = dataRoot
@@ -703,10 +714,13 @@ export default {
             }
             let hash = '#' + openShort;
             if ($item.type !== '$handler')
-                hash += '/~/handlers/pages/' + ($item.page || 'form');
+                hash += '/~/handlers/pages/' + pageName;
             history.replaceState(null, '', window.location.pathname + hash);
-            const fullUrl = encodeURI(window.location.origin + openShort + ($item.type !== '$handler' ? '/~/handlers/pages/' + ($item.page || 'form') : '') + '/index.html');
-            const bm = this._upsertBookmarkForUrl(fullUrl, openShort === short ? $item : null);
+            const fullUrl = encodeURI(window.location.origin + openShort + ($item.type !== '$handler' ? '/~/handlers/pages/' + pageName : '') + '/index.html');
+            const pageLabelPrefix = pageName !== 'form'
+                ? (pageHandlerMeta?.label || ({ data: 'Данные', site: 'Сайт', storage: 'Хранилище', explorer: 'Проводник' }[pageName]) || pageName)
+                : '';
+            const bm = this._upsertBookmarkForUrl(fullUrl, openShort === short ? $item : null, pageLabelPrefix, pageHandlerMeta?.icon || (pageName === 'data' ? 'carbon:data-base' : ''));
             if (openShort !== short && bm) {
                 const itemStateKey = ($item && ('_stateKey' in Object($item)) && $item._stateKey) ? String($item._stateKey) : '';
                 if (itemStateKey && itemStateKey.includes('#place:') && itemStateKey.includes('->')) {

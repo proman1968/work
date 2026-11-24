@@ -1,29 +1,26 @@
 export default {
-    imports: 'oda//icon, oda//button',
+    imports: 'oda//app-layout.js, oda//icon, oda//button',
     template: /*html*/`
         <style>
             :host {
-                @apply --horizontal;
+                @apply --vertical;
                 @apply --flex;
                 overflow: hidden;
                 background: var(--content-background);
                 color: var(--content-color);
                 min-height: 0;
             }
-            .left-pane {
+            .left-wrap {
                 @apply --vertical;
-                width: 320px;
-                min-width: 240px;
-                max-width: 460px;
-                border-right: 1px solid var(--subtle-border, var(--border-color));
-                background: var(--subtle-background);
+                @apply --flex;
                 min-height: 0;
+                background: var(--subtle-background);
             }
             .search-box {
                 @apply --horizontal;
                 align-items: center;
                 gap: 6px;
-                padding: 10px 10px 8px;
+                padding: 8px 10px;
                 border-bottom: 1px solid var(--subtle-border, var(--border-color));
             }
             .search-input {
@@ -43,7 +40,7 @@ export default {
                 padding: 8px;
                 display: flex;
                 flex-direction: column;
-                gap: 3px;
+                gap: 2px;
             }
             .sec-title {
                 font-size: 11px;
@@ -103,54 +100,6 @@ export default {
                 color: var(--accent-color);
                 border-color: var(--accent-color);
             }
-            .right-pane {
-                @apply --vertical;
-                @apply --flex;
-                min-width: 0;
-                min-height: 0;
-                overflow: hidden;
-            }
-            .right-head {
-                @apply --horizontal;
-                align-items: center;
-                gap: 8px;
-                padding: 8px 12px;
-                border-bottom: 1px solid var(--subtle-border, var(--border-color));
-                background: var(--subtle-background);
-                flex-wrap: wrap;
-                flex-shrink: 0;
-            }
-            .view-pills {
-                @apply --horizontal;
-                align-items: center;
-                gap: 4px;
-                flex-wrap: wrap;
-            }
-            .view-pill {
-                @apply --horizontal;
-                align-items: center;
-                gap: 5px;
-                padding: 4px 10px;
-                border-radius: 7px;
-                border: 1px solid var(--subtle-border, var(--border-color));
-                background: var(--content-background);
-                color: var(--content-color);
-                font: inherit;
-                font-size: 12px;
-                font-weight: 600;
-                cursor: pointer;
-            }
-            .view-pill.active {
-                background: var(--accent-color);
-                border-color: var(--accent-color);
-                color: var(--accent-back, #fff);
-            }
-            .frame-wrap {
-                @apply --flex;
-                @apply --vertical;
-                min-height: 0;
-                position: relative;
-            }
             iframe.class-frame {
                 border: none;
                 width: 100%;
@@ -171,71 +120,57 @@ export default {
             }
         </style>
 
-        <div class="left-pane">
-            <div class="search-box">
-                <input class="search-input" type="search" placeholder="Поиск класса, модуля, счёта…" :value="filter" @input="filter = $event.target.value">
-                <oda-button icon="icons:refresh" title="Обновить дерево классов" @tap="reload()"></oda-button>
-            </div>
-            <div class="tree-scroll">
-                <div ~if="loading" class="sec-title">Загрузка…</div>
-
-                <div ~if="visibleLinkRows.length" class="sec-title">Доступные классы ({{visibleLinkRows.length}})</div>
-                <div class="row" ~for="visibleLinkRows"
-                    ~class="{ active: selectedPath === $for.item.path }"
-                    :style="'padding-left:' + (8 + $for.item.depth * 16) + 'px'"
-                    @tap="selectNode($for.item)">
-                    <span class="exp" @tap.stop="toggleNode('link', $for.item)">
-                        <oda-icon ~if="$for.item.hasChildren" :icon="$for.item.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" icon-size="14"></oda-icon>
-                    </span>
-                    <oda-icon :icon="$for.item.icon || 'odant:class'" icon-size="17"></oda-icon>
-                    <span class="row-label" :title="$for.item.path">{{$for.item.label}}</span>
-                    <span ~if="$for.item.objectCount" class="badge">{{$for.item.objectCount}}</span>
-                    <span class="badge" ~class="{ write: $for.item.access === 'write' || $for.item.access === 'admin' }">{{accessShort($for.item.access)}}</span>
+        <oda-app-layout flex>
+            <div slot="left-panel" class="left-wrap">
+                <div class="search-box">
+                    <input class="search-input" type="search" placeholder="Поиск класса, модуля, счёта…" :value="filter" @input="filter = $event.target.value">
+                    <oda-button icon="icons:refresh" title="Обновить дерево классов" @tap="reload()"></oda-button>
                 </div>
+                <div class="tree-scroll">
+                    <div ~if="loading" class="sec-title">Загрузка…</div>
 
-                <div ~if="isBoss && visibleModuleRows.length" class="sec-title">Модули и классы ({{visibleModuleRows.length}})</div>
-                <div class="row" ~for="visibleModuleRows"
-                    ~class="{ active: selectedPath === $for.item.path }"
-                    :style="'padding-left:' + (8 + $for.item.depth * 16) + 'px'"
-                    @tap="selectNode($for.item)">
-                    <span class="exp" @tap.stop="toggleNode('mod', $for.item)">
-                        <oda-icon ~if="$for.item.hasChildren" :icon="$for.item.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" icon-size="14"></oda-icon>
-                    </span>
-                    <oda-icon :icon="$for.item.icon || 'odant:class'" icon-size="17"></oda-icon>
-                    <span class="row-label" :title="$for.item.path">{{$for.item.label}}</span>
-                    <span ~if="$for.item.objectCount" class="badge">{{$for.item.objectCount}}</span>
-                </div>
+                    <div ~if="visibleLinkRows.length" class="sec-title">Доступные классы ({{visibleLinkRows.length}})</div>
+                    <div class="row" ~for="visibleLinkRows"
+                        ~class="{ active: selectedPath === $for.item.path }"
+                        :style="'padding-left:' + (8 + $for.item.depth * 16) + 'px'"
+                        @tap="selectNode($for.item)">
+                        <span class="exp" @tap.stop="toggleNode('link', $for.item)">
+                            <oda-icon ~if="$for.item.hasChildren" :icon="$for.item.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" icon-size="14"></oda-icon>
+                        </span>
+                        <oda-icon :icon="$for.item.icon || 'odant:class'" icon-size="17"></oda-icon>
+                        <span class="row-label" :title="$for.item.path">{{$for.item.label}}</span>
+                        <span ~if="$for.item.objectCount" class="badge">{{$for.item.objectCount}}</span>
+                        <span class="badge" ~class="{ write: $for.item.access === 'write' || $for.item.access === 'admin' }">{{accessShort($for.item.access)}}</span>
+                    </div>
 
-                <div ~if="!loading && !visibleLinkRows.length && (!isBoss || !visibleModuleRows.length)" style="padding:14px 8px;color:var(--muted-color);font-size:13px;">
-                    Нет доступных классов для вашей роли в этом узле.
-                </div>
-                <div ~if="error" style="padding:8px;color:var(--error-color, #c00);font-size:12.5px;">{{error}}</div>
-            </div>
-        </div>
+                    <div ~if="isBoss && visibleModuleRows.length" class="sec-title">Модули и классы ({{visibleModuleRows.length}})</div>
+                    <div class="row" ~for="visibleModuleRows"
+                        ~class="{ active: selectedPath === $for.item.path }"
+                        :style="'padding-left:' + (8 + $for.item.depth * 16) + 'px'"
+                        @tap="selectNode($for.item)">
+                        <span class="exp" @tap.stop="toggleNode('mod', $for.item)">
+                            <oda-icon ~if="$for.item.hasChildren" :icon="$for.item.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right'" icon-size="14"></oda-icon>
+                        </span>
+                        <oda-icon :icon="$for.item.icon || 'odant:class'" icon-size="17"></oda-icon>
+                        <span class="row-label" :title="$for.item.path">{{$for.item.label}}</span>
+                        <span ~if="$for.item.objectCount" class="badge">{{$for.item.objectCount}}</span>
+                    </div>
 
-        <div class="right-pane">
-            <div ~if="selectedNode" class="right-head">
-                <oda-icon :icon="selectedNode.icon || 'odant:class'" icon-size="20"></oda-icon>
-                <span style="font-weight:700;font-size:14px;">{{selectedNode.label}}</span>
-                <div class="view-pills" ~if="selectedViews.length">
-                    <button type="button" class="view-pill" ~for="selectedViews"
-                        ~class="{ active: selectedViewId === $for.item.id }"
-                        @tap="switchSelectedView($for.item.id)">
-                        <oda-icon :icon="$for.item.icon || 'icons:view-quilt'" icon-size="14"></oda-icon>
-                        <span>{{$for.item.label || $for.item.id}}</span>
-                    </button>
+                    <div ~if="!loading && !visibleLinkRows.length && (!isBoss || !visibleModuleRows.length)" style="padding:14px 8px;color:var(--muted-color);font-size:13px;">
+                        Нет доступных классов для вашей роли в этом узле.
+                    </div>
+                    <div ~if="error" style="padding:8px;color:var(--error-color, #c00);font-size:12.5px;">{{error}}</div>
                 </div>
-                <oda-button style="margin-left:auto;" icon="icons:open-in-new" title="Открыть класс в отдельной закладке WORK" @tap="openInNewTab()">В закладку</oda-button>
             </div>
 
-            <div class="frame-wrap">
+            <div slot="main" vertical flex style="min-width: 0; min-height: 0; overflow: hidden;">
                 <iframe ~if="frameUrl" class="class-frame" :src="frameUrl"></iframe>
                 <div ~if="!frameUrl" class="empty-pane">
                     <oda-icon icon="carbon:data-base" icon-size="40" style="opacity:0.4;"></oda-icon>
-                    <div>Выберите класс или модуль слева, чтобы открыть его представления и данные</div>
+                    <div>Выберите класс или модуль слева, чтобы открыть его форму</div>
                 </div>
             </div>
-        </div>
+        </oda-app-layout>
     `,
     filter: '',
     loading: false,
@@ -244,9 +179,6 @@ export default {
     moduleTree: [],
     collapsedKeys: {},
     selectedNode: null,
-    selectedItem: null,
-    selectedViews: [],
-    selectedViewId: '',
     frameUrl: '',
     error: '',
     async attached() {
@@ -355,36 +287,15 @@ export default {
         if (!row?.path)
             return;
         this.selectedNode = row;
-        this.selectedViews = [];
-        this.selectedViewId = '';
         const item = await WORK.get_item(row.path).catch(() => null);
-        this.selectedItem = item;
         if (!item) {
             this.frameUrl = '';
             return;
         }
-        await item.ensureRole?.().catch(() => {});
-        const role = item.role || (this.isBoss ? 'BOSS' : 'USER');
-        const handlersRes = await item.fetch('handlers', { path: '//form', role }).catch(() => null);
-        const views = (handlersRes?.items || []).filter(v =>
-            v && v.type === '$handler' && v.usable !== false && v.allowUse !== false && !(v.DATA?.hiddenInViewList || v.hiddenInViewList)
-        );
-        views.sort((a, b) => (a.order ?? a.DATA?.order ?? 99) - (b.order ?? b.DATA?.order ?? 99));
-        this.selectedViews = views.map(v => ({
-            id: v.id,
-            label: v.DATA?.label || v.label || v.id,
-            icon: v.DATA?.icon || v.icon || '',
-        }));
-        const pref = ['objects', 'virtual', 'sheet', 'turnovers', 'postings', 'map', 'bpmn', 'gantt', 'scheduler', 'editor', 'folder'];
-        const defView = pref.find(id => views.some(v => v.id === id)) || views[0]?.id || '';
-        this._openFrame(item, defView);
-    },
-    _openFrame(item, viewId) {
-        this.selectedViewId = viewId || '';
         const short = item.short || item.path || '';
-        if (viewId && short) {
+        if (short) {
             try {
-                sessionStorage.setItem('work.form.nav:' + short, JSON.stringify({ view: viewId }));
+                sessionStorage.setItem('work.form.nav:' + short, JSON.stringify({ noClassTree: true }));
             }
             catch { /* ignore */ }
         }
@@ -394,28 +305,6 @@ export default {
             return;
         }
         const sep = base.includes('?') ? '&' : '?';
-        this.frameUrl = viewId ? `${base}${sep}_v=${encodeURIComponent(viewId)}` : base;
-    },
-    switchSelectedView(viewId) {
-        if (!this.selectedItem || !viewId)
-            return;
-        this.selectedViewId = viewId;
-        const short = this.selectedItem.short || this.selectedItem.path || '';
-        try {
-            sessionStorage.setItem('work.form.nav:' + short, JSON.stringify({ view: viewId }));
-            if (typeof BroadcastChannel === 'function') {
-                const bc = new BroadcastChannel('work-form-nav');
-                bc.postMessage({ short, nav: { view: viewId } });
-                bc.close();
-            }
-        }
-        catch { /* ignore */ }
-        if (!this.frameUrl)
-            this._openFrame(this.selectedItem, viewId);
-    },
-    openInNewTab() {
-        if (!this.selectedItem || typeof window?.execute !== 'function')
-            return;
-        window.execute(this.selectedItem, this.selectedViewId ? { view: this.selectedViewId } : undefined);
+        this.frameUrl = `${base}${sep}noTree=1`;
     },
 }
