@@ -234,7 +234,7 @@ ODA({is: 'work-form',
                 </div>
             </div>
             <oda-button @tap="toggleFullscreen" ~if="currentItem?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
-            <oda-button @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
+            <oda-button ~if="!isEmbeddedNoTree" @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
         </div>
         <div id="formTabsBar" slot="top" class="form-tabs-bar" accent-invert horizontal-center no-flex :hidden="!showTabsBar" ~show="showTabsBar" style="width: 100%; padding: 0 4px 0 8px; gap: 6px; box-sizing: border-box; min-height: 38px;">
             <oda-button id="classTreeToggleBtn" ~if="hasClassTree" no-flex allow-toggle
@@ -906,6 +906,9 @@ ODA({is: 'work-form',
     _syncingClassTreeFocus: false,
     view_control: null,
     _noClassTreeFlag: false,
+    get isEmbeddedNoTree() {
+        return typeof location !== 'undefined' && new URLSearchParams(location.search).get('noTree') === '1';
+    },
     get showConsultantBtn() {
         const t = this.currentItem?.type;
         return Boolean(t) && !['$server', '$base', '$project', '$structure', '$user'].includes(t);

@@ -120,8 +120,8 @@ export default {
             }
         </style>
 
-        <oda-app-layout flex>
-            <div slot="left-panel" class="left-wrap">
+        <oda-app-layout flex :hide-left-tabs="true">
+            <div slot="left-panel" label="Классы" icon="icons:tree-structure" class="left-wrap">
                 <div class="search-box">
                     <input class="search-input" type="search" placeholder="Поиск класса, модуля, счёта…" :value="filter" @input="filter = $event.target.value">
                     <oda-button icon="icons:refresh" title="Обновить дерево классов" @tap="reload()"></oda-button>

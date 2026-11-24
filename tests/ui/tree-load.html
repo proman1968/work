@@ -412,6 +412,26 @@ await test('Проводник: порядок вкладок [контекст,
     const storageProto = (await import('/$server/$folder/$class/handlers/pages/storage/$handler/storage.js')).default;
     eq(storageProto.extends, 'item-explorer', 'pages/storage открывается в новой вкладке как полноценный item-explorer');
 
+    const dataProto = (await import('/$server/$folder/$class/$structure/handlers/pages/data/$handler/data.js')).default;
+    assert(dataProto.template.includes(':hide-left-tabs="true"'), 'pages/data скрывает левую фиолетовую полосу вкладок oda-app-layout');
+    if (!customElements.get('test-data-page-view')) {
+        ODA({ is: 'test-data-page-view', ...dataProto });
+    }
+    await ODA.waitReg('test-data-page-view');
+    const dpEl = document.createElement('test-data-page-view');
+    dpEl.style.width = '1000px';
+    dpEl.style.height = '600px';
+    document.body.appendChild(dpEl);
+    await ODA.waitReg('oda-app-layout');
+    await new Promise(r => setTimeout(r, 150));
+    const dpLayout = dpEl.$('oda-app-layout');
+    assert(dpLayout, 'в pages/data смонтирован oda-app-layout');
+    eq(Boolean(dpLayout.hideLeftTabs), true, 'hideLeftTabs=true на oda-app-layout');
+    const dpLeftDrawer = dpLayout.$('#left-drawer');
+    eq(Boolean(dpLeftDrawer?.showTabs), false, 'в pages/data не рисуется левая фиолетовая полоса с пустым квадратом');
+    eq(Boolean(dpLeftDrawer?.$('app-tabs')), false, 'app-tabs не монтируется в #left-drawer');
+    dpEl.remove();
+
     const formMod = await import('/$server/$folder/handlers/pages/form/$handler/form.js');
     assert(formMod, 'модуль work-form загружен');
     await ODA.waitReg('work-form');
