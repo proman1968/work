@@ -205,4 +205,49 @@ describe('подразделения: ссылки #security', () => {
         assert.equal(await items.data_access(as(NOBODY)), 'read');
         assert.equal(await other.data_access(as(NOBODY)), 'write');
     });
+
+    it('внешний клиент (external: true): роль CLIENT, нет доступа к внутренним файлам и общим ссылкам, scope по умолчанию own', async () => {
+        write('ORGANIZATIONS/ORG1/MODULES/Reg/ORDERS/$operation/class.js', `export default { label: 'Заказы', ${FIELDS} }`);
+        write('ORGANIZATIONS/ORG1/MODULES/Reg/CLIENT_DOCS/$catalog/class.js', `export default { label: 'Документы клиентов', ${FIELDS} }`);
+        write('ORGANIZATIONS/ORG1/client_office/$structure/class.js', `export default { label: 'Отдел продаж',
+            '#security': {
+                LINKS: [{ id: '/ORGANIZATIONS/ORG1/MODULES/Reg/ORDERS', access: 'write' }],
+                ROLES: [
+                    { id: 'managers', label: 'Менеджеры', USERS: ['${USER1}'],
+                        LINKS: [{ id: '/ORGANIZATIONS/ORG1/MODULES/Reg/CLIENT_DOCS', access: 'write' }] },
+                    { id: 'buyers', label: 'Внешние клиенты', external: true, USERS: ['${USER2}'],
+                        LINKS: [{ id: '/ORGANIZATIONS/ORG1/MODULES/Reg/CLIENT_DOCS', access: 'read' }] }
+                ]
+            } }`);
+        write('ORGANIZATIONS/ORG1/client_office/$structure/internal_note.txt', 'Внутренняя заметка отдела');
+        globalThis.WORK.reset();
+        (await WORK.get_item('/ORGANIZATIONS/ORG1/MODULES/Reg'))?.reset();
+        (await WORK.get_item('/ORGANIZATIONS/ORG1'))?.reset();
+        const LINKS = await import('../sources/server/access/links.js');
+        const { scopeLinks } = LINKS;
+        const { scopeGrants } = await import('../sources/data/scope.js');
+        LINKS.reset();
+
+        const office = await WORK.get_item('/ORGANIZATIONS/ORG1/client_office');
+        const note = await WORK.get_item('/ORGANIZATIONS/ORG1/client_office/$structure/internal_note.txt');
+        const clientDocsCls = await WORK.get_item('/ORGANIZATIONS/ORG1/MODULES/Reg/CLIENT_DOCS');
+        const ordersCls = await WORK.get_item('/ORGANIZATIONS/ORG1/MODULES/Reg/ORDERS');
+
+        assert.deepEqual(await office.roles(as(USER1)), ['USER'], 'сотрудник на внутреннем месте получает USER');
+        assert.deepEqual(await office.roles(as(USER2)), ['CLIENT'], 'пользователь на external-месте получает CLIENT, а не USER');
+        assert.equal(await office.canSee(note, as(USER1)), true, 'внутренний сотрудник видит файл отдела');
+        assert.equal(await office.canSee(note, as(USER2)), false, 'внешний CLIENT не видит внутренние файлы отдела');
+        assert.equal(await office.canWrite(office, { ...as(USER2), filename: 'hack.txt' }), false, 'CLIENT не пишет в файлы отдела');
+
+        assert.equal(await clientDocsCls.data_access(as(USER2)), 'read', 'привязанный к клиентскому месту класс доступен');
+        assert.equal(await ordersCls.data_access(as(USER2)), null, 'общие LINKS подразделения клиенту недоступны');
+
+        const ltClient = await office.link_tree(as(USER2));
+        assert.ok(JSON.stringify(ltClient).includes('CLIENT_DOCS') && !JSON.stringify(ltClient).includes('ORDERS'),
+            'link_tree клиента содержит только ссылки его внешнего места');
+
+        const sLinks = await scopeLinks(clientDocsCls, as(USER2));
+        const grants = scopeGrants({ prepare: () => ({ get: () => null, all: () => [] }) }, { cid: clientDocsCls.path, path: clientDocsCls.path, type: '$catalog' }, sLinks, { uid: USER2 });
+        assert.deepEqual(grants, [{ author: USER2 }], 'для external-ссылки без явного scope действует ограничение own (только свои)');
+    });
 });

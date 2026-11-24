@@ -84,7 +84,8 @@ export function scopeGrants(db, cls, links, { uid, write = false } = {}) {
             if (FAMILY[c.type])
                 type = c.type;
         }
-        const rows = rowsOf(db, l, SCOPES.includes(l.scope) ? l.scope : defaultScope(type), uid);
+        const defScope = l.external ? 'own' : defaultScope(type);
+        const rows = rowsOf(db, l, SCOPES.includes(l.scope) ? l.scope : defScope, uid);
         if (!branch && !Object.keys(rows).length)
             return null;
         const g = branch ? { cids: branch, ...rows } : rows;

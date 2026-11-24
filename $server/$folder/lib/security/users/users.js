@@ -31,11 +31,15 @@ export default {
                 opacity: 1;
                 background: rgba(59, 29, 94, .12);
             }
+            item-user.inherited-boss {
+                opacity: .72;
+                border-style: dashed;
+            }
         </style>
         <div class="part">
             <oda-icon ~if="isBossRole && !selectMode && !availableUsers?.length" class="assign-btn" icon="fontawesome:s-user-plus" :icon-size="16" title="Назначить руководителя (BOSS)" @tap.stop="openAssignMenu($event)"></oda-icon>
             <oda-icon ~if="place && !selectMode && !availableUsers?.length" class="assign-btn" icon="fontawesome:s-users" :icon-size="16" title="Назначить сотрудников рабочего места" @tap.stop="openAssignMenu($event)"></oda-icon>
-            <item-user border ~for="availableUsers" :$item="$for.item" :icon-size @tap.stop="_tap" @contextmenu.capture="_userMenu"></item-user>
+            <item-user border ~for="availableUsers" ~class="{ 'inherited-boss': Boolean(inheritedFrom) }" :$item="$for.item" :icon-size :title="bossIconTitle($for.item)" @tap.stop="_tap" @contextmenu.capture="_userMenu"></item-user>
         </div>
         <div flex ~if="selectMode && selectedUsers.length"></div>
         <div ~if="selectMode && selectedUsers.length" class="part success-invert">
@@ -48,6 +52,15 @@ export default {
     place: '',
     selectMode: true,
     iconSize: 24,
+    inheritedFrom: '',
+    bossIconTitle(user) {
+        const name = user?.label || user?.DATA?.label || user?.id || '';
+        if (!this.isBossRole)
+            return name;
+        if (this.inheritedFrom)
+            return `${name} — руководитель из «${this.inheritedFrom}» (нажмите, чтобы сменить)`;
+        return `${name} — руководитель (нажмите, чтобы сменить)`;
+    },
     selected_users: {
         $def: [],
         $save: true,
@@ -99,11 +112,53 @@ export default {
             return this._placeUsers();
         if (!this.$item)
             return;
+        if (this.isBossRole)
+            return this._resolveEffectiveBosses();
         const roleIds = this.$item.DATA?.roleIds?.[this.securityKey];
         if (Array.isArray(roleIds) && typeof WORK?.usersByIds === 'function')
             return WORK.usersByIds(roleIds).then(l => (l || []).filter(Boolean));
         const attrName = this.securityKey === 'BOSS' ? 'bosses' : 'users';
         return Promise.resolve(this.$item?.[attrName]).then(list => Array.isArray(list) ? list : []);
+    },
+    async _localBossUsers() {
+        const item = this.$item;
+        if (!item)
+            return [];
+        const localIds = item.DATA?.roleIds?.BOSS;
+        if (Array.isArray(localIds) && typeof WORK?.usersByIds === 'function')
+            return (await WORK.usersByIds(localIds).catch(() => []))?.filter(Boolean) || [];
+        const list = await Promise.resolve(item.bosses).catch(() => []);
+        return Array.isArray(list) ? list.filter(Boolean) : [];
+    },
+    /** Локальный BOSS или ближайший вышестоящий BOSS (без лишних запросов, через кэш предков). */
+    async _resolveEffectiveBosses() {
+        const local = await this._localBossUsers();
+        if (local.length) {
+            this.inheritedFrom = '';
+            return local;
+        }
+        const itemsMap = CORE?.$item?.ITEMS || {};
+        const rawPath = String(this.$item?.path || '');
+        const segs = rawPath.split('/').filter(Boolean);
+        for (let i = segs.length - 1; i >= 0; i--) {
+            const pPath = i === 0 ? '/' : '/' + segs.slice(0, i).join('/');
+            const anc = itemsMap[pPath];
+            const ancIds = anc?.DATA?.roleIds?.BOSS;
+            if (Array.isArray(ancIds) && ancIds.length && typeof WORK?.usersByIds === 'function') {
+                const resolved = (await WORK.usersByIds(ancIds).catch(() => []))?.filter(Boolean) || [];
+                if (resolved.length) {
+                    this.inheritedFrom = anc?.label || anc?.DATA?.label || anc?.id || pPath;
+                    return resolved;
+                }
+            }
+        }
+        const all = await Promise.resolve(this.$item?.allBosses).catch(() => []);
+        if (Array.isArray(all) && all.length) {
+            this.inheritedFrom = 'вышестоящей структуры';
+            return [all[all.length - 1]].filter(Boolean);
+        }
+        this.inheritedFrom = '';
+        return [];
     },
     /** Пользователи рабочего места: поиск узла по trail в places() владельца. */
     async _placeUsers() {
@@ -163,7 +218,9 @@ export default {
         if (!owner)
             return;
         const canEdit = !!(WORK?.DEV_MODE || await this.canEdit);
-        const currentUsers = (await Promise.resolve(this._sourceUsers)) || [];
+        const currentUsers = this.isBossRole
+            ? await this._localBossUsers()
+            : ((await Promise.resolve(this._sourceUsers)) || []);
         const currentIds = new Set(currentUsers.map(u => u?.id).filter(Boolean));
         const items = [{
             icon: 'icons:supervisor-account',
@@ -254,6 +311,8 @@ export default {
         if (!security[key].includes(user.id))
             security[key].push(user.id);
         await this.saveSecurity(security);
+        if (this.$item?.DATA?.roleIds)
+            this.$item.DATA.roleIds[key] = [...security[key]];
     },
     async suspendUser(user) {
         if (this.place)
@@ -263,6 +322,8 @@ export default {
         if (security[key])
             security[key] = security[key].filter(id => id !== user.id);
         await this.saveSecurity(security);
+        if (this.$item?.DATA?.roleIds)
+            this.$item.DATA.roleIds[key] = [...(security[key] || [])];
     },
     /** Назначить на место / снять с места: правка USERS узла #security.ROLES по trail. */
     async _assignPlace(user, remove) {
@@ -296,6 +357,10 @@ export default {
         e.stopPropagation();
         const user = e.target.$item;
         if (!user) return;
+        if (this.isBossRole && this.inheritedFrom) {
+            this.openAssignMenu(e);
+            return;
+        }
         Promise.resolve(this.canEdit).then(ok => {
             if (!ok) return;
             const label = this.place ? 'Снять с места' : 'Отстранить пользователя';

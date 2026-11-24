@@ -136,6 +136,13 @@ export const classSecurityMethods = {
             || WORKPLACES.hasPlaceAssignments(this.DATA?.['#security']);
     },
 
+    /** Назначен ли uid на внешнюю клиентскую роль (#security.CLIENT или место с external: true). */
+    async _isClientMember(uid) {
+        if (!(await this._isStructure()))
+            return false;
+        return WORKPLACES.isClientMember(this.DATA?.['#security'], uid);
+    },
+
     /** Получить список ролей текущего пользователя в классе. */
     async roles(params = {}) {
         const uid = this.constructor.resolveUid(params);
@@ -144,6 +151,8 @@ export const classSecurityMethods = {
         if (!uid) {
             if (WORKPLACES.matchesUserList(this._roleIds('USER', declared), null) || await this._isPlaceMember(null))
                 return ['USER'];
+            if (WORKPLACES.matchesUserList(this._roleIds('CLIENT', declared), null) || await this._isClientMember(null))
+                return ['CLIENT'];
             return [];
         }
         const roles = [];
@@ -167,6 +176,8 @@ export const classSecurityMethods = {
         }
         if (!roles.includes('USER') && await this._isPlaceMember(uid))
             roles.push('USER');
+        if (!roles.includes('CLIENT') && await this._isClientMember(uid))
+            roles.push('CLIENT');
         const principal = params.session?.principal;
         if (principal?.kind === 'node') {
             const claimed = principal.roles?.length ? new Set(principal.roles) : null;
@@ -188,7 +199,8 @@ export const classSecurityMethods = {
             return false;
         await this.init;
         return WORKPLACES.matchesUserList(this._roleIds(role), uid)
-            || (role === this.constructor.ROLES.USER && await this._isPlaceMember(uid));
+            || (role === this.constructor.ROLES.USER && await this._isPlaceMember(uid))
+            || (role === 'CLIENT' && await this._isClientMember(uid));
     },
 
     /** Единое файловое хранилище точки — метапапка класса без деления на подпапки ролей. */
@@ -242,8 +254,10 @@ export const classSecurityMethods = {
             }
         }
         else {
-            for (const l of common)
-                add(l.id, l.access, [null]);
+            if (roles.includes('USER')) {
+                for (const l of common)
+                    add(l.id, l.access, [null]);
+            }
             for (const [id, e] of WORKPLACES.placeLinksFor(sec, uid, { bossAll: false }))
                 add(id, e.access, e.via);
         }
@@ -423,6 +437,7 @@ export const classSecurityMethods = {
                     links.push({ id: l.id, access: l.access, ...(await describe(l.id) || {}) });
                 out.push({
                     id: node.id, label: node.label, icon: node.icon,
+                    ...(node.external ? { external: true } : {}),
                     users: [...node.USERS], links,
                     tree: await this._linkTrie(toEff(node.LINKS, [key])),
                     mine: mine.has(key),

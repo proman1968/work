@@ -96,6 +96,7 @@ export function normalizePlaces(raw, seen = new Set(), depth = 0) {
             id,
             label: typeof r.label === 'string' && r.label ? r.label : id,
             icon: typeof r.icon === 'string' ? r.icon : '',
+            ...(r.external ? { external: true } : {}),
             USERS: Array.isArray(r.USERS) ? r.USERS.filter(u => typeof u === 'string') : [],
             LINKS: links,
             ROLES: normalizePlaces(r.ROLES, seen, depth + 1),
@@ -134,16 +135,24 @@ export function trailKey(trail) {
 }
 
 /** Пути (trail) мест, на которые назначен uid (с учётом псевдо-субъектов USERS и GUESTS). */
-export function memberTrailKeys(security, uid) {
+export function memberTrailKeys(security, uid, { includeExternal = true } = {}) {
     const { places } = normalizeSecurity(security);
     return walkPlaces(places)
-        .filter(({ node }) => matchesUserList(node.USERS, uid))
+        .filter(({ node }) => (includeExternal || !node.external) && matchesUserList(node.USERS, uid))
         .map(({ trail }) => trailKey(trail));
 }
 
-/** Назначен ли uid хоть на одно место. */
+/** Назначен ли uid хоть на одно внутреннее (не-external) рабочее место. */
 export function isPlaceMember(security, uid) {
-    return memberTrailKeys(security, uid).length > 0;
+    return memberTrailKeys(security, uid, { includeExternal: false }).length > 0;
+}
+
+/** Назначен ли uid как внешний клиент (роль CLIENT в #security или место с external: true). */
+export function isClientMember(security, uid) {
+    if (matchesUserList(security?.CLIENT, uid))
+        return true;
+    const { places } = normalizeSecurity(security);
+    return walkPlaces(places).some(({ node }) => Boolean(node.external) && matchesUserList(node.USERS, uid));
 }
 
 /** Назначен ли uid на место placeKey или на любое место выше него. */
@@ -151,7 +160,7 @@ export function isAncestorPlaceMember(security, uid, placeKey) {
     const key = String(placeKey || '');
     if (!key)
         return false;
-    return memberTrailKeys(security, uid).some(m => key === m || key.startsWith(m + '/'));
+    return memberTrailKeys(security, uid, { includeExternal: false }).some(m => key === m || key.startsWith(m + '/'));
 }
 
 /** Все uid, назначенные на места подразделения (без дубликатов). */

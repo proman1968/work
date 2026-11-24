@@ -60,6 +60,42 @@ export default {
                 color: var(--content-color);
                 font-size: 13px;
             }
+            .user-chip.clickable {
+                cursor: pointer;
+            }
+            .user-chip.clickable:hover {
+                filter: brightness(0.95);
+            }
+            .badge {
+                font-size: 11px;
+                font-weight: 600;
+                padding: 2px 7px;
+                border-radius: 10px;
+                background: var(--accent-soft);
+                color: var(--accent-color);
+            }
+            .badge.external {
+                background: light-dark(#fef3c7, #422006);
+                color: light-dark(#92400e, #fcd34d);
+            }
+            .ext-toggle {
+                @apply --horizontal;
+                align-items: center;
+                gap: 5px;
+                font-size: 12px;
+                color: var(--muted-color);
+                cursor: pointer;
+                user-select: none;
+            }
+            .link-title {
+                flex: 1;
+                font-weight: 500;
+                cursor: pointer;
+            }
+            .link-title:hover {
+                color: var(--accent-color);
+                text-decoration: underline;
+            }
             .user-chip .rm {
                 cursor: pointer;
                 font-weight: bold;
@@ -125,7 +161,11 @@ export default {
             <div class="card-header">
                 <oda-icon icon="odant:workplace" icon-size="22"></oda-icon>
                 <span>Рабочие места подразделения ({{flatPlaces.length}})</span>
-                <div ~if="canEdit" class="horizontal" style="margin-left:auto;gap:6px;align-items:center;">
+                <div ~if="canEdit" class="horizontal" style="margin-left:auto;gap:8px;align-items:center;">
+                    <label class="ext-toggle" title="Внешний клиент (CLIENT) без доступа к внутренним файлам и чату отдела">
+                        <input type="checkbox" :checked="newPlaceExternal" @change="newPlaceExternal = $event.target.checked">
+                        <span>Клиент</span>
+                    </label>
                     <input type="text" placeholder="Название нового рабочего места…" :value="newPlaceLabel" @input="newPlaceLabel = $event.target.value" style="width:220px;">
                     <oda-button icon="icons:add" @tap="addPlace('')">Добавить место</oda-button>
                 </div>
@@ -133,12 +173,18 @@ export default {
 
             <div ~if="!flatPlaces.length" class="muted">В этом подразделении ещё нет рабочих мест.</div>
 
-            <div ~for="flatPlaces" class="place-card" ~class="{'active-place': focusedTrail === $for.item.trail}" :style="'margin-left:' + ($for.item.depth * 24) + 'px'">
+            <div ~for="flatPlaces" class="place-card" ~class="{'active-place': focusedTrail === $for.item.trail || $for.item.mine}" :style="'margin-left:' + ($for.item.depth * 24) + 'px'">
                 <div class="card-header">
-                    <oda-icon icon="fontawesome:s-user-tie" icon-size="20"></oda-icon>
+                    <oda-icon :icon="$for.item.external ? 'icons:public' : 'fontawesome:s-user-tie'" icon-size="20"></oda-icon>
                     <span>{{$for.item.node.label || $for.item.node.id}}</span>
                     <span class="muted">({{$for.item.trail}})</span>
-                    <div ~if="canEdit" class="horizontal" style="margin-left:auto;gap:6px;">
+                    <span ~if="$for.item.mine" class="badge">Ваше место</span>
+                    <span ~if="$for.item.external" class="badge external" title="Внешний клиент: только клиентские ссылки без внутренних файлов и чата">Клиент</span>
+                    <div ~if="canEdit" class="horizontal" style="margin-left:auto;gap:6px;align-items:center;">
+                        <label class="ext-toggle" title="Пометить место как контур внешнего клиента (CLIENT)">
+                            <input type="checkbox" :checked="$for.item.external" @change="togglePlaceExternal($for.item.trail, $event.target.checked)">
+                            <span>Клиент</span>
+                        </label>
                         <oda-button icon="icons:send" title="Пригласить сотрудника по ссылке, Email, Telegram или MAX" @tap="openInvite($for.item.trail)">Пригласить</oda-button>
                         <oda-button icon="icons:add" title="Добавить подчинённое рабочее место" @tap="promptSubPlace($for.item.trail)">Подчинённое место</oda-button>
                         <oda-button icon="icons:delete" title="Удалить рабочее место" @tap="removePlace($for.item.trail)"></oda-button>
@@ -171,10 +217,10 @@ export default {
 
                 <div class="role-row">
                     <span class="role-title">Сотрудники места:</span>
-                    <div class="user-chip" ~for="$for.item.users">
+                    <div class="user-chip clickable" ~for="$for.item.users" title="Открыть диалог с пользователем" @tap="openUser($for.$for.item)">
                         <oda-icon icon="icons:person" icon-size="14"></oda-icon>
                         <span>{{userLabel($for.$for.item)}}</span>
-                        <span ~if="canEdit" class="rm" title="Снять с рабочего места" @tap="removePlaceUser($for.item.trail, $for.$for.item)">×</span>
+                        <span ~if="canEdit" class="rm" title="Снять с рабочего места" @tap.stop="removePlaceUser($for.item.trail, $for.$for.item)">×</span>
                     </div>
                     <span ~if="!$for.item.users.length" class="muted">сотрудники не назначены</span>
                     <select ~if="canEdit" @change="addPlaceUser($for.item.trail, $event)">
@@ -195,7 +241,7 @@ export default {
                     </div>
                     <div class="link-row" ~for="$for.item.links">
                         <oda-icon icon="odant:class" icon-size="16"></oda-icon>
-                        <span style="flex:1;font-weight:500;">{{classTitle($for.$for.item.id)}}</span>
+                        <span class="link-title" title="Открыть класс" @tap="openClass($for.$for.item.id)">{{classTitle($for.$for.item.id)}}</span>
                         <select :disabled="!canEdit" @change="updatePlaceLinkAccess($for.item.trail, $for.$for.item.id, $event.target.value)">
                             <option value="read" :selected="$for.$for.item.access === 'read'">Чтение (R)</option>
                             <option value="write" :selected="$for.$for.item.access === 'write'">Запись (A)</option>
@@ -226,7 +272,7 @@ export default {
                 </div>
             </div>
         </div>
-        <oda-messenger-settings :$item="$item" :can-edit="canEdit" :user-map="userMap"></oda-messenger-settings>
+        <oda-messenger-settings ~if="canEdit" :$item="$item" :can-edit="canEdit" :user-map="userMap"></oda-messenger-settings>
         <div ~if="error" style="color:var(--error-color, #c00);">{{error}}</div>
     `,
     security: null,
@@ -237,6 +283,7 @@ export default {
     canEdit: false,
     focusedTrail: '',
     newPlaceLabel: '',
+    newPlaceExternal: false,
     inviteTrail: '',
     inviteChannel: 'link',
     inviteRecipient: '',
@@ -267,6 +314,8 @@ export default {
                     trail,
                     depth,
                     node: r,
+                    mine: Boolean(r.mine),
+                    external: Boolean(r.external),
                     users: Array.isArray(r.USERS) ? [...r.USERS] : [],
                     links: Array.isArray(r.LINKS) ? [...r.LINKS] : [],
                 });
@@ -293,15 +342,54 @@ export default {
             return;
         try {
             this.canEdit = !!(WORK?.DEV_MODE || await this.$item.isAdmin);
-            const body = await this.$item.body;
-            this.security = JSON.parse(JSON.stringify(body?.['#security'] || {}));
-            await this.loadUsers();
-            await this.loadAvailableClasses();
-            await this.loadInvites();
+            if (this.canEdit) {
+                const body = await this.$item.body;
+                this.security = JSON.parse(JSON.stringify(body?.['#security'] || {}));
+                await Promise.all([this.loadUsers(), this.loadAvailableClasses(), this.loadInvites()]);
+            }
+            else {
+                const [bossList, placesRes] = await Promise.all([
+                    Promise.resolve(this.$item.bosses).catch(() => []),
+                    this.$item.fetch('places').catch(() => ({ places: [] })),
+                    this.loadUsers(),
+                ]);
+                const toRoles = (list) => (Array.isArray(list) ? list : []).map(p => ({
+                    id: p.id,
+                    label: p.label || p.id,
+                    icon: p.icon || '',
+                    ...(p.external ? { external: true } : {}),
+                    ...(p.mine ? { mine: true } : {}),
+                    USERS: Array.isArray(p.users) ? p.users : [],
+                    LINKS: Array.isArray(p.links) ? p.links.map(l => ({ id: l.id, access: l.access || 'read', scope: l.scope || '' })) : [],
+                    ROLES: toRoles(p.roles),
+                }));
+                this.security = {
+                    BOSS: Array.isArray(bossList) ? bossList.map(u => u?.id || u).filter(Boolean) : [],
+                    ROLES: toRoles(placesRes?.places),
+                };
+                this.availableClasses = [];
+                this.invitesList = [];
+            }
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
+    },
+    async openUser(uid) {
+        if (!uid || uid === 'USERS' || uid === 'GUESTS' || uid === 'GUEST')
+            return;
+        if (typeof window?.execute !== 'function')
+            return;
+        const target = await WORK.get_item(`/USERS/${uid}`).catch(() => null);
+        if (target)
+            window.execute(target);
+    },
+    async openClass(clsPath) {
+        if (!clsPath || typeof window?.execute !== 'function')
+            return;
+        const target = await WORK.get_item(clsPath).catch(() => null);
+        if (target)
+            window.execute(target);
     },
     async loadUsers() {
         try {
@@ -407,11 +495,19 @@ export default {
             return;
         const id = label.toLowerCase().replace(/[^a-zа-яё0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || ('place_' + Date.now());
         const sec = JSON.parse(JSON.stringify(this.security || {}));
-        const newNode = { id, label, USERS: [], LINKS: [] };
+        const newNode = {
+            id,
+            label,
+            ...(this.newPlaceExternal && !parentTrail ? { external: true } : {}),
+            USERS: [],
+            LINKS: [],
+        };
         if (parentTrail) {
             const parent = this._findPlaceMut(sec, parentTrail);
             if (!parent)
                 return;
+            if (parent.external)
+                newNode.external = true;
             parent.ROLES = Array.isArray(parent.ROLES) ? parent.ROLES : [];
             if (!parent.ROLES.some(r => r.id === id))
                 parent.ROLES.push(newNode);
@@ -421,7 +517,19 @@ export default {
             if (!sec.ROLES.some(r => r.id === id))
                 sec.ROLES.push(newNode);
             this.newPlaceLabel = '';
+            this.newPlaceExternal = false;
         }
+        await this.persist(sec);
+    },
+    async togglePlaceExternal(trail, checked) {
+        const sec = JSON.parse(JSON.stringify(this.security || {}));
+        const node = this._findPlaceMut(sec, trail);
+        if (!node)
+            return;
+        if (checked)
+            node.external = true;
+        else
+            delete node.external;
         await this.persist(sec);
     },
     async promptSubPlace(parentTrail) {

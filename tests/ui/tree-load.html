@@ -278,7 +278,7 @@ await test('Консультант ИИ: переключатель ИИ в пр
     }
 });
 
-await test('Проводник: порядок вкладок [контекст, USERS, Сеть, ИИ], кнопка звонка только при звонке, размеры иконок ($server/$base/$user=48px, $structure=32px)', async () => {
+await test('Проводник: порядок вкладок [контекст, USERS, Сеть, ИИ], кнопка звонка только при звонке, размеры иконок (все $structure-двойники=48px) и cleanStructure', async () => {
     await import('/oda/components/layouts/app-layout/app-layout.js');
     await ODA.waitReg('oda-app-layout');
     await ODA.waitReg('app-layout-drawer');
@@ -336,7 +336,41 @@ await test('Проводник: порядок вкладок [контекст,
     eq(sizeFor('$user', true), 48, '$user iconSize = 48');
     eq(sizeFor('$node', false, 'work.odant.org'), 48, 'сервер в Сети ($node) iconSize = 48');
     eq(sizeFor('$node', false, 'NODES'), 24, 'корень NODES iconSize = 24');
-    eq(sizeFor('$structure'), 32, '$structure iconSize = 32');
+    eq(sizeFor('$structure'), 48, '$structure iconSize = 48');
+    eq(sizeFor('$project'), 48, '$project iconSize = 48');
+
+    assert(explorerProto.template.includes('clean-structure'), 'в главном дереве проводника включён режим clean-structure');
+    assert(treeProto.$public?.cleanStructure === false && treeProto.$public?.showPlaces === false, 'по умолчанию showPlaces выключен (рабочие места не светятся в дереве)');
+    const orgNode = WORK.__bind({ path: '/ORGANIZATIONS/O1', id: 'O1', type: '$base', hasItems: true });
+    const projNode = WORK.__bind({ path: '/PROJECTS/P1', id: 'P1', type: '$project', hasItems: true });
+    eq(knownHasItems(projNode, { itemsSelector: 'items', cleanStructure: true }), false, 'в cleanStructure у $project нет стрелки раскрытия');
+    eq(knownHasItems(orgNode, { itemsSelector: 'items', cleanStructure: true }), undefined, 'в cleanStructure у $base стрелка определяется по дочерним $structure');
+
+    const usersProto = (await import('/$server/$folder/lib/security/users/users.js')).default;
+    const prevByIds = WORK.usersByIds;
+    WORK.usersByIds = async (ids) => ids.map(id => ({ id, label: 'User ' + id }));
+    try {
+        WORK.__bind({ path: '/ORGANIZATIONS/O1', id: 'O1', label: 'Орг 1', type: '$base', roleIds: { BOSS: ['b_parent'], USER: [] } });
+        const deptEmpty = WORK.__bind({ path: '/ORGANIZATIONS/O1/dev', id: 'dev', label: 'Разработка', type: '$structure', roleIds: { BOSS: [], USER: [] } });
+        const host = {
+            role: 'BOSS',
+            place: '',
+            selectMode: false,
+            inheritedFrom: '',
+            isBossRole: true,
+            securityKey: 'BOSS',
+            $item: deptEmpty,
+            _localBossUsers: usersProto._localBossUsers,
+            _resolveEffectiveBosses: usersProto._resolveEffectiveBosses,
+        };
+        const eff = await usersProto._resolveEffectiveBosses.call(host);
+        eq(eff.map(u => u.id), ['b_parent'], 'если локальный BOSS не назначен, показывается вышестоящий BOSS');
+        eq(host.inheritedFrom, 'Орг 1', 'фиксируется источник унаследованного BOSS');
+        eq((await usersProto._localBossUsers.call(host)).length, 0, 'локальный список BOSS при этом пуст для меню назначения');
+    }
+    finally {
+        WORK.usersByIds = prevByIds;
+    }
 
     const { isChatModel, setUserPreferredModel, getUserPreferredModel } = await import('/$server/$folder/lib/prompt-bar/prompt-bar.js');
     eq(isChatModel({ type: '$ai', id: 'Qwen3-14B', DATA: { modality: 'llm', capabilities: ['chat'] } }), true, 'Qwen3-14B — языковая модель для чата');

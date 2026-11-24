@@ -59,6 +59,7 @@ export const SYSTEM_META_NAMES = Object.freeze([
 export const BASE_ROLES = Object.freeze({
     BOSS: Object.freeze({ id: 'BOSS', label: 'Руководитель', icon: '', color: '', principals: Object.freeze(['user']) }),
     USER: Object.freeze({ id: 'USER', label: 'Исполнитель', icon: '', color: '', principals: Object.freeze(['user', 'node']) }),
+    CLIENT: Object.freeze({ id: 'CLIENT', label: 'Клиент', icon: '', color: '', principals: Object.freeze(['user']) }),
 });
 
 /** Системная ли роль (поведение из кода, а не из данных). */
@@ -75,8 +76,8 @@ export function seesFullFeed(role) {
 /** Виды субъектов: пользователь этого сервера | узел сети WORK (другой сервер и его представители). */
 export const PRINCIPALS = Object.freeze(['user', 'node']);
 
-/** Порядок ролей «по силе»: BOSS, затем USER и остальные в порядке объявления. */
-export const BASE_ORDER = Object.freeze(['BOSS', 'USER']);
+/** Порядок ролей «по силе»: BOSS, затем USER, CLIENT и остальные в порядке объявления. */
+export const BASE_ORDER = Object.freeze(['BOSS', 'USER', 'CLIENT']);
 
 /** Имя роли — заглавные латиница/цифры/подчёркивание (совпадает с именем папки зоны). */
 export function isRoleId(id) {
@@ -205,6 +206,8 @@ export function canRead(role, area, opts = {}) {
         return true;
     if (area.kind === AREA.SECRET)
         return false;
+    if (role.id === 'CLIENT')
+        return area.kind === AREA.SYSTEM;
     switch (area.kind) {
         case AREA.SYSTEM:
         case AREA.FILES:
@@ -234,6 +237,8 @@ export function canWrite(role, area, opts = {}) {
         return false;
     if (role.id === 'BOSS')
         return true;
+    if (role.id === 'CLIENT')
+        return false;
     if (!opts.local || opts.executable)
         return false;
     if (area.kind === AREA.FILES)

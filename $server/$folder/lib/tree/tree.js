@@ -17,6 +17,10 @@ export function knownHasItems(it, pdp = {}) {
         return Array.isArray(it.items) ? it.items.length > 0 : false;
     if (pdp.hideSystem || pdp.hideFiles || pdp.onlyClasses || pdp.itemsSelector !== 'items')
         return undefined;
+    if (pdp.cleanStructure && it.type === '$project')
+        return false;
+    if (pdp.cleanStructure && (it.type === '$base' || it.type === '$structure'))
+        return undefined;
     // __version — реактивная зависимость: после события changed флаг удаляется и пересчитывается по items
     it.__version;
     if (it.type === '$module' && (it.DATA?.enabled === false || it.DATA?.blocked === true || it.DATA?.systemBlocked === true))
@@ -105,6 +109,8 @@ export default {
         hideFiles: false,
         onlyClasses: false, // только CORE.$class (site)
         onlyChatModels: false, // только языковые модели ($ai с поддержкой chat)
+        cleanStructure: false, // внутри $base/$structure/$project показывать только дочерние $structure (без MODULES, файлов и мест)
+        showPlaces: false, // показывать рабочие места (isPlace) в дереве; по умолчанию скрыты (перенесены в form/staff)
         execute: null,
     },
     showUsers: false,
@@ -506,6 +512,8 @@ export default {
         // иначе предзагрузка тянет @items скрытых узлов (node_modules, USERS, файлов корня)
         if ($item?.type === '$server' && items instanceof Array && !WORK?.DEV_MODE && !(await $item.isAdmin))
             items = items.filter(f => f instanceof CORE.$class);
+        if (this.cleanStructure && ($item?.type === '$base' || $item?.type === '$structure' || $item?.type === '$project'))
+            items = Array.isArray(items) ? items.filter(f => f?.type === '$structure') : [];
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
                 await this.getItems(next, deep - 1);
@@ -743,13 +751,10 @@ ODA({is: 'oda-tree-node',
             return false;
         const t = it.type;
         const isNetServer = t === '$node' && it.id !== 'NODES';
-        return it instanceof CORE.$user || t === '$user' || t === '$base' || t === '$project' || t === '$server' || isNetServer;
+        return it instanceof CORE.$user || t === '$user' || t === '$base' || t === '$project' || t === '$structure' || t === '$server' || isNetServer;
     },
     get isDepartmentNode() {
-        const it = this.$item;
-        if (!it || isLinkNode(it) || ('isPlace' in Object(it) && it.isPlace))
-            return false;
-        return it.type === '$structure';
+        return false;
     },
     get rowHeight() {
         if (this.isLargeIconNode)
@@ -1018,11 +1023,12 @@ ODA({is: 'oda-tree-node',
                     items = items.filter(f => f instanceof CORE.$class);
                 }
             }
-            // Места и ссылки подразделения — обычные дочерние узлы дерева
-            // (ветка настройки): места с пользователями, ссылки — цепочкой
-            // от корня «Данные» через link-nodes. Кэш на узел, сброс — по 'changed'.
+            if (this.$pdp?.cleanStructure && (this.$item?.type === '$base' || this.$item?.type === '$structure' || this.$item?.type === '$project')) {
+                items = Array.isArray(items) ? items.filter(f => f?.type === '$structure') : [];
+            }
+            // Места и ссылки подразделения скрыты из левого дерева по умолчанию (перенесены в form/staff и form/data).
             try {
-                if (this.hasSecurity && Array.isArray(items) && this.$item) {
+                if (this.$pdp?.showPlaces && this.hasSecurity && Array.isArray(items) && this.$item) {
                     const keyObj = rawItem(this.$item);
                     let p = SEC_TREE_PROMISES.get(keyObj);
                     if (!p) {
@@ -1141,9 +1147,7 @@ ODA({is: 'oda-tree-node',
         let icon = 'icons:chevron-right';
         if (this.expanded)
             icon += ':90'
-        // у подразделения с настройкой стрелка есть всегда —
-        // иначе узел без детей (как «Продажи») нельзя раскрыть и ветку не увидеть
-        if (this.hasSecurity)
+        if (this.$pdp?.showPlaces && this.hasSecurity)
             return icon;
         const known = this.knownHasItems;
         if (known !== undefined)

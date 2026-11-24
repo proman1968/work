@@ -3,7 +3,7 @@ export default {
     imports: 'oda//app-layout.js, oda//tabs.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js, ~/lib//class-picker.js',
     extends: 'oda-app-layout',
     template: /*html*/`
-        <item-tree order="0" slot='left-panel' allow-search :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
+        <item-tree order="0" slot='left-panel' allow-search clean-structure :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
         <item-consultant order="3" slot='left-panel' id="consultant" label="ИИ" icon="bootstrap:robot" :$item hidden style="height: 0"></item-consultant>
         <div flex vertical slot='main' style="overflow: hidden; position: relative;">
             <call-form ~if="showCall" id="callForm"></call-form>

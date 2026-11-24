@@ -77,7 +77,7 @@ async function collect() {
                     for (const { node, trail } of WORKPLACES.walkPlaces(places)) {
                         const place = WORKPLACES.trailKey(trail);
                         for (const l of node.LINKS)
-                            out.push({ structure: clsPath, place, id: l.id, access: l.access, ...(l.scope ? { scope: l.scope } : {}) });
+                            out.push({ structure: clsPath, place, id: l.id, access: l.access, ...(l.scope ? { scope: l.scope } : {}), ...(node.external ? { external: true } : {}) });
                     }
                 }
                 catch { /* нет доступа */ }
@@ -144,7 +144,7 @@ export async function linkLevel(cls, params = {}) {
             else if (roles.includes('BOSS'))
                 best = takeRank(best, 'read');
         }
-        else {
+        else if (roles.includes('BOSS') || roles.includes('USER')) {
             best = takeRank(best, roles.includes('BOSS') && access === 'write' ? 'admin' : access);
         }
     }
@@ -231,8 +231,12 @@ export async function scopeLinks(cls, params = {}) {
         const s = await seen.get(e.structure);
         if (!s)
             continue;
-        const base = { structure: e.structure, place: e.place, id: e.id, scope: e.scope ?? null, places: s.places, labels: s.labels };
-        if (!e.place || s.places.includes(e.place))
+        const base = { structure: e.structure, place: e.place, id: e.id, scope: e.scope ?? null, ...(e.external ? { external: true } : {}), places: s.places, labels: s.labels };
+        if (!e.place) {
+            if (s.roles.includes('BOSS') || s.roles.includes('USER'))
+                out.push({ ...base, access: e.access, relation: 'member' });
+        }
+        else if (s.places.includes(e.place))
             out.push({ ...base, access: e.access, relation: 'member' });
         else if (WORKPLACES.isAncestorPlaceMember(s.sec, uid, e.place))
             out.push({ ...base, access: 'read', relation: 'ancestor' });

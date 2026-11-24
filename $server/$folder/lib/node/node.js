@@ -241,10 +241,8 @@ export default {
             return 24;
         const t = this.$item?.type;
         const isNetServer = t === '$node' && this.$item?.id !== 'NODES';
-        if(this.isUser || t === '$user' || t === '$base' || t === '$project' || t === '$server' || isNetServer)
+        if(this.isUser || t === '$user' || t === '$base' || t === '$project' || t === '$structure' || t === '$server' || isNetServer)
             return 48;
-        if(t === '$structure')
-            return 32;
         if(this.isStructureLike)
             return 28;
         if(!this.showStatus)
