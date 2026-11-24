@@ -412,6 +412,18 @@ await test('Проводник: порядок вкладок [контекст,
     const storageProto = (await import('/$server/$folder/$class/handlers/pages/storage/$handler/storage.js')).default;
     eq(storageProto.extends, 'item-explorer', 'pages/storage открывается в новой вкладке как полноценный item-explorer');
 
+    const formMod = await import('/$server/$folder/handlers/pages/form/$handler/form.js');
+    assert(formMod, 'модуль work-form загружен');
+    await ODA.waitReg('work-form');
+    const wf = document.createElement('work-form');
+    wf.currentItem = { type: '$base' };
+    eq(wf.showConsultantBtn, false, 'кнопка ИИ-консультанта скрыта на $base');
+    wf.currentItem = { type: '$structure' };
+    eq(wf.showConsultantBtn, false, 'кнопка ИИ-консультанта скрыта на $structure');
+    wf.currentItem = { type: '$catalog' };
+    eq(wf.showConsultantBtn, true, 'кнопка ИИ-консультанта показана на $catalog');
+    eq('canOpenDataPage' in wf, false, 'кнопка Данные удалена из шапки work-form');
+
     const { isChatModel, setUserPreferredModel, getUserPreferredModel } = await import('/$server/$folder/lib/prompt-bar/prompt-bar.js');
     eq(isChatModel({ type: '$ai', id: 'Qwen3-14B', DATA: { modality: 'llm', capabilities: ['chat'] } }), true, 'Qwen3-14B — языковая модель для чата');
     eq(isChatModel({ type: '$ai', id: 'Qwen3.8 27b', DATA: { capabilities: ['chat', 'stream'] } }), true, 'Qwen3.8 27b — языковая модель для чата');

@@ -1949,4 +1949,51 @@ describe('ПАК WORK: спецификация, лицензирование, �
             hubApp.bots.fetchImpl = prevBotFetch;
         }
     });
+
+    it('19. Автообновление удаляет устаревшие неизменённые файлы поставки и упразднённые системные хендлеры (с сохранением правок пользователя)', () => {
+        const workRoot = path.join(tmpDir, 'updater-cleanup-work');
+        const v2Source = path.join(tmpDir, 'updater-cleanup-v2');
+        const writeRel = (base, rel, content) => {
+            const full = path.join(base, rel);
+            fs.mkdirSync(path.dirname(full), { recursive: true });
+            fs.writeFileSync(full, content, 'utf8');
+        };
+
+        // Исходная установка v1.0.67:
+        // - устаревший неизменённый хендлер в манифесте (будет удалён из v2Source)
+        // - устаревший изменённый пользователем модуль в манифесте (должен сохраниться!)
+        // - упразднённый системный хендлер из прошлой версии (отсутствует в манифесте 1.0.67, как на уже обновлённых серверах)
+        writeRel(workRoot, 'package.json', JSON.stringify({ name: 'odant-work', version: '1.0.67' }, null, 2));
+        writeRel(workRoot, 'sources/keep.js', 'export const k = 1;\n');
+        writeRel(workRoot, '$server/$folder/handlers/old-handler/class.js', 'export default { label: "old" };\n');
+        writeRel(workRoot, 'MODULES/Demo/Custom/$catalog/class.js', 'export default { label: "v1" };\n');
+        ensurePackageManifest(workRoot);
+
+        // Пользователь редактирует MODULES/Demo/Custom/$catalog/class.js и на диске остаётся хвост от 1.0.65
+        writeRel(workRoot, 'MODULES/Demo/Custom/$catalog/class.js', 'export default { label: "user-edited" };\n');
+        writeRel(workRoot, '$server/$folder/$class/$structure/handlers/pages/form/staff/$handler/class.js', 'export default { label: "Роли и места" };\n');
+        writeRel(workRoot, '$server/$folder/$class/$structure/handlers/pages/form/messengers/$handler/class.js', 'export default { label: "Мессенджеры" };\n');
+
+        // Новый релиз 1.0.69: этих файлов/папок больше нет
+        writeRel(v2Source, 'package.json', JSON.stringify({ name: 'odant-work', version: '1.0.69' }, null, 2));
+        writeRel(v2Source, 'sources/keep.js', 'export const k = 2;\n');
+
+        const report = applyUpdateFromDirectory({
+            sourceDir: v2Source,
+            rootDir: workRoot,
+            newVersion: '1.0.69',
+        });
+
+        assert.ok(report.removedObsolete.includes('$server/$folder/handlers/old-handler/class.js'), 'устаревший файл ядра удалён');
+        assert.equal(fs.existsSync(path.join(workRoot, '$server/$folder/handlers/old-handler')), false, 'пустая папка устаревшего хендлера удалена');
+
+        assert.ok(report.preservedUserModified.includes('MODULES/Demo/Custom/$catalog/class.js'), 'изменённый пользователем файл сохранён, даже если исчез из поставки');
+        assert.ok(fs.existsSync(path.join(workRoot, 'MODULES/Demo/Custom/$catalog/class.js')), 'файл пользователя остался на диске');
+
+        assert.ok(report.removedLegacy.includes('$server/$folder/$class/$structure/handlers/pages/form/staff'), 'упразднённый form/staff удалён');
+        assert.ok(report.removedLegacy.includes('$server/$folder/$class/$structure/handlers/pages/form/messengers'), 'упразднённый form/messengers удалён');
+        assert.equal(fs.existsSync(path.join(workRoot, '$server/$folder/$class/$structure/handlers/pages/form/staff')), false);
+        assert.equal(fs.existsSync(path.join(workRoot, '$server/$folder/$class/$structure/handlers/pages/form/messengers')), false);
+        assert.ok(fs.existsSync(path.join(workRoot, '#system/updates/removed-1.0.69/$server/$folder/$class/$structure/handlers/pages/form/staff/$handler/class.js')), 'бэкап удалённого legacy-хендлера сохранён в #system/updates/removed-1.0.69');
+    });
 });

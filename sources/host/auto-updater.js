@@ -430,6 +430,46 @@ export function extractTgzBufferToDir(tgzBuffer, targetDir) {
     }
 }
 
+const LEGACY_REMOVED_SYSTEM_PATHS = [
+    '$server/$folder/$class/handlers/pages/form/builder',
+    '$server/$folder/$class/$structure/handlers/pages/form/data',
+    '$server/$folder/$class/$structure/handlers/pages/form/database',
+    '$server/$folder/$class/$structure/handlers/pages/form/gantt',
+    '$server/$folder/$class/$structure/handlers/pages/form/messengers',
+    '$server/$folder/$class/$structure/handlers/pages/form/scheduler',
+    '$server/$folder/$class/$structure/handlers/pages/form/search',
+    '$server/$folder/$class/$structure/handlers/pages/form/staff',
+    '$server/$folder/$class/$structure/$server/handlers/pages/form/license',
+    '$server/$folder/$class/$structure/$base/handlers/methods/archive',
+    '$server/$folder/$class/$structure/$project/handlers/methods/archive',
+    '$server/$folder/$class/$structure/$server/handlers/methods/npm',
+    'ORGANIZATIONS/$domain/handlers/methods/restore',
+    'PROJECTS/$domain/handlers/methods/restore',
+];
+
+function pruneEmptyParents(targetPath, absRoot) {
+    let cur = path.dirname(targetPath);
+    const rootWithSep = absRoot.endsWith(path.sep) ? absRoot : absRoot + path.sep;
+    while (cur !== absRoot && cur.startsWith(rootWithSep)) {
+        try {
+            if (!fs.existsSync(cur)) {
+                cur = path.dirname(cur);
+                continue;
+            }
+            if (fs.readdirSync(cur).length === 0) {
+                fs.rmdirSync(cur);
+                cur = path.dirname(cur);
+            }
+            else {
+                break;
+            }
+        }
+        catch {
+            break;
+        }
+    }
+}
+
 /**
  * Применить новую версию пакета из распакованной директории `sourceDir` к рабочей директории `rootDir`,
  * гарантируя полное сохранение пользовательских баз, настроек, файлов и изменённых пользователем классов.
@@ -455,13 +495,18 @@ export function applyUpdateFromDirectory({
         updatedCore: [],
         updatedClean: [],
         added: [],
+        removedObsolete: [],
+        removedLegacy: [],
         preservedUserModified: [],
         skippedProtected: [],
         dependenciesChanged: false,
     };
 
-    const newManifestFiles = { ...(oldManifest.files || {}) };
+    const newManifestFiles = {};
+    const seenInSource = new Set();
+    const seenInSourceLower = new Set();
     const upstreamBackupRoot = path.join(absRoot, '#system', 'updates', `upstream-${targetVersion}`);
+    const removedBackupRoot = path.join(absRoot, '#system', 'updates', `removed-${targetVersion}`);
 
     // Проверим, изменились ли dependencies в package.json
     let oldPkg = null;
@@ -497,6 +542,9 @@ export function applyUpdateFromDirectory({
             }
             if (!stat.isFile())
                 continue;
+
+            seenInSource.add(rel);
+            seenInSourceLower.add(rel.toLowerCase());
 
             const dstFile = path.join(absRoot, rel);
             let newBuf = fs.readFileSync(srcFile);
@@ -582,6 +630,66 @@ export function applyUpdateFromDirectory({
     };
 
     walkSource(absSource);
+
+    // Удаляем устаревшие файлы прошлой поставки, исчезнувшие из нового релиза
+    // (только если файл не защищён и не был изменён пользователем, либо относится к системному ядру)
+    for (const [rawOldRel, oldHash] of Object.entries(oldManifest.files || {})) {
+        const rel = normalizeRelPath(rawOldRel);
+        if (!rel)
+            continue;
+        const stillInSource = seenInSource.has(rel)
+            || (process.platform === 'win32' && seenInSourceLower.has(rel.toLowerCase()));
+        if (stillInSource || isProtectedUserPath(rel))
+            continue;
+        const dstFile = path.join(absRoot, rel);
+        if (!fs.existsSync(dstFile))
+            continue;
+        try {
+            const stat = fs.statSync(dstFile);
+            if (!stat.isFile())
+                continue;
+            const diskHash = sha256File(dstFile);
+            if (isCoreEnginePath(rel) || (oldHash && diskHash === oldHash)) {
+                fs.rmSync(dstFile, { force: true });
+                pruneEmptyParents(dstFile, absRoot);
+                report.removedObsolete.push(rel);
+            }
+            else {
+                // Пользователь менял удалённый из поставки файл — сохраняем на диске и в манифесте
+                if (oldHash)
+                    newManifestFiles[rel] = oldHash;
+                report.preservedUserModified.push(rel);
+            }
+        }
+        catch { /* ignore */ }
+    }
+
+    // Разовая зачистка известных упразднённых системных папок (для серверов, обновившихся до появления удаления устаревших файлов)
+    for (const legacyRel of LEGACY_REMOVED_SYSTEM_PATHS) {
+        const rel = normalizeRelPath(legacyRel);
+        if (!rel || isProtectedUserPath(rel))
+            continue;
+        const legacyAbs = path.join(absRoot, rel);
+        const inSourceAbs = path.join(absSource, rel);
+        if (!fs.existsSync(legacyAbs) || fs.existsSync(inSourceAbs))
+            continue;
+        try {
+            const backupAbs = path.join(removedBackupRoot, rel);
+            fs.mkdirSync(path.dirname(backupAbs), { recursive: true });
+            fs.cpSync(legacyAbs, backupAbs, { recursive: true });
+            fs.rmSync(legacyAbs, { recursive: true, force: true });
+            pruneEmptyParents(legacyAbs, absRoot);
+            report.removedLegacy.push(rel);
+            const relLow = rel.toLowerCase();
+            const prefix = relLow + '/';
+            for (const k of Object.keys(newManifestFiles)) {
+                const kl = normalizeRelPath(k).toLowerCase();
+                if (kl === relLow || kl.startsWith(prefix))
+                    delete newManifestFiles[k];
+            }
+        }
+        catch { /* ignore */ }
+    }
 
     // Очистка устаревшей дублирующей ветки MODELS/Halogen (объединена с MODELS/Local) с сохранением скачанных весов
     try {

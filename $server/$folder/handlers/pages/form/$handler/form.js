@@ -184,8 +184,7 @@ ODA({is: 'work-form',
                 <div :flex="ODA.states?.mobileMode"></div>
                 <item-node-explorer no-flex :$item="rootItem"></item-node-explorer>
                 <div flex></div>
-                <oda-button ~if="canOpenDataPage" shadow icon="carbon:data-base" @tap="openDataPage" title="Открыть проводник данных узла" label="Данные" :icon-size info-invert style="border-radius: 999px; padding: 0 10px; margin-right: 8px; flex-shrink: 0;"></oda-button>
-                <oda-button id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
+                <oda-button ~if="showConsultantBtn" id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
@@ -907,16 +906,9 @@ ODA({is: 'work-form',
     _syncingClassTreeFocus: false,
     view_control: null,
     _noClassTreeFlag: false,
-    get canOpenDataPage() {
+    get showConsultantBtn() {
         const t = this.currentItem?.type;
-        return t === '$base' || t === '$project' || t === '$structure';
-    },
-    openDataPage() {
-        const target = this.currentItem;
-        if (!target)
-            return;
-        const short = target.short || target.path || '';
-        window.open(encodeURI(`${short}/~/handlers/pages/data/index.html`), '_blank');
+        return Boolean(t) && !['$server', '$base', '$project', '$structure', '$user'].includes(t);
     },
     get hasClassTree() {
         if (this._noClassTreeFlag)

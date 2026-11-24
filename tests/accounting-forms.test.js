@@ -1142,6 +1142,8 @@ describe('архитектура представлений формы (VIEW п�
         const formSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../$server/$folder/handlers/pages/form/$handler/form.js'), 'utf-8');
         const svgSrc = fs.readFileSync(path.resolve(import.meta.dirname, '../oda/tools/icons/lib/svg/odant.svg'), 'utf-8');
         assert.match(formSrc, /id="consultantBtn"[^>]*icon="bootstrap:robot"/, 'кнопка Консультант с иконкой ИИ-бота');
+        assert.match(formSrc, /~if="showConsultantBtn"[^>]*id="consultantBtn"/, 'кнопка Консультант скрывается для $structure-узлов и видна только на прикладных формах');
+        assert.ok(!/canOpenDataPage|openDataPage/.test(formSrc), 'в шапке work-form нет лишней кнопки Данные');
         assert.ok(!/id="consultantBtn"[^>]*label="Консультант"/.test(formSrc), 'без громоздкой текстовой метки Консультант');
         assert.match(formSrc, /id="classTreeToggleBtn"[^>]*icon="icons:tree-structure"/, 'кнопка-тогл дерева классов перед вкладками формы');
         assert.match(formSrc, /hideLeftTabs:\s*true/, 'левая полоса селектора с одной вкладкой скрыта в work-form');
