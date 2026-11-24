@@ -366,7 +366,7 @@ ODA({is: 'oda-chat',
         </style>
         <div class="back"></div>
         <div class="feed-mode-bar" ~if="showFeedModeToggle">
-            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'own' }" @tap="setFeedMode('own')" title="Мои записи из личного кабинета (/USERS)">Мои записи</button>
+            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'dialog' }" @tap="setFeedMode('dialog')" title="Мой диалог и задачи с Агентом этого узла">Диалог</button>
             <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'local' }" @tap="setFeedMode('local')" title="Местный лог открытой точки (доступно только BOSS)">Местный лог</button>
             <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'audit' }" @tap="setFeedMode('audit')" title="Взаимодействия пользователей и клиентов с Агентом (доступно только BOSS)">Взаимодействия</button>
         </div>
@@ -604,6 +604,7 @@ ODA({is: 'oda-chat',
     detached() {
         if (this._onWsChatMsg && globalThis.WORK?.chatEvents) {
             globalThis.WORK.chatEvents.removeEventListener('chat:message', this._onWsChatMsg);
+            globalThis.WORK.chatEvents.removeEventListener('chat:action', this._onWsChatMsg);
             this._onWsChatMsg = null;
         }
     },
@@ -619,19 +620,21 @@ ODA({is: 'oda-chat',
             const curPath = String(cur.path || '/').replace(/\/+$/, '') || '/';
             const hitTwin = d.kind === 'twin' && d.nodePath === curPath;
             const hitDm = d.kind === 'dm' && cur.type === '$user' && (d.message?.sender === cur.id || d.message?.sender === WORK.uid);
-            if (hitTwin || hitDm) {
+            const hitThread = d.threadId && this.$('#ribbon')?._threadId === d.threadId;
+            if (hitTwin || hitDm || hitThread) {
                 this.$('#ribbon')?.refreshFeed?.();
-                if (d.threadId)
+                if (d.threadId && ev.type === 'chat:message')
                     cur.fetch?.('chat_mark_read', { threadId: d.threadId })?.catch?.(() => {});
             }
         };
         globalThis.WORK.chatEvents.addEventListener('chat:message', this._onWsChatMsg);
+        globalThis.WORK.chatEvents.addEventListener('chat:action', this._onWsChatMsg);
     },
     focusInput(){
         this.$('work-prompt-bar')?.focusInput();
     },
     focusedItem: null,
-    feedMode: 'own',
+    feedMode: 'dialog',
     showParticipants: false,
     _canLocalFeed: false,
     get participantsList() {
@@ -680,7 +683,7 @@ ODA({is: 'oda-chat',
     auditSelectedId: '',
     auditMessages: [],
     setFeedMode(mode) {
-        const next = (mode === 'local' || mode === 'audit') && this.showFeedModeToggle ? mode : 'own';
+        const next = (mode === 'local' || mode === 'audit') && this.showFeedModeToggle ? mode : 'dialog';
         if (this.feedMode === next)
             return;
         this.feedMode = next;
@@ -746,24 +749,14 @@ ODA({is: 'oda-chat',
     },
     async _runWithCabinetFallback(fn) {
         const primary = this.$pdp?.$item || this.$item;
-        try {
-            return { target: primary, result: await fn(primary) };
-        }
-        catch (err) {
-            if (this.feedMode !== 'own' || primary?.type === '$user' || !this._isAccessError(err))
-                throw err;
-            const cab = await this._ownCabinet();
-            if (!cab)
-                throw err;
-            return { target: cab, result: await fn(cab) };
-        }
+        return { target: primary, result: await fn(primary) };
     },
     $item: {
         $def: null,
         set(n) {
             const changed = Boolean(this._prevItem && this._prevItem !== n);
             this._prevItem = n;
-            this.feedMode = 'own';
+            this.feedMode = 'dialog';
             this._canLocalFeed = false;
             this._refreshCanLocalFeed(n);
             if (changed)
@@ -872,17 +865,19 @@ ODA({is: 'oda-chat',
                 else if (this.$pdp.receivers.length)
                     params.receivers = this.$pdp.receivers.map(u => u.id);
                 const uploadedPaths = [];
+                const isForeignDm = Boolean(this.$pdp.isPrivate && this.$pdp.$item?.id && this.$pdp.$item.id !== WORK.uid);
                 const runWrite = typeof this._runWithCabinetFallback === 'function'
                     ? fn => this._runWithCabinetFallback(fn)
                     : async fn => ({ target: this.$pdp.$item, result: await fn(this.$pdp.$item) });
                 await runWrite(async target => {
                     uploadedPaths.length = 0;
+                    const uploadTarget = isForeignDm ? ((await this._ownCabinet()) || target) : target;
                     if (list.length) {
                         const formData = new FormData();
                         for (const file of list)
                             formData.append('file', file, file.name);
-                        const fileParams = text ? { ...params, ignore_save_logs: true } : params;
-                        const savedLogs = await target.save_files(formData, fileParams);
+                        const fileParams = (text || isForeignDm) ? { ...params, ignore_save_logs: true } : params;
+                        const savedLogs = await uploadTarget.save_files(formData, fileParams);
                         const arr = Array.isArray(savedLogs) ? savedLogs : (savedLogs ? [savedLogs] : []);
                         for (const l of arr) {
                             const p = await pathOfLog(l);
@@ -890,7 +885,7 @@ ODA({is: 'oda-chat',
                                 uploadedPaths.push(p.startsWith('/') ? p : '/' + p);
                         }
                     }
-                    if (text) {
+                    if (text && !isForeignDm) {
                         const msgParams = { ...params, message: text };
                         if (uploadedPaths.length)
                             msgParams.includes = JSON.stringify(uploadedPaths);
@@ -904,7 +899,7 @@ ODA({is: 'oda-chat',
                             message: text,
                             attachments: uploadedPaths.map(p => ({ path: p, name: p.split('/').pop() || 'file' })),
                         };
-                        chatTarget.fetch('chat_send', {}, JSON.stringify(chatPayload))?.catch?.(() => {});
+                        await chatTarget.fetch('chat_send', {}, JSON.stringify(chatPayload))?.catch?.(() => {});
                     }
                 });
                 this.clear();
@@ -1255,7 +1250,18 @@ ODA({is: 'chat-ribbon',
         </div>
 
     `,
-    $item: null,
+    $item: {
+        $def: null,
+        set(n) {
+            if (this._prevRibbonItem && this._prevRibbonItem !== n) {
+                this._prevRibbonItem = n;
+                this.refreshFeed();
+            }
+            else {
+                this._prevRibbonItem = n;
+            }
+        }
+    },
     ribbonHeight: 0,
     attached() {
         this.async(() => {
@@ -1366,20 +1372,28 @@ ODA({is: 'chat-ribbon',
     get isLocalFeed() {
         return this.$pdp?.feedMode === 'local';
     },
+    get isDialogFeed() {
+        return !this.isLocalFeed && this.$pdp?.feedMode !== 'audit';
+    },
+    _threadId: '',
+    _threadMessages: [],
+    _threadMessagesByDay: null,
+    _localDayOf(ms) {
+        const dt = new Date(Number(ms) || Date.now());
+        if (typeof dt.toLocalDay === 'function')
+            return dt.toLocalDay();
+        const y = dt.getFullYear();
+        const m = String(dt.getMonth() + 1).padStart(2, '0');
+        const d = String(dt.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+    },
+    threadMessagesForDay(day) {
+        if (!day || !(this._threadMessagesByDay instanceof Map))
+            return [];
+        return this._threadMessagesByDay.get(day) || [];
+    },
     async _resolveLogsSource() {
-        if (!this.$item)
-            return null;
-        try {
-            const path = await this.$item.fetch('chatSource', {
-                role: this.activeRole,
-                uid: WORK.uid || '',
-                ...(this.isLocalFeed ? { local: 1 } : {}),
-            });
-            if (path && typeof path === 'string')
-                return (await WORK.get_item(path)) || this.$item;
-        }
-        catch { /* fallback */ }
-        return this.$item;
+        return this.$item || null;
     },
     _syncSourceListeners(source) {
         if (this._listenedSource === source)
@@ -1409,15 +1423,44 @@ ODA({is: 'chat-ribbon',
         const source = (await this._resolveLogsSource()) || this.$item;
         this._syncSourceListeners(source);
         source.invalidate?.('logs_dates');
-        let dates = await source.fetch('logs', {
+        const logsPromise = source.fetch('logs', {
             mode: 'dates',
             nonEmpty: 1,
-            ...(this.isLocalFeed ? { local: 1 } : {}),
+            ...(this.isLocalFeed ? { local: 1, feedMode: 'local' } : { feedMode: 'dialog' }),
             role: curRole,
             uid: WORK.uid || '',
-        });
+        }).catch(() => []);
+        const threadPromise = this.isDialogFeed && typeof this.$item.fetch === 'function'
+            ? this.$item.fetch('chat_messages_list', {
+                kind: this.$item.type === '$user' ? 'dm' : 'twin',
+                ...(this.$item.type === '$user' ? { peerId: this.$item.id } : {}),
+                limit: 200,
+            }).catch(() => null)
+            : Promise.resolve(null);
+
+        const [rawDates, threadRes] = await Promise.all([logsPromise, threadPromise]);
         // dates на сервере — по убыванию; в ленте дни — от старых к новым.
-        dates = (Array.isArray(dates) ? dates : []).slice().reverse();
+        const dateSet = new Set((Array.isArray(rawDates) ? rawDates : []).slice().reverse());
+        const byDay = new Map();
+        const msgs = Array.isArray(threadRes?.messages) ? threadRes.messages : [];
+        this._threadId = threadRes?.thread?.id || '';
+        this._threadMessages = msgs;
+        for (const msg of msgs) {
+            const d = this._localDayOf(msg.created);
+            if (!d) continue;
+            dateSet.add(d);
+            let arr = byDay.get(d);
+            if (!arr) {
+                arr = [];
+                byDay.set(d, arr);
+            }
+            arr.push(msg);
+        }
+        this._threadMessagesByDay = byDay;
+        if (threadRes?.thread?.unreadCount > 0 && threadRes?.thread?.id) {
+            this.$item.fetch?.('chat_mark_read', { threadId: threadRes.thread.id })?.catch?.(() => {});
+        }
+        let dates = [...dateSet].sort();
         // Пока создаётся новая задача (awaitTask), не сбрасываем локально добавленный _openCreated день
         if (!force && this.$pdp?.awaitTask && Array.isArray(this.dateList)) {
             for (const d of this.dateList) {
@@ -1695,6 +1738,39 @@ ODA({is: 'chat-day',
         this._wrappedById.set(id, wrapped);
         return wrapped;
     },
+    _wrapThreadMessage(msg) {
+        if (!msg || !msg.id)
+            return null;
+        const id = `chatmsg.${msg.id}.msg`;
+        this._wrappedById ??= new Map();
+        const nodeLabel = this.$pdp?.$item?.DATA?.label || this.$pdp?.$item?.label || this.$pdp?.$item?.id || '';
+        const enriched = { ...msg, nodeLabel };
+        const rawRow = {
+            time: msg.created || Date.now(),
+            sender: msg.sender,
+            content: msg.content || '',
+            kind: msg.kind || 'text',
+            includes: (msg.attachments || []).map(a => a.path).filter(Boolean),
+            chatMessage: enriched,
+        };
+        const existing = this._wrappedById.get(id);
+        if (existing) {
+            existing._sortTime = rawRow.time;
+            existing.logRow = rawRow;
+            return existing;
+        }
+        const wrapped = {
+            id,
+            name: id,
+            ext: 'msg',
+            path: '',
+            _sortTime: rawRow.time,
+            logRow: rawRow,
+            load: async () => ({ ...(wrapped.logRow || rawRow) }),
+        };
+        this._wrappedById.set(id, wrapped);
+        return wrapped;
+    },
     async _bindLogsFolder(){
         const source = await Promise.resolve(this.logsSource);
         return !!source;
@@ -1705,7 +1781,7 @@ ODA({is: 'chat-day',
             return [];
         const role = this.$pdp?.$item?.role || 'USER';
         const uid = WORK.uid || '';
-        const local = this.$pdp?.isLocalFeed ? { local: 1 } : {};
+        const local = this.$pdp?.isLocalFeed ? { local: 1, feedMode: 'local' } : { feedMode: 'dialog' };
         let rows = [];
         try {
             if (typeof source.fetch === 'function')
@@ -1718,8 +1794,26 @@ ODA({is: 'chat-day',
         }
         if (!Array.isArray(rows))
             rows = [];
-        const files = rows.map(r => this._wrapLogRow(r));
-        return this._dedupeLogFiles(this._sortLogFiles(files.filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.task'))));
+        const files = rows.map(r => this._wrapLogRow(r)).filter(f => f?.id?.endsWith?.('.logs') || f?.id?.endsWith?.('.task'));
+
+        if (!this.$pdp?.isLocalFeed && typeof this.$pdp?.threadMessagesForDay === 'function') {
+            const taskKeys = new Set(rows.map(r => taskKeyOf(r?.path)).filter(Boolean));
+            for (const f of this._adopted?.values() || []) {
+                const tk = taskKeyOf(f?.path || f?.id);
+                if (tk) taskKeys.add(tk);
+            }
+            const msgs = this.$pdp.threadMessagesForDay(this.day);
+            for (const m of msgs) {
+                if (m.taskPath && taskKeys.has(taskKeyOf(m.taskPath)))
+                    continue;
+                if (m.sender !== '$twin' && m.kind === 'text' && rows.some(r => r?.sender === m.sender && String(r?.content || '').trim() === String(m.content || '').trim() && Math.abs((Number(r?.time) || 0) - (Number(m.created) || 0)) < 5000))
+                    continue;
+                const w = this._wrapThreadMessage(m);
+                if (w)
+                    files.push(w);
+            }
+        }
+        return this._dedupeLogFiles(this._sortLogFiles(files));
     },
     /**
      * Раскрыть карточку только что созданной задачи. Строго та, что создана: по имени файла .task;

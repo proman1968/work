@@ -160,4 +160,80 @@ export const twinAskTool = {
     },
 };
 
-export const twinTools = [twinAskTool];
+export const twinRuleListTool = {
+    name: 'twin_rule_list',
+    description: 'Показать активные правила проактивности, настройки автоответа/сводки и расписания текущего структурного узла (только BOSS).',
+    readonly: true,
+    parameters: {
+        type: 'object',
+        properties: {},
+    },
+    async run(_args, ctx) {
+        if (!ctx?.session || ctx.session.twinCall)
+            throw new Error('twin_rule_list: недоступно в Service Plane');
+        const place = ctx.place || globalThis.WORK;
+        const { listNodeRules } = await import('./node-rules.js');
+        return listNodeRules(place, { session: ctx.session });
+    },
+};
+
+export const twinRuleSaveTool = {
+    name: 'twin_rule_save',
+    description: 'Создать, обновить или удалить правило проактивности текущего узла ($structure/ai/triggers/*.md). Требует полномочий BOSS; перед сохранением в диалоге согласуй правило с руководителем.',
+    risk: 'write',
+    parameters: {
+        type: 'object',
+        properties: {
+            name: { type: 'string', description: 'Имя правила (латиница/цифры/_/-)' },
+            on: { type: 'string', description: 'Событие: db:register | db:create | db:update | chat:message | save' },
+            class: { type: 'string', description: 'WORK-путь отслеживаемого класса (необязательно)' },
+            ext: { type: 'string', description: 'Расширения файлов для save (например: pdf, eml)' },
+            when: { type: 'string', description: 'Предикат условия (например: sum > 100000)' },
+            template: { type: 'string', description: 'Быстрый шаблон уведомления без вызова LLM (необязательно)' },
+            approval: { type: 'boolean', description: 'Показывать карточку с кнопками Утвердить / Отклонить' },
+            cooldownSec: { type: 'number', description: 'Пауза между срабатываниями на один объект (сек)' },
+            enabled: { type: 'boolean', description: 'Включено ли правило' },
+            body: { type: 'string', description: 'Инструкция для двойника при срабатывании (если не задан template)' },
+            delete: { type: 'boolean', description: 'true — удалить правило с этим именем' },
+        },
+        required: ['name'],
+    },
+    async run(args, ctx) {
+        if (!ctx?.session || ctx.session.twinCall)
+            throw new Error('twin_rule_save: недоступно в Service Plane');
+        const place = ctx.place || globalThis.WORK;
+        const { saveNodeRule } = await import('./node-rules.js');
+        return saveNodeRule(place, { session: ctx.session, post: args });
+    },
+};
+
+export const twinScheduleSaveTool = {
+    name: 'twin_schedule_save',
+    description: 'Создать, переключить или удалить регулярное расписание задач текущего структурного узла (только BOSS).',
+    risk: 'write',
+    parameters: {
+        type: 'object',
+        properties: {
+            id: { type: 'string', description: 'ID расписания (для toggle или delete)' },
+            label: { type: 'string', description: 'Название регулярной обязанности' },
+            prompt: { type: 'string', description: 'Что именно должен проверять/делать двойник по расписанию' },
+            rule: {
+                type: 'object',
+                description: 'Правило времени: { kind: "daily"|"weekly"|"every"|"once", at?: "09:00", days?: [1,2,3,4,5], minutes?: 60 }',
+            },
+            tz: { type: 'string', description: 'Часовой пояс, например Europe/Moscow' },
+            toggle: { type: 'boolean', description: 'Переключить enabled для id' },
+            enabled: { type: 'boolean' },
+            delete: { type: 'boolean', description: 'Удалить расписание по id' },
+        },
+    },
+    async run(args, ctx) {
+        if (!ctx?.session || ctx.session.twinCall)
+            throw new Error('twin_schedule_save: недоступно в Service Plane');
+        const place = ctx.place || globalThis.WORK;
+        const { saveNodeSchedule } = await import('./node-rules.js');
+        return saveNodeSchedule(place, { session: ctx.session, post: args });
+    },
+};
+
+export const twinTools = [twinAskTool, twinRuleListTool, twinRuleSaveTool, twinScheduleSaveTool];

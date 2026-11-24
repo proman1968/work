@@ -25,20 +25,11 @@ export const classFeedMethods = {
 
     /**
      * Источник логов чата для пользователя.
-     * По умолчанию, куда бы пользователь ни смотрел, отображаются его личные записи (/USERS/<uid>).
-     * Местный лог точки (this.path) открывается только при явном включении режима `local` и наличии роли BOSS (в т.ч. вышестоящей).
+     * Каждый узел ($server, $base, $project, $structure, $user) хранит и показывает свою собственную ленту,
+     * без подмены на /USERS/<uid>.
      */
     async chatSource(params = {}) {
-        if (this.type === '$user')
-            return this.path;
-        const uid = this.constructor.resolveUid(params) || (typeof params.uid === 'string' && params.uid ? params.uid : null);
-        const own = params.session?.principal?.kind === 'node'
-            ? params.session.$user?.path
-            : (uid ? '/USERS//' + uid : null);
-        const wantLocal = params.local === true || params.local === '1' || params.local === 'true' || params.feedMode === 'local';
-        if (wantLocal && await this._canViewLocalFeed(params))
-            return this.path;
-        return own || this.path;
+        return this.path;
     },
 
     /** Элемент-источник логов для текущей роли (this или $user). */
@@ -226,6 +217,12 @@ export const classFeedMethods = {
         return saveNodeSchedule(this, params);
     },
 
+    /** Сохранить настройки проактивности узла (autoReply, quietDigest, только BOSS). */
+    async agent_proactivity_save(params = {}) {
+        const { saveNodeProactivity } = await import('../../modules/agent/node-rules.js');
+        return saveNodeProactivity(this, params);
+    },
+
     /** @deprecated используй append_log_includes({ entryPath, includePaths }) */
     async appendLogIncludes(entryPath, includePaths = [], params = {}) {
         if (entryPath && typeof entryPath === 'object' && entryPath.entryPath) {
@@ -278,7 +275,16 @@ export const classFeedMethods = {
     /** uid, если вызывающему видна только своя часть ленты точки, иначе null. */
     async _feedOwnOnly(params = {}) {
         const uid = this.constructor.resolveUid(params) || (typeof params?.uid === 'string' && params.uid ? params.uid : null);
-        if (!uid || this.id === uid || this.type === '$user')
+        if (this.type === '$user') {
+            // На своём профиле — вся личная лента; на чужом $user — только общие записи с собой (приватность)
+            if (!uid || this.id === uid)
+                return null;
+            return uid;
+        }
+        const wantDialog = params?.feedMode === 'dialog' || params?.ownOnly === true || params?.ownOnly === 1 || params?.ownOnly === '1';
+        if (wantDialog && uid)
+            return uid;
+        if (!uid || this.id === uid)
             return null;
         if (params?.role) {
             return params.role === 'BOSS' ? null : uid;

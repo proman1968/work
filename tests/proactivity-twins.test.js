@@ -260,4 +260,70 @@ describe('Проактивность Агентов $structure, when-преди�
         assert.ok(rules.schedules.some(s => s.id === created.id));
         await S.cancelSchedule({ uid: BOSS_UID, id: created.id });
     });
+
+    it('субъектность $structure-двойника, инструменты самонастройки и тихая сводка (молчит при 0 событий, шлёт при наличии)', async () => {
+        const { createEnv } = await import('../sources/modules/agent/index.js');
+        const { collectQuietDigest, runQuietDigests } = await import('../sources/modules/agent/node-rules.js');
+        const sales = await WORK.get_item('/ORGANIZATIONS/OrgOne/sales');
+        const warehouse = await WORK.get_item('/ORGANIZATIONS/OrgOne/warehouse');
+
+        const structSysMd = fs.readFileSync(path.join(prevCwd, '$server/$folder/$class/$structure/ai/system.md'), 'utf8');
+        assert.match(structSysMd, /Субъектность цифрового двойника узла/i, 'файл субъектности $structure/ai/system.md существует');
+
+        const bossUser = await WORK.get_item('/USERS/' + BOSS_UID);
+        const env = await createEnv({ place: sales, session: { ...as(BOSS_UID).session, $user: bossUser } });
+        const sysPrompt = await env.makeSystem();
+        assert.match(sysPrompt, /цифровой двойник подразделения «Продажи»/i, 'в системном контексте указана субъектность подразделения');
+        assert.match(sysPrompt, /Собеседник \(кто обратился\):/i, 'собеседник отделён от идентичности узла');
+
+        const bossTools = await env.makeTools();
+        assert.ok(bossTools.some(t => t.name === 'twin_rule_save'), 'BOSS имеет инструмент самонастройки правил twin_rule_save');
+        assert.ok(bossTools.some(t => t.name === 'twin_schedule_save'), 'BOSS имеет инструмент самонастройки расписаний twin_schedule_save');
+
+        const svcEnv = await createEnv({ place: sales, session: { ...as(BOSS_UID).session, twinCall: { fromPath: '/', depth: 1 } } });
+        const svcTools = await svcEnv.makeTools();
+        assert.equal(svcTools.some(t => t.name === 'twin_rule_save'), false, 'в Service Plane инструменты настройки правил вырезаны');
+
+        // На чистом узле warehouse (без зависших карточек/обращений) тихая сводка молчит
+        const emptyDig = await collectQuietDigest(warehouse);
+        assert.equal(emptyDig.events.length, 0, 'на тихом узле 0 событий');
+        const silentRes = await runQuietDigests({ nodes: [warehouse] });
+        assert.equal(silentRes.length, 0, 'при 0 событий тихая сводка не спамит');
+
+        // Если в узле есть ожидающая карточка approval старше 1 часа — тихая сводка отправляется BOSS
+        const { dbForThreadStorage } = await import('../sources/server/chat-threads.js');
+        const db = await dbForThreadStorage(warehouse, 'twin');
+        const oldTs = Date.now() - 2 * 3600_000;
+        const tid = `twin:/ORGANIZATIONS/OrgOne/warehouse:${USER_UID}`;
+        db.prepare(`INSERT OR IGNORE INTO chat_threads (id, kind, node_path, title, created_by, created, updated) VALUES (?, 'twin', '/ORGANIZATIONS/OrgOne/warehouse', 'Склад', ?, ?, ?)`)
+            .run(tid, USER_UID, oldTs, oldTs);
+        db.prepare(`INSERT OR IGNORE INTO chat_participants (thread_id, uid, role, last_read_id, joined) VALUES (?, ?, 'member', 0, ?)`)
+            .run(tid, USER_UID, oldTs);
+        db.prepare(`INSERT INTO chat_messages (thread_id, sender, kind, content, reply_to, mentions, attachments, task_path, meta, created) VALUES (?, '$twin', 'approval', 'Списание сверх нормы', NULL, '[]', '[]', '', '{"status":"pending"}', ?)`)
+            .run(tid, oldTs);
+
+        const activeRes = await runQuietDigests({ nodes: [warehouse] });
+        assert.equal(activeRes.length, 1, 'при наличии реального события отправлена сводка');
+        assert.equal(activeRes[0].bossUid, BOSS_UID);
+
+        // Встроенный autoReply на прямое сообщение в twin-чат (на узле без явного правила chat:message)
+        TRIG.setTriggerRunner(null);
+        const { onChatEvent, idleTriggers } = await import('../sources/modules/agent/triggers.js');
+        globalThis.__workDefaultTwinRunner = async ({ prompt }) => ({ status: 'done', content: 'Принято складом: ' + prompt });
+        try {
+            const msgRes = await onChatEvent({
+                storage: warehouse,
+                thread: { id: `twin:/ORGANIZATIONS/OrgOne/warehouse:${USER_UID}`, kind: 'twin', nodePath: '/ORGANIZATIONS/OrgOne/warehouse' },
+                message: { id: 999, sender: USER_UID, kind: 'text', content: 'Проверь остатки', taskPath: '' },
+                params: as(USER_UID),
+            });
+            assert.ok(msgRes >= 1);
+            await idleTriggers();
+            const threadMsgs = await warehouse.chat_messages_list({ ...as(USER_UID), kind: 'twin' });
+            assert.ok(threadMsgs.messages.some(m => m.sender === '$twin' && m.content.includes('Принято складом: Проверь остатки')));
+        }
+        finally {
+            delete globalThis.__workDefaultTwinRunner;
+        }
+    });
 });

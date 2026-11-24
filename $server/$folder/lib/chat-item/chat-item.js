@@ -133,6 +133,12 @@ ODA({is: 'chat-item',
             </div>
             <div class="preview" ~if="!compact && !expanded && !missingTargetPath && hasPreview && $file" ~is="previewTag" flex :$item="$file" :log="log" :log-content="logContent" style="user-select: text;" @expand-card.stop="expanded = true"></div>
             <div class="preview" ~if="!compact && !expanded && !missingTargetPath && !$file && !hasTargetFilePath && logContent" flex style="padding: 6px 12px; white-space: pre-wrap; user-select: text;">{{logContent}}</div>
+            <div class="approval-box" ~if="!compact && !expanded && log?.chatMessage?.kind === 'approval'" horizontal style="align-items: center; gap: 8px; padding: 4px 12px 8px;">
+                <span ~if="approvalStatus === 'approved'" style="font-size: 12px; font-weight: 700; color: #059669;">✓ Утверждено</span>
+                <span ~if="approvalStatus === 'rejected'" style="font-size: 12px; font-weight: 700; color: #dc2626;">✕ Отклонено</span>
+                <oda-button ~if="approvalStatus === 'pending'" icon="icons:check" info-invert label="Утвердить" @down.stop @tap.stop="_resolveChatApproval('approve')" style="border-radius: 6px; padding: 3px 10px; scale: 1;"></oda-button>
+                <oda-button ~if="approvalStatus === 'pending'" icon="icons:close" label="Отклонить" @down.stop @tap.stop="_resolveChatApproval('reject')" style="border-radius: 6px; padding: 3px 10px; scale: 1;"></oda-button>
+            </div>
             <div header ~if="!expanded && !missingTargetPath && includeFiles?.length" vertical style="padding: 8px; gap: 8px;">
                 <chat-item ~for="includeFiles" visible history compact :$file="$for.item"></chat-item>
             </div>
@@ -225,20 +231,50 @@ ODA({is: 'chat-item',
         },
     },
     get isAgentSender() {
+        if (this.log?.sender === '$twin' || this.log?.chatMessage?.sender === '$twin')
+            return true;
         const act = String(this.log?.actor || '');
         if (act === 'AI' || act.startsWith('/MODELS/'))
             return true;
-        if (Array.isArray(this.log?.receivers) && this.log.receivers.length === 1 && this.log.receivers[0] === this.log?.sender && !this.log?.path)
+        if (Array.isArray(this.log?.receivers) && this.log?.receivers.length === 1 && this.log.receivers[0] === this.log?.sender && !this.log?.path)
             return true;
         return false;
     },
     get agentSenderTitle() {
+        if (this.log?.sender === '$twin' || this.log?.chatMessage?.sender === '$twin') {
+            const nl = this.log?.chatMessage?.nodeLabel;
+            return nl ? `Цифровой двойник «${nl}»` : 'Цифровой двойник узла';
+        }
         const act = String(this.log?.actor || '');
         if (this.log?.actorLabel)
             return String(this.log.actorLabel);
         if (act.startsWith('/MODELS/'))
             return 'ИИ-агент (' + act.split('/').pop() + ')';
         return 'ИИ-агент WORK';
+    },
+    get approvalStatus() {
+        return this.log?.chatMessage?.meta?.status || 'pending';
+    },
+    async _resolveChatApproval(action) {
+        const cm = this.log?.chatMessage;
+        if (!cm?.id || !cm?.threadId)
+            return;
+        const owner = this._resolveFeedOwner();
+        if (!owner?.fetch)
+            return;
+        try {
+            const res = await owner.fetch('chat_action', { threadId: cm.threadId, messageId: cm.id, action });
+            if (res?.meta) {
+                this.log = {
+                    ...this.log,
+                    chatMessage: { ...cm, meta: res.meta },
+                };
+                this.render?.();
+            }
+        }
+        catch (err) {
+            console.warn('[chat-item] chat_action:', err);
+        }
     },
     get isSender(){
         if (this.isAgentSender)
@@ -593,6 +629,11 @@ ODA({is: 'chat-item',
     async _labelForLog(body) {
         if (!body)
             return '';
+        if (body.chatMessage) {
+            if (body.chatMessage.kind === 'approval')
+                return 'Запрос подтверждения';
+            return body.chatMessage.sender === '$twin' ? (body.chatMessage.nodeLabel ? `Двойник «${body.chatMessage.nodeLabel}»` : 'Цифровой двойник') : '';
+        }
         if (String(body.path || '').includes('/history/'))
             return CORE.historyEntryLabel(body.path);
         try {
@@ -665,6 +706,8 @@ ODA({is: 'chat-item',
                 return this.loadPreview(taskFile).then(() => taskFile);
             }
             return Promise.resolve(this.itemBody).then(async body => {
+                if (body?.chatMessage)
+                    return null;
                 if (!body?.path || String(body.path).endsWith('.logs') || body?.ext === 'operation' || body?.ext === 'object') {
                     if (body?.ext === 'operation' || body?.ext === 'object')
                         this.hasPreview = true;

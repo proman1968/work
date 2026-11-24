@@ -223,33 +223,35 @@ describe('ядро: canSee / canWrite по модели', () => {
         );
     });
 
-    it('документооборот подразделения: двойной лог (подразделение + личный кабинет + получатели) и chatSource (по умолчанию свой лог, local — только BOSS)', async () => {
+    it('документооборот подразделения: изоляция ленты по узлу, chatSource = this.path, запрет свалки в /USERS и адресация получателям', async () => {
         const dept = await WORK.get_item('/ORG/DEPT');
         const u1Cab = await WORK.get_item('/USERS/u1');
         const u2Cab = await WORK.get_item('/USERS/u2');
 
-        // 1. По умолчанию для всех (включая BOSS) chatSource возвращает личный кабинет пользователя
-        assert.equal(await dept.chatSource(as('u1', 'USER')), '/USERS//u1', 'USER по умолчанию -> личный кабинет');
-        assert.equal(await dept.chatSource(as('b1', 'BOSS')), '/USERS//b1', 'BOSS по умолчанию -> личный кабинет');
-        assert.equal(await dept.chatSource({ session: { uid: 'b1' } }), '/USERS//b1', 'BOSS без local -> личный кабинет');
-
-        // Местный лог точки возвращается только при явном local: true и роли BOSS; у обычного USER local игнорируется
+        // 1. chatSource всегда возвращает сам открытый узел (без подмены на /USERS/<uid>)
+        assert.equal(await dept.chatSource(as('u1', 'USER')), '/ORG/DEPT', 'USER -> лента подразделения');
+        assert.equal(await dept.chatSource(as('b1', 'BOSS')), '/ORG/DEPT', 'BOSS -> лента подразделения');
         assert.equal(await dept.chatSource({ ...as('b1', 'BOSS'), local: true }), '/ORG/DEPT', 'BOSS с local: true -> лог подразделения');
-        assert.equal(await dept.chatSource({ session: { uid: 'b1' }, local: true }), '/ORG/DEPT', 'BOSS по ролям точки с local: true -> лог подразделения');
-        assert.equal(await dept.chatSource({ ...as('u1', 'USER'), local: true }), '/USERS//u1', 'USER с local: true -> всё равно личный кабинет');
-        assert.equal(await dept.chatSource({ session: { uid: 'u1' }, local: true }), '/USERS//u1', 'USER без роли BOSS с local: true -> личный кабинет');
 
-        // 2. Отправка сообщения в подразделении с получателем u2 пишет в лог подразделения, в кабинет автора u1 и в кабинет получателя u2
+        // 2. Отправка сообщения в подразделении с получателем u2 пишет в подразделение и получателю u2,
+        //    НЕ сваливая копию в личный кабинет автора u1
         const msg = 'Документ согласован #' + Date.now();
         await dept.save_message({ ...as('u1', 'USER'), message: msg, receivers: ['u2'] });
 
-        const deptRows = await dept.read_log_bodies({ role: 'BOSS', session: { uid: 'b1' } });
+        const deptRowsLocal = await dept.read_log_bodies({ role: 'BOSS', session: { uid: 'b1' }, local: true });
+        const deptRowsBossDialog = await dept.read_log_bodies({ role: 'BOSS', session: { uid: 'b1' }, feedMode: 'dialog' });
         const u1Rows = await u1Cab.read_log_bodies({ session: { uid: 'u1' } });
         const u2Rows = await u2Cab.read_log_bodies({ session: { uid: 'u2' } });
 
-        assert.ok(deptRows.some(r => r.content === msg && r.sender === 'u1'), 'запись попала в лог подразделения');
-        assert.ok(u1Rows.some(r => r.content === msg && r.sender === 'u1'), 'запись попала в личный лог автора u1');
-        assert.ok(u2Rows.some(r => r.content === msg && r.sender === 'u1' && r.receivers?.includes('u2')), 'запись попала в личный лог получателя u2');
+        assert.ok(deptRowsLocal.some(r => r.content === msg && r.sender === 'u1'), 'в Местном логе подразделения запись видна');
+        assert.ok(!deptRowsBossDialog.some(r => r.content === msg), 'в личном Диалоге BOSS чужая запись u1 не мешается');
+        assert.ok(!u1Rows.some(r => r.content === msg), 'запись подразделения НЕ сваливается в личный кабинет автора u1');
+        assert.ok(u2Rows.some(r => r.content === msg && r.sender === 'u1' && r.receivers?.includes('u2')), 'прямому получателю u2 запись доставлена');
+
+        // 3. При просмотре чужого профиля /USERS/u2 пользователь u1 не видит приватные записи u2
+        await u2Cab.save_message({ ...as('u2', 'USER'), message: 'Личная заметка u2 #' + Date.now() });
+        const visibleForU1OnU2 = await u2Cab.read_log_bodies({ session: { uid: 'u1' } });
+        assert.ok(!visibleForU1OnU2.some(r => String(r.content || '').startsWith('Личная заметка u2')), 'чужой пользователь не видит личные заметки владельца профиля');
     });
 });
 

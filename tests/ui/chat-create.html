@@ -321,44 +321,64 @@ await test('при наличии старой задачи («Гранит») �
     finally { restore(); host.remove(); }
 });
 
-await test('переключатель «Мои записи / Местный лог»: скрыт у USER, виден у BOSS, по умолчанию «Мои записи»', async () => {
+await test('переключатель «Диалог / Местный лог / Взаимодействия» и карточки утверждения в основной ленте', async () => {
     const { host, chat } = await mountChat();
-    const seenChatSource = [];
     const seenDatesParams = [];
+    const seenActions = [];
     const prevDev = WORK.DEV_MODE;
     WORK.DEV_MODE = false;
     try {
-        // 1. Обычный USER без BOSS — переключатель скрыт
+        // 1. Обычный USER без BOSS — переключатель скрыт, по умолчанию режим dialog
         host.$item = {
             id: 'DEPT', path: '/ORG/DEPT', short: '/ORG/DEPT', type: '$structure', name: 'DEPT',
             async fetch(m, p) {
                 if (m === 'roles') return ['USER'];
-                if (m === 'chatSource') { seenChatSource.push(p); return '/USERS//U1'; }
                 if (m === 'logs' && p?.mode === 'dates') { seenDatesParams.push(p); return []; }
+                if (m === 'chat_messages_list') return { thread: { id: 'twin:/ORG/DEPT:U1' }, messages: [] };
                 return [];
             },
         };
         await sleep(80);
-        eq(chat.feedMode, 'own', 'по умолчанию режим own');
+        eq(chat.feedMode, 'dialog', 'по умолчанию режим dialog');
         eq(chat.showFeedModeToggle, false, 'переключатель скрыт для USER');
-        assert(!chat.$('.feed-mode-bar'), 'в DOM нет плашки переключателя для USER');
+        assert(!chat.$('button[title*="Местный лог"]'), 'в DOM нет кнопок переключения режима ленты для USER');
 
-        // 2. Пользователь с ролью BOSS — переключатель виден, но по умолчанию «Мои записи» (без local)
-        seenChatSource.length = 0;
+        // 2. Пользователь с ролью BOSS — по умолчанию «Диалог» (без local), приходят и проактивные карточки approval из chat_messages_list
         seenDatesParams.length = 0;
+        let approvalStatus = 'pending';
         host.$item = {
             id: 'WORK', path: '/', short: '/', type: '$server', name: 'WORK',
             async fetch(m, p) {
                 if (m === 'roles') return ['BOSS'];
-                if (m === 'chatSource') { seenChatSource.push(p); return p?.local ? '/' : '/USERS//U1'; }
                 if (m === 'logs' && p?.mode === 'dates') { seenDatesParams.push(p); return [TODAY]; }
+                if (m === 'logs' && p?.mode === 'bodies') return [];
+                if (m === 'chat_messages_list') {
+                    return {
+                        thread: { id: 'twin:/:U1', unreadCount: 0 },
+                        messages: [{
+                            id: 77,
+                            threadId: 'twin:/:U1',
+                            sender: '$twin',
+                            kind: 'approval',
+                            content: 'Отгрузка сверх лимита',
+                            attachments: [],
+                            taskPath: '',
+                            meta: { status: approvalStatus },
+                            created: Date.now(),
+                        }],
+                    };
+                }
+                if (m === 'chat_action') {
+                    seenActions.push(p);
+                    approvalStatus = p.action === 'approve' ? 'approved' : 'rejected';
+                    return { id: 77, meta: { status: approvalStatus } };
+                }
                 return [];
             },
         };
         await waitFor(() => chat.showFeedModeToggle && chat.$('.feed-mode-bar'), 'переключатель показан для BOSS');
-        eq(chat.feedMode, 'own', 'даже для BOSS по умолчанию выбран режим «Мои записи»');
-        await waitFor(() => seenDatesParams.some(p => p?.nonEmpty === 1 && !p?.local), 'dates вызывается с nonEmpty: 1 и без local');
-        assert(seenChatSource.length > 0 && seenChatSource.every(p => !p?.local), 'по умолчанию chatSource вызывается без local');
+        eq(chat.feedMode, 'dialog', 'для BOSS по умолчанию выбран режим «Диалог»');
+        await waitFor(() => seenDatesParams.some(p => p?.nonEmpty === 1 && !p?.local && p?.feedMode === 'dialog'), 'dates вызывается с feedMode: dialog и без local');
 
         // Плашка даты есть, а пунктирной линии .date-line::before больше нет
         const day = await waitFor(() => chat.$('#ribbon').$$('chat-day').find(d => d.day === TODAY), 'chat-day сегодня');
@@ -367,10 +387,16 @@ await test('переключатель «Мои записи / Местный л
         const beforeContent = getComputedStyle(dateLine, '::before').content;
         assert(beforeContent === 'none' || beforeContent === '', 'пунктирная линия ::before у даты убрана');
 
+        // Карточка approval из chat_messages_list отрисовалась прямо в ленте с кнопкой Утвердить
+        const approvalItem = await waitFor(() => [...day.$$('chat-item')].find(ci => ci.log?.chatMessage?.id === 77), 'карточка approval появилась в ленте');
+        const approveBtn = await waitFor(() => approvalItem.$('oda-button[label="Утвердить"]'), 'кнопка Утвердить в карточке ленты');
+        approveBtn.click();
+        await waitFor(() => seenActions.some(a => a.messageId === 77 && a.action === 'approve'), 'нажатие Утвердить вызвало chat_action');
+
         // 3. Переключение на «Местный лог» передаёт local: 1
-        seenChatSource.length = 0;
+        seenDatesParams.length = 0;
         chat.setFeedMode('local');
-        await waitFor(() => seenChatSource.some(p => p?.local === 1), 'chatSource получил local: 1');
+        await waitFor(() => seenDatesParams.some(p => p?.local === 1), 'dates получил local: 1');
         eq(chat.feedMode, 'local', 'активен режим Местный лог');
     }
     finally {

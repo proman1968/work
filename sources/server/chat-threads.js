@@ -276,9 +276,19 @@ export async function listMessages(storage, params = {}) {
     if (!uid)
         throw new Error(ACCESS_DENIED);
 
-    const threadId = String(params.threadId || '').trim();
-    if (!threadId)
-        throw new Error('Не указан threadId');
+    let threadId = String(params.threadId || '').trim();
+    if (!threadId) {
+        const isDm = storage?.type === '$user' || params.kind === 'dm';
+        if (isDm) {
+            const peerId = String(params.peerId || (storage?.type === '$user' ? storage.id : '')).trim();
+            if (!peerId)
+                throw new Error('Не указан threadId или peerId');
+            threadId = dmThreadId(uid, peerId);
+        }
+        else {
+            threadId = twinThreadId(LOGS.feedPathOf(storage), uid);
+        }
+    }
 
     const kindHint = threadId.startsWith('dm:') ? 'dm' : 'twin';
     const db = await dbForThreadStorage(storage, kindHint);

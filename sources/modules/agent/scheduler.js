@@ -346,6 +346,8 @@ export async function cancelSchedule({ uid, id }) {
     return true;
 }
 
+let lastQuietDigestAt = 0;
+
 /** Выполнить наступившие запуски (вызывается таймером; тесты — напрямую). */
 export async function runDue(now = Date.now(), runner = defaultRunner) {
     const d = await indexDb();
@@ -368,6 +370,12 @@ export async function runDue(now = Date.now(), runner = defaultRunner) {
         d.prepare('UPDATE agent_schedules SET last = ?, last_error = ?, next = ?, enabled = ? WHERE id = ?')
             .run(now, error, next, next && !fatal ? 1 : 0, r.id);
         done.push({ id: r.id, error });
+    }
+    if (runner === defaultRunner && now - lastQuietDigestAt >= 15 * 60_000) {
+        lastQuietDigestAt = now;
+        import('./node-rules.js')
+            .then(m => m.runQuietDigests?.({ now }))
+            .catch(() => {});
     }
     return done;
 }

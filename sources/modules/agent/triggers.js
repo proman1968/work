@@ -471,6 +471,70 @@ export async function onChatEvent({ storage, thread, message, params = {} } = {}
             });
             n++;
         }
+
+        // Базовая субъектная реакция узла $structure на прямое сообщение (без .task),
+        // если нет явного правила chat:message и включён autoReply (в т.ч. обращения сотрудников/клиентов).
+        const STRUCT_TYPES = new Set(['$server', '$base', '$project', '$structure']);
+        const text = String(message.content || '').trim();
+        const allowDefaultReply = n === 0
+            && !message.taskPath
+            && text.length > 0
+            && STRUCT_TYPES.has(storage.type)
+            && storage.DATA?.proactivity?.autoReply !== false
+            && !globalThis.__workDisableDefaultTwinReply
+            && (Boolean(runner || globalThis.__workDefaultTwinRunner) || (!process.env.NODE_TEST_CONTEXT && process.env.NODE_ENV !== 'test'));
+
+        if (allowDefaultReply) {
+            const defKey = `default-chat:${thread.id}`;
+            if (allowedCooldown(defKey, 2000) && allowedRun(defKey, 30)) {
+                const execDefault = runner || globalThis.__workDefaultTwinRunner || (async o => (await import('./index.js')).runOnce(o));
+                const senderUid = message.sender || '';
+                const replyPromise = (async () => {
+                    try {
+                        let callerSession = params?.session;
+                        if (!callerSession && senderUid && senderUid !== '$twin') {
+                            callerSession = await sessionFor(senderUid, 'twin-chat').catch(() => null);
+                        }
+                        if (!callerSession)
+                            return;
+                        if (!runner && !globalThis.__workDefaultTwinRunner) {
+                            const { createEnv } = await import('./index.js');
+                            const env = await createEnv({ place: storage, session: callerSession });
+                            const modelPath = await env.defaultModel().catch(() => '');
+                            const modelItem = modelPath ? await WORK.get_item(modelPath).catch(() => null) : null;
+                            if (!modelItem || modelItem.DATA?.aiActive === false)
+                                return;
+                        }
+                        const res = await execDefault({
+                            place: storage,
+                            session: callerSession,
+                            prompt: text,
+                            mode: 'ask',
+                            signal: AbortSignal.timeout(4 * 60_000),
+                        });
+                        const answer = String(res?.content || '').trim();
+                        if (!answer)
+                            return;
+                        const CHAT = await import('../../server/chat-threads.js');
+                        await CHAT.sendMessage(storage, {
+                            uid: senderUid || storage.constructor?.resolveUid?.(params) || '',
+                            threadId: thread.id,
+                            asTwin: true,
+                            kind: 'text',
+                            message: answer,
+                            meta: { autoReply: true },
+                        });
+                    }
+                    catch (e) { console.warn('[trigger:autoReply]', e?.message || e); }
+                })();
+                globalThis.__workPendingTriggers = (globalThis.__workPendingTriggers || 0) + 1;
+                replyPromise.finally(() => {
+                    globalThis.__workPendingTriggers = Math.max(0, (globalThis.__workPendingTriggers || 1) - 1);
+                });
+                n++;
+            }
+        }
+
         pump();
         return n;
     }

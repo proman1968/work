@@ -476,6 +476,7 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
                 const TWIN_SERVICE_DENY = new Set([
                     'create_class', 'update_class', 'move_class', 'delete_class',
                     'assign', 'escalate', 'delete',
+                    'twin_rule_list', 'twin_rule_save', 'twin_schedule_save',
                     'dev_write', 'dev_edit', 'dev_patch', 'dev_git', 'dev_shell',
                     'shell', 'restart_server', 'os_write', 'os_rm',
                 ]);
@@ -631,7 +632,7 @@ async function resolvePlace(lat, lon) {
     return place;
 }
 
-/** Блок «Контекст» — только то, что постоянно в задаче (место, пользователь, роли, местоположение); время — nowLine. */
+/** Блок «Контекст» — только то, что постоянно в задаче (субъект, место, собеседник, роли, местоположение); время — nowLine. */
 async function placeBlock(place, session, location, contextPath) {
     const lines = ['# Контекст'];
     if (place) {
@@ -639,10 +640,28 @@ async function placeBlock(place, session, location, contextPath) {
             await place.init;
         }
         catch (e) { log.debug('place.init', e); /* без DATA */ }
-        lines.push('- Место задачи (текущий класс): ' + place.path + (place.DATA?.label ? ' «' + place.DATA.label + '»' : '') + (place.type ? ' [' + place.type + ']' : ''));
+        const label = place.DATA?.label || place.label || place.id || place.path || 'WORK';
+        const cone = contextConeOf(contextPath || place.path);
+        const pt = place.type;
+        if (pt === '$structure') {
+            const orgName = cone?.[1] || '';
+            lines.push(`- Твоя идентичность (субъект): ты — цифровой двойник подразделения «${label}»${orgName ? ` (организация «${orgName}»)` : ''}, путь ${place.path}. Отвечай и действуй от первого лица этого подразделения.`);
+        }
+        else if (pt === '$base') {
+            lines.push(`- Твоя идентичность (субъект): ты — цифровой двойник организации «${label}» (${place.path}). Отвечай и действуй от первого лица этой организации.`);
+        }
+        else if (pt === '$project') {
+            lines.push(`- Твоя идентичность (субъект): ты — цифровой двойник проекта «${label}» (${place.path}). Отвечай и действуй от первого лица этого проекта.`);
+        }
+        else if (pt === '$server') {
+            lines.push(`- Твоя идентичность (субъект): ты — цифровой двойник системы WORK (корневой узел /). Отвечай и действуй от первого лица системы WORK.`);
+        }
+        else if (pt === '$user') {
+            lines.push(`- Твоя идентичность (субъект): ты — личный цифровой двойник пользователя «${label}» (${place.path}).`);
+        }
+        lines.push('- Место задачи (текущий узел/класс): ' + place.path + (place.DATA?.label ? ' «' + place.DATA.label + '»' : '') + (place.type ? ' [' + place.type + ']' : ''));
         if (contextPath && contextPath !== place.path)
             lines.push('- Открытая форма (контекст вопроса): ' + contextPath);
-        const cone = contextConeOf(contextPath || place.path);
         if (cone) {
             const scopeDesc = cone.length > 2
                 ? `подразделение «/${cone.join('/')}» организации «${cone[1]}»`
@@ -652,11 +671,11 @@ async function placeBlock(place, session, location, contextPath) {
     }
     const user = session?.$user;
     if (user && user !== globalThis.WORK) {
-        lines.push('- Пользователь: ' + (user.DATA?.label || user.label || user.id) + ' (' + (user.path || '/USERS/' + user.id) + ')');
+        lines.push('- Собеседник (кто обратился): ' + (user.DATA?.label || user.label || user.id) + ' (' + (user.path || '/USERS/' + user.id) + ')');
         try {
             const roles = await place?.roles?.({ session });
             if (roles?.length)
-                lines.push('- Роли пользователя здесь: ' + roles.join(', '));
+                lines.push('- Полномочия собеседника в этом узле: ' + roles.join(', '));
         }
         catch (e) { log.debug('place.roles', e); /* нет ролей */ }
     }

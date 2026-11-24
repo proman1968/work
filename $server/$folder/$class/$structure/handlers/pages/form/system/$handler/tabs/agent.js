@@ -77,6 +77,23 @@ export default {
         <div class="card">
             <div class="card-head">
                 <oda-icon icon="bootstrap:robot" icon-size="20"></oda-icon>
+                <span>Поведение цифрового двойника узла</span>
+            </div>
+            <div class="row" style="gap:16px;">
+                <label class="row" style="gap:6px;cursor:pointer;">
+                    <input type="checkbox" :checked="proactivity.autoReply" @change="toggleProactivity('autoReply', $event.target.checked)">
+                    <span>Отвечать на входящие обращения</span>
+                </label>
+                <label class="row" style="gap:6px;cursor:pointer;">
+                    <input type="checkbox" :checked="proactivity.quietDigest" @change="toggleProactivity('quietDigest', $event.target.checked)">
+                    <span>Тихая суточная сводка руководителю (только при наличии событий)</span>
+                </label>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head">
+                <oda-icon icon="bootstrap:robot" icon-size="20"></oda-icon>
                 <span>Правила проактивности узла ({{triggers.length}})</span>
                 <div class="row" style="margin-left:auto;">
                     <oda-button icon="icons:add" @tap="openNewRule()">Новое правило</oda-button>
@@ -167,6 +184,7 @@ export default {
     `,
     triggers: [],
     schedules: [],
+    proactivity: { autoReply: true, quietDigest: true },
     editing: false,
     editingIsNew: true,
     form: {},
@@ -185,6 +203,21 @@ export default {
             const res = await this.$item.fetch('agent_rules_list');
             this.triggers = Array.isArray(res?.triggers) ? res.triggers : [];
             this.schedules = Array.isArray(res?.schedules) ? res.schedules : [];
+            if (res?.proactivity)
+                this.proactivity = { ...this.proactivity, ...res.proactivity };
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
+    },
+    async toggleProactivity(key, value) {
+        if (!this.$item?.fetch)
+            return;
+        this.error = '';
+        try {
+            const res = await this.$item.fetch('agent_proactivity_save', {}, JSON.stringify({ [key]: Boolean(value) }));
+            if (res?.proactivity)
+                this.proactivity = { ...this.proactivity, ...res.proactivity };
         }
         catch (e) {
             this.error = String(e?.message || e);

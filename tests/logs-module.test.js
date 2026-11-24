@@ -96,10 +96,10 @@ describe('logs.js: чистые функции', () => {
             const orgLogCount = orgDb.prepare('SELECT COUNT(*) AS c FROM logs WHERE feed_path = ?').get('/ORGANIZATIONS/OrgA/sales').c;
             assert.equal(orgLogCount, 1, 'запись подразделения сохранена в work.db организации');
 
-            // 3. Зеркальная запись автора лежит в серверной БД (.data/work.db)
+            // 3. По умолчанию запись подразделения НЕ сваливается в кабинет автора (/USERS/ivan)
             const srvDb = await dataDb('', tmp);
-            const cabLogCount = srvDb.prepare('SELECT COUNT(*) AS c FROM logs WHERE feed_path = ?').get('/USERS/ivan').c;
-            assert.equal(cabLogCount, 1, 'запись кабинета автора сохранена в корневой .data/work.db');
+            const cabLogCountBefore = srvDb.prepare('SELECT COUNT(*) AS c FROM logs WHERE feed_path = ?').get('/USERS/ivan').c;
+            assert.equal(cabLogCountBefore, 0, 'запись подразделения не дублируется в /USERS/ivan без явного mirrorToAuthor');
 
             // 4. Чтение через datesList, loadBodies, findEntry и appendIncludes
             const day = LOGS.dayOfTime(row.time);
@@ -115,6 +115,11 @@ describe('logs.js: чистые функции', () => {
 
             const updated = await LOGS.appendIncludes(salesDept, found.logsFilePath, ['/ORGANIZATIONS/OrgA/sales/work/att.xlsx']);
             assert.deepEqual(updated.includes, ['/ORGANIZATIONS/OrgA/sales/work/att.xlsx'], 'appendIncludes обновляет запись в SQLite');
+
+            // При явном mirrorToAuthor: true запись попадает и в корневую .data/work.db
+            await LOGS.appendRow(salesDept, { ...row, time: row.time + 1 }, { logAuthor: { $user: userCab }, mirrorToAuthor: true });
+            const cabLogCountAfter = srvDb.prepare('SELECT COUNT(*) AS c FROM logs WHERE feed_path = ?').get('/USERS/ivan').c;
+            assert.equal(cabLogCountAfter, 1, 'при явном mirrorToAuthor запись сохранена в корневой .data/work.db');
 
             // 5. nonEmpty: true отсекает пустой сегодня и дни только со скрытыми mainContext-записями
             const emptyDept = { id: 'empty', path: '/ORGANIZATIONS/OrgA/empty', type: '$structure', $parent: orgBase };

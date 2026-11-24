@@ -42,7 +42,7 @@ export const MEMBERS = Object.freeze({
     read_log_entry: L.READ, log_index: L.READ, chatSource: L.READ,
     chat_thread_open: L.CALL, chat_threads_list: L.READ, chat_messages_list: L.READ,
     chat_send: L.WRITE, chat_mark_read: L.WRITE, chat_action: L.WRITE, chat_unread_summary: L.USER, visible_contacts: L.USER,
-    agent_rules_list: L.READ, agent_rule_save: L.ADMIN, agent_schedule_save: L.ADMIN,
+    agent_rules_list: L.READ, agent_rule_save: L.ADMIN, agent_schedule_save: L.ADMIN, agent_proactivity_save: L.ADMIN,
     roles: L.READ, members: L.READ, is_data_type: L.READ, reset: L.READ,
     work_zone: L.READ, places: L.READ,
     data_access: L.READ, link_tree: L.READ, search_tree: L.USER,
