@@ -28,6 +28,36 @@ export function isCodeChange(rel) {
 const pending = new Set();
 let timer = null;
 
+/** Сбросить кэши слоёв и элементов дерева WORK для изменившегося/удалённого WORK-пути (работает и без DEV/watchCode). */
+export async function invalidateWorkCaches(workPath) {
+    const srv = globalThis.WORK;
+    if (!srv)
+        return;
+    const norm = '/' + String(workPath || '').replace(/\\/g, '/').split('/').filter(Boolean).join('/');
+    const rel = norm.slice(1);
+    for (const key of Object.keys(srv.merges || {})) {
+        if (!rel || key.includes(rel) || norm.startsWith('/$server') || norm.startsWith('/MODULES') || /class\.js$/i.test(norm))
+            srv.merges[key] = undefined;
+    }
+    FS.$folder?.__script_cache__?.clear?.();
+    if (srv.__merge_pairs__ instanceof Map)
+        srv.__merge_pairs__.clear();
+    FS.$file.__ext_scripts__ = Object.create(null);
+    FS.$file.__type_data__ = Object.create(null);
+    markClassesDirty();
+    // Сбрасываем сам узел и его ближайших существующих предков (чтобы исчезнувшие/добавленные хендлеры сразу обновились в дереве)
+    const segs = norm.split('/').filter(Boolean);
+    for (let i = segs.length; i >= 1 && i >= segs.length - 3; i--) {
+        const cand = '/' + segs.slice(0, i).join('/');
+        try {
+            const it = await srv.get_item(cand);
+            if (it && !Array.isArray(it))
+                it.reset?.();
+        }
+        catch { /* узел уже удалён — идём к родителю */ }
+    }
+}
+
 function flush($server) {
     timer = null;
     const files = [...pending];
@@ -53,9 +83,12 @@ function flush($server) {
         const norm = f.replace(/\\/g, '/');
         const p = '/' + norm;
         if (!fs.existsSync(f)) {
-            const parentDir = path.posix.dirname(norm);
-            if (parentDir && parentDir !== '.' && fs.existsSync(parentDir)) {
-                Promise.resolve(globalThis.WORK?.get_item('/' + parentDir)).then(item => {
+            // При удалении целого каталога ($handler, builder/...) шагаем вверх до первого существующего предка
+            let cur = path.posix.dirname(norm);
+            while (cur && cur !== '.' && !fs.existsSync(cur))
+                cur = path.posix.dirname(cur);
+            if (cur && cur !== '.' && fs.existsSync(cur)) {
+                Promise.resolve(globalThis.WORK?.get_item('/' + cur)).then(item => {
                     if (item && !Array.isArray(item))
                         item.reset?.();
                 }).catch(() => {});

@@ -37,7 +37,7 @@ const BUILTIN_DENY = [
     'C:/Windows/System32/config', 'C:/Windows/NTDS',
 ];
 
-function workRoot() {
+export function workRoot() {
     return process.cwd();
 }
 

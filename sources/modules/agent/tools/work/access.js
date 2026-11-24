@@ -45,13 +45,16 @@ export const access = {
                     assigned: local, inherited,
                 });
             }
+            const readRoles = async (targetPoint) => typeof targetPoint.roles === 'function'
+                ? targetPoint.roles({ session: ctx?.session })
+                : FS.$class.prototype.roles.call(targetPoint, { session: ctx?.session });
             const open = (point.DATA?.['#security']?.USER || []).some(u => u === 'GUEST' || u === 'GUESTS');
             return JSON.stringify({
                 path: target.path, point: point.path || '/', area,
                 openToAll: open || undefined,
-                yourRoles: await point.roles({ session: ctx?.session }),
+                yourRoles: await readRoles(point),
                 roles: rows,
-                note: 'Плюс видят: WORK BOSS (всё), владельцы лент, в которых есть запись с этим путём (receivers). Системные пути /$server, /sources, /oda видны всем.',
+                note: 'Плюс видят: WORK BOSS (всё), владельцы лент с записью пути. Системные пути /$server, /sources, /oda видны всем.',
             }, null, 1);
         },
     };
@@ -61,17 +64,17 @@ export const assign = {
         risk: 'write',
         outbound: true, // смена прав доступа после чтения внешнего содержимого — только с подтверждением (taint.js)
         target: args => absPath(String(args?.path || '') + '/class.js', null),
-        description: 'Назначить или снять пользователей на роль точки (BOSS, USER), либо создать/изменить рабочее место (должность) в #security.ROLES подразделения ($structure / $base): меняет только #security собственного class.js. Для создания или настройки рабочего места укажи place (id или путь места, например "researcher" или "head/accountant") и label (например "Исследователь"), при необходимости add/remove сотрудников и links. Требует прав BOSS.',
+        description: 'Назначить/снять роли (BOSS, USER) или создать/изменить рабочее место в #security.ROLES подразделения ($structure/$base). Требует BOSS.',
         parameters: {
             type: 'object',
             properties: {
-                path: { type: 'string', description: 'WORK-путь класса (подразделения $structure или организации $base)' },
-                role: { type: 'string', description: 'Системная роль (BOSS, USER) или id рабочего места' },
-                place: { type: 'string', description: 'ID или путь рабочего места в #security.ROLES подразделения (например "researcher" или "head/accountant")' },
-                label: { type: 'string', description: 'Отображаемое название рабочего места по-русски (например "Исследователь", "Главный бухгалтер")' },
-                icon: { type: 'string', description: 'Иконка рабочего места (необязательно)' },
-                links: { type: 'array', items: { type: 'object' }, description: 'Привязанные учётные классы рабочего места: [{ id: "/ORGANIZATIONS/.../CATALOGS/...", access: "read"|"write", scope?: "own"|"place"|"unit"|"all" }]' },
-                add: { type: 'array', items: { type: 'string' }, description: 'Кого назначить: uid, ФИО, псевдо-субъекты USERS / GUESTS или id узла сети' },
+                path: { type: 'string', description: 'WORK-путь ($structure или $base)' },
+                role: { type: 'string', description: 'Системная роль (BOSS, USER) или id места' },
+                place: { type: 'string', description: 'id или путь места в ROLES (напр. researcher)' },
+                label: { type: 'string', description: 'Название должности по-русски' },
+                icon: { type: 'string', description: 'Иконка' },
+                links: { type: 'array', items: { type: 'object' }, description: '[{ id, access: "read"|"write", scope? }]' },
+                add: { type: 'array', items: { type: 'string' }, description: 'Кого назначить (uid, ФИО, USERS, GUESTS)' },
                 remove: { type: 'array', items: { type: 'string' }, description: 'Кого снять' },
             },
             required: ['path'],

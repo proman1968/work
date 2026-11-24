@@ -620,5 +620,5 @@ export const metaTools = [
 /** Короткий листинг для system: имя — описание. */
 export function listing(map, max = 60) {
     // сначала сортируем по имени, затем берём первые max: детерминированный набор и порядок независимо от обхода ФС
-    return [...map.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 400)).join('\n');
+    return [...map.values()].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)).slice(0, max).map(d => '- ' + d.name + ': ' + clip(String(d.meta.description || d.body.split('\n')[0] || ''), 160)).join('\n');
 }

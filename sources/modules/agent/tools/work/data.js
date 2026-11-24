@@ -84,18 +84,26 @@ export const createClass = {
         name: 'create_class',
         risk: 'write',
         target: args => absPath(String(args?.parent || '') + '/' + String(args?.id || ''), null),
-        description: 'Создать новый класс (подразделение $structure, справочник $catalog, операцию $operation, счёт $account и т.д.) внутри класса parent. Для обычного $class имя id — ЗАГЛАВНЫМИ; для подразделений $structure id — латиницей snake_case (finances, ai_research). Обязательно передавай подходящую по смыслу иконку icon. ВНИМАНИЕ: НЕ используй create_class для создания рабочих мест (должностей, например «Главный бухгалтер», «Исследователь») — рабочие места хранятся в "#security".ROLES подразделения и создаются через инструмент assign (параметры place и label).',
+        description: 'Создать класс внутри parent ($structure, $catalog, $operation, $account, $handler…). Для $structure id — латиницей snake_case; передавай icon. Должности — не классы, а assign (#security.ROLES).',
         parameters: {
             type: 'object',
             properties: {
-                parent: { type: 'string', description: 'WORK-путь родительского класса' },
-                id: { type: 'string', description: 'Имя класса (для $structure — латиницей snake_case)' },
-                type: { type: 'string', description: 'Типизатор ($structure, $base, $catalog, $operation, $account, $struct, $virtual…)' },
-                label: { type: 'string', description: 'Отображаемое имя по-русски' },
-                icon: { type: 'string', description: 'Подходящая по смыслу иконка из наборов ODA (например carbon:machine-learning-model, carbon:chemistry, icons:account-balance, icons:shopping-cart, icons:store, icons:assignment-ind, lineawesome:shuttle-van-solid, icons:code)' },
-                class_js: { type: 'string', description: 'Содержимое class.js (необязательно)' },
+                parent: { type: 'string', description: 'WORK-путь родителя' },
+                id: { type: 'string', description: 'Имя (для $structure — snake_case)' },
+                type: { type: 'string', description: 'Типизатор ($structure, $base, $catalog, $operation, $account, $struct, $virtual, $handler…)' },
+                label: { type: 'string', description: 'Название по-русски' },
+                icon: { type: 'string', description: 'Иконка ODA (carbon:..., icons:...)' },
+                class_js: { type: 'string', description: 'Содержимое class.js' },
             },
             required: ['parent', 'id'],
+        },
+        async permission(args, ctx) {
+            const p = absPath(String(args?.parent || '') + '/' + String(args?.id || ''), ctx);
+            if (p === '/$server' || p.startsWith('/$server/'))
+                return { verdict: 'ask', noAlways: true, reason: 'создание прикладного компонента в системном типизаторе ' + p };
+            if (p === '/MODULES' || p.startsWith('/MODULES/'))
+                return { verdict: 'ask', reason: 'изменение общего модуля ' + p + ' повлияет на организации' };
+            return null;
         },
         async run(args, ctx) {
             const parent = await mustItem(args.parent, ctx);
@@ -112,6 +120,10 @@ export const createClass = {
                 p.post = args.class_js;
             await callAs(parent, 'create', p, ctx);
             const path = parent.path + '/' + args.id;
+            if (path.startsWith('/$server/') || path.startsWith('/MODULES/')) {
+                const { invalidateWorkCaches } = await import('../../../../host/watch.js');
+                await invalidateWorkCaches(path);
+            }
             if (ctx.entry)
                 ctx.entry.path = path;
             return 'создан класс ' + path + (args.type ? ' (' + args.type + ')' : '');
@@ -281,19 +293,19 @@ export const describeClass = {
 export const findObjects = {
     name: 'find_objects',
     readonly: true,
-    description: 'Поиск и выборка объектов справочника ($catalog), виртуального справочника ($virtual) или операций ($operation) по классу (включая потомков), тексту search, условиям where (поддерживаются вложенные поля структур, например passport.address.city), периоду [from, to] и статусу.',
+    description: 'Поиск объектов $catalog, $virtual или $operation по классу (включая потомков), search, where, периоду [from, to] и статусу.',
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'WORK-путь класса справочника или операции' },
-            search: { type: 'string', description: 'Поисковая строка по названию и текстовым полям' },
-            where: { type: 'object', description: 'Фильтр по полям объекта (включая вложенные поля структур)' },
-            from: { type: 'string', description: 'Начало периода YYYY-MM-DD (для операций)' },
-            to: { type: 'string', description: 'Конец периода YYYY-MM-DD включительно (для операций)' },
-            status: { type: 'string', description: 'Статус: active | draft | registered | cancelled | deleted' },
-            at: { type: 'string', description: 'Дата состояния YYYY-MM-DD (для виртуального справочника)' },
-            mode: { type: 'string', description: 'Режим виртуального справочника: balance | turnover' },
-            limit: { type: 'integer', description: 'Максимум записей (по умолчанию 50)' },
+            path: { type: 'string', description: 'WORK-путь справочника/операции' },
+            search: { type: 'string', description: 'Поиск по названию и тексту' },
+            where: { type: 'object', description: 'Фильтр по полям (включая вложенные)' },
+            from: { type: 'string', description: 'От YYYY-MM-DD' },
+            to: { type: 'string', description: 'По YYYY-MM-DD' },
+            status: { type: 'string', description: 'active | draft | registered | cancelled | deleted' },
+            at: { type: 'string', description: 'Дата состояния YYYY-MM-DD ($virtual)' },
+            mode: { type: 'string', description: 'balance | turnover ($virtual)' },
+            limit: { type: 'integer', description: 'Лимит (по умолчанию 50)' },
         },
         required: ['path'],
     },
@@ -411,21 +423,21 @@ export const registerOperation = {
 export const report = {
     name: 'report',
     readonly: true,
-    description: 'Построить учётный отчёт по классу журнала ($register) или счёта ($account): sheet (Экран 1/2: ОСВ и Анализ счёта с разворотом by по аналитикам и субаналитикам), turnovers (Экран 3: двухпанельные Обороты счёта с группировкой groupBy), card (карточка проводок счёта), journal (журнал проводок), entry (Экран 4: сборная карточка проводки по номеру entry).',
+    description: 'Учётный отчёт по $register или $account: sheet (ОСВ/Анализ), turnovers (Обороты), card (проводки счёта), journal, entry.',
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'WORK-путь журнала ($register) или счёта ($account)' },
-            kind: { type: 'string', description: 'Вид отчёта: sheet | turnovers | card | journal | entry (по умолчанию sheet)' },
-            from: { type: 'string', description: 'Начало периода YYYY-MM-DD' },
-            to: { type: 'string', description: 'Конец периода YYYY-MM-DD включительно' },
-            account: { type: 'string', description: 'Уточнение счёта (при вызове на журнале)' },
-            by: { type: 'array', items: { type: 'string' }, description: 'Слоты аналитик или поля субаналитик (например ["item", "item.base_unit"]) для разворота ОСВ' },
-            groupBy: { type: 'string', description: 'Группировка оборотов: none | day | week | month | quarter | year | operation | account | all' },
-            analytics: { type: 'object', description: 'Фильтр по аналитикам или субаналитикам ({ counterparty: id } или { "counterparty.name": { contains: "Альфа" } })' },
-            subanalytics: { type: 'object', description: 'Двухэтапный фильтр по полям справочника-аналитики и его OVERLAY' },
+            path: { type: 'string', description: 'WORK-путь $register или $account' },
+            kind: { type: 'string', description: 'sheet | turnovers | card | journal | entry' },
+            from: { type: 'string', description: 'От YYYY-MM-DD' },
+            to: { type: 'string', description: 'По YYYY-MM-DD' },
+            account: { type: 'string', description: 'Уточнение счёта' },
+            by: { type: 'array', items: { type: 'string' }, description: 'Разворот по аналитикам/субаналитикам' },
+            groupBy: { type: 'string', description: 'none | day | week | month | quarter | year | operation | account | all' },
+            analytics: { type: 'object', description: 'Фильтр по аналитикам/субаналитикам' },
+            subanalytics: { type: 'object', description: 'Двухэтапный фильтр по полям аналитики и OVERLAY' },
             entry: { type: 'integer', description: 'Номер проводки (для kind: "entry")' },
-            effective: { type: 'boolean', description: 'Только действующие проводки без сторно (для kind: "journal")' },
+            effective: { type: 'boolean', description: 'Без сторно (для journal)' },
         },
         required: ['path'],
     },

@@ -9,6 +9,7 @@
 - `$device/` — тип «устройство»
 - `$structure/` — тип «структура»
 - [`ai/`](ai/readme.md) — способность ИИ класса (`~/ai`, one-shot `?prompt`)
+- [`handlers/pages/form/`](handlers/pages/form/readme.md) — представления (табы) карточки класса в `work-form`
 - `handlers/` — специфичные для класса обработчики
 
 ## Методы `$class`

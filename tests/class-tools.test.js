@@ -358,3 +358,49 @@ describe('Субагенты builder, org-architect, schema-validator в createE
         assert.ok(!callTool?.restrictedMethods?.has('save'));
     });
 });
+
+describe('Прикладные компоненты /$server/$folder: правки от корня WORK (BOSS) со сбросом кэша', () => {
+    it('BOSS на уровне WORK может обновить и удалить прикладной $handler в /$server со сбросом кэша, но корень /$server защищён', async () => {
+        const rootCtx = adminCtx('/');
+        cls('$server/$folder/$class/handlers/pages/form/temp_tab', '$handler', `{ label: 'Временный таб', roles: ['BOSS'], order: 77 }`);
+        // Сбросим кэш класса и папок после ручной записи в tmp
+        (await WORK.get_item('/$server/$folder/$class'))?.reset?.();
+        (await WORK.get_item('/$server/$folder/$class/handlers/pages/form'))?.reset?.();
+
+        // Permission на update_class и delete_class в /$server — ask с noAlways: true (кроме dry_run)
+        const permUpd = await byName.update_class.permission({ path: '/$server/$folder/$class/handlers/pages/form/temp_tab' }, rootCtx);
+        assert.equal(permUpd?.verdict, 'ask');
+        assert.equal(permUpd?.noAlways, true);
+
+        const permDry = await byName.delete_class.permission({ path: '/$server/$folder/$class/handlers/pages/form/temp_tab', dry_run: true }, rootCtx);
+        assert.equal(permDry?.verdict, 'allow');
+        const permDel = await byName.delete_class.permission({ path: '/$server/$folder/$class/handlers/pages/form/temp_tab' }, rootCtx);
+        assert.equal(permDel?.verdict, 'ask');
+        assert.equal(permDel?.noAlways, true);
+
+        // Обновление прикладного $handler работает
+        const upd = await byName.update_class.run({ path: '/$server/$folder/$class/handlers/pages/form/temp_tab', label: 'Обновлённый таб' }, rootCtx);
+        assert.match(upd, /обновлён класс/);
+
+        // access на $handler не падает из-за поля DATA.roles
+        const accessTool = workTools.find(t => t.name === 'access');
+        const accOut = await accessTool.run({ path: '/$server/$folder/$class/handlers/pages/form/temp_tab' }, rootCtx);
+        assert.match(accOut, /yourRoles/);
+
+        // dry_run показывает isSystemTypifier: true
+        const dryJson = JSON.parse(await byName.delete_class.run({ path: '/$server/$folder/$class/handlers/pages/form/temp_tab', dry_run: true }, rootCtx));
+        assert.equal(dryJson.isSystemTypifier, true);
+        assert.equal(dryJson.canDeleteSafely, true);
+
+        // Удаление прикладного $handler удаляет его с диска и сбрасывает кэш родителя
+        const delOut = await byName.delete_class.run({ path: '/$server/$folder/$class/handlers/pages/form/temp_tab' }, rootCtx);
+        assert.match(delOut, /удалён класс/);
+        assert.ok(!await WORK.get_item('/$server/$folder/$class/handlers/pages/form/temp_tab'));
+
+        // Корневой /$server удалить нельзя
+        await assert.rejects(
+            () => byName.delete_class.run({ path: '/$server' }, rootCtx),
+            /корневой домен \/\$server удалять запрещено/
+        );
+    });
+});

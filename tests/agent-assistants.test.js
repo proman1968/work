@@ -44,10 +44,19 @@ before(async () => {
     // типы файлов данных проекта: лента (.logs) — запись дня, а не обычный файл
     for (const rel of ['$server/$folder/$file/$data/class.js', '$server/$folder/$file/$logs/class.js'])
         write(rel, fs.readFileSync(path.join(ROOT, rel), 'utf-8'));
-    // пакет движка: настоящие субагенты и навыки проекта
+    // пакет движка: настоящие субагенты и навыки проекта (включая папочные <id>/SKILL.md)
+    const copyDir = (srcAbs, relBase) => {
+        for (const ent of fs.readdirSync(srcAbs, { withFileTypes: true })) {
+            const nextSrc = path.join(srcAbs, ent.name);
+            const nextRel = relBase + '/' + ent.name;
+            if (ent.isDirectory())
+                copyDir(nextSrc, nextRel);
+            else
+                write(nextRel, fs.readFileSync(nextSrc, 'utf-8'));
+        }
+    };
     for (const dir of ['agents', 'skills'])
-        for (const f of fs.readdirSync(path.join(ROOT, '$server/$folder/$class/ai', dir)))
-            write('$server/$folder/$class/ai/' + dir + '/' + f, fs.readFileSync(path.join(ROOT, '$server/$folder/$class/ai', dir, f), 'utf-8'));
+        copyDir(path.join(ROOT, '$server/$folder/$class/ai', dir), '$server/$folder/$class/ai/' + dir);
     for (const [uid, label] of [[ADMIN, 'Админ Главный'], [BOSS, 'Сидоров Босс'], [IVAN, 'Иванов Иван'], [PETR, 'Иванова Пётр']])
         write(`USERS/${uid}/$user/class.js`, `export default { label: '${label}' }`);
     write('ORGANIZATIONS/$domain/class.js', `export default { label: 'Организации' }`);

@@ -60,7 +60,7 @@ export function isProtectedPath(path) {
     return false;
 }
 
-const SHELL_DANGEROUS_RE = /(?:^|[;&|{}\n(]\s*)(?:rm|rmdir|del|erase|rd|format|diskpart|bcdedit|shutdown|restart-computer|stop-computer|stop-process|taskkill|kill|killall|pkill|mkfs|dd|fdisk|parted|remove-item|clear-content|invoke-expression|iex)\b|\breg\s+delete\b|\bnet\s+user\b|\bwsl\b[^;\n|&]*--unregister\b|\b(?:curl|wget|irm|iwr|invoke-webrequest|invoke-restmethod)\b[^|\n]*\|/i;
+const SHELL_DANGEROUS_RE = /(?:^|[;&|{}\n(]\s*)(?:rm|rmdir|del|erase|rd|format|diskpart|bcdedit|shutdown|restart-computer|stop-computer|stop-process|start-process|taskkill|kill|killall|pkill|mkfs|dd|fdisk|parted|remove-item|clear-content|invoke-expression|iex)\b|\breg\s+delete\b|\bnet\s+user\b|\bwsl\b[^;\n|&]*--unregister\b|\[(?:system\.)?io\.(?:directory|file|fileinfo|directoryinfo)\]::(?:delete|move|write|append|create)|\.delete\s*\(|\b(?:curl|wget|irm|iwr|invoke-webrequest|invoke-restmethod)\b[^|\n]*\|/i;
 
 const SHELL_WRITE_RE = /(?:^|[;&|{}\n(]\s*)(?:set-content|add-content|out-file|new-item|copy-item|move-item|rename-item|set-itemproperty|new-service|start-service|stop-service|restart-service|mkdir|md|touch|cp|mv|ln|chmod|chown|tee|winget\s+(?:install|uninstall|upgrade)|choco\s+(?:install|uninstall|upgrade)|pip\d?\s+install|npm\s+(?:install|i|uninstall)|apt(?:-get)?\s+(?:install|remove|purge)|msiexec)\b/i;
 
@@ -256,16 +256,16 @@ export async function decide(tool, args, ctx) {
             return custom;
         }
     }
-    if (allowedMatches(host, tool.name, scope))
-        return { verdict: 'allow', autoAllowed: true, scopeKey: scope?.key || tool.name, scopeLabel: scope?.label || '' };
-    if (mode === 'ask')
-        return { verdict: 'ask', reason: 'режим «Спрашивать»', ...(scope?.noAlways ? { noAlways: true } : { scope }) };
-    if (tool.risk === 'danger')
-        return { verdict: 'ask', reason: 'необратимое или внешнее действие', ...(scope?.noAlways ? { noAlways: true } : { scope }) };
     const target = typeof tool.target === 'function' ? tool.target(args, ctx) : null;
     const targets = (Array.isArray(target) ? target : [target]).filter(Boolean);
     const hit = targets.find(isProtectedPath);
     if (hit)
-        return { verdict: 'ask', reason: 'изменение системы: ' + hit, ...(scope?.noAlways ? { noAlways: true } : { scope }) };
+        return { verdict: 'ask', noAlways: true, reason: 'изменение системы: ' + hit };
+    if (tool.risk === 'danger')
+        return { verdict: 'ask', reason: 'необратимое или внешнее действие', ...(scope?.noAlways ? { noAlways: true } : { scope }) };
+    if (allowedMatches(host, tool.name, scope))
+        return { verdict: 'allow', autoAllowed: true, scopeKey: scope?.key || tool.name, scopeLabel: scope?.label || '' };
+    if (mode === 'ask')
+        return { verdict: 'ask', reason: 'режим «Спрашивать»', ...(scope?.noAlways ? { noAlways: true } : { scope }) };
     return { verdict: 'allow' };
 }

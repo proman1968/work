@@ -16,22 +16,32 @@ import { getClass, descendants, isLeaf, DATA_TYPES, STRUCTURE_TYPES, MODULE_TYPE
 import { classSchema, checkSchema, analyticSlots, findAncestor, classBasePath, FAMILY } from '../../../../data/schema.js';
 import { tx } from '../../../../data/db.js';
 import { beforeWrite, recordWrite } from '../../undo.js';
+import { invalidateWorkCaches } from '../../../../host/watch.js';
 import { isAccessDenied } from '../../util.js';
 import {
     absPath, assertContextCone, contextConeOf, mustItem, callAs,
 } from './common.js';
 
 const ROOT_PROTECTED_CLASSES = new Set([
-    '/', '/ORGANIZATIONS', '/PROJECTS', '/MODULES', '/USERS', '/MODELS', '/SERVICES', '/NODES', '/DATA',
+    '/', '/$server', '/$server/$folder', '/ORGANIZATIONS', '/PROJECTS', '/MODULES', '/USERS', '/MODELS', '/SERVICES', '/NODES', '/DATA',
 ]);
 
-/** Проверка границ правки структуры: запрещено менять /$server, и из организации — общий /MODULES. */
+function isSystemTypifierPath(normPath) {
+    return normPath === '/$server' || normPath.startsWith('/$server/');
+}
+
+/** Проверка границ правки структуры: из контекста организации запрещены /$server и общий /MODULES. */
 function assertClassScope(targetPath, ctx, actionLabel) {
     assertContextCone(targetPath, ctx);
     const norm = '/' + String(targetPath || '').replace(/\\/g, '/').split('/').filter(Boolean).join('/');
-    if (norm === '/$server' || norm.startsWith('/$server/'))
-        throw new Error(`${actionLabel}: системные классы /$server изменяет разработчик, а не инструменты моделирования`);
     const cone = contextConeOf(ctx);
+    if (isSystemTypifierPath(norm)) {
+        if (cone)
+            throw new Error(`${actionLabel}: системные классы /$server изменяются с уровня WORK (BOSS), а не из организации «${cone[1]}»`);
+        if (ctx?.role && ctx.role !== 'BOSS' && ctx.role !== 'ADMIN')
+            throw new Error(`${actionLabel}: системные классы /$server требуют роль BOSS`);
+        return norm;
+    }
     if (cone && (norm === '/MODULES' || norm.startsWith('/MODULES/'))) {
         throw new Error(
             `${actionLabel}: из контекста организации «${cone[1]}» запрещено менять общий шаблон ${norm}. `
@@ -475,36 +485,35 @@ export const updateClass = {
     name: 'update_class',
     risk: 'write',
     target: targetClassPath,
-    description: 'Декларативно обновить существующий класс WORK (label, icon, description, types-миксины, METADATA.FIELDS, STATIC, OVERLAY, POSTINGS, SOURCE, METADATA.LAYOUT, AUTO_REGISTER, NUMERATOR, allowed_child_types) через штатное слоеное сохранение ($class.save), не затирая JS-методы класса и унаследованные слои. После правки автоматически проверяет схему (db_schema).',
+    description: 'Декларативно обновить метаданные класса (label, icon, types, поля, проводки, LAYOUT), сохраняя JS-методы class.js.',
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'WORK-путь изменяемого класса' },
-            label: { type: 'string', description: 'Новое отображаемое название' },
-            icon: { type: 'string', description: 'Иконка из наборов ODA (carbon:..., icons:..., lineawesome:...)' },
-            description: { type: 'string', description: 'Описание класса' },
-            types: { type: 'array', items: { type: 'string' }, description: 'Массив WORK-путей миксинов (1-я ось наследования Types)' },
-            allowed_child_types: { type: 'array', items: { type: 'string' }, description: 'Разрешённые дочерние $-типы (без $class)' },
-            auto_register: { type: 'boolean', description: 'Автопроведение операции при создании (AUTO_REGISTER)' },
-            numerator: { description: 'Настройки нумератора операции ({ field, reset, pad, prefix, scope }) или false' },
-            source: { type: 'object', description: 'Источник виртуального справочника $virtual ({ registry, account, slot, mode })' },
-            fields: {
-                type: 'array',
-                description: 'Поля объектов (METADATA.FIELDS): upsert по id. Для удаления унаследованного поля передай { id, removed: true }, для удаления собственного — { id, delete_own: true }',
-            },
-            replace_fields: { type: 'boolean', description: 'Полностью заменить собственный METADATA.FIELDS переданным массивом (по умолчанию false — слияние по id)' },
-            static: { type: 'array', description: 'Свойства класса (METADATA.STATIC): upsert по id' },
-            replace_static: { type: 'boolean', description: 'Заменить собственный METADATA.STATIC целиком' },
-            overlay: { type: 'array', description: 'Поля расширения виртуального справочника (METADATA.OVERLAY): upsert по id' },
-            replace_overlay: { type: 'boolean', description: 'Заменить собственный METADATA.OVERLAY целиком' },
-            postings: { type: 'array', description: 'Правила проводок операции (METADATA.POSTINGS): upsert по id' },
-            replace_postings: { type: 'boolean', description: 'Заменить собственный METADATA.POSTINGS целиком' },
-            layout: { description: 'Раскладка карточки (METADATA.LAYOUT): массив для ROOT или объект { ROOT: [...], <structId>: [...] }, либо false для сброса' },
+            path: { type: 'string', description: 'WORK-путь класса' },
+            label: { type: 'string', description: 'Новое название' },
+            icon: { type: 'string', description: 'Иконка ODA (carbon:..., icons:...)' },
+            description: { type: 'string', description: 'Описание' },
+            types: { type: 'array', items: { type: 'string' }, description: 'Пути миксинов (Types)' },
+            allowed_child_types: { type: 'array', items: { type: 'string' }, description: 'Дочерние $-типы (без $class)' },
+            auto_register: { type: 'boolean', description: 'Автопроведение операции' },
+            numerator: { description: 'Нумератор ({ field, reset, pad, prefix, scope }) или false' },
+            source: { type: 'object', description: 'Источник $virtual ({ registry, account, slot, mode })' },
+            fields: { type: 'array', description: 'Поля METADATA.FIELDS (upsert по id; removed:true / delete_own:true)' },
+            replace_fields: { type: 'boolean', description: 'Заменить METADATA.FIELDS целиком' },
+            static: { type: 'array', description: 'Свойства METADATA.STATIC (upsert по id)' },
+            replace_static: { type: 'boolean', description: 'Заменить METADATA.STATIC целиком' },
+            overlay: { type: 'array', description: 'Поля METADATA.OVERLAY (upsert по id)' },
+            replace_overlay: { type: 'boolean', description: 'Заменить METADATA.OVERLAY целиком' },
+            postings: { type: 'array', description: 'Правила METADATA.POSTINGS (upsert по id)' },
+            replace_postings: { type: 'boolean', description: 'Заменить METADATA.POSTINGS целиком' },
+            layout: { description: 'Раскладка METADATA.LAYOUT (массив, объект по структурам или false)' },
         },
         required: ['path'],
     },
     async permission(args, ctx) {
         const p = absPath(args?.path, ctx);
+        if (isSystemTypifierPath(p))
+            return { verdict: 'ask', noAlways: true, reason: 'изменение прикладного компонента системного типизатора ' + p + ' затронет все наследующие классы и формы' };
         if (isGlobalModulePath(p))
             return { verdict: 'ask', reason: 'изменение общего эталонного модуля ' + p + ' повлияет на все организации' };
         return null;
@@ -624,7 +633,7 @@ export const updateClass = {
         const prevSnap = exists && file ? await beforeWrite(file) : { existed: false };
         const post = item.constructor.toScript(nextObj);
         await callAs(item, 'save', { post }, ctx);
-        markClassesDirty();
+        await invalidateWorkCaches(item.path);
         if (file) {
             const metaClassJs = item.path + '/' + item.type + '/class.js';
             recordWrite(ctx, metaClassJs, prevSnap, file);
@@ -654,16 +663,13 @@ export const updateClass = {
 export const inspectClassTree = {
     name: 'inspect_class_tree',
     readonly: true,
-    description: 'Глубокий 5-уровневый аудит класса и его поддерева: 1) дерево и allowed_child_types; 2) конфликты 3-осевого наследования (Types → Ancestor → Parent → Self) и происхождение полей; 3) ошибки схемы и проводок (checkSchema); 4) счётчики объектов/проводок в work.db и входящие ссылки от других классов; 5) #security.ROLES и LINKS. Поддерживает simulate для оценки последствий планируемых изменений.',
+    description: 'Аудит поддерева класса: типы, 3-осевое наследование, ошибки схемы (checkSchema), счётчики work.db, ROLES/LINKS и simulate изменений.',
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'WORK-путь класса (по умолчанию точка задачи)' },
-            depth: { type: 'integer', description: 'Глубина обхода дерева (по умолчанию 8, до 20)' },
-            simulate: {
-                type: 'object',
-                description: 'Оценка последствий планируемого изменения без записи: { remove_field?, rename_field?: { from, to }, change_type?: { field, to }, move_to?, delete?: true }',
-            },
+            path: { type: 'string', description: 'WORK-путь класса' },
+            depth: { type: 'integer', description: 'Глубина (по умолчанию 8, до 20)' },
+            simulate: { type: 'object', description: '{ remove_field?, rename_field?: { from, to }, change_type?: { field, to }, move_to?, delete?: true }' },
         },
         required: ['path'],
     },
@@ -811,15 +817,15 @@ export const moveClass = {
         const id = safeNodeName(String(args?.new_id || path.posix.basename(src)).trim());
         return [src, parent === '/' ? '/' + id : parent + '/' + id];
     },
-    description: 'Переименовать или перенести класс WORK в нового родителя. Проверяет ALLOWED_CHILD_TYPES, зависимости (Link, Struct, POSTINGS, SOURCE, types, LINKS) и записи work.db; при dry_run:true возвращает план последствий без изменений, при выполнении обновляет дерево, входящие ссылки (update_refs) и привязки в work.db.',
+    description: 'Переименовать или перенести класс с проверкой типов, ссылок и work.db (dry_run:true — только план).',
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'Текущий WORK-путь класса' },
-            new_parent: { type: 'string', description: 'Новый родительский класс (если не указан — остаётся прежний)' },
-            new_id: { type: 'string', description: 'Новое имя узла (если не указано — остаётся прежнее)' },
-            update_refs: { type: 'boolean', description: 'Обновлять входящие ссылки в классах того же контекста (по умолчанию true)' },
-            dry_run: { type: 'boolean', description: 'Только анализ и план последствий без переноса (по умолчанию false)' },
+            path: { type: 'string', description: 'Текущий WORK-путь' },
+            new_parent: { type: 'string', description: 'Новый родитель' },
+            new_id: { type: 'string', description: 'Новое имя узла' },
+            update_refs: { type: 'boolean', description: 'Обновлять входящие ссылки (по умолчанию true)' },
+            dry_run: { type: 'boolean', description: 'Только анализ без переноса' },
         },
         required: ['path'],
     },
@@ -827,6 +833,8 @@ export const moveClass = {
         if (args?.dry_run === true)
             return { verdict: 'allow' };
         const p = absPath(args?.path, ctx);
+        if (isSystemTypifierPath(p))
+            return { verdict: 'ask', noAlways: true, reason: 'перенос/переименование системного типизатора ' + p + ' затронет все классы и формы' };
         if (isGlobalModulePath(p))
             return { verdict: 'ask', reason: 'перенос/переименование общего модуля ' + p + ' затронет все организации' };
         return null;
@@ -964,7 +972,8 @@ export const moveClass = {
         newParent.reset?.();
         globalThis.WORK_RAG?.invalidate?.(srcDir);
         globalThis.WORK_RAG?.invalidate?.(dstDir);
-        markClassesDirty();
+        await invalidateWorkCaches(srcPath);
+        await invalidateWorkCaches(dstPath);
 
         const summary = [
             `перенесён класс ${srcPath} → ${dstPath} (${srcType})`,
@@ -980,21 +989,24 @@ export const deleteClass = {
     name: 'delete_class',
     risk: 'danger',
     target: targetClassPath,
-    description: 'Безопасно удалить класс (или отключить модуль). Сначала проверяет потомков, объекты и проводки в work.db, а также входящие ссылки от других классов/ролей. По умолчанию блокирует удаление непустых или используемых классов; при dry_run:true возвращает полный отчёт последствий.',
+    description: 'Удалить класс (или отключить $module) с проверкой потомков, ссылок и work.db; dry_run:true — отчёт последствий.',
     parameters: {
         type: 'object',
         properties: {
-            path: { type: 'string', description: 'WORK-путь удаляемого класса' },
-            dry_run: { type: 'boolean', description: 'Только проверка последствий без удаления (по умолчанию false)' },
-            mode: { type: 'string', enum: ['delete', 'disable_module'], description: 'delete — удалить класс; disable_module — мягко отключить модуль $module (set_enabled: false)' },
-            force: { type: 'boolean', description: 'Игнорировать входящие ссылки из других классов/ролей (по умолчанию false)' },
-            allow_purge_data: { type: 'boolean', description: 'Разрешить удаление вместе с объектами/проводками в work.db (по умолчанию false — защита данных)' },
+            path: { type: 'string', description: 'WORK-путь класса' },
+            dry_run: { type: 'boolean', description: 'Только проверка последствий без удаления' },
+            mode: { type: 'string', enum: ['delete', 'disable_module'], description: 'delete или disable_module ($module)' },
+            force: { type: 'boolean', description: 'Игнорировать входящие ссылки' },
+            allow_purge_data: { type: 'boolean', description: 'Удалить вместе с записями work.db' },
         },
         required: ['path'],
     },
-    async permission(args) {
+    async permission(args, ctx) {
         if (args?.dry_run === true)
             return { verdict: 'allow' };
+        const p = absPath(args?.path, ctx);
+        if (isSystemTypifierPath(p))
+            return { verdict: 'ask', noAlways: true, reason: 'удаление прикладного элемента системного типизатора ' + p + ' уберёт его у всех классов через ~' };
         return null;
     },
     async run(args, ctx) {
@@ -1022,6 +1034,7 @@ export const deleteClass = {
                 dryRun: true,
                 path: p,
                 type: itemType,
+                isSystemTypifier: isSystemTypifierPath(p),
                 subClasses: subCids,
                 dbImpact,
                 incomingRefs,
@@ -1072,7 +1085,7 @@ export const deleteClass = {
             await fsp.rm(itemRealDir, { recursive: true, force: true });
         globalThis.WORK_RAG?.invalidate?.(itemRealDir);
         itemParent?.reset?.();
-        markClassesDirty();
+        await invalidateWorkCaches(p);
 
         return `удалён класс ${p} (${itemType}); удалено подклассов: ${subCids.length}`;
     },

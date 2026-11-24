@@ -75,6 +75,9 @@ export async function* walkItems(root, deadline, ctx) {
                 continue;
             if (k.id[0] === '#' || k.id[0] === '.')
                 continue;
+            // Унаследованные через ~ тени типизаторов не обходим: физический поиск ищет оригиналы слоёв, не 197 копий
+            if (k.inherit_source)
+                continue;
             if (!checkContextCone(k.path, ctx).ok)
                 continue;
             if (seen.has(k.path))
@@ -354,30 +357,30 @@ const WHERE_PROP = {
     where: {
         type: 'string',
         enum: ['work', 'sandbox'],
-        description: 'Где искать: work — дерево WORK (с правами; код /sources, /MODELS), sandbox — ваш компьютер (песочница, от /workspace)',
+        description: 'Арена: work (дерево WORK) или sandbox (песочница /workspace)',
     },
 };
 const SBX_PROPS = {
-    name: { type: 'string', description: 'Компьютер (по умолчанию main)' },
-    timeout: { type: 'integer', description: 'Секунд, только sandbox (по умолчанию 30, максимум 60)' },
+    name: { type: 'string', description: 'Имя песочницы (по умолчанию main)' },
+    timeout: { type: 'integer', description: 'Таймаут, с (только sandbox, до 60)' },
 };
 
 export const grep = {
     name: 'grep',
     readonly: true,
     concurrent: true,
-    description: 'Поиск по содержимому файлов (grep): подстрока text или регулярное выражение regex, без учёта регистра по умолчанию, контекст строк context, маска файлов glob (например *.js), лимит limit. Арена where: work — дерево WORK (права по файлам, системные зоны не видны), sandbox — ваш компьютер (папка от /workspace; ripgrep с учётом .gitignore, в старом образе — grep).',
+    description: 'Поиск по содержимому файлов (text или regex): context, маска glob, limit. work — дерево WORK, sandbox — песочница.',
     parameters: {
         type: 'object',
         properties: {
             ...WHERE_PROP,
-            path: { type: 'string', description: 'Где искать: WORK-путь (по умолчанию место задачи) или папка песочницы' },
+            path: { type: 'string', description: 'WORK-путь или папка песочницы' },
             text: { type: 'string', description: 'Подстрока' },
-            regex: { type: 'string', description: 'Регулярное выражение (по строкам)' },
-            caseSensitive: { type: 'boolean', description: 'Учитывать регистр (по умолчанию нет)' },
-            context: { type: 'integer', description: 'Строк контекста до/после совпадения (0–10, по умолчанию 0)' },
+            regex: { type: 'string', description: 'Регулярное выражение' },
+            caseSensitive: { type: 'boolean', description: 'Учитывать регистр' },
+            context: { type: 'integer', description: 'Строк контекста (0–10)' },
             glob: { type: 'string', description: 'Маска файлов, например *.js' },
-            limit: { type: 'integer', description: 'Максимум совпадений (по умолчанию 200, потолок 2000)' },
+            limit: { type: 'integer', description: 'Лимит совпадений (до 2000)' },
             ...SBX_PROPS,
         },
     },
@@ -392,15 +395,15 @@ export const glob = {
     name: 'glob',
     readonly: true,
     concurrent: true,
-    description: 'Поиск файлов по шаблону имени: **/*.js (в любой глубине), *.md, src/**/*.test.js; exclude — исключить шаблон. Арена where: work — дерево WORK (права по файлам, системные зоны не видны), sandbox — ваш компьютер (папка от /workspace).',
+    description: 'Поиск файлов по шаблону имени (**/*.js, *.md) без теней ~. work — дерево WORK, sandbox — песочница.',
     parameters: {
         type: 'object',
         properties: {
             ...WHERE_PROP,
-            path: { type: 'string', description: 'Где искать: WORK-путь (по умолчанию место задачи) или папка песочницы' },
+            path: { type: 'string', description: 'WORK-путь или папка песочницы' },
             pattern: { type: 'string', description: 'Шаблон, например **/*.js' },
-            exclude: { type: 'string', description: 'Исключить шаблон, например node_modules/**' },
-            limit: { type: 'integer', description: 'Максимум путей (по умолчанию 500, потолок 2000)' },
+            exclude: { type: 'string', description: 'Исключить шаблон' },
+            limit: { type: 'integer', description: 'Лимит путей (до 2000)' },
             ...SBX_PROPS,
         },
         required: ['pattern'],

@@ -719,6 +719,49 @@ export class $server extends $class {
         setTimeout(() => process.exit(0), 1000).unref?.();
         return true;
     }
+
+    /**
+     * Отложенный штатный перезапуск процесса WORK (например после правки ядра sources/).
+     * Работает как в DEV_MODE, так и в обычном режиме; доступен только BOSS корневого WORK.
+     */
+    async restart_server(params = {}) {
+        const uid = $class.resolveUid(params);
+        if (!uid)
+            throw new Error('Доступ запрещён');
+        const roles = await this.roles(params).catch(() => []);
+        if (!roles.includes('BOSS'))
+            throw new Error('Доступ запрещён');
+        const { spawn } = await import('node:child_process');
+        const env = { ...process.env };
+        delete env.NODE_OPTIONS;
+        const entryArgs = process.argv.slice(1).length ? process.argv.slice(1) : ['run.mjs'];
+        const delayMs = Math.max(1500, Math.min(10000, Number(params.delayMs) || 2500));
+        const helper = `
+            const fs = await import('node:fs');
+            const path = await import('node:path');
+            const { spawn } = await import('node:child_process');
+            const pid = Number(process.argv[1]);
+            const cwd = process.argv[2];
+            const env = JSON.parse(process.argv[3]);
+            const entryArgs = JSON.parse(process.argv[4]);
+            for (let i = 0; i < 300; i++) {
+                try { process.kill(pid, 0); }
+                catch { break; }
+                await new Promise(r => setTimeout(r, 200));
+            }
+            const log = fs.openSync(path.join(cwd, 'work-restart.log'), 'a');
+            const child = spawn(process.execPath, entryArgs, {
+                cwd, env, detached: true, stdio: ['ignore', log, log],
+            });
+            child.unref();
+        `;
+        spawn(process.execPath, ['--input-type=module', '-e', helper,
+            String(process.pid), process.cwd(), JSON.stringify(env), JSON.stringify(entryArgs)], {
+            detached: true, stdio: 'ignore', env,
+        }).unref();
+        setTimeout(() => process.exit(0), delayMs).unref?.();
+        return { scheduled: true, delayMs };
+    }
 }
 $server.type_chain = Object.create(null);
 Object.assign($server.prototype, authMethods, serverDistroMethods);

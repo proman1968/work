@@ -7,6 +7,12 @@ import { isAccessDenied } from '../../util.js';
 import { lineDiff } from '../../diff.js';
 import { beforeWrite, recordDelete } from '../../undo.js';
 import { normalizeWorkPath } from '../../permissions.js';
+import { invalidateWorkCaches } from '../../../../host/watch.js';
+
+function shouldInvalidate(p) {
+    const n = normalizeWorkPath(p) || '';
+    return n.startsWith('/$server') || n.startsWith('/MODULES') || /class\.js$/i.test(n);
+}
 
 /** F30: файл долговременной памяти (system будущих задач) — правится только инструментом
  *  memory (remember/forget: пометки outbound, фильтр секретов, лимиты), не write/append/edit. */
@@ -178,6 +184,8 @@ export const write = {
                 ctx.entry.diff = lineDiff(typeof before === 'string' ? before : '', String(args.content));
             }
             await trackWrite(ctx, real, log, pre);
+            if (shouldInvalidate(real))
+                await invalidateWorkCaches(real);
             const req = absPath(args.path, ctx);
             return (before == null ? 'создан ' : 'перезаписан ') + real + ' (' + String(args.content).length + ' символов)'
                 + (real !== req ? ' (помещён в папку задачи — в ссылках и дальнейших вызовах используй только этот путь)' : '');
@@ -217,6 +225,8 @@ export const append = {
                 ctx.entry.diff = lineDiff(before, before + chunk);
             }
             await trackWrite(ctx, file.path, log, pre);
+            if (shouldInvalidate(file.path))
+                await invalidateWorkCaches(file.path);
             return 'добавлено ' + chunk.length + ' символов в ' + file.path + ' (всего ' + (before.length + chunk.length) + ')';
         },
     };
@@ -266,6 +276,8 @@ export const edit = {
                 ctx.entry.diff = lineDiff(text, after);
             }
             await trackWrite(ctx, file.path, log, pre);
+            if (shouldInvalidate(file.path))
+                await invalidateWorkCaches(file.path);
             return 'изменён ' + file.path + ' (замен: ' + (args.replace_all ? count : 1) + ')';
         },
     };
@@ -320,6 +332,7 @@ export const deleteTool = {
         name: 'delete',
         risk: 'danger',
         target: target('path'),
+        permission: (args, ctx) => ({ verdict: 'ask', noAlways: true, reason: 'удаление ' + absPath(args?.path, ctx) + ' необратимо' }),
         description: 'Удалить файл или элемент (необратимо, спросит человека).',
         parameters: {
             type: 'object',
@@ -334,8 +347,11 @@ export const deleteTool = {
                 throw new Error('путь дал несколько элементов — уточни');
             // файл (не папку) можно вернуть при откате ленты: запоминаем прежнее состояние (undo.js)
             const pre = isContainer(item) ? null : await beforeWrite(item);
+            const targetPath = item.path;
             const res = await callAs(item, 'delete', {}, ctx);
             recordDelete(ctx.entry, { item, pre });
+            if (shouldInvalidate(targetPath))
+                await invalidateWorkCaches(targetPath);
             return res;
         },
     };

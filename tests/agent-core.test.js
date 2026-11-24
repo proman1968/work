@@ -3164,3 +3164,49 @@ describe('подобные разрешения в задаче (approvalScope, 
         }
     });
 });
+
+describe('Защита /$server и системных путей: запрет обхода через allowedMatches, shell и подсказки путей', () => {
+    it('decide: allowedMatches для write не пропускает запись в /$server, /sources и *.js', async () => {
+        const { decide } = await import('../sources/modules/agent/permissions.js');
+        const w = workTools.find(t => t.name === 'write');
+        const d = workTools.find(t => t.name === 'delete');
+        const host = { mode: 'auto', allowed: new Set(['write', 'delete']) };
+
+        // Обычный рабочий документ в /BOX — проходит по allowed
+        assert.equal((await decide(w, { path: '/BOX/note.md', content: 'x' }, { host })).verdict, 'allow');
+
+        // Защищённые пути — НЕ обходятся даже при allowed.has('write')
+        for (const p of ['/$server/$folder/$class/handlers/pages/form/x/x.js', '/sources/core.js', '/BOX/hook.js', '/BOX/$class/#security/x.json']) {
+            const v = await decide(w, { path: p, content: 'x' }, { host });
+            assert.equal(v.verdict, 'ask', p + ' должен требовать подтверждения');
+            assert.equal(v.noAlways, true, p + ' не должен допускать always');
+        }
+
+        // delete (risk: danger) тоже не обходится общим allowed
+        const vd = await decide(d, { path: '/BOX/note.md' }, { host });
+        assert.equal(vd.verdict, 'ask');
+        assert.equal(vd.noAlways, true);
+    });
+
+    it('classifyShellCommand и shell: .NET-удаление даёт noAlways, а удаление в /$server через shell блокируется', async () => {
+        const { classifyShellCommand } = await import('../sources/modules/agent/permissions.js');
+        const { osProcTools } = await import('../sources/modules/agent/tools/os-proc.js');
+        const shellTool = osProcTools.find(t => t.name === 'shell');
+
+        assert.equal(classifyShellCommand('[IO.Directory]::Delete("C:\\WORK\\$server\\x", $true)').noAlways, true);
+        assert.equal(classifyShellCommand('[System.IO.File]::WriteAllText("C:\\x.js", "a")').noAlways, true);
+
+        await assert.rejects(
+            () => shellTool.run({ command: 'Remove-Item -Recurse -Force "C:\\WORK\\$server\\x"' }, {}),
+            /запрещена — используй WORK-инструменты/
+        );
+    });
+
+    it('mustItem("/server/...") подсказывает путь в /$server/...', async () => {
+        const readTool = workTools.find(t => t.name === 'read');
+        await assert.rejects(
+            () => readTool.run({ path: '/server/$folder' }, { session: { uid: CHILD_UID, principal: { kind: 'user', id: CHILD_UID } } }),
+            /\/\$server\/\$folder/
+        );
+    });
+});

@@ -203,6 +203,14 @@ describe('ai/: system.md, config.js, prompt', () => {
         assert.ok(sys.length < 6000, 'system.md растёт — это токены каждого запроса: ' + sys.length);
     });
 
+    it('AGENTS.md и ai/system.md имеют побайтово одинаковый канонический блок (WORK-CANON)', () => {
+        const sys = read('system.md').replace(/\r\n/g, '\n').trim();
+        const agentsMd = fs.readFileSync(path.join(ROOT, 'AGENTS.md'), 'utf-8').replace(/\r\n/g, '\n');
+        const m = agentsMd.match(/<!-- WORK-CANON:START -->\n([\s\S]*?)\n<!-- WORK-CANON:END -->/);
+        assert.ok(m, 'в AGENTS.md должны быть маркеры WORK-CANON:START / END');
+        assert.equal(m[1].trim(), sys, 'канон в AGENTS.md и $server/$folder/$class/ai/system.md разошёлся');
+    });
+
     it('config.js: модель задана', async () => {
         const cfg = (await import('file:///' + path.join(AI, 'config.js').replace(/\\/g, '/'))).default;
         assert.match(cfg.model, /^\/MODELS\//);

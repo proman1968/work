@@ -5,7 +5,8 @@
  */
 import os from 'node:os';
 import { clip } from '../util.js';
-import { IS_WIN, checkPath, askEach, askScoped, run, powershell, psQuote, formatRun, loadConfig } from '../system.js';
+import { IS_WIN, checkPath, workRoot, askEach, askScoped, run, powershell, psQuote, formatRun, loadConfig } from '../system.js';
+import { classifyShellCommand } from '../permissions.js';
 import { size } from './os-files.js';
 
 const NAME = /^[\w.@:-]{1,128}$/;
@@ -134,11 +135,11 @@ export const osProcTools = [
     {
         name: 'shell',
         permission: askScoped(a => 'команда на сервере' + (a?.reason ? ' (' + a.reason + ')' : '') + ':\n' + a?.command),
-        description: 'Выполнить команду на сервере WORK: PowerShell на Windows, sh на Linux/macOS. Команды требуют подтверждения человека (для безопасного чтения/проверок и повторяющихся утилит можно выдать общее разрешение в задаче). Предпочитай специальные os_*/net_* инструменты; shell — когда их не хватает.',
+        description: 'Выполнить команду ОС вне дерева WORK (PowerShell / sh). Запрещено использовать для файлов/классов дерева WORK (включая /$server) — используй WORK-инструменты.',
         parameters: {
             type: 'object',
             properties: {
-                command: { type: 'string', description: 'Команда (скрипт)' },
+                command: { type: 'string', description: 'Команда ОС' },
                 cwd: { type: 'string', description: 'Рабочая папка ОС (по умолчанию домашняя)' },
                 timeout: { type: 'integer', description: 'Секунд (по умолчанию 60, максимум 600)' },
                 reason: { type: 'string', description: 'Зачем — для подтверждения' },
@@ -148,9 +149,14 @@ export const osProcTools = [
         async run(args, ctx) {
             if (loadConfig().shell === 'off')
                 throw new Error('shell выключен (#system/os.json shell:"off")');
+            const cmd = String(args.command || '');
+            const scope = classifyShellCommand(cmd);
+            const rootLow = workRoot().replace(/\\/g, '/').toLowerCase();
+            const cmdLow = cmd.replace(/\\/g, '/').toLowerCase();
+            if (scope.key !== 'shell:read' && (cmdLow.includes(rootLow + '/$server') || cmdLow.includes('/$server/') || (scope.noAlways && cmdLow.includes(rootLow))))
+                throw new Error('работа с деревом WORK и /$server через shell запрещена — используй WORK-инструменты (delete_class, update_class, write, edit, delete)');
             const cwd = args.cwd ? checkPath(args.cwd) : os.homedir();
             const timeout = Math.min(600, Math.max(1, Number(args.timeout) || 60)) * 1000;
-            const cmd = String(args.command);
             const r = IS_WIN
                 ? await powershell(cmd, { cwd, timeout, signal: ctx?.signal })
                 : await run('/bin/sh', ['-c', cmd], { cwd, timeout, signal: ctx?.signal });
@@ -174,6 +180,25 @@ export const osProcTools = [
             const npm = IS_WIN ? 'npm.cmd' : 'npm';
             const r = await run(npm, ['install', name, '--save', '--no-audit', '--no-fund'], { cwd: process.cwd(), timeout: 300000, signal: ctx?.signal, shell: IS_WIN });
             return formatRun(r, 4000);
+        },
+    },
+    {
+        name: 'restart_server',
+        risk: 'danger',
+        permission: askEach(a => 'перезапустить сервер WORK' + (a?.reason ? ' (' + a.reason + ')' : '') + ' после завершения ответа'),
+        description: 'Отложенный штатный перезапуск сервера WORK (после правки ядра sources/ или run.mjs; правки в /$server сбрасывают кэш автоматически и перезапуск не требуют). Запускается через 2.5 с после завершения ответа.',
+        parameters: {
+            type: 'object',
+            properties: {
+                reason: { type: 'string', description: 'Зачем нужен перезапуск' },
+            },
+            required: ['reason'],
+        },
+        async run(args, ctx) {
+            if (typeof WORK?.restart_server !== 'function')
+                throw new Error('метод restart_server недоступен');
+            const res = await WORK.restart_server({ session: ctx?.session, delayMs: 2500 });
+            return 'перезапуск сервера WORK запланирован через ' + Math.round((res?.delayMs || 2500) / 1000) + ' с после завершения текущего ответа';
         },
     },
 ];

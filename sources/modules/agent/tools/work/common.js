@@ -150,8 +150,14 @@ export async function getItem(path, ctx) {
 
 export async function mustItem(path, ctx) {
     const item = await getItem(path, ctx);
-    if (!item)
-        throw new Error('не найдено: ' + absPath(path, ctx) + ' — проверь путь через ls');
+    if (!item) {
+        const p = absPath(path, ctx);
+        if (/^\/server(\/|$)/i.test(p)) {
+            const alt = '/$server' + p.slice('/server'.length);
+            throw new Error('не найдено: ' + p + ' — системный типизатор находится в ' + alt + ' (проверь путь через ls /)');
+        }
+        throw new Error('не найдено: ' + p + ' — проверь путь через ls');
+    }
     return item;
 }
 
