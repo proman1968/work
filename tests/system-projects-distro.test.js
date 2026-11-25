@@ -246,7 +246,7 @@ test('5. Предустановленный набор российских Се
 
     // Пресеты MCP включают российские шаблоны
     const presetIds = catalog.presets.map(p => p.id);
-    for (const pId of ['1c-mcp', 'yandex-tracker', 'gitverse', 'diadoc-edo', 'marketplaces-ru', 'postgres', 'playwright', 'filesystem']) {
+    for (const pId of ['1c-mcp', 'yandex-tracker', 'gitverse', 'diadoc-edo', 'Marketplaces/Ozon', 'Marketplaces/Wildberries', 'Marketplaces/YandexMarket', 'postgres', 'playwright', 'filesystem']) {
         assert.ok(presetIds.includes(pId), `Пресет MCP ${pId} должен быть в витрине MCP_PRESETS`);
     }
 

@@ -72,14 +72,47 @@ export const MCP_PRESETS = [
         },
     },
     {
-        id: 'marketplaces-ru',
-        label: 'Wildberries и Ozon Seller MCP',
-        description: 'Остатки на складах, карточки товаров, заказы и финансовые отчёты селлера WB / Ozon',
-        icon: 'carbon:shopping-cart',
-        transport: 'http',
+        id: 'Marketplaces/Ozon',
+        label: 'Ozon Seller MCP',
+        description: 'Товары, остатки, цены, заказы FBS/FBO, аналитика и финансы Ozon Seller API',
+        icon: 'carbon:shopping-bag',
+        transport: 'stdio',
         mcp: {
-            url: 'http://localhost:8092/mcp/marketplaces',
-            headers: { Authorization: 'secret:marketplace_api_key' },
+            command: 'node',
+            args: ['sources/modules/mcp-marketplaces/ozon.js'],
+            env: {
+                OZON_CLIENT_ID: 'secret?:ozon_client_id',
+                OZON_API_KEY: 'secret?:ozon_api_key',
+            },
+        },
+    },
+    {
+        id: 'Marketplaces/Wildberries',
+        label: 'Wildberries Seller MCP',
+        description: 'Карточки товаров, цены, склады, остатки FBS, заказы и статистика продаж Wildberries',
+        icon: 'carbon:store',
+        transport: 'stdio',
+        mcp: {
+            command: 'node',
+            args: ['sources/modules/mcp-marketplaces/wildberries.js'],
+            env: {
+                WB_API_TOKEN: 'secret?:wb_api_token',
+            },
+        },
+    },
+    {
+        id: 'Marketplaces/YandexMarket',
+        label: 'Яндекс Маркет MCP',
+        description: 'Кампании, товары/офферы, остатки, цены, заказы и отчёты Yandex Market Partner API',
+        icon: 'carbon:shopping-catalog',
+        transport: 'stdio',
+        mcp: {
+            command: 'node',
+            args: ['sources/modules/mcp-marketplaces/yandex-market.js'],
+            env: {
+                YANDEX_MARKET_API_KEY: 'secret?:yandex_market_api_key',
+                YANDEX_MARKET_CAMPAIGN_ID: 'secret?:yandex_market_campaign_id',
+            },
         },
     },
     {
@@ -759,13 +792,19 @@ export function formatMentionedAgentsAndToolsBlock(promptText, agentsMap) {
 // ============================================================================
 
 function normalizeMcpServerId(rawId) {
-    const clean = String(rawId || '')
+    const parts = String(rawId || '')
         .trim()
-        .replace(/[^a-zA-Z0-9_-]+/g, '-')
-        .replace(/^-+|-+$/g, '');
-    if (!clean || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,48}$/.test(clean))
-        throw new Error(`Недопустимое имя MCP-сервера «${rawId}» (используйте латиницу, цифры, дефис или подчёркивание)`);
-    return clean;
+        .replace(/\\/g, '/')
+        .split('/')
+        .map(seg => seg.trim().replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, ''))
+        .filter(Boolean);
+    if (!parts.length || parts.length > 2)
+        throw new Error(`Недопустимое имя MCP-сервера «${rawId}» (латиница, цифры, дефис, подчёркивание; допускается 1 подраздел)`);
+    for (const seg of parts) {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,48}$/.test(seg))
+            throw new Error(`Недопустимое имя MCP-сервера «${rawId}» (используйте латиницу, цифры, дефис или подчёркивание)`);
+    }
+    return parts.join('/');
 }
 
 /**
@@ -854,83 +893,94 @@ export function parseMcpInstallInput(input = {}) {
     });
 }
 
-/** Список всех сервисов и MCP-серверов в /SERVICES + каталог пресетов. */
+/** Список всех сервисов и MCP-серверов в /SERVICES (до 2 уровней вложенности) + каталог пресетов. */
 export async function listMcpCatalog() {
     const servicesDir = path.join(process.cwd(), 'SERVICES');
     const mcpServers = [];
     const connectors = [];
 
-    if (fs.existsSync(servicesDir)) {
-        const entries = await fsp.readdir(servicesDir, { withFileTypes: true }).catch(() => []);
+    const readServiceData = async (relId) => {
+        const workPath = '/SERVICES/' + relId;
+        let data = null;
+        try {
+            const item = await globalThis.WORK?.get_item?.(workPath);
+            if (item && typeof item.import === 'function')
+                data = await item.import();
+        }
+        catch { /* fallback to reading class.js */ }
+
+        if (!data) {
+            const clsFile = path.join(servicesDir, ...relId.split('/'), '$service', 'class.js');
+            if (fs.existsSync(clsFile)) {
+                try {
+                    const raw = await fsp.readFile(clsFile, 'utf-8');
+                    const m = raw.match(/export\s+default\s+(\{[\s\S]*\})\s*;?\s*$/);
+                    if (m)
+                        data = JSON.parse(m[1]);
+                }
+                catch { /* fallback to dynamic import */ }
+                if (!data) {
+                    try {
+                        const { pathToFileURL } = await import('node:url');
+                        const mod = await import(pathToFileURL(clsFile).href + '?t=' + Date.now());
+                        data = mod?.default || null;
+                    }
+                    catch { /* ignore */ }
+                }
+            }
+        }
+        return { workPath, data };
+    };
+
+    const scanDir = async (dirPath, prefix = '', level = 1) => {
+        const entries = await fsp.readdir(dirPath, { withFileTypes: true }).catch(() => []);
         for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
             if (!e.isDirectory() || /^[$.#]/.test(e.name))
                 continue;
-            const workPath = '/SERVICES/' + e.name;
-            let data = null;
-            try {
-                const item = await globalThis.WORK?.get_item?.(workPath);
-                if (item && typeof item.import === 'function')
-                    data = await item.import();
-            }
-            catch { /* fallback to reading class.js */ }
+            const relId = prefix ? `${prefix}/${e.name}` : e.name;
+            const { workPath, data } = await readServiceData(relId);
 
-            if (!data) {
-                const clsFile = path.join(servicesDir, e.name, '$service', 'class.js');
-                if (fs.existsSync(clsFile)) {
-                    try {
-                        const raw = await fsp.readFile(clsFile, 'utf-8');
-                        const m = raw.match(/export\s+default\s+(\{[\s\S]*\})\s*;?\s*$/);
-                        if (m)
-                            data = JSON.parse(m[1]);
-                    }
-                    catch { /* fallback to dynamic import */ }
-                    if (!data) {
-                        try {
-                            const { pathToFileURL } = await import('node:url');
-                            const mod = await import(pathToFileURL(clsFile).href + '?t=' + Date.now());
-                            data = mod?.default || null;
-                        }
-                        catch { /* ignore */ }
-                    }
+            if (data && typeof data === 'object') {
+                if (data.mcp && typeof data.mcp === 'object') {
+                    const isHttp = Boolean(data.mcp.url);
+                    mcpServers.push({
+                        id: relId,
+                        path: workPath,
+                        label: data.label || e.name,
+                        description: data.description || 'MCP-сервер',
+                        icon: data.icon || 'carbon:plug',
+                        enabled: data.enabled !== false,
+                        transport: isHttp ? 'http' : 'stdio',
+                        command: data.mcp.command || '',
+                        args: Array.isArray(data.mcp.args) ? data.mcp.args : [],
+                        url: data.mcp.url || '',
+                        envKeys: data.mcp.env ? Object.keys(data.mcp.env) : [],
+                        headerKeys: data.mcp.headers ? Object.keys(data.mcp.headers) : [],
+                        mcp: data.mcp,
+                    });
+                }
+                else if (data.SCHEMA || level > 1) {
+                    const schemaTools = data.SCHEMA && typeof data.SCHEMA === 'object' ? Object.keys(data.SCHEMA) : [];
+                    connectors.push({
+                        id: relId,
+                        path: workPath,
+                        label: data.label || e.name,
+                        description: data.description || '',
+                        icon: data.icon || 'carbon:api',
+                        enabled: data.enabled !== false,
+                        capabilities: Array.isArray(data.capabilities) ? data.capabilities : [],
+                        tools: schemaTools,
+                    });
                 }
             }
 
-            if (!data || typeof data !== 'object')
-                continue;
-
-            if (data.mcp && typeof data.mcp === 'object') {
-                const isHttp = Boolean(data.mcp.url);
-                mcpServers.push({
-                    id: e.name,
-                    path: workPath,
-                    label: data.label || e.name,
-                    description: data.description || 'MCP-сервер',
-                    icon: data.icon || 'carbon:plug',
-                    enabled: data.enabled !== false,
-                    transport: isHttp ? 'http' : 'stdio',
-                    command: data.mcp.command || '',
-                    args: Array.isArray(data.mcp.args) ? data.mcp.args : [],
-                    url: data.mcp.url || '',
-                    envKeys: data.mcp.env ? Object.keys(data.mcp.env) : [],
-                    headerKeys: data.mcp.headers ? Object.keys(data.mcp.headers) : [],
-                    mcp: data.mcp,
-                });
-            }
-            else {
-                const schemaTools = data.SCHEMA && typeof data.SCHEMA === 'object' ? Object.keys(data.SCHEMA) : [];
-                connectors.push({
-                    id: e.name,
-                    path: workPath,
-                    label: data.label || e.name,
-                    description: data.description || '',
-                    icon: data.icon || 'carbon:api',
-                    enabled: data.enabled !== false,
-                    capabilities: Array.isArray(data.capabilities) ? data.capabilities : [],
-                    tools: schemaTools,
-                });
-            }
+            if (level < 2)
+                await scanDir(path.join(dirPath, e.name), relId, level + 1);
         }
-    }
+    };
+
+    if (fs.existsSync(servicesDir))
+        await scanDir(servicesDir, '', 1);
 
     return {
         mcpServers,
@@ -950,7 +1000,7 @@ export async function installMcpServers(input = {}, ctx = {}) {
     const installed = [];
 
     for (const spec of specs) {
-        const srvDir = path.join(servicesDir, spec.id, '$service');
+        const srvDir = path.join(servicesDir, ...spec.id.split('/'), '$service');
         const secretDir = path.join(srvDir, '#secret');
         await fsp.mkdir(srvDir, { recursive: true });
 
@@ -997,7 +1047,7 @@ export async function setMcpServerEnabled({ id, enabled }, ctx = {}) {
     if (ctx?.session && !(await isAdmin(ctx.session)))
         throw new Error('Доступ запрещён: управлять сервисами и MCP может только руководитель (BOSS)');
     const cleanId = normalizeMcpServerId(id);
-    const clsFile = path.join(process.cwd(), 'SERVICES', cleanId, '$service', 'class.js');
+    const clsFile = path.join(process.cwd(), 'SERVICES', ...cleanId.split('/'), '$service', 'class.js');
     if (!fs.existsSync(clsFile))
         throw new Error(`Сервис /SERVICES/${cleanId} не найден`);
 
@@ -1034,7 +1084,7 @@ export async function removeMcpServer({ id }, ctx = {}) {
     if (ctx?.session && !(await isAdmin(ctx.session)))
         throw new Error('Доступ запрещён: удалять MCP-серверы может только руководитель (BOSS)');
     const cleanId = normalizeMcpServerId(id);
-    const targetDir = path.join(process.cwd(), 'SERVICES', cleanId);
+    const targetDir = path.join(process.cwd(), 'SERVICES', ...cleanId.split('/'));
     if (!fs.existsSync(targetDir))
         throw new Error(`MCP-сервер /SERVICES/${cleanId} не найден`);
     await fsp.rm(targetDir, { recursive: true, force: true });

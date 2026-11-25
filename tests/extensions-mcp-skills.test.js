@@ -185,4 +185,46 @@ describe('внешние навыки (SKILL.md / @skill) и управлени�
         assert.ok(barSrc.includes('class="mention-popup"'), 'в work-prompt-bar присутствует всплывающее меню .mention-popup');
         assert.ok(barSrc.includes('applyMention('), 'в work-prompt-bar реализована вставка выбранного @-элемента');
     });
+
+    it('Подраздел Маркетплейсы в /SERVICES и встроенные MCP-серверы (Ozon, Wildberries, YandexMarket)', async () => {
+        const origCwd = process.cwd();
+        process.chdir(ROOT);
+        try {
+            const { listMcpCatalog } = await import('../sources/modules/agent/extensions.js');
+            const cat = await listMcpCatalog();
+            const mpIds = ['Marketplaces/Ozon', 'Marketplaces/Wildberries', 'Marketplaces/YandexMarket'];
+            for (const id of mpIds) {
+                const srv = cat.mcpServers.find(s => s.id === id);
+                assert.ok(srv, `в каталоге /SERVICES присутствует MCP ${id}`);
+                assert.equal(srv.path, `/SERVICES/${id}`);
+                assert.equal(srv.transport, 'stdio');
+            }
+
+            // Живой прогон протокола stdio для всех 3 MCP-серверов маркетплейсов
+            const pool = await import('../sources/modules/agent/mcp-pool.js');
+            try {
+                for (const [script, sampleTool] of [
+                    ['sources/modules/mcp-marketplaces/ozon.js', 'products_list'],
+                    ['sources/modules/mcp-marketplaces/wildberries.js', 'cards_list'],
+                    ['sources/modules/mcp-marketplaces/yandex-market.js', 'campaigns_list'],
+                ]) {
+                    const cfg = { command: 'node', args: [path.join(ROOT, script)], env: {} };
+                    const listed = await pool.rpc(cfg, 'tools/list', {}, 15000, { owner: 'test-mp' });
+                    assert.ok(Array.isArray(listed?.tools) && listed.tools.length >= 8, `${script}: tools/list вернул >= 8 инструментов`);
+                    assert.ok(listed.tools.some(t => t.name === sampleTool), `${script}: содержит ${sampleTool}`);
+
+                    const callRes = await pool.rpc(cfg, 'tools/call', { name: sampleTool, arguments: {} }, 15000, { owner: 'test-mp' });
+                    const parsed = JSON.parse(callRes?.content?.[0]?.text || '{}');
+                    assert.equal(parsed.notConfigured, true, `${script}: без ключа возвращает понятный статус notConfigured`);
+                    assert.ok(parsed.hint && parsed.hint.includes('#secret'), `${script}: подсказывает настройку через #secret`);
+                }
+            }
+            finally {
+                pool.closeAll?.();
+            }
+        }
+        finally {
+            process.chdir(origCwd);
+        }
+    });
 });

@@ -248,6 +248,12 @@ export const classFeedMethods = {
         return listNodeStructures(this, params);
     },
 
+    /** Список серверов сети (/NODES) для назначения в роли доступа (только BOSS). */
+    async agent_network_nodes(params = {}) {
+        const { listNodeNetworkNodes } = await import('../../modules/agent/node-rules.js');
+        return listNodeNetworkNodes(this, params);
+    },
+
     /** Список последних выполненных задач (.task) узла для повторения по расписанию (только BOSS). */
     async agent_tasks_list(params = {}) {
         const { listNodeTasks } = await import('../../modules/agent/node-rules.js');

@@ -23,6 +23,11 @@
 - **`DuckDuckGo` («DuckDuckGo Веб-поиск»)** — поиск и чтение веб-страниц (`fetch_url`).
 - **`Weather` («Погода wttr.in»)** — прогноз погоды по городам и координатам России и мира без ключа.
 
+### 4. Маркетплейсы (`/SERVICES/Marketplaces`)
+- **`Ozon` («Ozon Seller MCP»)** — товары, цены, остатки FBO/FBS, заказы, аналитика продаж и финансовые транзакции (`#secret/ozon_client_id`, `#secret/ozon_api_key`).
+- **`Wildberries` («Wildberries Seller MCP»)** — карточки товаров, цены и скидки, склады, остатки FBS, заказы и статистика продаж (`#secret/wb_api_token`).
+- **`YandexMarket` («Яндекс Маркет MCP»)** — кампании, товары/офферы, остатки, цены, заказы и отчёты (`#secret/yandex_market_api_key`, `#secret/yandex_market_campaign_id`).
+
 ## Подключение MCP-серверов (`mcp`)
 
 Любой класс в `/SERVICES/<Имя>/$service/class.js` с полем `mcp` автоматически работает как MCP-клиент:

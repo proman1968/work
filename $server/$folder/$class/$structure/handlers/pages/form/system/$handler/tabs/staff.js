@@ -39,6 +39,14 @@ function isDroppedStructure(info) {
         && !String(info.path || '').includes('/MODULES/');
 }
 
+function isDroppedNetworkNode(info) {
+    if (!info)
+        return false;
+    if (info.type === '$node' && info.id !== 'NODES')
+        return true;
+    return /^\/NODES\/[^/]+$/i.test(info.path || '');
+}
+
 function isDroppedClass(info) {
     if (!info)
         return false;
@@ -175,6 +183,10 @@ export default {
             .chip.node-chip {
                 background: color-mix(in srgb, #0284c7 13%, var(--content-background));
                 border: 1px solid color-mix(in srgb, #0284c7 28%, transparent);
+            }
+            .chip.net-chip {
+                background: color-mix(in srgb, #7c3aed 12%, var(--content-background));
+                border: 1px solid color-mix(in srgb, #7c3aed 28%, transparent);
             }
             .chip:hover {
                 filter: brightness(0.95);
@@ -380,13 +392,13 @@ export default {
 
                     <div class="members-wrap">
                         <div class="chip" ~for="$for.item.memberEntries"
-                            ~class="{ 'node-chip': $for.$for.item.isNode }"
+                            ~class="{ 'node-chip': $for.$for.item.isNode, 'net-chip': $for.$for.item.isNetworkNode }"
                             @tap="openMember($for.$for.item)">
-                            <oda-icon :round="!$for.$for.item.isNode && !$for.$for.item.isGroup" :icon="$for.$for.item.icon" :icon-color="$for.$for.item.iconColor" icon-size="16"></oda-icon>
+                            <oda-icon :round="!$for.$for.item.isNode && !$for.$for.item.isNetworkNode && !$for.$for.item.isGroup" :icon="$for.$for.item.icon" :icon-color="$for.$for.item.iconColor" icon-size="16"></oda-icon>
                             <span>{{$for.$for.item.label}}</span>
                             <span ~if="canEdit" class="rm" title="Убрать из роли" @tap.stop="removeRoleMember($for.item.trail, $for.$for.item.id)">×</span>
                         </div>
-                        <button ~if="canEdit" type="button" class="icon-btn" title="Добавить участника (человека или подразделение)" @tap="toggleMemberPicker($for.item.trail)">
+                        <button ~if="canEdit" type="button" class="icon-btn" title="Добавить участника (человека, подразделение или сервер сети)" @tap="toggleMemberPicker($for.item.trail)">
                             <oda-icon icon="icons:add" icon-size="14"></oda-icon>
                         </button>
                     </div>
@@ -419,11 +431,11 @@ export default {
                     </div>
                 </div>
 
-                <!-- Инлайн-выбор участника (сотрудники / подразделения) -->
+                <!-- Инлайн-выбор участника (сотрудники / подразделения / серверы сети) -->
                 <div ~if="$for.item.kind === 'role' && canEdit && memberPickerTrail === $for.item.trail"
                     class="inline-panel" :style="'padding-left:' + (36 + $for.item.depth * 24) + 'px'">
                     <div class="horizontal" style="gap:8px;align-items:center;">
-                        <input type="text" placeholder="Поиск человека или подразделения…" ::value="memberSearch" style="flex:1;">
+                        <input type="text" placeholder="Поиск человека, подразделения или сервера сети…" ::value="memberSearch" style="flex:1;">
                         <oda-button icon="icons:close" @tap="closeMemberPicker()">Закрыть</oda-button>
                     </div>
                     <div class="panel-list">
@@ -435,6 +447,11 @@ export default {
                             <oda-icon :icon="$for.$for.item.icon || 'odant:structure'" icon-size="18"></oda-icon>
                             <span>{{$for.$for.item.label}}</span>
                             <span class="muted">подразделение</span>
+                        </div>
+                        <div class="panel-item" ~for="filteredNetworkNodes" @tap="pickMember($for.item.trail, $for.$for.item.principalId || $for.$for.item.id)">
+                            <oda-icon :icon="$for.$for.item.icon || 'icons:dns'" icon-size="18"></oda-icon>
+                            <span>{{$for.$for.item.label}}</span>
+                            <span class="muted">сервер сети</span>
                         </div>
                         <div class="panel-item" @tap="pickMember($for.item.trail, 'USERS')">
                             <oda-icon icon="social:people" icon-size="18"></oda-icon>
@@ -502,6 +519,8 @@ export default {
     userMetaMap: {},
     availableStructures: [],
     structureMap: {},
+    availableNetworkNodes: [],
+    networkNodeMap: {},
     inheritedBossInfo: null,
     classTreeRoots: [],
     classMap: {},
@@ -564,6 +583,16 @@ export default {
             return this.availableStructures || [];
         return (this.availableStructures || []).filter(s => String(s.label || '').toLowerCase().includes(q));
     },
+    get filteredNetworkNodes() {
+        const q = String(this.memberSearch || '').trim().toLowerCase();
+        if (!q)
+            return this.availableNetworkNodes || [];
+        return (this.availableNetworkNodes || []).filter(n =>
+            String(n.label || '').toLowerCase().includes(q)
+            || String(n.id || '').toLowerCase().includes(q)
+            || String(n.origin || '').toLowerCase().includes(q)
+        );
+    },
     get treeRows() {
         const rows = [];
         const walk = (roles, prefix = '', depth = 0) => {
@@ -605,9 +634,23 @@ export default {
                         memberEntries.push({
                             id,
                             isNode: false,
+                            isNetworkNode: false,
                             isGroup: true,
                             label: id === 'USERS' ? 'Все сотрудники' : 'Все гости',
                             icon: id === 'USERS' ? 'social:people' : 'icons:public',
+                            iconColor: '',
+                        });
+                    }
+                    else if (this.networkNodeMap?.[id] || this.networkNodeMap?.[String(id).toUpperCase()]) {
+                        const nn = this.networkNodeMap[id] || this.networkNodeMap[String(id).toUpperCase()];
+                        memberEntries.push({
+                            id,
+                            isNode: false,
+                            isNetworkNode: true,
+                            isGroup: false,
+                            nodePath: nn.path,
+                            label: nn.label || nn.id || id,
+                            icon: nn.icon || 'icons:dns',
                             iconColor: '',
                         });
                     }
@@ -615,6 +658,7 @@ export default {
                         memberEntries.push({
                             id,
                             isNode: false,
+                            isNetworkNode: false,
                             isGroup: false,
                             label: this.userLabel(id),
                             icon: this.userIcon(id),
@@ -727,6 +771,7 @@ export default {
                     this.loadUsers(),
                     this.loadAvailableClasses(),
                     this.loadAvailableStructures(),
+                    this.loadNetworkNodes(),
                 ]);
             }
             else {
@@ -734,6 +779,7 @@ export default {
                     Promise.resolve(this.$item.bosses).catch(() => []),
                     this.$item.fetch('places').catch(() => ({ places: [] })),
                     this.loadUsers(),
+                    this.loadNetworkNodes(),
                 ]);
                 const toRoles = (list) => (Array.isArray(list) ? list : []).map(p => ({
                     id: p.id,
@@ -799,6 +845,28 @@ export default {
         }
         catch {
             this.availableStructures = [];
+        }
+    },
+    async loadNetworkNodes() {
+        if (!this.$item?.fetch)
+            return;
+        try {
+            const res = await this.$item.fetch('agent_network_nodes');
+            const list = Array.isArray(res?.nodes) ? res.nodes : [];
+            const map = {};
+            for (const n of list) {
+                if (n?.principalId) {
+                    map[n.principalId] = n;
+                    map[String(n.principalId).toUpperCase()] = n;
+                }
+                if (n?.id) map[n.id] = n;
+                if (n?.path) map[n.path] = n;
+            }
+            this.availableNetworkNodes = list;
+            this.networkNodeMap = map;
+        }
+        catch {
+            this.availableNetworkNodes = [];
         }
     },
     async loadInheritedBoss() {
@@ -903,6 +971,12 @@ export default {
     async openMember(entry) {
         if (!entry || entry.isGroup || typeof window?.execute !== 'function')
             return;
+        if (entry.isNetworkNode && entry.nodePath) {
+            const target = await WORK.get_item(entry.nodePath).catch(() => null);
+            if (target)
+                window.execute(target);
+            return;
+        }
         if (entry.isNode) {
             const target = await WORK.get_item(entry.id).catch(() => null);
             if (target)
@@ -983,6 +1057,17 @@ export default {
             const uid = dropped.id || dropped.path.split('/').pop();
             if (uid)
                 await this._addMemberToRole(trail, uid);
+            return;
+        }
+        if (isDroppedNetworkNode(dropped)) {
+            const byMap = this.networkNodeMap?.[dropped.path] || this.networkNodeMap?.[dropped.id];
+            let memberId = byMap?.principalId || byMap?.id || '';
+            if (!memberId && dropped.path) {
+                const item = await WORK.get_item(dropped.path).catch(() => null);
+                memberId = item?.DATA?.host_id ? String(item.DATA.host_id).toUpperCase() : (item?.id || dropped.id);
+            }
+            if (memberId)
+                await this._addMemberToRole(trail, memberId);
             return;
         }
         if (isDroppedStructure(dropped)) {

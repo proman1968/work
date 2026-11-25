@@ -155,9 +155,17 @@ async function mcpRpc(owner, method, params, opts = {}) {
     if (String(cfg.url || '').trim())
         return mcpHttpRpc(owner, method, params, opts);
     const command = String(cfg.command || '').trim();
-    const args = Array.isArray(cfg.args) ? cfg.args.map(String) : [];
+    let args = Array.isArray(cfg.args) ? cfg.args.map(String) : [];
     if (!command)
         return { error: 'mcp: нет mcp.command (stdio) или mcp.url (remote) в class.js провайдера' };
+    if (command === 'node' && args[0] && /^sources\//.test(args[0])) {
+        const pathMod = await import('node:path');
+        const fsMod = await import('node:fs');
+        const baseDir = globalThis.WORK?.real_dir || process.cwd();
+        const abs = pathMod.resolve(baseDir, args[0]);
+        if (fsMod.existsSync(abs))
+            args = [abs, ...args.slice(1)];
+    }
     const env = await mcpEnv(owner, cfg.env);
     if (env.error)
         return env;
@@ -395,22 +403,33 @@ function parseHttpRpc(body) {
     return null;
 }
 
-/** Переменные окружения / заголовки: `secret:ФАЙЛ` резолвятся через read_secret владельца. */
+/** Переменные окружения / заголовки: `secret:ФАЙЛ` (строгий) и `secret?:ФАЙЛ` (опциональный) резолвятся через read_secret владельца. */
 async function mcpEnv(owner, env) {
     const vars = {};
     for (const [k, v] of Object.entries(env && typeof env === 'object' ? env : {})) {
         const s = String(v ?? '');
-        if (/^secret:/i.test(s)) {
-            const filename = s.slice(7).trim();
+        const secMatch = s.match(/^secret(\?)?:(.*)$/i);
+        if (secMatch) {
+            const optional = Boolean(secMatch[1]);
+            const filename = String(secMatch[2] || '').trim();
             try {
                 const data = await owner.read_secret({ filename });
                 const value = typeof data === 'string' ? data
                     : data?.value ?? data?.token ?? data?.key ?? data?.apiKey ?? null;
-                if (value == null || String(value) === '')
+                if (value == null || String(value) === '') {
+                    if (optional) {
+                        vars[k] = '';
+                        continue;
+                    }
                     return { error: 'mcp: секрет ' + filename + ' пуст (нужно поле value/token/key в #secret/' + filename + ')' };
+                }
                 vars[k] = String(value);
             }
             catch (e) {
+                if (optional) {
+                    vars[k] = '';
+                    continue;
+                }
                 return { error: 'mcp: нет секрета ' + filename + ' (#secret): ' + String(e.message || e) };
             }
         }

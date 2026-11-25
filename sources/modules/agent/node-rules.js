@@ -671,6 +671,39 @@ export async function listNodeStructures(storage, params = {}) {
 }
 
 /**
+ * Список серверов сети WORK (/NODES/<Узел>) для назначения в роли доступа.
+ */
+export async function listNodeNetworkNodes(storage, params = {}) {
+    await assertBoss(storage, params);
+    const WORK = globalThis.WORK;
+    if (!WORK)
+        return { nodes: [] };
+    const nodesRoot = await WORK.get_item('/NODES').catch(() => null);
+    if (!nodesRoot)
+        return { nodes: [] };
+    const items = await Promise.resolve(nodesRoot.items).catch(() => []) || [];
+    const out = [];
+    for (const n of items) {
+        if (!n || n.id?.[0] === '$' || n.type !== '$node')
+            continue;
+        await n.init?.catch?.(() => {});
+        const principalId = String(n.principalId || n.DATA?.host_id || n.id || '').trim();
+        if (!principalId)
+            continue;
+        out.push({
+            id: n.id,
+            path: n.path || `/NODES/${n.id}`,
+            principalId,
+            label: n.DATA?.label || n.label || n.id,
+            origin: n.DATA?.origin || '',
+            status: n.DATA?.status || '',
+            icon: n.DATA?.icon || n.icon || 'icons:dns',
+        });
+    }
+    return { nodes: out };
+}
+
+/**
  * Последние выполненные задачи `.task` подразделения (для повторения по расписанию).
  */
 export async function listNodeTasks(storage, params = {}) {

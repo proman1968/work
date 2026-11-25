@@ -161,12 +161,15 @@ await test('Система: левое боковое меню .sys-sidebar бе
     assert(staffEl.$item?.set !== undefined || typeof (await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js')).default.$item?.set === 'function', '$item имеет сеттер reload');
     staffEl.canEdit = true;
     staffEl.userMap = { U_REAL: 'Харитонов Юрий' };
+    staffEl.networkNodeMap = {
+        AABBCCDDEEFF001: { id: 'partner-1', path: '/NODES/partner-1', principalId: 'AABBCCDDEEFF001', label: 'Сервер Партнёра', icon: 'icons:dns' },
+    };
     staffEl.security = {
         BOSS: ['U_GHOST'], // несуществующий UID скрывается
         ROLES: [{
             id: 'head',
             label: 'Главный бухгалтер',
-            USERS: ['U_REAL', 'U_GHOST'],
+            USERS: ['U_REAL', 'AABBCCDDEEFF001', 'U_GHOST'],
             LINKS: [{ id: '/ORG/MODULES/Reg/OPERATIONS/Зарплата', access: 'write' }],
             ROLES: [{
                 id: 'acc',
@@ -181,6 +184,7 @@ await test('Система: левое боковое меню .sys-sidebar бе
         return rows?.length === 2 ? rows : null;
     }, 'единое дерево ролей (Главный бухгалтер и дочерний Бухгалтер)');
     assert(roleRows[0].textContent.includes('Харитонов Юрий'), 'отображён реальный пользователь в строке роли');
+    assert(roleRows[0].textContent.includes('Сервер Партнёра'), 'отображён сервер сети в строке роли');
     const staffText = (staffEl.shadowRoot || staffEl).textContent;
     assert(!staffText.includes('U_GHOST'), 'несуществующие UID не отображаются абракадаброй');
     assert(!staffText.includes('Пригласить'), 'нет лишней кнопки Пригласить');

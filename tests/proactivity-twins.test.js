@@ -413,9 +413,43 @@ describe('Проактивность Агентов $structure, when-преди�
 
         // 4. Все новые методы вкладок Системы зарегистрированы в gateway.js (MEMBERS)
         const { MEMBERS, resolveMember } = await import('../sources/server/access/gateway.js');
-        for (const m of ['agent_system_get', 'agent_system_save', 'agent_available_classes', 'agent_structures_list', 'agent_tasks_list', 'security_update']) {
+        for (const m of ['agent_system_get', 'agent_system_save', 'agent_available_classes', 'agent_structures_list', 'agent_network_nodes', 'agent_tasks_list', 'security_update']) {
             assert.ok(MEMBERS[m], `метод ${m} зарегистрирован в gateway.js MEMBERS`);
             assert.ok(resolveMember(sales, m), `метод ${m} разрешается на $structure`);
         }
+
+        // 5. Узлы сети (/NODES) как активные участники ролей: agent_network_nodes и доступ node_principal
+        fs.mkdirSync(path.join(tmpDir, 'NODES/$node'), { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, 'NODES/$node/class.js'), 'export default { label: "Сеть" }', 'utf8');
+        fs.mkdirSync(path.join(tmpDir, 'NODES/partner-1/$node'), { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, 'NODES/partner-1/$node/class.js'), `export default { label: "Сервер Партнёра", host_id: "AABBCCDDEEFF001", origin: "https://partner.example" }`, 'utf8');
+        WORK.reset?.();
+        const netRes = await sales.agent_network_nodes(as(BOSS_UID));
+        assert.ok(netRes.nodes.some(n => n.id === 'partner-1' && n.principalId === 'AABBCCDDEEFF001' && n.label === 'Сервер Партнёра'));
+
+        await sales.security_update({
+            ...as(BOSS_UID),
+            post: {
+                security: {
+                    BOSS: [BOSS_UID],
+                    ROLES: [{
+                        id: 'partner_role',
+                        label: 'Доступ партнёрского сервера',
+                        USERS: ['AABBCCDDEEFF001'],
+                        LINKS: [{ id: '/ORGANIZATIONS/OrgOne/MODULES/Reg/SALE', access: 'read' }],
+                    }],
+                },
+                title: 'Добавлен сервер сети в роль',
+            },
+        });
+        LINKS.reset();
+        const nodeSession = {
+            uid: 'AABBCCDDEEFF001',
+            principal: { kind: 'node', id: 'AABBCCDDEEFF001', roles: ['USER'] },
+        };
+        assert.deepEqual(await sales.roles({ session: nodeSession }), ['USER'], 'удалённый сервер сети получает роль USER в подразделении');
+        assert.equal(await LINKS.dataAccess(saleCls, { session: nodeSession }), 'read', 'удалённый сервер сети получает доступ к привязанному классу роли');
+        const grants = await WORK.node_grants({ session: nodeSession });
+        assert.ok(grants.some(g => g.point === '/ORGANIZATIONS/OrgOne/sales' && g.role === 'USER'), 'node_grants видит назначение узла на подразделение');
     });
 });

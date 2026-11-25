@@ -49,6 +49,8 @@ describe('Ядро бесед мессенджера (chat_threads, WebSocket-с
 
         write('ORGANIZATIONS/$domain/class.js', `export default { label: 'Организации', archiveType: '$base' }`);
         write('PROJECTS/$domain/class.js', `export default { label: 'Проекты', archiveType: '$project' }`);
+        write('NODES/$node/class.js', `export default { label: 'Сеть' }`);
+        write('SERVICES/$service/class.js', `export default { label: 'Сервисы и MCP' }`);
         write('ORGANIZATIONS/OrgOne/$base/class.js', `export default { label: 'Орг Один', '#security': { BOSS: ['${BOSS_UID}'] } }`);
         write('ORGANIZATIONS/OrgOne/sales/$structure/class.js', `export default {
             label: 'Продажи',
@@ -211,6 +213,8 @@ describe('Ядро бесед мессенджера (chat_threads, WebSocket-с
         const ids = (rootInfo?.items || []).map(it => it.id);
         assert.ok(ids.indexOf('ORGANIZATIONS') >= 0 && ids.indexOf('PROJECTS') > ids.indexOf('ORGANIZATIONS'));
         assert.equal(ids.indexOf('USERS'), ids.indexOf('PROJECTS') + 1, 'USERS идёт сразу после PROJECTS');
+        assert.equal(ids.indexOf('NODES'), ids.indexOf('USERS') + 1, 'NODES (Сеть) идёт сразу под USERS');
+        assert.ok(ids.indexOf('SERVICES') > ids.indexOf('NODES'));
     });
 
     it('work-dot поддерживает профессиональные аксессуары (wrench, tie, calc, headphones)', () => {
