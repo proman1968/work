@@ -5,6 +5,7 @@ import * as fs from 'node:fs';
 import { FS } from '../index.js';
 import * as LOGS from '../logs.js';
 import * as CHAT from '../chat-threads.js';
+import * as MAILCAL from './mail-calendar.js';
 import * as POLICY from '../access/policy.js';
 import { DEV_MODE } from '../../host/config.js';
 
@@ -221,6 +222,51 @@ export const classFeedMethods = {
     async agent_proactivity_save(params = {}) {
         const { saveNodeProactivity } = await import('../../modules/agent/node-rules.js');
         return saveNodeProactivity(this, params);
+    },
+
+    /** Публичный список настроенных почтовых ящиков узла (без паролей и секретов). */
+    async mail_accounts(params = {}) {
+        return MAILCAL.mailAccounts(this, params);
+    },
+
+    /** Список писем узла (.eml) с фильтрацией по папке, поиском и счётчиками непрочитанных. */
+    async mail_list(params = {}) {
+        return MAILCAL.mailList(this, params);
+    },
+
+    /** Прочитать полное письмо (.eml) с автопометкой прочитанности. */
+    async mail_read(params = {}) {
+        return MAILCAL.mailRead(this, params);
+    },
+
+    /** Сохранить/обновить черновик письма в папке drafts. */
+    async mail_draft_save(params = {}) {
+        return MAILCAL.mailDraftSave(this, params);
+    },
+
+    /** Отправить письмо через SMTP-конвейер узла. */
+    async mail_send(params = {}) {
+        return MAILCAL.mailSend(this, params);
+    },
+
+    /** Изменить состояние письма (read/unread, в корзину, восстановить, удалить). */
+    async mail_state(params = {}) {
+        return MAILCAL.mailState(this, params);
+    },
+
+    /** Запросить свежие входящие письма с IMAP-сервера узла. */
+    async mail_refresh(params = {}) {
+        return MAILCAL.mailRefresh(this, params);
+    },
+
+    /** События календаря узла (.ics), включая повторения, задачи и расписания ИИ. */
+    async calendar_list(params = {}) {
+        return MAILCAL.calendarList(this, params);
+    },
+
+    /** Сохранить, перенести или отменить событие календаря (.ics) + синхронизация участникам. */
+    async calendar_save(params = {}) {
+        return MAILCAL.calendarSave(this, params);
     },
 
     /** @deprecated используй append_log_includes({ entryPath, includePaths }) */

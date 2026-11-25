@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head><meta charset="UTF-8"><title>Mail & Calendar & System UI tests</title></head>
+<body>
+<script type="module">
+await import('/sources/client.js');
+const calMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/calendar/$handler/calendar.js');
+const emailMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/email.js');
+const sysMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/system.js');
+
+function cloneProto(src, is) {
+    const proto = {};
+    for (const k of [...Object.getOwnPropertyNames(src), ...Object.getOwnPropertySymbols(src)])
+        Object.defineProperty(proto, k, Object.getOwnPropertyDescriptor(src, k));
+    proto.is = is;
+    return proto;
+}
+
+await ODA(cloneProto(calMod.default, 'test-cal-view'));
+await ODA(cloneProto(emailMod.default, 'test-email-view'));
+await ODA(cloneProto(sysMod.default, 'test-sys-view'));
+
+await ODA.waitReg('test-cal-view');
+await ODA.waitReg('test-email-view');
+await ODA.waitReg('test-sys-view');
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try { await fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, error: String(e?.stack || e) }); }
+}
+const assert = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(fn, msg, ms = 3000) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        const v = fn();
+        if (v) return v;
+        await sleep(25);
+    }
+    throw new Error('не дождались: ' + (typeof msg === 'function' ? msg() : msg));
+}
+
+await test('Календарь: без правой панели, кнопки Встреча/Сегодня/слои/виды и сетка событий', async () => {
+    const el = document.createElement('test-cal-view');
+    el.style.cssText = 'display:flex;width:1000px;height:650px;';
+    document.body.appendChild(el);
+    const today = new Date();
+    const pad = n => String(n).padStart(2, '0');
+    const ds = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`;
+    el.$item = {
+        id: 'logistics', path: '/ORG/logistics', type: '$structure',
+        listen() {}, unlisten() {},
+        async fetch(m) {
+            if (m === 'calendar_list') {
+                return {
+                    events: [
+                        { kind: 'event', uid: 'e1', summary: 'Планёрка логистики', start: `${ds}T10:00:00`, end: `${ds}T11:00:00`, category: 'meeting', allDay: false },
+                        { kind: 'task', uid: 't1', summary: 'Проверить маршрут', start: `${ds}T14:00:00`, end: `${ds}T14:30:00`, category: 'task', allDay: false },
+                        { kind: 'schedule', uid: 's1', summary: 'Утренняя сводка ИИ', start: `${ds}T09:00:00`, end: `${ds}T09:30:00`, category: 'ai', allDay: false },
+                    ],
+                };
+            }
+            return {};
+        },
+    };
+    const grid = await waitFor(() => el.$('oda-calendar-time-grid'), 'сетка времени');
+    await waitFor(() => grid.$('.ev-card'), 'карточки событий в сетке');
+    assert(!el.$('[slot="right-panel"]'), 'правой боковой панели Встречи больше нет');
+    assert(el.$('.btn-new')?.textContent.includes('Встреча'), 'есть кнопка + Встреча');
+    el.viewMode = 'month';
+    const month = await waitFor(() => el.$('oda-calendar-month-view'), 'вид Месяц');
+    await waitFor(() => month.$('.chip'), 'события в режиме Месяц');
+    el.remove();
+});
+
+await test('Почта: 4 папки, светлое левое меню, без top-panel, единый список и чтение письма', async () => {
+    const el = document.createElement('test-email-view');
+    el.style.cssText = 'display:flex;width:1000px;height:650px;';
+    document.body.appendChild(el);
+    let readCalled = false;
+    el.$item = {
+        id: 'logistics', path: '/ORG/logistics', type: '$structure',
+        listen() {}, unlisten() {},
+        async fetch(m) {
+            if (m === 'mail_accounts')
+                return { accounts: [{ address: 'log@org.ru', label: 'log@org.ru', hasImap: true, hasSmtp: true }], canConfigure: true, autoRefresh: true };
+            if (m === 'mail_list')
+                return {
+                    messages: [{
+                        path: '/ORG/logistics/inbox.eml',
+                        uid: 'm1',
+                        subject: 'Запрос отгрузки',
+                        from: 'client@test.ru',
+                        to: 'log@org.ru',
+                        date: new Date().toISOString(),
+                        box: 'inbox',
+                        read: false,
+                        attachmentsCount: 1,
+                        snippet: 'Просим подтвердить отгрузку',
+                    }],
+                    countsByBox: { inbox: 1, drafts: 2, outbox: 0, trash: 0 },
+                    unreadByBox: { inbox: 1, drafts: 0, outbox: 0, trash: 0 },
+                };
+            if (m === 'mail_read') {
+                readCalled = true;
+                return {
+                    path: '/ORG/logistics/inbox.eml',
+                    uid: 'm1',
+                    subject: 'Запрос отгрузки',
+                    from: 'client@test.ru',
+                    to: 'log@org.ru',
+                    date: new Date().toISOString(),
+                    box: 'inbox',
+                    read: true,
+                    body: 'Подробный текст письма от клиента.',
+                    attachments: [{ name: 'order.pdf' }],
+                };
+            }
+            return {};
+        },
+    };
+    assert(!el.$('[slot="top-panel"]'), 'нет кнопок в slot=top-panel фиолетовой шапки');
+    const row = await waitFor(() => el.$('div.msg-row'), 'письмо в плоском списке');
+    assert(el.$('.nav-badge')?.textContent.trim() === '1', 'бейдж непрочитанных на папке Входящие');
+    row.click();
+    await waitFor(() => readCalled && el.$('.view-body')?.textContent.includes('Подробный текст'), () => `письмо открыто (readCalled=${readCalled}, mode=${el.mode}, rowTag=${row.tagName})`);
+    el.$('.compose-btn').click();
+    await waitFor(() => el.$('.compose-wrap'), 'открыта форма написания письма');
+    el.remove();
+});
+
+await test('Система: левое боковое меню .sys-sidebar без вкладки Поиск', async () => {
+    const el = document.createElement('test-sys-view');
+    el.style.cssText = 'display:flex;width:900px;height:550px;';
+    document.body.appendChild(el);
+    el.$item = {
+        id: 'logistics', path: '/ORG/logistics', type: '$structure',
+        METADATA: Promise.resolve({ STATIC: [], FIELDS: [] }),
+        async fetch() { return {}; },
+    };
+    const nav = await waitFor(() => el.$('.sys-sidebar'), 'левое боковое меню Системы');
+    const labels = [...nav.querySelectorAll('.sys-tab')].map(b => b.textContent.trim());
+    assert(labels.includes('Пользователи') && labels.includes('Мессенджеры') && labels.includes('Агент и правила'), 'основные разделы в левом меню');
+    assert(!labels.includes('Поиск'), 'Поиск вынесен из Системы');
+    el.remove();
+});
+window.__done = true;
+</script>
+</body>
+</html>

@@ -314,3 +314,54 @@ export async function runQuietDigests({ now = Date.now(), nodes = null } = {}) {
     }
     return sent;
 }
+
+/**
+ * Фоновая проверка входящей почты (IMAP) для узлов, у которых настроен хотя бы один ящик с imap.host
+ * и не отключён mailAutoRefresh.
+ */
+export async function runMailAutoRefresh({ nodes = null } = {}) {
+    const WORK = globalThis.WORK;
+    if (!WORK && !Array.isArray(nodes))
+        return [];
+    const list = Array.isArray(nodes) ? nodes : [WORK];
+    if (!Array.isArray(nodes) && WORK) {
+        const collectTargets = async (containerPath) => {
+            const c = await WORK.get_item(containerPath).catch(() => null);
+            const items = (await c?.items) || [];
+            for (const item of items) {
+                if (!item || item.id?.[0] === '$') continue;
+                list.push(item);
+                if (item.type === '$base' || item.type === '$project') {
+                    const sub = (await item.items) || [];
+                    for (const child of sub) {
+                        if (child && child.type === '$structure' && child.id?.[0] !== '$')
+                            list.push(child);
+                    }
+                }
+            }
+        };
+        await collectTargets('/ORGANIZATIONS');
+        await collectTargets('/PROJECTS');
+        await collectTargets('/USERS');
+    }
+
+    const { readEmailSettings } = await import('../../../$server/$folder/lib/email/settings.js');
+    const MAILCAL = await import('../../server/class/mail-calendar.js');
+    const refreshed = [];
+    for (const nodeItem of list) {
+        if (!nodeItem || nodeItem.DATA?.mailAutoRefresh === false)
+            continue;
+        const settings = readEmailSettings(nodeItem);
+        const hasImap = Object.values(settings?.mailboxes || {}).some(b => b?.imap?.host && b?.auth?.pass);
+        if (!hasImap)
+            continue;
+        try {
+            const res = await MAILCAL.mailRefresh(nodeItem, { session: { uid: nodeItem.id || 'WORK', $user: WORK } });
+            refreshed.push({ path: nodeItem.path || '/', ok: Boolean(res?.ok !== false) });
+        }
+        catch (e) {
+            console.warn('[mailAutoRefresh]', nodeItem.path || '/', e?.message || e);
+        }
+    }
+    return refreshed;
+}

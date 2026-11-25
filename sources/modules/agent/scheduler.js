@@ -347,6 +347,7 @@ export async function cancelSchedule({ uid, id }) {
 }
 
 let lastQuietDigestAt = 0;
+let lastMailRefreshAt = 0;
 
 /** Выполнить наступившие запуски (вызывается таймером; тесты — напрямую). */
 export async function runDue(now = Date.now(), runner = defaultRunner) {
@@ -375,6 +376,12 @@ export async function runDue(now = Date.now(), runner = defaultRunner) {
         lastQuietDigestAt = now;
         import('./node-rules.js')
             .then(m => m.runQuietDigests?.({ now }))
+            .catch(() => {});
+    }
+    if (runner === defaultRunner && now - lastMailRefreshAt >= 10 * 60_000) {
+        lastMailRefreshAt = now;
+        import('./node-rules.js')
+            .then(m => m.runMailAutoRefresh?.({ now }))
             .catch(() => {});
     }
     return done;

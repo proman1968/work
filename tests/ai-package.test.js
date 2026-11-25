@@ -9,6 +9,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseFrontmatter } from '../sources/modules/agent/util.js';
 import { workTools, accountingTools, classTools } from '../sources/modules/agent/tools/work.js';
+import { twinTools } from '../sources/modules/agent/twin-bus.js';
+import { calendarMailTools } from '../sources/modules/agent/tools/calendar-mail.js';
 import { docTools } from '../sources/modules/agent/tools/docs.js';
 import { memoryTools } from '../sources/modules/agent/tools/memory.js';
 import { webTools } from '../sources/modules/agent/tools/services.js';
@@ -35,7 +37,7 @@ const MAX_DESCRIPTION = 400; // список в system обрезается: с�
 const SUBAGENT_DENY = ['ask_user', 'todo_write', 'save_skill', 'connect_service', 'disconnect_service', 'schedule', 'git_push'];
 const REQUIRES = ['system', 'sandbox'];
 
-const TOOLS = [...workTools, ...accountingTools, ...classTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools,
+const TOOLS = [...workTools, ...accountingTools, ...classTools, ...twinTools, ...calendarMailTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools,
     ...scheduleTools, ...osFileTools, ...osProcTools, ...netTools, ...sandboxTools, ...computerTools, ...browserTools,
     ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools];
 const BY_NAME = new Map(TOOLS.map(t => [t.name, t]));

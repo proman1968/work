@@ -59,13 +59,26 @@ export default {
 
         // Отправка
         try {
-            await sendOutboxEml(box, json);
+            const resolveAttachment = async (attPath) => {
+                const item = await globalThis.WORK?.get_item?.(attPath).catch(() => null);
+                if (!item || typeof item.load !== 'function')
+                    return null;
+                if (params.session && typeof item.canSee === 'function') {
+                    const ok = await item.canSee(item, { session: params.session }).catch(() => false);
+                    if (!ok) return null;
+                }
+                const buf = await item.load({ encoding: 'buffer', session: params.session }).catch(() => null);
+                if (!buf) return null;
+                return { content: Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf)) };
+            };
+            await sendOutboxEml(box, json, { resolveAttachment });
             markJsonStatus(json, 'sent');
         }
         catch (err) {
             console.warn(`[${filename}]`, err.message);
             markJsonStatus(json, 'failed', { error: err.message || String(err) });
         }
+        json.read = true;
         await saveOutboxOnMailbox(storage, address, json, params);
         return true;
     },
@@ -78,10 +91,13 @@ async function saveOutboxOnMailbox(storage, folder, json, params) {
         subject: json.subject || '',
         from: json.from || '',
         to: json.to || '',
+        cc: json.cc || '',
         date: json.date || '',
         box: json.box || 'outbox',
         mailbox: json.mailbox || folder || '',
         status: json.status || '',
+        read: true,
+        attachmentsCount: Array.isArray(json.attachments) ? json.attachments.length : 0,
     };
     if (json.error)
         message.error = json.error;

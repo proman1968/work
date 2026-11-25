@@ -204,7 +204,7 @@ export default {
                         <input ~if="inviteChannel === 'telegram' || inviteChannel === 'max'" type="text" placeholder="Chat ID (для отправки ботом) или имя для заметки…" ::value="inviteRecipient" style="flex:1;min-width:200px;">
                         <input type="text" placeholder="Комментарий (опционально)" ::value="inviteNote" style="width:180px;">
                         <oda-button icon="icons:check" :disabled="inviteBusy" @tap="sendInvite()">{{inviteBusy ? 'Отправка…' : 'Создать'}}</oda-button>
-                        <oda-button icon="icons:close" @tap="inviteTrail = ''; inviteResult = null">Закрыть</oda-button>
+                        <oda-button icon="icons:close" @tap="(inviteTrail = '', inviteResult = null)">Закрыть</oda-button>
                     </div>
                     <div ~if="inviteResult" class="role-row" style="gap:8px;flex-wrap:wrap;">
                         <input type="text" readonly :value="inviteResult.url" style="flex:1;min-width:260px;font-family:monospace;font-size:12px;">

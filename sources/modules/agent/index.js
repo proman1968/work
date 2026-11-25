@@ -10,6 +10,7 @@ import { log } from './log.js';
 import { runLoop, pickAllowedEffort } from './loop.js';
 import { workTools, accountingTools, classTools, contextConeOf } from './tools/work.js';
 import { twinTools } from './twin-bus.js';
+import { calendarMailTools } from './tools/calendar-mail.js';
 import { webTools, serviceTools, mcpTools } from './tools/services.js';
 import { metaTools, listing, MAX_DEPTH } from './tools/meta.js';
 import { connectTools } from './tools/connect.js';
@@ -449,7 +450,7 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
          * restrict — ограничение call родителя, пережившее перезапуск (body.callRestrict дочерней задачи, R3/8.31).
          */
         async makeTools(def, depth = 0, parent = null, restrict = null) {
-            let all = [...workTools, ...accountingTools, ...classTools, ...twinTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...pluginTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
+            let all = [...workTools, ...accountingTools, ...classTools, ...twinTools, ...calendarMailTools, ...devSearchTools, ...devPatchTools, ...devGitTools, ...devCheckTools, ...devLspTools, ...branchTools, ...pluginTools, ...docTools, ...memoryTools, ...webTools, ...connectTools, ...browseTools, ...metaTools, ...scheduleTools, ...await env.extTools()];
             // не-администратор этих инструментов даже не видит
             if (await system())
                 all.push(...SYSTEM_TOOLS);
@@ -477,6 +478,7 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
                     'create_class', 'update_class', 'move_class', 'delete_class',
                     'assign', 'escalate', 'delete',
                     'twin_rule_list', 'twin_rule_save', 'twin_schedule_save',
+                    'mail_send', 'mail_draft', 'mail_refresh',
                     'dev_write', 'dev_edit', 'dev_patch', 'dev_git', 'dev_shell',
                     'shell', 'restart_server', 'os_write', 'os_rm',
                 ]);

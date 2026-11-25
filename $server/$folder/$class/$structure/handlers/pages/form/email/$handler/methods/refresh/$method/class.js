@@ -82,7 +82,27 @@ async function streamToString(stream) {
     return Buffer.concat(chunks).toString('utf-8');
 }
 
-/** Найти part-id для text/plain и text/html в bodyStructure. */
+function extractAttachmentsMeta(structure) {
+    const out = [];
+    const walk = (node) => {
+        if (!node || typeof node !== 'object')
+            return;
+        const disp = String(node.disposition || '').toLowerCase();
+        const name = node.dispositionParameters?.filename || node.parameters?.name || '';
+        if (disp === 'attachment' || (name && !String(node.type || '').startsWith('text/'))) {
+            out.push({
+                name: String(name || 'attachment'),
+                contentType: String(node.type || 'application/octet-stream'),
+                size: Number(node.size) || 0,
+                part: String(node.part || ''),
+            });
+        }
+        for (const child of node.childNodes || [])
+            walk(child);
+    };
+    walk(structure);
+    return out;
+}
 function findTextPartIds(structure) {
     const found = { text: '', html: '' };
     const walk = (node) => {
@@ -150,11 +170,13 @@ async function syncMailboxFolder(client, storage, {
                 }
                 let raw = Buffer.isBuffer(msg.source) ? msg.source.toString('utf-8') : String(msg.source);
                 const parts = findTextPartIds(msg.bodyStructure);
+                const attachments = extractAttachmentsMeta(msg.bodyStructure);
                 const [body, html] = await Promise.all([
                     downloadPart(client, msg.uid ?? uid, parts.text),
                     downloadPart(client, msg.uid ?? uid, parts.html),
                 ]);
                 const env = msg.envelope || {};
+                const cc = formatAddrs(env.cc) || getEmlHeader(raw, 'Cc') || '';
                 const date = env.date
                         ? new Date(env.date).toISOString()
                         : (getEmlHeader(raw, 'Delivery-Date') || new Date().toISOString());
@@ -163,12 +185,15 @@ async function syncMailboxFolder(client, storage, {
                     subject: env.subject || getEmlHeader(raw, 'Subject') || '(без темы)',
                     from: formatAddrs(env.from) || getEmlHeader(raw, 'From'),
                     to: formatAddrs(env.to) || getEmlHeader(raw, 'To'),
+                    cc,
                     date,
                     body,
                     html,
                     'rfc-822': raw,
                     messageId: getEmlHeader(raw, 'Message-ID') || '',
                     box,
+                    read: box !== 'inbox',
+                    attachments,
                 }, {
                     uid: msg.uid ?? uid,
                     uidValidity,
@@ -177,13 +202,17 @@ async function syncMailboxFolder(client, storage, {
                 });
                 // метаданные для списка писем — форма не читает тела ради box
                 const meta = {
+                    uid: json.uid || `${address}:${imapPath}:${msg.uid ?? uid}`,
                     subject: json.subject,
                     from: json.from,
                     to: json.to,
+                    cc,
                     date,
                     box,
+                    read: box !== 'inbox',
                     mailbox: address,
                     messageId: json.messageId,
+                    attachmentsCount: attachments.length,
                 };
                 await storage.save_file({
                     filename,

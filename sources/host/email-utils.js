@@ -92,21 +92,43 @@ export function createMailboxTransport(box) {
     });
 }
 
-export async function sendOutboxEml(box, data) {
+export async function sendOutboxEml(box, data, opts = {}) {
     const json = parseJsonEml(data);
     const from = json.from || box.auth?.user || box.address;
     const to = json.to;
     if (!to)
         throw new Error('Не указан получатель');
+    const attachments = [];
+    if (Array.isArray(json.attachments)) {
+        for (const att of json.attachments) {
+            if (!att) continue;
+            const filename = String(att.name || att.filename || 'file').trim() || 'file';
+            if (att.content != null) {
+                attachments.push({
+                    filename,
+                    content: att.content,
+                    encoding: att.encoding || undefined,
+                    contentType: att.contentType || undefined,
+                });
+            }
+            else if (att.path && typeof opts.resolveAttachment === 'function') {
+                const resolved = await opts.resolveAttachment(att.path, att).catch(() => null);
+                if (resolved)
+                    attachments.push({ filename, ...resolved });
+            }
+        }
+    }
     const transport = createMailboxTransport(box);
     await transport.sendMail({
         from,
         to,
+        cc: json.cc || undefined,
         subject: json.subject || '(без темы)',
         text: json.body || '',
         html: json.html || undefined,
         inReplyTo: json.inReplyTo || undefined,
         references: json.inReplyTo || undefined,
+        ...(attachments.length ? { attachments } : {}),
     });
 }
 
@@ -141,6 +163,8 @@ export function imapFolderToBox(imapPath) {
         return '';
     if (name === 'inbox')
         return 'inbox';
+    if (/draft|черновик/.test(name))
+        return 'drafts';
     if (/outbox|sent|отправленные/.test(name))
         return 'outbox';
     if (/trash|deleted|bin|удаленные/.test(name))

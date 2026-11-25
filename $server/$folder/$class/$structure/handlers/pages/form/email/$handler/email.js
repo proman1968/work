@@ -1,46 +1,8 @@
-export default {
-    icon: 'enterprise:email',
-    imports: 'oda//button, oda//icon',
-    template: /* html */`
-        <style>
-            :host {
-                @apply --vertical;
-                @apply --flex;
-            }
-            .email-top-panel {
-                gap: 4px;
-                align-items: center;
-            }
-        </style>
-        <div class="email-top-panel" slot="top-panel" horizontal>
-            <oda-button icon="icons:add" @tap="odaFormEmail?.createEmail?.()" title="Написать"></oda-button>
-            <oda-button icon="icons:refresh" @tap="odaFormEmail?.fetchRefresh?.()" title="Обновить"></oda-button>
-        </div>
-        <oda-form-email flex :$item></oda-form-email>
-    `,
-    get odaFormEmail() {
-        return this.$('oda-form-email');
-    },
-}
-
-const NO_MAILBOX = 'Сначала настройте почтовый ящик в настройках формы';
-const EMPTY_DRAFT = () => ({ from: '', to: '', subject: '', body: '', inReplyTo: '' });
-
-function accountAddresses(mailboxes = {}) {
-    const result = [];
-    for (const [key, box] of Object.entries(mailboxes || {})) {
-        const address = String(box?.auth?.user || box?.address || key || '').trim();
-        if (address && !result.includes(address))
-            result.push(address);
-    }
-    return result;
-}
+const EMPTY_DRAFT = () => ({ uid: '', origTime: 0, from: '', to: '', cc: '', subject: '', body: '', inReplyTo: '', attachments: [] });
 
 function parseJson(value) {
-    if (value && typeof value === 'object')
-        return value;
-    if (typeof value !== 'string' || !value)
-        return null;
+    if (value && typeof value === 'object') return value;
+    if (typeof value !== 'string' || !value) return null;
     try {
         const parsed = JSON.parse(value);
         return parsed && typeof parsed === 'object' ? parsed : null;
@@ -50,42 +12,25 @@ function parseJson(value) {
     }
 }
 
-function formatMailDate(value) {
-    if (!value)
-        return '';
+function formatMailShortDate(value) {
+    if (!value) return '';
     const d = new Date(value);
-    if (Number.isNaN(d.getTime()))
-        return String(value);
+    if (isNaN(d.getTime())) return String(value);
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+    if (sameDay)
+        return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+}
+
+function formatMailFullDate(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return String(value);
     return d.toLocaleString('ru-RU', {
-        day: '2-digit',
-        month: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
+        day: '2-digit', month: 'short', year: 'numeric',
+        hour: '2-digit', minute: '2-digit',
     });
-}
-
-function newUid() {
-    if (globalThis.crypto?.randomUUID)
-        return crypto.randomUUID();
-    return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-}
-
-/** Адрес из «Имя <a@b>» или «a@b». */
-function bareAddress(value) {
-    const s = String(value || '').trim();
-    const m = s.match(/<([^>]+)>/);
-    return (m ? m[1] : s).trim();
-}
-
-/** Проверка поля «Кому»: непустое, каждый адрес похож на e-mail. */
-function validateRecipients(to) {
-    const list = String(to || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
-    if (!list.length)
-        throw new Error('Укажите получателя');
-    const bad = list.filter(a => !/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(bareAddress(a)));
-    if (bad.length)
-        throw new Error('Некорректный адрес: ' + bad.join(', '));
-    return list.join(', ');
 }
 
 function htmlToText(html) {
@@ -100,90 +45,79 @@ function htmlToText(html) {
 function quoteBody(msg) {
     const text = msg.body || htmlToText(msg.html || '');
     const quoted = String(text).split(/\r?\n/).map(line => '> ' + line).join('\n');
-    return `\n\n${msg.dateLabel || ''}, ${msg.from || ''} пишет:\n${quoted}`;
+    return `\n\n${formatMailFullDate(msg.date)}, ${msg.from || ''} пишет:\n${quoted}`;
 }
 
-/** Документ для iframe sandbox: без скриптов, ссылки — в новой вкладке. */
 function htmlDocument(html) {
     return '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">'
-        + '<style>body{margin:0;font-family:sans-serif;word-wrap:break-word;}img{max-width:100%;height:auto;}</style>'
+        + '<style>body{margin:0;padding:8px;font-family:sans-serif;font-size:13.5px;line-height:1.45;word-wrap:break-word;}img{max-width:100%;height:auto;}</style>'
         + '</head><body>' + String(html || '') + '</body></html>';
 }
 
-function defaultEmlJson({ uid, from, to, subject, body, address, inReplyTo, status = 'pending' }) {
-    const json = {
-        uid,
-        subject: subject || '(без темы)',
-        from: from || '',
-        to: to || '',
-        date: new Date().toISOString(),
-        body: body || '',
-        html: '',
-        status,
-        box: 'outbox',
-        mailbox: address || '',
-    };
-    if (inReplyTo)
-        json.inReplyTo = inReplyTo;
-    return json;
-}
-
-/** Метаданные письма для message лога (список строится без чтения тел). */
-function emlMeta(json) {
-    return {
-        uid: json.uid || '',
-        subject: json.subject || '',
-        from: json.from || '',
-        to: json.to || '',
-        date: json.date || '',
-        box: json.box || '',
-        mailbox: json.mailbox || '',
-        status: json.status || '',
-    };
-}
-
-/** Строка лога → письмо списка. Старые записи без box в message — чтение файла (legacy). */
-async function rowToMessage(row) {
-    let meta = parseJson(row.content) || {};
-    if (!meta.box) {
-        try {
-            const res = await fetch(row.path);
-            const json = parseJson(await res.text());
-            if (!json?.box)
-                return null;
-            meta = json;
-        }
-        catch {
-            return null;
-        }
-    }
-    const date = meta.date || row.time || '';
-    return {
-        path: row.path,
-        uid: meta.uid || '',
-        subject: meta.subject || '(без темы)',
-        from: meta.from || '',
-        to: meta.to || '',
-        date,
-        status: meta.status || '',
-        error: meta.error || '',
-        box: meta.box,
-        address: meta.mailbox || '',
-        messageId: meta.messageId || '',
-        body: null,
-        html: null,
-        dateLabel: formatMailDate(date),
-        sortTime: date ? new Date(date).getTime() : (row.time || 0),
-    };
-}
-
-function emptyMailbox(address = '') {
-    return {
+function mailboxesToAccounts(mailboxes = {}) {
+    return Object.entries(mailboxes).map(([address, box]) => ({
         address,
-        smtp: { host: '', port: 465, secure: true },
-        imap: { host: '', port: 993, secure: true },
-        auth: { user: address, pass: '' },
-    };
+        smtp: { host: '', port: 465, secure: true, ...box.smtp },
+        imap: { host: '', port: 993, secure: true, ...box.imap },
+        auth: { user: address, pass: '', ...box.auth },
+    }));
+}
+
+function accountsToMailboxes(accounts = [], previousMailboxes = {}) {
+    const mailboxes = Object.create(null);
+    for (const acc of accounts) {
+        const address = String(acc.auth?.user || '').trim();
+        if (!address) continue;
+        const prev = previousMailboxes?.[address] || {};
+        mailboxes[address] = {
+            ...prev,
+            smtp: { host: acc.smtp?.host || '', port: Number(acc.smtp?.port) || 465, secure: acc.smtp?.secure !== false },
+            imap: { host: acc.imap?.host || '', port: Number(acc.imap?.port) || 993, secure: acc.imap?.secure !== false },
+            auth: { user: address, pass: acc.auth?.pass || '' },
+        };
+    }
+    return mailboxes;
+}
+
+async function openEmailSettingsDialog($context) {
+    if (openEmailSettingsDialog.opening || !$context) return null;
+    openEmailSettingsDialog.opening = true;
+    let el, settings;
+    try {
+        settings = await $context.fetch('read_secret', { filename: 'email.json' });
+        el = ODA.createElement('oda-email-settings', {
+            accounts: mailboxesToAccounts(settings?.mailboxes),
+        });
+        if (!el.accounts.length) el.addAccount();
+        else el.index = 0;
+    }
+    catch (e) {
+        ODA.showMessage?.(e.message || String(e));
+        return null;
+    }
+    finally {
+        openEmailSettingsDialog.opening = false;
+    }
+    try {
+        await WORK.showDialog(el, {
+            TITLE: { label: 'Почтовые ящики', icon: 'enterprise:email' },
+            OK: { label: 'Сохранить', icon: 'icons:save' },
+            CANCEL: { label: 'Отмена', icon: 'icons:close' },
+        });
+    }
+    catch {
+        return null;
+    }
+    try {
+        el.validate();
+        const mailboxes = accountsToMailboxes(el.accounts, settings?.mailboxes);
+        await $context.fetch('save_secret', { filename: 'email.json' }, JSON.stringify({ mailboxes }));
+        return mailboxes;
+    }
+    catch (e) {
+        ODA.showMessage?.(e.message || String(e));
+        return null;
+    }
 }
 
 ODA({
@@ -215,25 +149,15 @@ ODA({
                 cursor: pointer;
                 border-bottom: 1px solid var(--subtle-border);
             }
-            .account-item:not([info-invert]):hover {
-                @apply --hover;
-            }
+            .account-item:not([info-invert]):hover { @apply --hover; }
             .account-title {
                 font-weight: 500;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
             }
-            .account-sub {
-                font-size: x-small;
-                @apply --muted;
-            }
-            /* на инвертированной плашке приглушённый цвет темы нечитаем — следуем цвету плашки */
-            [info-invert] .account-sub {
-                color: inherit;
-                fill: inherit;
-                opacity: .75;
-            }
+            .account-sub { font-size: x-small; @apply --muted; }
+            [info-invert] .account-sub { color: inherit; fill: inherit; opacity: .75; }
             .editor {
                 padding: 12px var(--space-l);
                 gap: var(--space-m);
@@ -245,10 +169,7 @@ ODA({
                 padding: var(--space-s) var(--space-m);
                 margin: 0;
             }
-            legend {
-                font-size: x-small;
-                padding: 0 var(--space-s);
-            }
+            legend { font-size: x-small; padding: 0 var(--space-s); }
             input {
                 border: none;
                 outline: none;
@@ -259,635 +180,922 @@ ODA({
                 box-sizing: border-box;
                 font: inherit;
             }
-            .row {
-                gap: 12px;
-                align-items: center;
-            }
-            .port {
-                max-width: 72px;
-            }
-            .empty {
-                padding: 24px;
-                @apply --muted;
-                text-align: center;
-            }
+            .row { gap: 12px; align-items: center; }
+            .port { max-width: 72px; }
+            .empty { padding: var(--space-l); @apply --muted; }
         </style>
         <div class="accounts" vertical>
             <div class="accounts-toolbar" horizontal>
-                <strong flex>Ящики</strong>
-                <oda-button icon="icons:add" title="Добавить ящик" @tap="addAccount"></oda-button>
+                <span flex>Ящики</span>
+                <oda-button icon="icons:add" @tap="addAccount" title="Добавить ящик"></oda-button>
+                <oda-button icon="icons:delete" :disabled="!current" @tap="removeAccount" title="Удалить ящик"></oda-button>
             </div>
-            <div flex style="overflow-y:auto;">
-                <div ~if="accounts.length" ~for="accounts" class="account-item" horizontal
-                    :info-invert="index === $for.index"
-                    @tap="index = $for.index">
-                    <div vertical flex>
-                        <div class="account-title">{{$for.item.auth?.user || '(новый)'}}</div>
-                        <div class="account-sub">{{$for.item.smtp?.host || 'SMTP не задан'}}</div>
-                    </div>
-                    <oda-button ~if="index === $for.index" icon="icons:delete" title="Удалить ящик" @tap="removeAccount($for.index)"></oda-button>
-                </div>
-                <div ~if="!accounts.length" class="empty">Нет ящиков</div>
+            <div class="account-item" ~for="accounts"
+                :info-invert="index === $for.index"
+                @tap="index = $for.index">
+                <div class="account-title">{{$for.item.auth.user || 'Новый ящик'}}</div>
+                <div class="account-sub">{{$for.item.smtp.host || 'SMTP не задан'}}</div>
             </div>
+            <div ~if="!accounts.length" class="empty">Нажмите «+» чтобы добавить ящик</div>
         </div>
-        <div class="editor" vertical flex>
-            <div ~if="accounts[index]" vertical flex>
+        <div class="editor" vertical flex ~if="current">
+            <fieldset>
+                <legend>Учётная запись</legend>
+                <input placeholder="user@example.com" ::value="current.auth.user">
+                <input type="password" placeholder="Пароль или пароль приложения" ::value="current.auth.pass">
+            </fieldset>
+            <fieldset>
+                <legend>Исходящая почта (SMTP)</legend>
                 <div class="row" horizontal>
-                    <fieldset flex>
-                        <legend>Логин</legend>
-                        <input placeholder="user@example.com" ::value="accounts[index].auth.user">
-                    </fieldset>
-                    <fieldset flex>
-                        <legend>Пароль</legend>
-                        <input type="password" placeholder="••••••••" ::value="accounts[index].auth.pass">
-                    </fieldset>
+                    <input flex placeholder="smtp.yandex.ru" ::value="current.smtp.host">
+                    <input class="port" type="number" placeholder="465" ::value="current.smtp.port">
+                    <oda-checkbox ::value="current.smtp.secure"></oda-checkbox><span>TLS</span>
                 </div>
-                <fieldset>
-                    <legend>Входящая (IMAP)</legend>
-                    <input placeholder="imap.example.com" ::value="accounts[index].imap.host">
-                    <div class="row" horizontal>
-                        <fieldset class="port">
-                            <legend>Порт</legend>
-                            <input type="number" ::value="accounts[index].imap.port">
-                        </fieldset>
-                        <label horizontal style="gap:4px; align-items:center;">
-                            <oda-checkbox ::value="accounts[index].imap.secure"></oda-checkbox>
-                            <span>SSL/TLS</span>
-                        </label>
-                    </div>
-                </fieldset>
-                <fieldset>
-                    <legend>Исходящая (SMTP)</legend>
-                    <input placeholder="smtp.example.com" ::value="accounts[index].smtp.host">
-                    <div class="row" horizontal>
-                        <fieldset class="port">
-                            <legend>Порт</legend>
-                            <input type="number" ::value="accounts[index].smtp.port">
-                        </fieldset>
-                        <label horizontal style="gap:4px; align-items:center;">
-                            <oda-checkbox ::value="accounts[index].smtp.secure"></oda-checkbox>
-                            <span>SSL/TLS</span>
-                        </label>
-                    </div>
-                </fieldset>
-            </div>
-            <div ~if="!accounts[index]" class="empty" flex>Выберите ящик или нажмите «+»</div>
+            </fieldset>
+            <fieldset>
+                <legend>Входящая почта (IMAP)</legend>
+                <div class="row" horizontal>
+                    <input flex placeholder="imap.yandex.ru" ::value="current.imap.host">
+                    <input class="port" type="number" placeholder="993" ::value="current.imap.port">
+                    <oda-checkbox ::value="current.imap.secure"></oda-checkbox><span>TLS</span>
+                </div>
+            </fieldset>
         </div>
+        <div ~if="!current" class="empty" flex>Выберите или добавьте ящик</div>
     `,
     accounts: [],
     index: -1,
+    get current() { return this.accounts[this.index] ?? null; },
     addAccount() {
-        this.accounts.push(emptyMailbox(''));
+        this.accounts = [...this.accounts, {
+            address: '',
+            smtp: { host: '', port: 465, secure: true },
+            imap: { host: '', port: 993, secure: true },
+            auth: { user: '', pass: '' },
+        }];
         this.index = this.accounts.length - 1;
-        this.render();
     },
-    removeAccount(index) {
-        if (index < 0)
-            return;
-        this.accounts.splice(index, 1);
-        this.async(() => {
-            if (this.index >= index) {
-                this.index = Math.min(this.index, this.accounts.length - 1);
-            }
-            this.render();
-        })
+    removeAccount() {
+        if (this.index < 0) return;
+        const next = [...this.accounts];
+        next.splice(this.index, 1);
+        this.accounts = next;
+        this.index = next.length ? Math.min(this.index, next.length - 1) : -1;
     },
     validate() {
-        const logins = this.accounts.map(a => String(a.auth?.user || '').trim()).filter(Boolean);
-        if (this.accounts.some(a => !String(a.auth?.user || '').trim()))
-            throw new Error('Укажите логин e-mail для каждого ящика');
-        if (logins.length !== new Set(logins).size)
-            throw new Error('Логины ящиков должны быть уникальными');
+        const seen = new Set();
+        for (const acc of this.accounts) {
+            const addr = String(acc.auth?.user || '').trim();
+            if (!addr) throw new Error('Укажите адрес (логин) для каждого ящика');
+            if (seen.has(addr)) throw new Error('Повторяющийся ящик: ' + addr);
+            seen.add(addr);
+        }
     },
 });
 
-ODA({
-    is: 'oda-form-email',
-    imports: 'oda//button, oda//icon, oda//app-layout',
-    extends: 'oda-app-layout',
-    template: /* html */ `
+export default {
+    icon: 'enterprise:email',
+    imports: 'oda//button, oda//icon',
+    template: /* html */`
         <style>
             :host {
+                @apply --horizontal;
+                @apply --flex;
+                overflow: hidden;
+                background: var(--content-background, #ffffff);
+                color: var(--content-color, #1e293b);
+                font-size: 13px;
+            }
+            .mail-sidebar {
+                @apply --vertical;
+                width: 212px;
+                flex-shrink: 0;
+                padding: 12px 10px;
+                gap: 6px;
+                border-right: 1px solid var(--subtle-border, #e2e8f0);
+                background: var(--subtle-background, #f8fafc);
+                overflow-y: auto;
+            }
+            .compose-btn {
+                @apply --horizontal;
+                align-items: center;
+                justify-content: center;
+                gap: 7px;
+                padding: 9px 14px;
+                border-radius: 9px;
+                border: none;
+                background: var(--accent-color, #2563eb);
+                color: var(--accent-back, #ffffff);
+                font: inherit;
+                font-size: 13.5px;
+                font-weight: 600;
+                cursor: pointer;
+                margin-bottom: 6px;
+                box-shadow: 0 2px 6px rgba(37, 99, 235, 0.22);
+            }
+            .compose-btn:hover { filter: brightness(1.06); }
+            .nav-btn {
+                @apply --horizontal;
+                align-items: center;
+                gap: 9px;
+                width: 100%;
+                padding: 8px 11px;
+                border-radius: 8px;
+                border: 1px solid transparent;
+                background: transparent;
+                color: inherit;
+                font: inherit;
+                font-size: 13.5px;
+                font-weight: 500;
+                text-align: left;
+                cursor: pointer;
+                user-select: none;
+            }
+            .nav-btn:hover {
+                background: color-mix(in srgb, var(--accent-color, #2563eb) 6%, transparent);
+            }
+            .nav-btn.active {
+                background: color-mix(in srgb, var(--accent-color, #2563eb) 10%, var(--content-background, #ffffff));
+                border-color: color-mix(in srgb, var(--accent-color, #2563eb) 50%, transparent);
+                color: var(--accent-color, #2563eb);
+                font-weight: 600;
+            }
+            .nav-badge {
+                margin-left: auto;
+                padding: 1px 7px;
+                border-radius: 999px;
+                font-size: 11px;
+                font-weight: 700;
+                background: var(--accent-color, #2563eb);
+                color: #ffffff;
+            }
+            .nav-count {
+                margin-left: auto;
+                font-size: 11.5px;
+                color: var(--muted-color, #64748b);
+            }
+            .side-sep {
+                height: 1px;
+                margin: 4px 6px;
+                background: var(--subtle-border, #e2e8f0);
+            }
+            .side-label {
+                padding: 2px 10px;
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.04em;
+                color: var(--muted-color, #64748b);
+            }
+            .acc-pill {
+                font-size: 12.5px;
+                padding: 6px 10px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .mail-list-pane {
+                @apply --vertical;
+                width: 335px;
+                min-width: 260px;
+                flex-shrink: 0;
+                border-right: 1px solid var(--subtle-border, #e2e8f0);
+                background: var(--content-background, #ffffff);
                 overflow: hidden;
             }
+            .list-toolbar {
+                @apply --horizontal;
+                align-items: center;
+                gap: 6px;
+                padding: 10px 10px 8px;
+                border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+                background: var(--content-background, #ffffff);
+            }
+            .search-input {
+                @apply --flex;
+                min-width: 0;
+                padding: 6px 10px;
+                border-radius: 7px;
+                border: 1px solid var(--subtle-border, #cbd5e1);
+                background: var(--subtle-background, #f8fafc);
+                color: inherit;
+                font: inherit;
+                font-size: 12.5px;
+                outline: none;
+            }
+            .search-input:focus {
+                border-color: var(--accent-color, #2563eb);
+                background: var(--content-background, #ffffff);
+            }
+            .icon-btn {
+                @apply --horizontal;
+                align-items: center;
+                justify-content: center;
+                padding: 6px 8px;
+                border-radius: 7px;
+                border: 1px solid var(--subtle-border, #cbd5e1);
+                background: var(--content-background, #ffffff);
+                color: inherit;
+                cursor: pointer;
+                font-size: 12px;
+            }
+            .icon-btn:hover { background: var(--accent-soft); }
+            .icon-btn.active {
+                border-color: var(--accent-color, #2563eb);
+                color: var(--accent-color, #2563eb);
+                background: color-mix(in srgb, var(--accent-color, #2563eb) 10%, var(--content-background, #ffffff));
+                font-weight: 600;
+            }
+            .msg-scroll {
+                @apply --vertical;
+                @apply --flex;
+                overflow-y: auto;
+            }
+            .msg-row {
+                display: flex;
+                flex-direction: column;
+                gap: 3px;
+                padding: 10px 12px;
+                border-bottom: 1px solid var(--subtle-border, #f1f5f9);
+                cursor: pointer;
+                position: relative;
+                transition: background 0.1s ease;
+            }
+            .msg-row:hover {
+                background: var(--subtle-background, #f8fafc);
+            }
+            .msg-row.selected {
+                background: color-mix(in srgb, var(--accent-color, #2563eb) 10%, var(--content-background, #ffffff));
+                border-left: 3px solid var(--accent-color, #2563eb);
+                padding-left: 9px;
+            }
+            .msg-row.unread .msg-peer,
+            .msg-row.unread .msg-subj {
+                font-weight: 700;
+            }
+            .msg-top {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                min-width: 0;
+            }
+            .unread-dot {
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                background: var(--accent-color, #2563eb);
+                flex-shrink: 0;
+            }
+            .msg-peer {
+                flex: 1;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 13px;
+                font-weight: 500;
+            }
+            .msg-time {
+                font-size: 11px;
+                color: var(--muted-color, #64748b);
+                white-space: nowrap;
+            }
+            .msg-subj {
+                font-size: 12.5px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                display: flex;
+                align-items: center;
+                gap: 5px;
+            }
+            .msg-snip {
+                font-size: 11.5px;
+                color: var(--muted-color, #64748b);
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            .status-tag {
+                font-size: 10.5px;
+                padding: 1px 6px;
+                border-radius: 999px;
+                background: var(--subtle-background, #f1f5f9);
+                color: var(--muted-color, #64748b);
+            }
+            .status-tag.err { background: #fef2f2; color: #dc2626; }
+            .status-tag.draft { background: #fffbeb; color: #b45309; }
+            .mail-view-pane {
+                @apply --vertical;
+                @apply --flex;
+                min-width: 0;
+                overflow: hidden;
+                background: var(--content-background, #ffffff);
+            }
+            .empty-pane {
+                @apply --vertical;
+                @apply --flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                color: var(--muted-color, #64748b);
+                padding: 24px;
+                text-align: center;
+            }
+            .view-actions {
+                @apply --horizontal;
+                align-items: center;
+                gap: 6px;
+                padding: 10px 16px;
+                border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+                background: var(--subtle-background, #f8fafc);
+                flex-wrap: wrap;
+            }
+            .view-head {
+                @apply --vertical;
+                gap: 4px;
+                padding: 14px 18px 10px;
+                border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+            }
+            .view-subject {
+                font-size: 17px;
+                font-weight: 700;
+            }
+            .view-meta {
+                font-size: 12.5px;
+                color: var(--muted-color, #475569);
+            }
+            .att-bar {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                padding: 8px 18px;
+                border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+                background: var(--subtle-background, #f8fafc);
+            }
+            .att-chip {
+                @apply --horizontal;
+                align-items: center;
+                gap: 5px;
+                padding: 4px 10px;
+                border-radius: 6px;
+                border: 1px solid var(--subtle-border, #cbd5e1);
+                background: var(--content-background, #ffffff);
+                font-size: 12px;
+                cursor: pointer;
+            }
+            .view-body {
+                @apply --flex;
+                overflow: auto;
+                padding: 16px 18px;
+                white-space: pre-wrap;
+                line-height: 1.5;
+                user-select: text;
+            }
+            .view-iframe {
+                @apply --flex;
+                width: 100%;
+                border: none;
+                background: #ffffff;
+            }
+            .compose-wrap {
+                @apply --vertical;
+                @apply --flex;
+                padding: 14px 18px;
+                gap: 10px;
+                overflow-y: auto;
+            }
+            .compose-field {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+                padding: 4px 0;
+            }
+            .compose-field label {
+                width: 68px;
+                font-size: 12.5px;
+                color: var(--muted-color, #64748b);
+                flex-shrink: 0;
+            }
+            .compose-field input,
+            .compose-field select {
+                flex: 1;
+                border: none;
+                outline: none;
+                background: transparent;
+                color: inherit;
+                font: inherit;
+                padding: 4px 0;
+            }
+            .compose-body {
+                @apply --flex;
+                min-height: 180px;
+                border: 1px solid var(--subtle-border, #e2e8f0);
+                border-radius: 8px;
+                padding: 10px 12px;
+                outline: none;
+                background: var(--content-background, #ffffff);
+                color: inherit;
+                font: inherit;
+                line-height: 1.5;
+                resize: none;
+            }
+            .compose-footer {
+                @apply --horizontal;
+                align-items: center;
+                gap: 8px;
+                padding-top: 4px;
+            }
         </style>
-        <!--<oda-mailbox ~for="boxes" slot="left-panel" vertical flex :box="$for.item" :label="$for.item.label" :icon="$for.item.icon"></oda-mailbox>-->
-        <oda-mailbox slot="left-panel" vertical flex :box="boxes[0]" label="Входящие" icon="icons:inbox"></oda-mailbox>
-        <oda-mailbox slot="left-panel" vertical flex :box="boxes[1]" label="Исходящие" icon="iconoir:send-mail"></oda-mailbox>
-        <oda-mailbox slot="left-panel" vertical flex :box="boxes[2]" label="Корзина" icon="icons:delete"></oda-mailbox>
-        <oda-email-message slot="main" :mode></oda-email-message>
+
+        <aside class="mail-sidebar">
+            <button type="button" class="compose-btn" @tap="createEmail()">
+                <oda-icon icon="icons:add" icon-size="16"></oda-icon>
+                <span>Написать</span>
+            </button>
+
+            <button type="button" class="nav-btn" ~for="folders"
+                ~class="{ active: activeBox === $for.item.id }"
+                @tap="selectBox($for.item.id)">
+                <oda-icon :icon="$for.item.icon" icon-size="16"></oda-icon>
+                <span>{{$for.item.label}}</span>
+                <span ~if="badgeOf($for.item.id) > 0" class="nav-badge">{{badgeOf($for.item.id)}}</span>
+                <span ~if="badgeOf($for.item.id) === 0 && countOf($for.item.id) > 0" class="nav-count">{{countOf($for.item.id)}}</span>
+            </button>
+
+            <div class="side-sep" ~if="accounts.length"></div>
+            <div class="side-label" ~if="accounts.length">Ящики</div>
+            <button type="button" class="nav-btn acc-pill" ~if="accounts.length > 1"
+                ~class="{ active: !selectedAccount }"
+                @tap="selectAccount('')">Все ящики</button>
+            <button type="button" class="nav-btn acc-pill" ~for="accounts"
+                ~class="{ active: selectedAccount === $for.item.address }"
+                @tap="selectAccount($for.item.address)"
+                :title="$for.item.address">
+                <span>{{$for.item.address}}</span>
+            </button>
+
+            <div style="flex: 1;"></div>
+            <div class="side-sep" ~if="canConfigure"></div>
+            <label ~if="canConfigure && accounts.length" style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;cursor:pointer;">
+                <input type="checkbox" :checked="autoRefresh" @change="toggleAutoRefresh($event.target.checked)">
+                <span>Автопроверка почты</span>
+            </label>
+            <button type="button" class="nav-btn" ~if="canConfigure" @tap="openSettings()">
+                <oda-icon icon="icons:settings" icon-size="16"></oda-icon>
+                <span>Настройка ящиков</span>
+            </button>
+        </aside>
+
+        <section class="mail-list-pane">
+            <div class="list-toolbar">
+                <input class="search-input" type="search" placeholder="Поиск писем…" :value="searchQuery" @input="onSearchInput($event)">
+                <button type="button" class="icon-btn" ~class="{ active: unreadOnly }" @tap="toggleUnreadOnly()" title="Только непрочитанные">●</button>
+                <button type="button" class="icon-btn" @tap="fetchRefresh()" :disabled="refreshing" title="Проверить почту с сервера">
+                    <oda-icon :icon="refreshing ? 'spinners:8-dots-rotate' : 'icons:refresh'" icon-size="15"></oda-icon>
+                </button>
+            </div>
+
+            <div class="msg-scroll">
+                <div ~if="loading && !messages.length" class="empty-pane">Загрузка писем…</div>
+                <div ~if="!loading && !messages.length" class="empty-pane">
+                    <span>В папке «{{activeBoxLabel}}» писем нет</span>
+                </div>
+                <div ~for="messages" class="msg-row"
+                    ~class="{ selected: selected?.path === $for.item.path, unread: !$for.item.read }"
+                    @tap="selectMessage($for.item)">
+                    <div class="msg-top">
+                        <span ~if="!$for.item.read" class="unread-dot"></span>
+                        <span class="msg-peer">{{peerLabel($for.item)}}</span>
+                        <span class="msg-time">{{shortDate($for.item.date || $for.item.sortTime)}}</span>
+                    </div>
+                    <div class="msg-subj">
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{$for.item.subject || '(без темы)'}}</span>
+                        <oda-icon ~if="$for.item.attachmentsCount > 0" icon="editor:attach-file" icon-size="13"></oda-icon>
+                        <span ~if="$for.item.status === 'failed'" class="status-tag err">ошибка</span>
+                        <span ~if="$for.item.status === 'draft'" class="status-tag draft">черновик</span>
+                    </div>
+                    <div ~if="$for.item.snippet" class="msg-snip">{{$for.item.snippet}}</div>
+                </div>
+            </div>
+        </section>
+
+        <main class="mail-view-pane">
+            <div ~if="mode === 'idle'" class="empty-pane">
+                <oda-icon icon="enterprise:email" icon-size="40" style="opacity:0.35;"></oda-icon>
+                <div style="font-size:14px;font-weight:600;">Выберите письмо для просмотра</div>
+                <div ~if="!accounts.length && canConfigure" style="font-size:12.5px;">
+                    Почтовый ящик для этого узла ещё не настроен.
+                    <div style="margin-top:8px;">
+                        <button type="button" class="compose-btn" @tap="openSettings()">Подключить ящик</button>
+                    </div>
+                </div>
+            </div>
+
+            <div ~if="mode === 'view' && selected" style="display:flex;flex-direction:column;flex:1;min-height:0;">
+                <div class="view-actions">
+                    <oda-button ~if="selected.box === 'drafts'" icon="editor:mode-edit" info-invert @tap="editDraft(selected)">Продолжить черновик</oda-button>
+                    <oda-button ~if="selected.box !== 'drafts'" icon="icons:reply" @tap="reply(false)">Ответить</oda-button>
+                    <oda-button ~if="selected.box !== 'drafts' && (selected.cc || (selected.to || '').includes(','))" icon="icons:reply-all" @tap="reply(true)">Ответить всем</oda-button>
+                    <oda-button icon="icons:forward" @tap="forward()">Переслать</oda-button>
+                    <oda-button ~if="selected.box === 'inbox'" :icon="selected.read ? 'icons:markunread' : 'icons:drafts'" @tap="toggleRead(selected)">
+                        {{selected.read ? 'Непрочитано' : 'Прочитано'}}
+                    </oda-button>
+                    <div style="flex:1;"></div>
+                    <oda-button ~if="selected.box !== 'trash'" icon="icons:delete" @tap="moveToTrash(selected)">В корзину</oda-button>
+                    <oda-button ~if="selected.box === 'trash'" icon="icons:restore" @tap="restoreFromTrash(selected)">Восстановить</oda-button>
+                    <oda-button ~if="selected.box === 'trash'" icon="icons:delete-forever" error @tap="deleteForever(selected)">Удалить навсегда</oda-button>
+                </div>
+
+                <div class="view-head">
+                    <div class="view-subject">{{selected.subject || '(без темы)'}}</div>
+                    <div class="view-meta"><b>От:</b> {{selected.from || '—'}} · <b>Дата:</b> {{fullDate(selected.date)}}</div>
+                    <div class="view-meta"><b>Кому:</b> {{selected.to || '—'}} <span ~if="selected.cc">· <b>Копия:</b> {{selected.cc}}</span></div>
+                    <div ~if="selected.error" style="font-size:12.5px;color:#dc2626;font-weight:600;">Ошибка доставки: {{selected.error}}</div>
+                </div>
+
+                <div ~if="selected.attachments?.length" class="att-bar">
+                    <div ~for="selected.attachments" class="att-chip" @tap="openAttachment($for.item)">
+                        <oda-icon icon="editor:attach-file" icon-size="14"></oda-icon>
+                        <span>{{$for.item.name || 'Вложение'}}</span>
+                    </div>
+                </div>
+
+                <iframe ~if="selected.html" class="view-iframe" sandbox="allow-popups allow-popups-to-escape-sandbox" :srcdoc="htmlDoc"></iframe>
+                <div ~if="!selected.html" class="view-body">{{selected.body || ''}}</div>
+            </div>
+
+            <div ~if="mode === 'compose'" class="compose-wrap">
+                <div style="display:flex;align-items:center;justify-content:space-between;">
+                    <span style="font-size:15px;font-weight:700;">{{draft.uid ? 'Редактирование черновика' : 'Новое письмо'}}</span>
+                </div>
+
+                <div class="compose-field">
+                    <label>От:</label>
+                    <select @change="draft.from = $event.target.value">
+                        <option ~for="accounts" :value="$for.item.address" :selected="$for.item.address === draft.from">{{$for.item.address}}</option>
+                    </select>
+                </div>
+                <div class="compose-field">
+                    <label>Кому:</label>
+                    <input placeholder="recipient@example.com" :value="draft.to" @input="draft.to = $event.target.value">
+                </div>
+                <div class="compose-field">
+                    <label>Копия:</label>
+                    <input placeholder="cc@example.com (необязательно)" :value="draft.cc" @input="draft.cc = $event.target.value">
+                </div>
+                <div class="compose-field">
+                    <label>Тема:</label>
+                    <input placeholder="Тема письма" :value="draft.subject" @input="draft.subject = $event.target.value">
+                </div>
+
+                <div class="att-bar" style="padding:6px 0;border:none;background:transparent;" ~if="draft.attachments?.length">
+                    <div ~for="draft.attachments" class="att-chip">
+                        <oda-icon icon="editor:attach-file" icon-size="14"></oda-icon>
+                        <span>{{$for.item.name}}</span>
+                        <oda-icon icon="icons:close" icon-size="13" style="cursor:pointer;" @tap.stop="removeDraftAttachment($for.index)"></oda-icon>
+                    </div>
+                </div>
+
+                <textarea class="compose-body" placeholder="Текст письма…" :value="draft.body" @input="draft.body = $event.target.value"></textarea>
+
+                <div class="compose-footer">
+                    <oda-button icon="icons:send" info-invert @tap="sendDraft()">Отправить</oda-button>
+                    <oda-button icon="icons:save" @tap="saveDraft()">Сохранить черновик</oda-button>
+                    <label class="icon-btn" style="cursor:pointer;">
+                        <oda-icon icon="editor:attach-file" icon-size="15"></oda-icon>
+                        <span>Прикрепить</span>
+                        <input type="file" multiple hidden @change="onAttachFiles($event)">
+                    </label>
+                    <div style="flex:1;"></div>
+                    <oda-button icon="icons:close" @tap="mode = selected ? 'view' : 'idle'">Отмена</oda-button>
+                </div>
+            </div>
+        </main>
     `,
-    $item: null,
-    boxes: [
+    $item: {
+        $def: null,
+        set(n, o) {
+            if (o && this._onChanged)
+                o.unlisten?.('changed', this._onChanged);
+            if (n) {
+                this._onChanged ??= () => this.debounce('mail-reload', () => this.reload(), 200);
+                n.listen?.('changed', this._onChanged);
+                this.initLoad();
+            }
+        }
+    },
+    folders: [
         { id: 'inbox', label: 'Входящие', icon: 'icons:inbox' },
+        { id: 'drafts', label: 'Черновики', icon: 'editor:insert-drive-file' },
         { id: 'outbox', label: 'Исходящие', icon: 'iconoir:send-mail' },
         { id: 'trash', label: 'Корзина', icon: 'icons:delete' },
     ],
+    activeBox: 'inbox',
+    selectedAccount: '',
+    searchQuery: '',
+    unreadOnly: false,
+    loading: false,
+    refreshing: false,
+    accounts: [],
+    canConfigure: false,
+    autoRefresh: true,
+    messages: [],
+    countsByBox: { inbox: 0, drafts: 0, outbox: 0, trash: 0 },
+    unreadByBox: { inbox: 0, drafts: 0, outbox: 0, trash: 0 },
     selected: null,
     mode: 'idle',
     draft: EMPTY_DRAFT(),
-    accounts: [],
-    _settings: null,
-    /** Зарегистрированные колонки (oda-mailbox) — для перезагрузки по changed. */
-    _mailboxRegistry() {
-        return this._mailboxes ??= new Set();
+    get activeBoxLabel() {
+        return this.folders.find(f => f.id === this.activeBox)?.label || 'Входящие';
+    },
+    get htmlDoc() {
+        return htmlDocument(this.selected?.html);
     },
     attached() {
-        this.loadSettings();
-        this._onChanged ??= () => this.debounce('email-reload', () => this.reload(), 150);
-        this._watch();
+        if (this.$item && this._loadedFor !== this.$item)
+            this.initLoad();
     },
     detached() {
-        for (const src of this._watched || [])
-            src?.unlisten?.('changed', this._onChanged);
-        this._watched = null;
+        this.$item?.unlisten?.('changed', this._onChanged);
     },
-    async _watch() {
-        if (this._watched || !this.$item)
-            return;
-        this._watched = [this.$item];
-        for (const src of this._watched)
-            src?.listen?.('changed', this._onChanged);
+    async initLoad() {
+        const cur = this.$item;
+        if (!cur) return;
+        this._loadedFor = cur;
+        this.selected = null;
+        this.mode = 'idle';
+        await this.loadAccounts();
+        await this.reload();
     },
-    async loadSettings() {
+    async loadAccounts() {
+        if (!this.$item?.fetch) return;
         try {
-            this._settings = await this.$item?.fetch('read_secret', { filename: 'email.json' });
+            const res = await this.$item.fetch('mail_accounts');
+            this.accounts = Array.isArray(res?.accounts) ? res.accounts : [];
+            this.canConfigure = Boolean(res?.canConfigure);
+            this.autoRefresh = res?.autoRefresh !== false;
         }
         catch {
-            this._settings = null;
+            this.accounts = [];
+            this.canConfigure = false;
         }
-        this.accounts = accountAddresses(this._settings?.mailboxes);
-        return this._settings;
     },
-    /** Даты с логами, по убыванию. Общие для всех колонок. */
-    loadDates() {
-        return this._datesPromise ??= Promise.resolve(this.$item?.logs({ mode: 'dates' }))
-            .then(list => (Array.isArray(list) ? list : [])
-                .map(String)
-                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-                .sort((a, b) => b.localeCompare(a)))
-            .catch(() => []);
-    },
-    /** Письма дня (все ящики), одна загрузка на форму; исходящие — последняя версия по uid. */
-    dayMessages(day) {
-        const cache = this._dayCache ??= new Map();
-        if (!cache.has(day)) {
-
-
-
-            cache.set(day, (async () => {
-                const rows = await this.$item.logs({ mode: 'bodies', day, ext: 'eml' });
-                const seen = new Set();
-                const list = [];
-                // rows — по убыванию time: первая строка uid — актуальная версия
-                for (const row of rows || []) {
-                    const msg = await rowToMessage(row);
-                    if (!msg)
-                        continue;
-                    const key = msg.uid ? 'uid:' + msg.uid : 'path:' + msg.path;
-                    if (seen.has(key))
-                        continue;
-                    seen.add(key);
-                    list.push(msg);
-                }
-                list.sort((a, b) => (b.sortTime || 0) - (a.sortTime || 0));
-                return list;
-            })().catch(e => {
-                console.warn('[email] day', day, e);
-                cache.delete(day);
-                return [];
-            }));
-        }
-        return cache.get(day);
-    },
-    reload() {
-        this._datesPromise = null;
-        this._dayCache?.clear();
-        for (const mb of this._mailboxRegistry())
-            mb.reload();
-    },
-    async fetchRefresh() {
+    async reload() {
+        if (!this.$item?.fetch) return;
+        this.loading = true;
         try {
-            await this.$pdp.$handler.fetch('refresh');
+            const res = await this.$item.fetch('mail_list', {}, JSON.stringify({
+                box: this.activeBox,
+                address: this.selectedAccount,
+                q: this.searchQuery,
+                unreadOnly: this.unreadOnly,
+                limit: 200,
+            }));
+            this.messages = Array.isArray(res?.messages) ? res.messages : [];
+            if (res?.countsByBox) this.countsByBox = res.countsByBox;
+            if (res?.unreadByBox) this.unreadByBox = res.unreadByBox;
         }
         catch (e) {
-            ODA.showMessage(e.message || String(e));
+            this.messages = [];
         }
-        await this.loadSettings();
+        finally {
+            this.loading = false;
+        }
+    },
+    badgeOf(boxId) {
+        return boxId === 'inbox' ? (Number(this.unreadByBox?.[boxId]) || 0) : 0;
+    },
+    countOf(boxId) {
+        return boxId === 'drafts' ? (Number(this.countsByBox?.[boxId]) || 0) : 0;
+    },
+    peerLabel(msg) {
+        if (this.activeBox === 'outbox' || this.activeBox === 'drafts')
+            return msg.to || '(без получателя)';
+        return msg.from || '(неизвестный отправитель)';
+    },
+    shortDate(v) { return formatMailShortDate(v); },
+    fullDate(v) { return formatMailFullDate(v); },
+    selectBox(boxId) {
+        this.activeBox = boxId;
+        this.selected = null;
+        if (this.mode === 'view') this.mode = 'idle';
         this.reload();
     },
-    async selectMessage(msg) {
-        this.selected = msg;
-        this.mode = 'view';
-        if (msg.body != null)
-            return;
+    selectAccount(addr) {
+        this.selectedAccount = addr || '';
+        this.reload();
+    },
+    onSearchInput(e) {
+        this.searchQuery = e.target.value || '';
+        this.debounce('mail-search', () => this.reload(), 200);
+    },
+    toggleUnreadOnly() {
+        this.unreadOnly = !this.unreadOnly;
+        this.reload();
+    },
+    async fetchRefresh() {
+        if (!this.$item?.fetch || this.refreshing) return;
+        this.refreshing = true;
         try {
-            const res = await fetch(msg.path);
-            const json = parseJson(await res.text()) || {};
-            this.selected = {
-                ...msg,
-                body: json.body || '',
-                html: json.html || '',
-                messageId: msg.messageId || json.messageId || '',
-                error: msg.error || json.error || '',
-            };
+            await this.$item.fetch('mail_refresh');
         }
         catch (e) {
-            console.error(e);
-            ODA.showMessage(e.message);
-            this.selected = { ...msg, body: e.message, html: '' };
+            ODA.showMessage?.(e?.message || String(e));
+        }
+        finally {
+            this.refreshing = false;
+        }
+        await this.loadAccounts();
+        await this.reload();
+    },
+    async selectMessage(msg) {
+        if (!msg?.path || !this.$item?.fetch) return;
+        this.selected = msg;
+        this.mode = 'view';
+        try {
+            const full = await this.$item.fetch('mail_read', {}, JSON.stringify({ path: msg.path, uid: msg.uid, markRead: true }));
+            this.selected = full;
+            if (!msg.read && full.read) {
+                msg.read = true;
+                this.messages = [...this.messages];
+                if (this.unreadByBox.inbox > 0) {
+                    this.unreadByBox = { ...this.unreadByBox, inbox: this.unreadByBox.inbox - 1 };
+                }
+            }
+        }
+        catch (e) {
+            ODA.showMessage?.(e?.message || String(e));
         }
     },
-    async createEmail(draft = {}) {
+    async toggleRead(msg) {
+        if (!msg?.path || !this.$item?.fetch) return;
+        try {
+            await this.$item.fetch('mail_state', {}, JSON.stringify({ path: msg.path, uid: msg.uid, read: !msg.read }));
+            await this.reload();
+            if (this.selected?.path === msg.path)
+                this.selected = { ...this.selected, read: !msg.read };
+        }
+        catch (e) { ODA.showMessage?.(e?.message || String(e)); }
+    },
+    async moveToTrash(msg) {
+        if (!msg?.path || !this.$item?.fetch) return;
+        try {
+            await this.$item.fetch('mail_state', {}, JSON.stringify({ path: msg.path, uid: msg.uid, box: 'trash' }));
+            this.selected = null;
+            this.mode = 'idle';
+            await this.reload();
+        }
+        catch (e) { ODA.showMessage?.(e?.message || String(e)); }
+    },
+    async restoreFromTrash(msg) {
+        if (!msg?.path || !this.$item?.fetch) return;
+        try {
+            await this.$item.fetch('mail_state', {}, JSON.stringify({ path: msg.path, uid: msg.uid, restore: true }));
+            this.selected = null;
+            this.mode = 'idle';
+            await this.reload();
+        }
+        catch (e) { ODA.showMessage?.(e?.message || String(e)); }
+    },
+    async deleteForever(msg) {
+        if (!msg?.path || !this.$item?.fetch) return;
+        try {
+            await this.$item.fetch('mail_state', {}, JSON.stringify({ path: msg.path, uid: msg.uid, deletePermanent: true }));
+            this.selected = null;
+            this.mode = 'idle';
+            await this.reload();
+        }
+        catch (e) { ODA.showMessage?.(e?.message || String(e)); }
+    },
+    async createEmail(init = {}) {
         if (!this.accounts.length)
-            await this.loadSettings();
+            await this.loadAccounts();
         if (!this.accounts.length) {
-            ODA.showMessage(NO_MAILBOX);
+            ODA.showMessage?.('Сначала настройте почтовый ящик');
             return;
         }
-        this.draft = { ...EMPTY_DRAFT(), from: this.accounts[0], ...draft };
-        this.selected = null;
+        this.draft = {
+            ...EMPTY_DRAFT(),
+            from: this.selectedAccount || this.accounts[0]?.address || '',
+            ...init,
+        };
         this.mode = 'compose';
     },
-    async reply() {
-        const msg = this.selected;
-        if (!msg)
-            return;
-        if (msg.body == null)
-            await this.selectMessage(msg);
+    editDraft(msg) {
+        this.createEmail({
+            uid: msg.uid || '',
+            origTime: msg.origTime || 0,
+            from: msg.address || msg.from || this.accounts[0]?.address || '',
+            to: msg.to || '',
+            cc: msg.cc || '',
+            subject: msg.subject === '(без темы)' ? '' : (msg.subject || ''),
+            body: msg.body || '',
+            attachments: Array.isArray(msg.attachments) ? [...msg.attachments] : [],
+        });
+    },
+    reply(replyAll = false) {
         const src = this.selected;
+        if (!src) return;
         const subject = /^re:/i.test(src.subject || '') ? src.subject : 'Re: ' + (src.subject || '');
         const to = src.box === 'outbox' ? src.to : src.from;
-        const from = this.accounts.includes(src.address) ? src.address : undefined;
-        await this.createEmail({
+        const from = this.accounts.some(a => a.address === src.address) ? src.address : undefined;
+        this.createEmail({
             to,
+            cc: replyAll ? (src.cc || '') : '',
             subject,
             body: quoteBody(src),
             inReplyTo: src.messageId || '',
             ...(from ? { from } : {}),
         });
     },
-    setFrom(address) {
-        this.draft.from = address;
+    forward() {
+        const src = this.selected;
+        if (!src) return;
+        const subject = /^fwd?:/i.test(src.subject || '') ? src.subject : 'Fwd: ' + (src.subject || '');
+        const from = this.accounts.some(a => a.address === src.address) ? src.address : undefined;
+        this.createEmail({
+            to: '',
+            subject,
+            body: `\n\n---------- Пересылаемое сообщение ----------\nОт: ${src.from}\nКому: ${src.to}\nТема: ${src.subject}\n\n${src.body || htmlToText(src.html || '')}`,
+            attachments: Array.isArray(src.attachments) ? src.attachments.filter(a => a.path) : [],
+            ...(from ? { from } : {}),
+        });
+    },
+    async onAttachFiles(e) {
+        const files = [...(e.target?.files || [])];
+        e.target.value = '';
+        if (!files.length || !this.$item?.save_files) return;
+        try {
+            const fd = new FormData();
+            for (const f of files)
+                fd.append('file', f, f.name);
+            const saved = await this.$item.save_files(fd, { ignore_save_logs: true });
+            const arr = Array.isArray(saved) ? saved : (saved ? [saved] : []);
+            const nextAtts = [...(this.draft.attachments || [])];
+            for (let i = 0; i < arr.length; i++) {
+                const s = arr[i];
+                const p = s?.path || s?.logFullPath || '';
+                if (p)
+                    nextAtts.push({ name: files[i]?.name || p.split('/').pop(), path: p });
+            }
+            this.draft = { ...this.draft, attachments: nextAtts };
+        }
+        catch (err) {
+            ODA.showMessage?.(err?.message || String(err));
+        }
+    },
+    removeDraftAttachment(idx) {
+        const next = [...(this.draft.attachments || [])];
+        next.splice(idx, 1);
+        this.draft = { ...this.draft, attachments: next };
+    },
+    async saveDraft() {
+        if (!this.$item?.fetch) return;
+        try {
+            const res = await this.$item.fetch('mail_draft_save', {}, JSON.stringify(this.draft));
+            this.draft = { ...this.draft, uid: res?.uid || this.draft.uid };
+            ODA.showMessage?.('Черновик сохранён');
+            await this.reload();
+        }
+        catch (e) { ODA.showMessage?.(e?.message || String(e)); }
     },
     async sendDraft() {
-        const address = this.draft.from || this.accounts[0];
-        if (!address) {
-            ODA.showMessage(NO_MAILBOX);
-            return;
-        }
-        let to;
+        if (!this.$item?.fetch) return;
         try {
-            to = validateRecipients(this.draft.to);
-        }
-        catch (e) {
-            ODA.showMessage(e.message);
-            return;
-        }
-        const settings = this._settings || await this.loadSettings();
-        const box = settings?.mailboxes?.[address];
-        const eml = defaultEmlJson({
-            uid: newUid(),
-            from: box?.auth?.user || address,
-            to,
-            subject: this.draft.subject,
-            body: this.draft.body,
-            address,
-            inReplyTo: this.draft.inReplyTo,
-            status: 'pending',
-        });
-        try {
-            await this.$item.save_file(new File([JSON.stringify(eml)], 'outbound.eml', { type: 'application/json' }), {
-                encoding: 'utf-8',
-                folder: address,
-                message: JSON.stringify(emlMeta(eml)),
-            });
-            this.mode = 'idle';
+            await this.$item.fetch('mail_send', {}, JSON.stringify({
+                ...this.draft,
+                draftUid: this.draft.uid || undefined,
+            }));
             this.draft = EMPTY_DRAFT();
-            this.reload();
+            this.mode = 'idle';
+            this.activeBox = 'outbox';
+            await this.reload();
         }
-        catch (e) {
-            ODA.showMessage(e.message);
-        }
+        catch (e) { ODA.showMessage?.(e?.message || String(e)); }
     },
-});
-
-ODA({
-    is: 'oda-mailbox',
-    template: /* html */ `
-        <style>
-            :host {
-                min-width: 240px;
-                overflow: hidden;
-                border-bottom: 1px solid var(--subtle-border);
-            }
-            .box-title {
-                @apply --header;
-                padding: var(--space-m) 12px;
-                font-weight: 600;
-                font-size: small;
-                text-transform: uppercase;
-                letter-spacing: .04em;
-            }
-            .days {
-                overflow-y: auto;
-            }
-            .empty {
-                padding: 12px;
-                @apply --muted;
-                font-size: small;
-            }
-        </style>
-        <div class="box-title">{{box?.label || box?.id}}</div>
-        <div class="days" vertical flex>
-            <email-day ~for="dates" :day="$for.item" :box-id="box?.id" :first="$for.index === 0"></email-day>
-            <div ~if="!dates.length" class="empty">Нет писем</div>
-        </div>
-    `,
-    box: null,
-    dates: [],
-    // имена реестров разные: $pdp сначала ищет свойство на самом узле
-    _dayRegistry() {
-        return this._days ??= new Set();
-    },
-    attached() {
-        this.$pdp?._mailboxRegistry?.().add(this);
-        this.reload();
-    },
-    detached() {
-        this.$pdp?._mailboxRegistry?.().delete(this);
-    },
-    async reload() {
-        this.dates = await this.$pdp.loadDates();
-        for (const day of this._dayRegistry())
-            day.reload();
-    },
-});
-
-ODA({
-    is: 'email-day',
-    imports: 'oda//button',
-    template: /* html */ `
-        <style>
-            :host {
-                @apply --vertical;
-                @apply --no-flex;
-            }
-            :host([hidden-day]) {
-                display: none;
-            }
-            .day-header {
-                cursor: pointer;
-                padding: 6px 10px;
-                align-items: center;
-                gap: var(--space-s);
-                font-size: small;
-            }
-            /* раскрытый день — цвета плашки --accent-invert, приглушаем только свёрнутые */
-            .day-header:not([accent-invert]) {
-                @apply --muted;
-            }
-            .msg-list {
-                gap: 2px;
-                padding: 0 var(--space-s) 6px;
-            }
-            .msg-item {
-                display: grid;
-                grid-template-columns: 1fr auto;
-                grid-template-rows: auto auto;
-                gap: 2px var(--space-m);
-                padding: var(--space-m) 10px;
-                cursor: pointer;
-                border-radius: var(--radius-s);
-                margin: 0 2px;
-            }
-            .msg-item:not([info-invert]):hover {
-                @apply --hover;
-            }
-            .msg-subject {
-                font-weight: 500;
-                font-size: small;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                min-width: 0;
-            }
-            .msg-date {
-                font-size: x-small;
-                @apply --muted;
-                white-space: nowrap;
-                justify-self: end;
-            }
-            .msg-from, .msg-to {
-                font-size: x-small;
-                @apply --muted;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                min-width: 0;
-            }
-            .msg-to {
-                justify-self: end;
-                text-align: right;
-            }
-            /* на инвертированной плашке приглушённый цвет темы нечитаем — следуем цвету плашки */
-            [info-invert] .msg-date,
-            [info-invert] .msg-from,
-            [info-invert] .msg-to {
-                color: inherit;
-                fill: inherit;
-                opacity: .75;
-            }
-            .empty {
-                padding: var(--space-s) 12px var(--space-m);
-                @apply --muted;
-                font-size: x-small;
-            }
-        </style>
-        <div class="day-header" horizontal :accent-invert="expanded" @tap="expanded = !expanded">
-            <span flex>{{label}}</span>
-            <oda-button icon-size="16" :icon="expanderIcon"></oda-button>
-        </div>
-        <div class="msg-list" vertical ~if="expanded">
-            <div ~for="messages" class="msg-item"
-                :info-invert="selectedPath === $for.item.path"
-                @tap="$pdp.selectMessage($for.item)">
-                <div class="msg-subject">{{$for.item.subject}}</div>
-                <div class="msg-date">{{$for.item.status === 'failed' ? 'ошибка' : $for.item.dateLabel}}</div>
-                <div class="msg-from">От: {{$for.item.from}}</div>
-                <div class="msg-to">Кому: {{$for.item.to}}</div>
-            </div>
-            <div ~if="loaded && !messages.length" class="empty">Нет писем</div>
-        </div>
-    `,
-    day: '',
-    boxId: '',
-    messages: [],
-    loaded: false,
-    first: {
-        $def: false,
-        set(n) {
-            if (n)
-                this.expanded = true;
-        }
-    },
-    expanded: {
-        $def: false,
-        $attr: true,
-        set(n) {
-            if (n)
-                this.reload();
-        },
-    },
-    get selectedPath() {
-        return this.$pdp?.selected?.path || '';
-    },
-    get expanderIcon() {
-        return this.expanded ? 'icons:chevron-right:90' : 'icons:chevron-right';
-    },
-    get label() {
-        const date = new Date(this.day + 'T12:00:00');
-        if (Number.isNaN(date.getTime()))
-            return this.day;
-        return date.toLocaleDateString('ru-RU', {
-            weekday: 'short',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric',
-        });
-    },
-    attached() {
-        this.$pdp?._dayRegistry?.().add(this);
-        if (this.expanded)
-            this.reload();
-    },
-    detached() {
-        this.$pdp?._dayRegistry?.().delete(this);
-    },
-    async reload() {
-        if (!this.expanded || !this.day || !this.boxId)
+    async openAttachment(att) {
+        if (!att?.path) {
+            ODA.showMessage?.(`Вложение «${att?.name || 'файл'}»`);
             return;
-        const day = this.day, boxId = this.boxId;
-        const list = await this.$pdp.dayMessages(day);
-        if (day !== this.day || boxId !== this.boxId)
-            return;
-        this.messages = list.filter(m => m.box === boxId);
-        this.loaded = true;
+        }
+        const item = await globalThis.WORK?.get_item?.(att.path).catch(() => null);
+        if (item && typeof window?.execute === 'function')
+            window.execute(item);
     },
-});
-
-ODA({
-    is: 'oda-email-message',
-    imports: 'oda//button',
-    template: /* html */ `
-        <style>
-            :host {
-                @apply --vertical;
-                @apply --flex;
-                overflow: hidden;
-                padding: 12px var(--space-l);
-                gap: var(--space-m);
-            }
-            fieldset {
-                border: 1px solid var(--subtle-border);
-                border-radius: var(--radius-s);
-                padding: var(--space-s) var(--space-m);
-                margin: 0;
-            }
-            legend {
-                font-size: x-small;
-                padding: 0 var(--space-s);
-            }
-            input, textarea, select {
-                border: none;
-                outline: none;
-                background: transparent;
-                color: inherit;
-                width: 100%;
-                box-sizing: border-box;
-                font: inherit;
-            }
-            textarea {
-                min-height: 160px;
-                resize: vertical;
-            }
-            .idle {
-                align-items: center;
-                justify-content: center;
-                @apply --muted;
-                padding: 24px;
-            }
-            .msg-meta {
-                font-size: small;
-                @apply --muted;
-            }
-            .msg-error {
-                font-size: small;
-                color: var(--error-color);
-            }
-            .toolbar {
-                gap: var(--space-m);
-                align-items: center;
-                justify-content: flex-end;
-            }
-            .view-body {
-                white-space: pre-wrap;
-                overflow: auto;
-                padding: var(--space-m) 0;
-            }
-            .view-html {
-                border: 1px solid var(--subtle-border);
-                border-radius: var(--radius-s);
-                box-sizing: border-box;
-                width: 100%;
-                /* намеренно белый в обеих темах: чужая вёрстка писем рассчитана на светлый фон */
-                background: white;
-            }
-        </style>
-        <div ~if="mode === 'idle'" class="idle" flex>Выберите письмо</div>
-        <div ~if="mode === 'compose'" vertical flex style="gap: 8px;">
-            <fieldset>
-                <legend>От</legend>
-                <select @change="(e) => $pdp.setFrom(e.target.value)">
-                    <option ~for="accounts" :value="$for.item" :selected="$for.item === draft.from">{{$for.item}}</option>
-                </select>
-            </fieldset>
-            <fieldset>
-                <legend>Кому</legend>
-                <input placeholder="recipient@example.com" ::value="draft.to">
-            </fieldset>
-            <fieldset>
-                <legend>Тема</legend>
-                <input placeholder="Тема письма" ::value="draft.subject">
-            </fieldset>
-            <fieldset flex vertical>
-                <legend>Текст</legend>
-                <textarea ::value="draft.body" flex></textarea>
-            </fieldset>
-            <div class="toolbar" horizontal>
-                <oda-button icon="icons:send" @tap="$pdp.sendDraft()" title="Отправить">Отправить</oda-button>
-            </div>
-        </div>
-        <div ~if="mode === 'view' && selected" vertical flex style="gap: 4px;">
-            <div horizontal class="toolbar">
-                <strong flex>{{selected.subject}}</strong>
-                <oda-button icon="icons:reply" @tap="$pdp.reply()" title="Ответить">Ответить</oda-button>
-            </div>
-            <span class="msg-meta">От: {{selected.from}}</span>
-            <span class="msg-meta">Кому: {{selected.to}}</span>
-            <span ~if="selected.status" class="msg-meta">Статус: {{statusLabel}}</span>
-            <span ~if="selected.error" class="msg-error">{{selected.error}}</span>
-            <iframe ~if="selected.html" class="view-html" flex sandbox="allow-popups allow-popups-to-escape-sandbox" :srcdoc="htmlDoc"></iframe>
-            <div class="view-body" flex ~if="!selected.html">{{selected.body ?? 'Загрузка…'}}</div>
-        </div>
-    `,
-    // selected / draft / accounts — у формы (через $pdp); свои одноимённые свойства перекрыли бы их
-    mode: 'idle',
-    get statusLabel() {
-        const s = this.$pdp.selected?.status || '';
-        return { pending: 'отправляется', sent: 'отправлено', failed: 'ошибка отправки' }[s] || s;
+    async openSettings() {
+        const res = await openEmailSettingsDialog(this.$item);
+        if (res) {
+            await this.loadAccounts();
+            await this.reload();
+        }
     },
-    get htmlDoc() {
-        return htmlDocument(this.$pdp.selected?.html);
+    async toggleAutoRefresh(val) {
+        this.autoRefresh = Boolean(val);
+        try {
+            await this.$item?.save?.({ mailAutoRefresh: this.autoRefresh });
+        }
+        catch { /* ignore */ }
     },
-});
+};
