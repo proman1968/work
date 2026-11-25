@@ -148,11 +148,25 @@ export async function matchTriggers(file) {
             if (area.kind !== 'files' && (area.kind !== 'zone' || area.role !== String(m.zone)))
                 continue;
         }
-        if (!m.as)
-            continue;
         out.push({ ...doc, point });
     }
     return out;
+}
+
+async function resolveRuleActorUid(point, rawAs, params) {
+    const val = String(rawAs || '').trim();
+    if (val && val !== 'BOSS')
+        return val;
+    const bosses = await Promise.resolve(point?.bosses).catch(() => []);
+    if (Array.isArray(bosses) && bosses[0]?.id)
+        return bosses[0].id;
+    const allBosses = await Promise.resolve(point?.allBosses).catch(() => []);
+    if (Array.isArray(allBosses) && allBosses.length) {
+        const last = allBosses.at(-1);
+        if (last?.id)
+            return last.id;
+    }
+    return String(params?.session?.uid || '').trim();
 }
 
 async function sessionFor(uid, trigger) {
@@ -181,6 +195,16 @@ async function resolveNotifyUids(point, rawNotify, fallbackUid) {
                 if (top?.id) out.add(top.id);
             }
         }
+        else if (entry === 'CHAT' || entry === 'ALL') {
+            const members = await Promise.resolve(point?.assignedUsers).catch(() => []);
+            for (const u of Array.isArray(members) ? members : []) {
+                if (u?.id) out.add(u.id);
+            }
+            const bosses = await Promise.resolve(point?.bosses).catch(() => []);
+            for (const b of Array.isArray(bosses) ? bosses : []) {
+                if (b?.id) out.add(b.id);
+            }
+        }
         else {
             out.add(entry);
         }
@@ -195,15 +219,20 @@ async function deliverTwinNotification(point, t, { uid, text, attachments = [], 
     const CHAT = await import('../../server/chat-threads.js');
     const isApproval = t.meta?.approval === true || t.meta?.approval === 'true';
     const msgKind = isApproval ? 'approval' : 'text';
+    const ruleTitle = String(t.meta?.label || t.name || 'правило').trim();
+    const decorated = `🤖 Агент · реакция «${ruleTitle}» (с правами руководителя):\n${text}`;
     for (const targetUid of notifyUids) {
         await CHAT.sendMessage(point, {
             uid: targetUid,
             asTwin: true,
             kind: msgKind,
-            message: text,
+            message: decorated,
             attachments,
             meta: {
+                source: 'agent-rule',
                 trigger: t.name,
+                ruleTitle,
+                actedAsBoss: true,
                 event: eventName,
                 entityId,
                 ...(isApproval ? { status: 'pending', action: t.meta?.action || t.name } : {}),
@@ -215,7 +244,9 @@ async function deliverTwinNotification(point, t, { uid, text, attachments = [], 
 async function runTrigger(t, ctxData, params) {
     const { audit } = await import('../../server/access/audit.js');
     const m = t.meta || {};
-    const uid = String(m.as || '');
+    const uid = await resolveRuleActorUid(t.point, m.as, params);
+    if (!uid)
+        throw new Error('не найден руководитель (BOSS) для выполнения правила ' + t.name);
     const session = await sessionFor(uid, t.name);
     const roles = await t.point.roles({ session });
     if (!roles.length)
@@ -271,7 +302,7 @@ async function runTrigger(t, ctxData, params) {
     }
     await deliverTwinNotification(t.point, t, {
         uid,
-        text: `[${t.name}] ${text}`,
+        text,
         eventName,
         entityId,
     });
@@ -380,7 +411,7 @@ export async function onDbEvent(eventName, { basePath = '', cls = null, obj = nu
                 continue;
             for (const doc of docs.values()) {
                 const m = doc.meta || {};
-                if (m.enabled === false || !m.as)
+                if (m.enabled === false)
                     continue;
                 if (!onList(m).includes(eventName))
                     continue;
@@ -449,7 +480,7 @@ export async function onChatEvent({ storage, thread, message, params = {} } = {}
         let n = 0;
         for (const doc of docs.values()) {
             const m = doc.meta || {};
-            if (m.enabled === false || !m.as)
+            if (m.enabled === false)
                 continue;
             if (!onList(m).includes('chat:message'))
                 continue;

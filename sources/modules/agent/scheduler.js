@@ -72,11 +72,79 @@ function utcOf(y, m, d, hh, mm, tz) {
 /** Дней в месяце года (григорианский, по UTC — пояс не важен). */
 const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
+/** Разбор ODANT-маски времени вида YYYY-MM-05T10:15:00 (YYYY/MM/DD/HH/mm — любое значение). */
+export function parseTimeMask(rawMask) {
+    const src = String(rawMask ?? '').trim();
+    const m = src.match(/^(\d{4}|[Yy]{4})-(\d{2}|[Mm]{2})-(\d{2}|[Dd]{2})[T ](\d{2}|[Hh]{2}):(\d{2}|[Mm]{2})(?::(\d{2}|[Ss]{2}))?$/);
+    if (!m)
+        throw new Error('mask: формат YYYY-MM-DDTHH:MM:00 (например YYYY-MM-05T10:15:00)');
+    const [, yStr, moStr, dStr, hStr, minStr] = m;
+    const y = /^[Yy]{4}$/.test(yStr) ? null : Number(yStr);
+    const mo = /^[Mm]{2}$/.test(moStr) ? null : Number(moStr);
+    const d = /^[Dd]{2}$/.test(dStr) ? null : Number(dStr);
+    const hh = /^[Hh]{2}$/.test(hStr) ? null : Number(hStr);
+    const mm = /^[Mm]{2}$/.test(minStr) ? null : Number(minStr);
+    if (y !== null && (y < 1970 || y > 2199))
+        throw new Error('mask: год должен быть 1970–2199 или YYYY');
+    if (mo !== null && (mo < 1 || mo > 12))
+        throw new Error('mask: месяц должен быть 01–12 или MM');
+    if (d !== null && (d < 1 || d > 31))
+        throw new Error('mask: день должен быть 01–31 или DD');
+    if (hh !== null && (hh < 0 || hh > 23))
+        throw new Error('mask: час должен быть 00–23 или HH');
+    if (mm !== null && (mm < 0 || mm > 59))
+        throw new Error('mask: минуты должны быть 00–59 или MM');
+    if (hh === null && mm === null)
+        throw new Error('mask: укажите хотя бы час или минуты (для более редкого интервала используйте каждые N минут)');
+    const norm = `${y === null ? 'YYYY' : String(y).padStart(4, '0')}-${mo === null ? 'MM' : String(mo).padStart(2, '0')}-${d === null ? 'DD' : String(d).padStart(2, '0')}T${hh === null ? 'HH' : String(hh).padStart(2, '0')}:${mm === null ? 'MM' : String(mm).padStart(2, '0')}:00`;
+    return { norm, y, mo, d, hh, mm };
+}
+
+function nextRunMask(maskStr, tz, from) {
+    const { y, mo, d, hh, mm } = parseTimeMask(maskStr);
+    const now = local(from, tz);
+    const years = y !== null
+        ? (y < now.y ? [] : [y])
+        : [now.y, now.y + 1, now.y + 2, now.y + 3, now.y + 4];
+    const months = mo !== null ? [mo] : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+    const hours = hh !== null ? [hh] : Array.from({ length: 24 }, (_, i) => i);
+    const mins = mm !== null ? [mm] : Array.from({ length: 60 }, (_, i) => i);
+    for (const yy of years) {
+        for (const m2 of months) {
+            if (yy === now.y && m2 < now.m)
+                continue;
+            const maxD = daysInMonth(yy, m2);
+            const days = d !== null ? (d <= maxD ? [d] : []) : Array.from({ length: maxD }, (_, i) => i + 1);
+            for (const dd of days) {
+                if (yy === now.y && m2 === now.m && dd < now.d)
+                    continue;
+                for (const h of hours) {
+                    if (yy === now.y && m2 === now.m && dd === now.d && h < now.hh)
+                        continue;
+                    for (const min of mins) {
+                        const t = utcOf(yy, m2, dd, h, min, tz);
+                        if (t > from)
+                            return t;
+                    }
+                }
+            }
+        }
+    }
+    return null;
+}
+
 /** Нормализовать правило (бросает при ошибке). */
 export function normalizeRule(rule = {}) {
     if (rule.scope != null && rule.scope !== '' && !['personal', 'department'].includes(String(rule.scope)))
         throw new Error('scope: personal (лично) | department (общее по подразделению)');
     const extra = rule.scope === 'department' ? { scope: 'department' } : {};
+    if (rule.mask != null && String(rule.mask).trim() !== '') {
+        const parsed = parseTimeMask(rule.mask);
+        const days = Array.isArray(rule.days) && rule.days.length
+            ? [...new Set(rule.days.map(Number))].filter(d => Number.isInteger(d) && d >= 1 && d <= 7).sort()
+            : null;
+        return { mask: parsed.norm, ...(days?.length ? { days } : {}), ...extra };
+    }
     if (rule.once) {
         const t = Date.parse(rule.once);
         if (!Number.isFinite(t))
@@ -145,6 +213,21 @@ export function normalizeRule(rule = {}) {
 /** Следующий запуск после from (мс) или null (разовое уже прошло). */
 export function nextRun(rule, tz, from = Date.now()) {
     tz = validTz(tz);
+    if (rule.mask) {
+        if (Array.isArray(rule.days) && rule.days.length) {
+            let cur = from;
+            for (let i = 0; i < 64; i++) {
+                const candidate = nextRunMask(rule.mask, tz, cur);
+                if (!candidate)
+                    return null;
+                if (rule.days.includes(local(candidate, tz).dow))
+                    return candidate;
+                cur = candidate;
+            }
+            return null;
+        }
+        return nextRunMask(rule.mask, tz, from);
+    }
     if (rule.once) {
         const t = Date.parse(rule.once);
         return t > from ? t : null;
@@ -238,6 +321,36 @@ export function nextRun(rule, tz, from = Date.now()) {
 
 export function describeRule(rule) {
     const suffix = rule.scope === 'department' ? ' [по подразделению]' : '';
+    if (rule.mask) {
+        let p;
+        try { p = parseTimeMask(rule.mask); } catch { return rule.mask + suffix; }
+        const timeStr = `${p.hh === null ? 'каждый час' : String(p.hh).padStart(2, '0')}:${p.mm === null ? '00' : String(p.mm).padStart(2, '0')}`;
+        let dateDesc = '';
+        if (p.y === null && p.mo === null && p.d === null) {
+            if (Array.isArray(rule.days) && rule.days.length && rule.days.length < 7) {
+                const isWorkdays = rule.days.join(',') === '1,2,3,4,5';
+                const names = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
+                dateDesc = isWorkdays ? 'по будням' : rule.days.map(d => names[d - 1]).join(', ');
+            }
+            else {
+                dateDesc = 'ежедневно';
+            }
+        }
+        else if (p.y === null && p.mo === null && p.d !== null) {
+            dateDesc = `каждое ${p.d}-е число месяца`;
+        }
+        else if (p.y === null && p.mo !== null && p.d !== null) {
+            dateDesc = `ежегодно ${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}`;
+        }
+        else if (p.y !== null && p.mo !== null && p.d !== null) {
+            dateDesc = `${String(p.d).padStart(2, '0')}.${String(p.mo).padStart(2, '0')}.${p.y}`;
+        }
+        else {
+            dateDesc = rule.mask.split('T')[0];
+        }
+        const atText = p.hh === null ? `в :${String(p.mm).padStart(2, '0')} каждого часа` : `в ${timeStr}`;
+        return `${dateDesc} ${atText}${suffix}`;
+    }
     if (rule.once)
         return 'однократно ' + rule.once + suffix;
     if (rule.every) {
@@ -404,8 +517,8 @@ async function defaultRunner(r) {
     };
     const session = { uid: r.uid, $user: user, principal: Object.freeze({ kind: 'user', id: r.uid }), scheduled: true, sockets: {}, send: sendToUser };
 
-    // Расписание уровня узла $structure (без привязки к файлу .task)
-    if (r.node_path && !r.task) {
+    // Расписание уровня узла $structure (свежий запуск по поручению или на основе готовой задачи .task)
+    if (r.node_path) {
         let nodeItem = await WORK.get_item(r.node_path).catch(() => null);
         if (Array.isArray(nodeItem))
             nodeItem = nodeItem.at(-1);
@@ -414,12 +527,29 @@ async function defaultRunner(r) {
         const roles = await nodeItem.roles?.({ session }).catch(() => []);
         if (!roles.length)
             throw new Error('Доступ запрещён');
+        let effectivePrompt = String(r.prompt || '').trim();
+        if (r.task) {
+            try {
+                let tplFile = await WORK.get_item(r.task).catch(() => null);
+                if (Array.isArray(tplFile)) tplFile = tplFile.at(-1);
+                const raw = tplFile && typeof tplFile.load === 'function' ? await tplFile.load().catch(() => null) : null;
+                const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                const firstUser = Array.isArray(parsed?.items) ? parsed.items.find(i => i?.type === 'user' && i.content) : null;
+                const basePrompt = String(firstUser?.content || '').trim();
+                if (basePrompt) {
+                    effectivePrompt = effectivePrompt && effectivePrompt !== basePrompt
+                        ? `Выполни повторно по образцу задачи «${parsed?.title || r.label}»:\n${basePrompt}\n\nДополнительное уточнение: ${effectivePrompt}`
+                        : basePrompt;
+                }
+            }
+            catch { /* если исходная .task недоступна — используем сохранённый prompt */ }
+        }
         const stamp = new Date().toLocaleString('ru-RU', { timeZone: r.tz || undefined });
         const { runOnce } = await import('./index.js');
         const res = await runOnce({
             place: nodeItem,
             session,
-            prompt: '[по расписанию «' + r.label + '», ' + stamp + ']\n' + r.prompt,
+            prompt: '[по расписанию «' + r.label + '», ' + stamp + ']\n' + effectivePrompt,
             mode: 'ask',
             signal: AbortSignal.timeout(10 * 60_000),
         });
@@ -429,7 +559,8 @@ async function defaultRunner(r) {
             uid: r.uid,
             asTwin: true,
             kind: 'text',
-            message: `[по расписанию «${r.label}»] ${answer}`,
+            message: `🤖 Агент · по расписанию «${r.label}»:\n${answer}`,
+            meta: { source: 'agent-schedule', scheduleId: r.id, scheduleLabel: r.label, actedAsBoss: true },
         }).catch(() => {});
         return;
     }

@@ -477,7 +477,7 @@ export async function createEnv({ place, contextPath, session, host, tz, locatio
                 const TWIN_SERVICE_DENY = new Set([
                     'create_class', 'update_class', 'move_class', 'delete_class',
                     'assign', 'escalate', 'delete',
-                    'twin_rule_list', 'twin_rule_save', 'twin_schedule_save',
+                    'twin_rule_list', 'twin_rule_save', 'twin_schedule_save', 'twin_system_save', 'twin_security_save',
                     'mail_send', 'mail_draft', 'mail_refresh',
                     'dev_write', 'dev_edit', 'dev_patch', 'dev_git', 'dev_shell',
                     'shell', 'restart_server', 'os_write', 'os_rm',

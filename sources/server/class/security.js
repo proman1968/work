@@ -143,10 +143,22 @@ export const classSecurityMethods = {
         return WORKPLACES.isClientMember(this.DATA?.['#security'], uid);
     },
 
+    /** Назначено ли подразделение nodePath в какую-либо роль (#security.ROLES) этого узла. */
+    async hasNodeRole(nodePath) {
+        if (!nodePath || !(await this._isStructure()))
+            return false;
+        await this.init;
+        return WORKPLACES.nodePlaceTrails(this.DATA?.['#security'], nodePath).length > 0;
+    },
+
     /** Получить список ролей текущего пользователя в классе. */
     async roles(params = {}) {
-        const uid = this.constructor.resolveUid(params);
         await this.init;
+        const twinFrom = params?.session?.twinCall?.fromPath || '';
+        if (params?.session?.twinRoleOnly && twinFrom) {
+            return (await this.hasNodeRole(twinFrom)) ? ['USER'] : [];
+        }
+        const uid = this.constructor.resolveUid(params);
         const declared = this._declaredRolesSync();
         if (!uid) {
             if (WORKPLACES.matchesUserList(this._roleIds('USER', declared), null) || await this._isPlaceMember(null))
@@ -174,7 +186,7 @@ export const classSecurityMethods = {
                 }
             }
         }
-        if (!roles.includes('USER') && await this._isPlaceMember(uid))
+        if (!roles.includes('USER') && (await this._isPlaceMember(uid) || (twinFrom && await this.hasNodeRole(twinFrom))))
             roles.push('USER');
         if (!roles.includes('CLIENT') && await this._isClientMember(uid))
             roles.push('CLIENT');
@@ -515,7 +527,16 @@ export const classSecurityMethods = {
 
     /** Видимость элемента (чтение). */
     async canSee(item, params = {}) {
-        if (DEV_MODE) return true;
+        const twinRoleOnly = Boolean(params?.session?.twinRoleOnly);
+        if (DEV_MODE && !twinRoleOnly) return true;
+        if (twinRoleOnly) {
+            if (!item || typeof item !== 'object') return false;
+            if (this._isSystemItem(item)) return true;
+            if (await LINKS.grants(this, item, params)) return true;
+            const roles = await this.roles(params);
+            if (!roles.length) return false;
+            return this._readableByRoles(item, roles, null);
+        }
         const users = this.DATA?.['#security']?.USER;
         if (Array.isArray(users) && (users.includes('GUEST') || users.includes('GUESTS'))) return true;
         if (!item || typeof item !== 'object') return true;
@@ -569,8 +590,20 @@ export const classSecurityMethods = {
 
     /** Право записи (при отсутствии params.role использует сильнейшую роль пользователя в точке). */
     async canWrite(item, params = {}) {
-        if (DEV_MODE) return true;
+        const twinRoleOnly = Boolean(params?.session?.twinRoleOnly);
+        if (DEV_MODE && !twinRoleOnly) return true;
         if (!item || typeof item !== 'object') return false;
+        if (twinRoleOnly) {
+            const roles = await this.roles(params);
+            if (!roles.length) return false;
+            const rel = [params.folder, params.filename].filter(Boolean).join('/');
+            const target = rel && item.path ? item.path.replace(/\/+$/, '') + '/' + rel : item.path;
+            const protectedTarget = POLICY.isSystemMetaPath(target, this.path)
+                || POLICY.isExecutablePath(target, this.path)
+                || POLICY.isAgentControlPath(target, this.path);
+            if (protectedTarget) return false;
+            return LINKS.grantsWrite(this, params);
+        }
         const uid = this.constructor.resolveUid(params);
         if (!uid) return false;
         const rel = [params.folder, params.filename].filter(Boolean).join('/');
@@ -611,9 +644,9 @@ export const classSecurityMethods = {
 
     /** Единая проверка доступа (бросает при отказе): read → canSee, write → canWrite, BOSS → BOSS точки или корня. */
     async assertAccess(params = {}, level = this.constructor.ACCESS_LEVEL.READ, folder) {
-        if (DEV_MODE) return;
+        if (DEV_MODE && !params?.session?.twinRoleOnly) return;
         if (!params?.session) return;
-        if (params.session?.$user === globalThis.WORK) return;
+        if (params.session?.$user === globalThis.WORK && !params?.session?.twinRoleOnly) return;
         const uid = this.constructor.resolveUid(params);
         const L = this.constructor.ACCESS_LEVEL;
         const ROLES = this.constructor.ROLES;
@@ -711,6 +744,7 @@ export const classSecurityMethods = {
      * напрямую и не вызывает canWrite/assertAccess/_isWorkBoss.
      */
     async _isWorkBoss(params = {}) {
+        if (params?.session?.twinRoleOnly) return false;
         if (!globalThis.WORK) return false;
         return globalThis.WORK.roles?.(params).then(r => r.includes(this.constructor.ROLES.BOSS));
     },

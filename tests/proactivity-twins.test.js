@@ -330,4 +330,85 @@ describe('Проактивность Агентов $structure, when-преди�
             delete globalThis.__workDefaultTwinRunner;
         }
     });
+
+    it('ODANT-маска времени (YYYY-MM-05T10:15:00), системная инструкция (ai/system.md), доступ подразделений как участников роли и фиксация таски босса', async () => {
+        // 1. ODANT-маска времени в scheduler.js
+        const maskRule = S.normalizeRule({ mask: 'YYYY-MM-05T10:15:00' });
+        assert.equal(maskRule.mask, 'YYYY-MM-05T10:15:00');
+        assert.match(S.describeRule(maskRule), /5-е число месяца.*10:15/);
+        const fromMs = Date.parse('2026-11-10T08:00:00Z');
+        const nextIso = new Date(S.nextRun(maskRule, 'Europe/Moscow', fromMs)).toISOString();
+        assert.equal(nextIso, '2026-12-05T07:15:00.000Z');
+
+        const dailyMask = S.normalizeRule({ mask: 'YYYY-MM-DDT09:00:00', days: [1, 2, 3, 4, 5] });
+        assert.match(S.describeRule(dailyMask), /по будням в 09:00/);
+
+        // 2. Системная инструкция узла (ai/system.md): чтение унаследованной и сохранение своей
+        const orgOne = await WORK.get_item('/ORGANIZATIONS/OrgOne');
+        await orgOne.agent_system_save({
+            ...as(BOSS_UID),
+            post: { text: 'Общее правило организации: отвечай вежливо и точно.', replace: false },
+        });
+        const sales = await WORK.get_item('/ORGANIZATIONS/OrgOne/sales');
+        await sales.agent_system_save({
+            ...as(BOSS_UID),
+            post: { text: 'Ты главный менеджер по продажам.', replace: false },
+        });
+        const sysInfo = await sales.agent_system_get(as(BOSS_UID));
+        assert.equal(sysInfo.text, 'Ты главный менеджер по продажам.');
+        assert.equal(sysInfo.replace, false);
+        assert.ok(Array.isArray(sysInfo.inherited) && sysInfo.inherited.some(l => l.text.includes('Общее правило организации')), 'видны унаследованные правила сверху');
+
+        // Обычный сотрудник не может менять инструкцию узла
+        await assert.rejects(
+            () => sales.agent_system_save({ ...as(USER_UID), post: { text: 'взлом' } }),
+            /Доступ запрещён/
+        );
+
+        // 3. Доступные классы, подразделения и security_update (ровно 1 BOSS + подразделение как участник роли)
+        const clsTree = await sales.agent_available_classes(as(BOSS_UID));
+        assert.ok(clsTree.roots.some(r => JSON.stringify(r).includes('/ORGANIZATIONS/OrgOne/MODULES/Reg/SALE')), 'виден класс реализации в модуле организации');
+
+        const structs = await sales.agent_structures_list(as(BOSS_UID));
+        assert.ok(structs.structures.some(s => s.path === '/ORGANIZATIONS/OrgOne/warehouse'), 'список подразделений включает warehouse');
+
+        // Выдаём подразделению /ORGANIZATIONS/OrgOne/warehouse роль в sales на чтение SALE
+        await sales.security_update({
+            ...as(BOSS_UID),
+            post: {
+                security: {
+                    BOSS: [BOSS_UID, USER_UID], // проверка обрезки до 1 BOSS
+                    ROLES: [{
+                        id: 'for_warehouse',
+                        label: 'Доступ для Склада',
+                        USERS: ['/ORGANIZATIONS/OrgOne/warehouse'],
+                        LINKS: [{ id: '/ORGANIZATIONS/OrgOne/MODULES/Reg/SALE', access: 'read' }],
+                    }],
+                },
+                title: 'Настроен доступ для Склада',
+            },
+        });
+        assert.equal(sales.DATA['#security'].BOSS.length, 1, 'BOSS на точку сохраняется только один');
+        assert.equal(await sales.hasNodeRole('/ORGANIZATIONS/OrgOne/warehouse'), true);
+        LINKS.reset();
+
+        // Пользователь USER_UID не имеет прямых ролей в sales, но действует из warehouse через twin_ask:
+        // доступ открывается ТОЛЬКО к роли подразделения warehouse (twinRoleOnly = true)
+        const saleCls = await WORK.get_item('/ORGANIZATIONS/OrgOne/MODULES/Reg/SALE');
+        const askRes = await askTwin({
+            fromPath: '/ORGANIZATIONS/OrgOne/warehouse',
+            targetPath: '/ORGANIZATIONS/OrgOne/sales',
+            question: 'Дай сводку продаж',
+            session: as(USER_UID).session,
+            runner: async ({ place, session }) => {
+                assert.equal(session.twinRoleOnly, true, 'включён ограниченный режим роли подразделения');
+                const r = await place.roles({ session });
+                assert.deepEqual(r, ['USER'], 'в целевом узле выдана только роль USER без прав BOSS');
+                assert.equal(await LINKS.dataAccess(saleCls, { session }), 'read', 'привязанный класс доступен строго на чтение');
+                return { status: 'done', content: 'Продажи за период: 200 000' };
+            },
+        });
+        assert.equal(askRes.ok, true);
+        assert.match(askRes.answer, /Продажи за период/);
+    });
 });

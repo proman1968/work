@@ -117,9 +117,17 @@ function takeRank(best, level) {
  * Место даёт свой access участникам; вышестоящее место и BOSS видят
  * ссылки вложенных мест на чтение; общая ссылка — всем назначенным.
  */
+function linkSubject(cls, params = {}) {
+    const uid = cls.constructor.resolveUid(params);
+    const nodePath = params?.session?.twinCall?.fromPath || '';
+    const nodeOnly = Boolean(params?.session?.twinRoleOnly);
+    return nodePath ? { uid, nodePath, nodeOnly } : uid;
+}
+
 export async function linkLevel(cls, params = {}) {
     if (NO_LINK_TYPES.has(cls.type))
         return null;
+    const subject = linkSubject(cls, params);
     const uid = cls.constructor.resolveUid(params);
     let best = null;
     for (const { structure, place, access } of await covering(cls.path)) {
@@ -137,14 +145,14 @@ export async function linkLevel(cls, params = {}) {
             continue;
         const sec = g.DATA?.['#security'];
         if (place) {
-            if (WORKPLACES.memberTrailKeys(sec, uid).includes(place))
+            if (WORKPLACES.memberTrailKeys(sec, subject).includes(place))
                 best = takeRank(best, access);
-            else if (WORKPLACES.isAncestorPlaceMember(sec, uid, place))
+            else if (!params?.session?.twinRoleOnly && WORKPLACES.isAncestorPlaceMember(sec, uid, place))
                 best = takeRank(best, 'read');
-            else if (roles.includes('BOSS'))
+            else if (!params?.session?.twinRoleOnly && roles.includes('BOSS'))
                 best = takeRank(best, 'read');
         }
-        else if (roles.includes('BOSS') || roles.includes('USER')) {
+        else if (!params?.session?.twinRoleOnly && (roles.includes('BOSS') || roles.includes('USER'))) {
             best = takeRank(best, roles.includes('BOSS') && access === 'write' ? 'admin' : access);
         }
     }
@@ -156,8 +164,10 @@ export async function linkLevel(cls, params = {}) {
  * прямые назначения плюс ссылки рабочих мест (кроме структурных типов).
  */
 export async function dataAccess(cls, params = {}) {
-    if (DEV_MODE)
+    if (DEV_MODE && !params?.session?.twinRoleOnly)
         return 'admin';
+    if (params?.session?.twinRoleOnly)
+        return await linkLevel(cls, params);
     return takeRank(await directAccess(cls, params), await linkLevel(cls, params));
 }
 
@@ -225,7 +235,7 @@ export async function scopeLinks(cls, params = {}) {
                 const labels = {};
                 for (const { node, trail } of WORKPLACES.walkPlaces(WORKPLACES.normalizeSecurity(sec).places))
                     labels[WORKPLACES.trailKey(trail)] = node.label;
-                return { roles, sec, labels, places: WORKPLACES.memberTrailKeys(sec, uid) };
+                return { roles, sec, labels, places: WORKPLACES.memberTrailKeys(sec, linkSubject(cls, params)) };
             })());
         }
         const s = await seen.get(e.structure);

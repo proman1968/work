@@ -131,12 +131,23 @@ await test('Почта: 4 папки, светлое левое меню, без
     el.remove();
 });
 
-await test('Система: левое боковое меню .sys-sidebar без вкладки Поиск', async () => {
+await test('Система: левое боковое меню .sys-sidebar без вкладки Поиск и доступ только для BOSS', async () => {
+    // 1. Для обычного сотрудника (не BOSS) доступ к Системе закрыт
+    const deniedEl = document.createElement('test-sys-view');
+    deniedEl.style.cssText = 'display:flex;width:900px;height:550px;';
+    document.body.appendChild(deniedEl);
+    deniedEl.isBossDenied = true;
+    await waitFor(() => deniedEl.$('.denied-msg')?.textContent.includes('только руководителю'), 'сообщение о доступе только BOSS');
+    assert(!deniedEl.$('.sys-sidebar'), 'меню Системы скрыто от не-BOSS');
+    deniedEl.remove();
+
+    // 2. Для BOSS меню Системы открыто
     const el = document.createElement('test-sys-view');
     el.style.cssText = 'display:flex;width:900px;height:550px;';
     document.body.appendChild(el);
     el.$item = {
         id: 'logistics', path: '/ORG/logistics', type: '$structure',
+        isBoss: Promise.resolve(true),
         METADATA: Promise.resolve({ STATIC: [], FIELDS: [] }),
         async fetch() { return {}; },
     };
@@ -144,6 +155,25 @@ await test('Система: левое боковое меню .sys-sidebar бе
     const labels = [...nav.querySelectorAll('.sys-tab')].map(b => b.textContent.trim());
     assert(labels.includes('Пользователи') && labels.includes('Мессенджеры') && labels.includes('Агент и правила'), 'основные разделы в левом меню');
     assert(!labels.includes('Поиск'), 'Поиск вынесен из Системы');
+
+    // 3. Проверка вкладки Пользователи: один BOSS, Роли, дерево классов и отсутствие дубля Мессенджеров
+    const staffEl = await waitFor(() => el.$('system-tab-staff'), 'смонтирована вкладка Пользователи');
+    assert(staffEl.$item?.set !== undefined || typeof (await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js')).default.$item?.set === 'function', '$item имеет сеттер reload');
+    const staffSrc = await fetch('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js').then(r => r.text());
+    assert(staffSrc.includes('Роли в подразделении'), 'терминология Роли в подразделении');
+    assert(!staffSrc.includes('<oda-messenger-settings'), 'нет дублирующих настроек мессенджеров на вкладке Пользователи');
+    assert(staffSrc.includes('onBossDrop') && staffSrc.includes('onRoleDrop'), 'поддержан drag&drop людей, подразделений и классов');
+
+    // 4. Проверка вкладки Агент и правила: инструкция, скрытая форма реакций и ODANT-маска времени
+    const agentTabBtn = [...nav.querySelectorAll('.sys-tab')].find(b => b.textContent.includes('Агент и правила'));
+    agentTabBtn.dispatchEvent(new MouseEvent('tap', { bubbles: true, composed: true }));
+    if (el.currentTabId !== 'agent') el.selectTab('agent');
+    const agentEl = await waitFor(() => el.$('system-tab-agent'), 'смонтирована вкладка Агент и правила');
+    assert(agentEl.maskPreview.ok && agentEl.maskPreview.text.includes('5-го числа'), 'расшифровка ODANT-маски YYYY-MM-05T10:15:00: ' + agentEl.maskPreview.text);
+    const agentSrc = await fetch('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/agent.js').then(r => r.text());
+    assert(agentSrc.includes('Системная инструкция для агента этого подразделения'), 'есть редактор системного промпта');
+    assert(agentSrc.includes('Автоматические реакции на события'), 'блок переименован в Автоматические реакции');
+    assert(agentSrc.includes('Повторять задачу'), 'можно выбрать готовую задачу в расписание');
     el.remove();
 });
 window.__done = true;

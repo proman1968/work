@@ -224,6 +224,42 @@ export const classFeedMethods = {
         return saveNodeProactivity(this, params);
     },
 
+    /** Получить собственную инструкцию агента узла (ai/system.md) и унаследованные слои (только BOSS). */
+    async agent_system_get(params = {}) {
+        const { getNodeAgentSystem } = await import('../../modules/agent/node-rules.js');
+        return getNodeAgentSystem(this, params);
+    },
+
+    /** Сохранить системную инструкцию агента узла (ai/system.md, только BOSS). */
+    async agent_system_save(params = {}) {
+        const { saveNodeAgentSystem } = await import('../../modules/agent/node-rules.js');
+        return saveNodeAgentSystem(this, params);
+    },
+
+    /** Дерево доступных прикладных классов (модули организации + общие /MODULES, только BOSS). */
+    async agent_available_classes(params = {}) {
+        const { listNodeAvailableClasses } = await import('../../modules/agent/node-rules.js');
+        return listNodeAvailableClasses(this, params);
+    },
+
+    /** Список подразделений организации/проекта (для добавления в роли, только BOSS). */
+    async agent_structures_list(params = {}) {
+        const { listNodeStructures } = await import('../../modules/agent/node-rules.js');
+        return listNodeStructures(this, params);
+    },
+
+    /** Список последних выполненных задач (.task) узла для повторения по расписанию (только BOSS). */
+    async agent_tasks_list(params = {}) {
+        const { listNodeTasks } = await import('../../modules/agent/node-rules.js');
+        return listNodeTasks(this, params);
+    },
+
+    /** Сохранить права/роли подразделения (#security) с фиксацией таски босса (только BOSS). */
+    async security_update(params = {}) {
+        const { saveNodeSecurity } = await import('../../modules/agent/node-rules.js');
+        return saveNodeSecurity(this, params);
+    },
+
     /** Публичный список настроенных почтовых ящиков узла (без паролей и секретов). */
     async mail_accounts(params = {}) {
         return MAILCAL.mailAccounts(this, params);

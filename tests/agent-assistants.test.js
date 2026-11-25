@@ -410,8 +410,7 @@ it('memory: память места видна только своей роли;
 describe('роль задачи', () => {
     it('администратор в роли USER: запись в зону USER (кабинет и точка), без прав ADMIN и инструментов ОС', async () => {
         const { taskRole } = await import('../sources/modules/agent/session.js');
-        write('ORG/$class/class.js', fs.readFileSync(path.join(tmp, 'ORG/$class/class.js'), 'utf-8').replace("USER: ['", "USER: ['" + ADMIN + "', '"));
-        (await WORK.get_item('/ORG')).reset();
+        await tool('assign').run({ path: '/ORG', role: 'USER', add: [ADMIN] }, as(BOSS));
         const ctx = { ...as(ADMIN), role: 'USER' };
         const cab = await tool('write').run({ path: '/USERS/' + ADMIN + '/work/презентация.html', content: '<p>x</p>' }, ctx);
         assert.match(cab, new RegExp('/USERS/' + ADMIN + '/\\$user/text/work/'), 'кабинет — единое хранилище $user без подпапок ролей');

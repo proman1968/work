@@ -32,10 +32,32 @@ export function isPseudoUser(id) {
     return id === 'USERS' || id === 'GUESTS' || id === 'GUEST';
 }
 
-/** Сопоставление субъекта uid (или null для гостя) со списком назначенных USERS. */
-export function matchesUserList(list, uid) {
+/** Проверка, является ли идентификатор путём структурного подразделения (/ORGANIZATIONS/...). */
+export function isNodeSubject(id) {
+    return typeof id === 'string' && id.startsWith('/');
+}
+
+function normNodePath(p) {
+    const s = String(p || '').trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    return s || '/';
+}
+
+/** Сопоставление субъекта uid (строка/null или { uid, nodePath, nodeOnly }) со списком назначенных USERS. */
+export function matchesUserList(list, subject) {
     if (!Array.isArray(list) || !list.length)
         return false;
+    if (subject && typeof subject === 'object' && !Array.isArray(subject)) {
+        const { uid = null, nodePath = '', nodeOnly = false } = subject;
+        if (nodePath) {
+            const target = normNodePath(nodePath);
+            if (list.some(item => isNodeSubject(item) && normNodePath(item) === target))
+                return true;
+        }
+        if (nodeOnly)
+            return false;
+        return matchesUserList(list, uid);
+    }
+    const uid = subject;
     if (list.includes('GUESTS') || list.includes('GUEST'))
         return true;
     if (!uid)
@@ -43,6 +65,17 @@ export function matchesUserList(list, uid) {
     if (list.includes('USERS'))
         return true;
     return list.includes(uid);
+}
+
+/** Пути (trail) не-external ролей, в которые добавлено подразделение nodePath. */
+export function nodePlaceTrails(security, nodePath) {
+    if (!nodePath)
+        return [];
+    const { places } = normalizeSecurity(security);
+    const subject = { nodePath, nodeOnly: true };
+    return walkPlaces(places)
+        .filter(({ node }) => !node.external && matchesUserList(node.USERS, subject))
+        .map(({ trail }) => trailKey(trail));
 }
 
 /** Открыта ли точка для неавторизованных гостей (через USER или любое рабочее место ROLES). */

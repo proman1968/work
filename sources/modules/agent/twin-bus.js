@@ -89,18 +89,32 @@ export async function askTwin({ fromPath = '/', targetPath, question, session, d
     if (!STRUCT_TYPES.has(targetItem.type))
         throw new Error(`twin_ask: адресат ${target} не является структурным Агентом (${targetItem.type})`);
 
+    let hasHumanAccess = true;
+    let hasHumanRoles = true;
+    let hasNodeRole = false;
     if (!DEV_MODE && session && session.$user !== WORK) {
-        const canSee = await targetItem.canSee?.({ session }, { session }).catch(() => false);
+        const canSee = await targetItem.canSee?.(targetItem, { session }).catch(() => false);
         const roles = await targetItem.roles?.({ session }).catch(() => []);
-        if (!canSee && !roles.length)
+        hasHumanRoles = Array.isArray(roles) && roles.length > 0;
+        hasHumanAccess = Boolean(canSee || hasHumanRoles);
+        hasNodeRole = Boolean(await targetItem.hasNodeRole?.(from).catch(() => false));
+        if (!hasHumanAccess && !hasNodeRole)
             throw new Error(`twin_ask: нет прав доступа к узлу ${target}`);
+    }
+    else {
+        const roles = await targetItem.roles?.({ session }).catch(() => []);
+        hasHumanRoles = Array.isArray(roles) && roles.length > 0;
+        hasNodeRole = Boolean(await targetItem.hasNodeRole?.(from).catch(() => false));
+        hasHumanAccess = hasHumanRoles;
     }
 
     const nextVisited = [...prevVisited, target];
     const nextDepth = depth + 1;
+    const useRoleOnly = Boolean(hasNodeRole && !hasHumanRoles);
     const childSession = {
         ...session,
         twinCall: Object.freeze({ fromPath: from, targetPath: target, depth: nextDepth, visited: nextVisited }),
+        ...(useRoleOnly ? { twinRoleOnly: true } : {}),
     };
 
     const prompt = `[Межагентный запрос от узла ${from} (глубина ${nextDepth}/${MAX_TWIN_DEPTH})]\n`
@@ -209,7 +223,7 @@ export const twinRuleSaveTool = {
 
 export const twinScheduleSaveTool = {
     name: 'twin_schedule_save',
-    description: 'Создать, переключить или удалить регулярное расписание задач текущего структурного узла (только BOSS).',
+    description: 'Создать, переключить или удалить регулярное расписание задач текущего структурного узла (только BOSS). Поддерживает ODANT-маску времени (например YYYY-MM-05T10:15:00) и повтор готовой .task.',
     risk: 'write',
     parameters: {
         type: 'object',
@@ -217,9 +231,10 @@ export const twinScheduleSaveTool = {
             id: { type: 'string', description: 'ID расписания (для toggle или delete)' },
             label: { type: 'string', description: 'Название регулярной обязанности' },
             prompt: { type: 'string', description: 'Что именно должен проверять/делать двойник по расписанию' },
+            task: { type: 'string', description: 'WORK-путь готовой .task для повторного выполнения (необязательно)' },
             rule: {
                 type: 'object',
-                description: 'Правило времени: { kind: "daily"|"weekly"|"every"|"once", at?: "09:00", days?: [1,2,3,4,5], minutes?: 60 }',
+                description: 'Правило времени: { mask: "YYYY-MM-05T10:15:00" } | { every: 60 } | { at: "09:00", days?: [1..5] } | { once: ISO }',
             },
             tz: { type: 'string', description: 'Часовой пояс, например Europe/Moscow' },
             toggle: { type: 'boolean', description: 'Переключить enabled для id' },
@@ -236,4 +251,50 @@ export const twinScheduleSaveTool = {
     },
 };
 
-export const twinTools = [twinAskTool, twinRuleListTool, twinRuleSaveTool, twinScheduleSaveTool];
+export const twinSystemSaveTool = {
+    name: 'twin_system_save',
+    description: 'Обновить системную инструкцию (правила поведения) цифрового двойника текущего узла (ai/system.md, только BOSS).',
+    risk: 'write',
+    parameters: {
+        type: 'object',
+        properties: {
+            text: { type: 'string', description: 'Текст инструкции для агента этого подразделения' },
+            replace: { type: 'boolean', description: 'true — заменить правила сверху; false (по умолчанию) — дополнить их' },
+        },
+        required: ['text'],
+    },
+    async run(args, ctx) {
+        if (!ctx?.session || ctx.session.twinCall)
+            throw new Error('twin_system_save: недоступно в Service Plane');
+        const place = ctx.place || globalThis.WORK;
+        const { saveNodeAgentSystem } = await import('./node-rules.js');
+        return saveNodeAgentSystem(place, { session: ctx.session, post: args });
+    },
+};
+
+export const twinSecuritySaveTool = {
+    name: 'twin_security_save',
+    description: 'Настроить права доступа подразделения: назначить руководителя (одного BOSS), роли (ROLES), участников (людей и подразделения) и привязку классов (LINKS) — только BOSS.',
+    risk: 'write',
+    parameters: {
+        type: 'object',
+        properties: {
+            security: {
+                type: 'object',
+                description: 'Секция #security: { BOSS: [uid?], ROLES: [{ id, label, external?, USERS: [uid|nodePath], LINKS: [{ id, access: "read"|"write", scope? }] }] }',
+            },
+            title: { type: 'string', description: 'Краткий заголовок изменения для журнала босса' },
+            summary: { type: 'string', description: 'Описание изменения' },
+        },
+        required: ['security'],
+    },
+    async run(args, ctx) {
+        if (!ctx?.session || ctx.session.twinCall)
+            throw new Error('twin_security_save: недоступно в Service Plane');
+        const place = ctx.place || globalThis.WORK;
+        const { saveNodeSecurity } = await import('./node-rules.js');
+        return saveNodeSecurity(place, { session: ctx.session, post: args });
+    },
+};
+
+export const twinTools = [twinAskTool, twinRuleListTool, twinRuleSaveTool, twinScheduleSaveTool, twinSystemSaveTool, twinSecuritySaveTool];

@@ -112,7 +112,11 @@ export default {
             }
         </style>
 
-        <nav class="sys-sidebar" aria-label="Разделы системы">
+        <div ~if="isBossDenied" class="denied-msg" style="padding:28px 24px;color:var(--muted-color);font-size:14px;">
+            Раздел «Система» доступен только руководителю подразделения (BOSS).
+        </div>
+
+        <nav ~if="!isBossDenied" class="sys-sidebar" aria-label="Разделы системы">
             <button type="button" class="sys-tab" ~for="mainTabs"
                 ~class="{ active: currentTabId === $for.item.id }"
                 @tap="selectTab($for.item.id)">
@@ -128,7 +132,7 @@ export default {
             </button>
         </nav>
 
-        <div class="sys-body">
+        <div ~if="!isBossDenied" class="sys-body">
             <div ~if="currentTabId === 'requisites'" class="req-wrap">
                 <div class="req-bar">
                     <span style="font-weight:700;font-size:14px;">Реквизиты и свойства</span>
@@ -153,19 +157,37 @@ export default {
     activeTab: '',
     pendingPlace: '',
     hasStaticFields: false,
+    isBossDenied: false,
     dataAccessNode: null,
     requisitesBody: null,
     reqStatus: '',
     $item: {
         $def: null,
         set(n) {
-            if (n)
+            if (n) {
+                this._checkBoss(n);
                 this._syncRequisites(n);
+            }
         }
     },
     async attached() {
-        if (this.$item)
+        if (this.$item) {
+            await this._checkBoss(this.$item);
             await this._syncRequisites(this.$item);
+        }
+    },
+    async _checkBoss(item) {
+        try {
+            if (WORK?.DEV_MODE) {
+                this.isBossDenied = false;
+                return;
+            }
+            const ok = Boolean(await (item.isBoss ?? item.isAdmin));
+            this.isBossDenied = !ok;
+        }
+        catch {
+            this.isBossDenied = true;
+        }
     },
     get storageFolder() {
         return this.$item?.storage_folder;

@@ -5,11 +5,13 @@
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { loadDocs } from './resources.js';
+import { loadDocs, aiDirs } from './resources.js';
+import { parseFrontmatter } from './util.js';
 import { resetTriggerCache } from './triggers.js';
 import { createSchedule, listSchedules, toggleSchedule, cancelSchedule } from './scheduler.js';
 import { DEV_MODE } from '../../host/config.js';
 import { audit } from '../../server/access/audit.js';
+import { FS } from '../../server/index.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
 const SAFE_RULE_NAME_RE = /^[A-Za-z0-9\u0400-\u04FF_-]{1,64}$/;
@@ -17,9 +19,10 @@ const SAFE_RULE_NAME_RE = /^[A-Za-z0-9\u0400-\u04FF_-]{1,64}$/;
 async function assertBoss(storage, params = {}) {
     if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
         return;
-    const ok = await storage._canViewLocalFeed?.(params);
-    if (!ok)
-        throw new Error(ACCESS_DENIED);
+    const roles = await storage.roles?.(params).catch(() => []) || [];
+    if (roles.includes('BOSS') || await storage._isWorkBoss?.(params).catch(() => false))
+        return;
+    throw new Error(ACCESS_DENIED);
 }
 
 function ownTriggersDir(storage) {
@@ -41,16 +44,17 @@ function yamlScalar(v) {
     return s;
 }
 
-function serializeTriggerMd({ name, on, class: cls, ext, when, template, approval, as, notify, cooldownSec, maxPerHour, enabled, body }) {
+function serializeTriggerMd({ name, label, on, class: cls, ext, when, template, approval, as, notify, cooldownSec, maxPerHour, enabled, body }) {
     const lines = ['---'];
     lines.push(`name: ${yamlScalar(name)}`);
+    if (label && label !== name) lines.push(`label: ${yamlScalar(label)}`);
     lines.push(`on: ${yamlScalar(Array.isArray(on) ? on.join(', ') : (on || 'db:register'))}`);
     if (cls) lines.push(`class: ${yamlScalar(cls)}`);
     if (ext) lines.push(`ext: ${yamlScalar(ext)}`);
     if (when) lines.push(`when: ${yamlScalar(when)}`);
     if (template) lines.push(`template: ${yamlScalar(template)}`);
     if (approval) lines.push(`approval: true`);
-    if (as) lines.push(`as: ${yamlScalar(as)}`);
+    lines.push(`as: ${yamlScalar(as || 'BOSS')}`);
     const notifyList = Array.isArray(notify) ? notify : String(notify || 'BOSS').split(/[\s,]+/).filter(Boolean);
     lines.push(`notify: [${notifyList.map(yamlScalar).join(', ')}]`);
     if (Number(cooldownSec) > 0) lines.push(`cooldownSec: ${Math.round(Number(cooldownSec))}`);
@@ -77,13 +81,14 @@ export async function listNodeRules(storage, params = {}) {
         const m = doc.meta || {};
         triggers.push({
             name: doc.name,
+            label: m.label || doc.name,
             on: m.on || 'save',
             class: m.class || '',
             ext: m.ext || '',
             when: m.when || '',
             template: m.template || '',
             approval: Boolean(m.approval === true || m.approval === 'true'),
-            as: m.as || '',
+            as: m.as || 'BOSS',
             notify: Array.isArray(m.notify) ? m.notify : String(m.notify || '').split(/[\s,]+/).filter(Boolean),
             cooldownSec: Number(m.cooldownSec) || 0,
             maxPerHour: Number(m.maxPerHour) || 20,
@@ -116,16 +121,18 @@ export async function saveNodeRule(storage, params = {}) {
             await fsp.rm(filePath, { force: true });
         resetTriggerCache();
         audit('agent_rule_delete', { name, point: storage.path, params });
+        await recordBossSettingTask(storage, params, {
+            title: `Удалена реакция «${name}»`,
+            summary: `В подразделении ${storage.path || '/'} удалена автоматическая реакция «${name}».`,
+        });
         return { ok: true, deleted: name };
     }
 
-    const uid = storage.constructor?.resolveUid?.(params) || post.as || '';
-    const asUid = String(post.as || uid).trim();
-    if (!asUid)
-        throw new Error('Не указан исполнитель (as) для правила');
+    const asUid = String(post.as || 'BOSS').trim() || 'BOSS';
 
     const md = serializeTriggerMd({
         name,
+        label: post.label || name,
         on: post.on || 'db:register',
         class: post.class || '',
         ext: post.ext || '',
@@ -146,6 +153,10 @@ export async function saveNodeRule(storage, params = {}) {
     storage?.reset?.();
     resetTriggerCache();
     audit('agent_rule_save', { name, point: storage.path, params });
+    await recordBossSettingTask(storage, params, {
+        title: `Настроена реакция «${post.label || name}»`,
+        summary: `В подразделении ${storage.path || '/'} сохранена автоматическая реакция «${post.label || name}» (событие: ${post.on || 'db:register'}).`,
+    });
     return { ok: true, name };
 }
 
@@ -158,20 +169,63 @@ export async function saveNodeSchedule(storage, params = {}) {
         throw new Error('Не определён владелец расписания');
 
     if (post.delete === true && post.id) {
-        await cancelSchedule({ uid, id: post.id });
+        await cancelSchedule({ uid, id: post.id }).catch(async () => {
+            // Если расписание создавал прежний BOSS — разрешаем BOSS узла удалить
+            const { indexDb } = await import('../../host/index-db.js');
+            const d = await indexDb();
+            d?.prepare('DELETE FROM agent_schedules WHERE id = ? AND node_path = ?').run(String(post.id), nodePath);
+        });
+        await recordBossSettingTask(storage, params, {
+            title: `Удалено расписание (${post.id})`,
+            summary: `В подразделении ${nodePath} удалено расписание ${post.id}.`,
+        });
         return { ok: true, deleted: post.id };
     }
     if (post.toggle === true && post.id) {
-        return toggleSchedule({ id: post.id, enabled: post.enabled });
+        const res = await toggleSchedule({ id: post.id, enabled: post.enabled });
+        await recordBossSettingTask(storage, params, {
+            title: `${res.enabled ? 'Включено' : 'Приостановлено'} расписание «${res.label || post.id}»`,
+            summary: `В подразделении ${nodePath} расписание «${res.label || post.id}» переведено в состояние: ${res.enabled ? 'активно' : 'пауза'}.`,
+        });
+        return res;
     }
-    return createSchedule({
+    const created = await createSchedule({
         uid,
+        task: String(post.task || '').trim(),
         nodePath,
         label: post.label || 'Задача по расписанию',
         prompt: post.prompt,
         rule: post.rule,
         tz: post.tz,
     });
+    await recordBossSettingTask(storage, params, {
+        title: `Добавлено расписание «${created.label}»`,
+        summary: `В подразделении ${nodePath} добавлено расписание «${created.label}» (${created.when})${created.task ? ` на основе задачи ${created.task}` : ''}.`,
+    });
+    return created;
+}
+
+async function saveOwnClassFields(storage, params, patch) {
+    const own = await storage.meta_file;
+    const text = own ? await own.load({ encoding: 'utf-8', session: params?.session }).catch(() => '') : '';
+    const data = text ? (await FS.$class.importScript(String(text))) || {} : {};
+    const copy = { ...data, ...patch };
+    if (storage.meta_folder?.save_file) {
+        await storage.meta_folder.save_file({
+            ...params,
+            filename: 'class.js',
+            post: 'export default ' + FS.$class.toScript(copy),
+        });
+        storage.meta_folder?.reset?.();
+        storage.reset?.();
+        if (typeof storage.import === 'function')
+            storage.DATA = await storage.import({ reset: true });
+        await storage.init;
+    }
+    else if (storage?.DATA) {
+        Object.assign(storage.DATA, patch);
+    }
+    return copy;
 }
 
 /**
@@ -186,12 +240,11 @@ export async function saveNodeProactivity(storage, params = {}) {
         ...(typeof post.autoReply === 'boolean' ? { autoReply: post.autoReply } : {}),
         ...(typeof post.quietDigest === 'boolean' ? { quietDigest: post.quietDigest } : {}),
     };
-    if (typeof storage?.save === 'function') {
-        await storage.save({ proactivity: next }, params);
-    }
-    else if (storage?.DATA) {
-        storage.DATA.proactivity = next;
-    }
+    await saveOwnClassFields(storage, params, { proactivity: next });
+    await recordBossSettingTask(storage, params, {
+        title: 'Изменено поведение агента узла',
+        summary: `В подразделении ${storage.path || '/'} обновлены параметры поведения (autoReply=${next.autoReply !== false}, quietDigest=${next.quietDigest !== false}).`,
+    });
     return { ok: true, proactivity: next };
 }
 
@@ -364,4 +417,331 @@ export async function runMailAutoRefresh({ nodes = null } = {}) {
         }
     }
     return refreshed;
+}
+
+/**
+ * Зафиксировать настройку руководителя как выполненную задачу `.task` в журнале узла (без вызова LLM).
+ */
+export async function recordBossSettingTask(storage, params = {}, { title = 'Настройка узла', summary = '' } = {}) {
+    if (!storage || params?.skipAuditTask)
+        return null;
+    try {
+        const actor = storage.constructor?.resolveUid?.(params) || params?.session?.uid || 'BOSS';
+        const now = Date.now();
+        const taskBody = {
+            name: String(title || 'Настройка узла').slice(0, 120),
+            title: String(title || 'Настройка узла').slice(0, 120),
+            status: 'done',
+            source: 'boss-setting',
+            actor,
+            nodePath: storage.path || '/',
+            created: now,
+            items: [
+                { id: 'u_' + now, type: 'user', content: `[Настройка в «Системе»] ${title}` },
+                { id: 'a_' + now, type: 'assistant', content: summary || title },
+            ],
+        };
+        if (typeof storage.save_file === 'function') {
+            const filename = `setting-${new Date(now).toISOString().replace(/[:.]/g, '-')}.task`;
+            const safeParams = {
+                ...params,
+                session: { ...(params?.session || { uid: actor, $user: globalThis.WORK }), trigger: 'boss-setting' },
+                filename,
+                post: JSON.stringify(taskBody, null, 2),
+                auto: false,
+            };
+            await storage.save_file(safeParams).catch(() => {});
+        }
+        return { ok: true, title };
+    }
+    catch {
+        return null;
+    }
+}
+
+/**
+ * Прочитать собственную инструкцию узла (`$structure/ai/system.md`) и унаследованные слои сверху.
+ */
+export async function getNodeAgentSystem(storage, params = {}) {
+    await assertBoss(storage, params);
+    const metaDir = storage?.meta_folder?.real_dir || storage?.meta_folder?.dir
+        || (storage?.real_dir ? path.join(storage.real_dir, storage.type || '$class') : '');
+    const ownFile = metaDir ? path.join(metaDir, 'ai', 'system.md') : '';
+    let ownText = '';
+    let replace = false;
+    if (ownFile && fs.existsSync(ownFile)) {
+        try {
+            const raw = await fsp.readFile(ownFile, 'utf8');
+            const parsed = parseFrontmatter(raw);
+            ownText = String(parsed.body || '').trim();
+            replace = parsed.meta?.replace === true || parsed.meta?.replace === 'true';
+        }
+        catch { /* ignore */ }
+    }
+    const inherited = [];
+    try {
+        const dirs = await aiDirs(storage);
+        const ownPath = storage?.path || '/';
+        for (const { dir, scope } of dirs) {
+            if (scope === ownPath)
+                continue;
+            const f = await dir.get_item('system.md').catch(() => null);
+            const raw = f && typeof f.load === 'function' ? await f.load({ encoding: 'utf-8' }).catch(() => '') : '';
+            const text = String(raw || '').trim();
+            if (!text)
+                continue;
+            const parsed = parseFrontmatter(text);
+            inherited.push({
+                scope: scope === 'engine' ? 'Базовые правила системы WORK' : scope,
+                text: String(parsed.body || text).trim(),
+                replace: parsed.meta?.replace === true || parsed.meta?.replace === 'true',
+            });
+        }
+    }
+    catch { /* ignore */ }
+    return { text: ownText, replace, inherited };
+}
+
+/**
+ * Сохранить собственную инструкцию агента узла (`$structure/ai/system.md`).
+ */
+export async function saveNodeAgentSystem(storage, params = {}) {
+    await assertBoss(storage, params);
+    const post = (typeof params.post === 'string' ? JSON.parse(params.post) : params.post) || params;
+    const text = String(post.text ?? '').trim();
+    const replace = Boolean(post.replace);
+    const metaDir = storage?.meta_folder?.real_dir || storage?.meta_folder?.dir
+        || (storage?.real_dir ? path.join(storage.real_dir, storage.type || '$class') : '');
+    if (!metaDir)
+        throw new Error('Не найдена метапапка узла');
+    const filePath = path.join(metaDir, 'ai', 'system.md');
+    if (!text && !replace) {
+        if (fs.existsSync(filePath))
+            await fsp.rm(filePath, { force: true });
+    }
+    else {
+        await fsp.mkdir(path.dirname(filePath), { recursive: true });
+        const content = replace ? `---\nreplace: true\n---\n${text}\n` : `${text}\n`;
+        await fsp.writeFile(filePath, content, 'utf8');
+    }
+    storage?.meta_folder?.reset?.();
+    storage?.reset?.();
+    audit('agent_system_save', { point: storage.path, replace, length: text.length, params });
+    await recordBossSettingTask(storage, params, {
+        title: 'Обновлена инструкция агента узла',
+        summary: text
+            ? `Для подразделения ${storage.path || '/'} сохранена инструкция поведения агента (${replace ? 'с заменой общих правил' : 'в дополнение к общим правилам'}):\n${text.slice(0, 300)}`
+            : `Для подразделения ${storage.path || '/'} собственная инструкция агента очищена (действуют общие правила).`,
+    });
+    return { ok: true, text, replace };
+}
+
+const DATA_CLASS_TYPES = new Set(['$catalog', '$virtual', '$operation', '$register', '$account', '$struct']);
+
+/**
+ * Дерево доступных прикладных классов (из всех модулей текущей организации/проекта и общих /MODULES).
+ */
+export async function listNodeAvailableClasses(storage, params = {}) {
+    await assertBoss(storage, params);
+    const WORK = globalThis.WORK;
+    if (!WORK)
+        return { roots: [] };
+
+    const p = String(storage?.path || '/');
+    const m = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(p);
+    const baseModPath = m ? m[1] + '/MODULES' : '';
+    const candidateRoots = [];
+    if (baseModPath)
+        candidateRoots.push({ path: baseModPath, label: 'Модули организации' });
+    candidateRoots.push({ path: '/MODULES', label: 'Общие модули системы' });
+
+    const walk = async (node, depth = 0, modRootPath = '') => {
+        if (!node || depth > 6)
+            return null;
+        await node.init?.catch?.(() => {});
+        if (!node.id || node.id[0] === '$')
+            return null;
+        const t = node.type;
+        const isLeafData = DATA_CLASS_TYPES.has(t);
+        const isFolderGroup = t === '$domain' || t === '$module' || t === '$class' || t === '$folder';
+        if (!isLeafData && !isFolderGroup)
+            return null;
+        const items = await Promise.resolve(node.items).catch(() => []) || [];
+        const children = [];
+        for (const ch of items) {
+            if (!ch || ch.id?.[0] === '$')
+                continue;
+            const childNode = await walk(ch, depth + 1, modRootPath);
+            if (childNode)
+                children.push(childNode);
+        }
+        if (!isLeafData && !children.length)
+            return null;
+        const rawShort = modRootPath && node.path?.startsWith(modRootPath + '/')
+            ? node.path.slice(modRootPath.length + 1)
+            : (node.path || node.id);
+        return {
+            id: node.id,
+            path: node.path,
+            label: node.DATA?.label || node.label || node.id,
+            type: t,
+            icon: node.icon || node.DATA?.icon || (isLeafData ? 'odant:class' : 'odant:folder'),
+            selectable: isLeafData || t === '$module',
+            shortPath: rawShort,
+            children,
+        };
+    };
+
+    const roots = [];
+    const seenPaths = new Set();
+    for (const r of candidateRoots) {
+        if (seenPaths.has(r.path))
+            continue;
+        seenPaths.add(r.path);
+        const modRoot = await WORK.get_item(r.path).catch(() => null);
+        if (!modRoot)
+            continue;
+        const items = await Promise.resolve(modRoot.items).catch(() => []) || [];
+        const children = [];
+        for (const ch of items) {
+            if (!ch || ch.id?.[0] === '$')
+                continue;
+            const built = await walk(ch, 1, r.path);
+            if (built)
+                children.push(built);
+        }
+        if (children.length) {
+            roots.push({
+                id: r.path,
+                path: r.path,
+                label: r.label,
+                type: '$domain',
+                icon: 'odant:folder',
+                selectable: false,
+                children,
+            });
+        }
+    }
+    return { roots };
+}
+
+/**
+ * Список подразделений текущей организации/проекта (для добавления в участники ролей).
+ */
+export async function listNodeStructures(storage, params = {}) {
+    await assertBoss(storage, params);
+    const WORK = globalThis.WORK;
+    if (!WORK)
+        return { structures: [] };
+    const selfPath = String(storage?.path || '/').replace(/\/+$/, '') || '/';
+    const m = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(selfPath);
+    const rootsToScan = m ? [m[1]] : ['/ORGANIZATIONS', '/PROJECTS'];
+    const out = [];
+    const seen = new Set();
+    const visit = async (node, depth = 0) => {
+        if (!node || depth > 5)
+            return;
+        await node.init?.catch?.(() => {});
+        const p = String(node.path || '').replace(/\/+$/, '') || '/';
+        if (['$base', '$project', '$structure'].includes(node.type) && p !== selfPath && !seen.has(p)) {
+            seen.add(p);
+            out.push({
+                path: p,
+                id: node.id,
+                label: node.DATA?.label || node.label || node.id,
+                type: node.type,
+                icon: node.icon || node.DATA?.icon || 'odant:structure',
+            });
+        }
+        const items = await Promise.resolve(node.items).catch(() => []) || [];
+        for (const ch of items) {
+            if (ch && ch.id?.[0] !== '$' && ['$domain', '$base', '$project', '$structure'].includes(ch.type))
+                await visit(ch, depth + 1);
+        }
+    };
+    for (const rp of rootsToScan) {
+        const item = await WORK.get_item(rp).catch(() => null);
+        if (item)
+            await visit(item, 0);
+    }
+    return { structures: out };
+}
+
+/**
+ * Последние выполненные задачи `.task` подразделения (для повторения по расписанию).
+ */
+export async function listNodeTasks(storage, params = {}) {
+    await assertBoss(storage, params);
+    const out = [];
+    const seen = new Set();
+    const scanContainer = async (container) => {
+        if (!container)
+            return;
+        const items = await Promise.resolve(container.items).catch(() => []) || [];
+        for (const f of items) {
+            if (!(f instanceof FS.$file) || !String(f.id || '').endsWith('.task') || seen.has(f.path))
+                continue;
+            seen.add(f.path);
+            try {
+                const raw = await f.load({ encoding: 'utf-8' }).catch(() => '');
+                const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (!parsed || parsed.source === 'boss-setting')
+                    continue;
+                const firstUser = Array.isArray(parsed.items) ? parsed.items.find(i => i?.type === 'user' && i.content) : null;
+                const prompt = String(firstUser?.content || parsed.prompt || parsed.name || '').trim();
+                if (!prompt)
+                    continue;
+                out.push({
+                    path: f.path,
+                    title: String(parsed.title || parsed.name || f.id.replace(/\.task$/i, '')).slice(0, 100),
+                    prompt: prompt.slice(0, 1000),
+                    time: Number(parsed.updated || parsed.created || f.mtime || 0),
+                });
+            }
+            catch { /* ignore */ }
+        }
+    };
+    await scanContainer(storage);
+    const uid = storage.constructor?.resolveUid?.(params) || params?.session?.uid || '';
+    if (uid && globalThis.WORK) {
+        const userItem = await globalThis.WORK.get_item(`/USERS/${uid}`).catch(() => null);
+        await scanContainer(userItem);
+    }
+    out.sort((a, b) => (b.time || 0) - (a.time || 0));
+    return { tasks: out.slice(0, 30) };
+}
+
+/**
+ * Сохранить `#security` подразделения (BOSS — не более одного, ROLES — роли с людьми/подразделениями и классами)
+ * с автоматической фиксацией в журнале босса.
+ */
+export async function saveNodeSecurity(storage, params = {}) {
+    await assertBoss(storage, params);
+    const post = (typeof params.post === 'string' ? JSON.parse(params.post) : params.post) || params;
+    const rawSec = post.security && typeof post.security === 'object' ? post.security : post;
+    const bossArr = Array.isArray(rawSec.BOSS)
+        ? rawSec.BOSS.filter(v => typeof v === 'string' && v.trim()).slice(0, 1)
+        : [];
+    const nextSec = {
+        ...rawSec,
+        BOSS: bossArr,
+    };
+    await saveOwnClassFields(storage, params, { '#security': nextSec });
+    try {
+        const LINKS = await import('../../server/access/links.js');
+        LINKS.reset();
+    }
+    catch { /* ignore */ }
+    const summaryText = String(post.summary || '').trim()
+        || `Обновлена структура прав в ${storage.path || '/'}: BOSS=${bossArr[0] || 'наследуется сверху'}, ролей=${Array.isArray(nextSec.ROLES) ? nextSec.ROLES.length : 0}.`;
+    await recordBossSettingTask(storage, params, {
+        title: String(post.title || 'Изменены права и роли подразделения'),
+        summary: summaryText,
+    });
+    storage.meta_folder?.reset?.();
+    storage.reset?.();
+    if (typeof storage.import === 'function')
+        storage.DATA = await storage.import({ reset: true });
+    await storage.init;
+    return { ok: true, security: nextSec };
 }
