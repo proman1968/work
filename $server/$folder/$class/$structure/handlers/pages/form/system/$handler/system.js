@@ -1,7 +1,6 @@
 import staffProto from './tabs/staff.js';
 import messengersProto from './tabs/messengers.js';
 import databaseProto from './tabs/database.js';
-import searchProto from './tabs/search.js';
 import licenseProto from './tabs/license.js';
 import agentProto from './tabs/agent.js';
 
@@ -28,7 +27,6 @@ function regTab(tag, raw) {
 regTab('system-tab-staff', staffProto);
 regTab('system-tab-messengers', messengersProto);
 regTab('system-tab-database', databaseProto);
-regTab('system-tab-search', searchProto);
 regTab('system-tab-license', licenseProto);
 regTab('system-tab-agent', agentProto);
 
@@ -37,48 +35,59 @@ export default {
     template: /* html */`
         <style>
             :host {
-                @apply --vertical;
+                @apply --horizontal;
                 @apply --flex;
                 overflow: hidden;
                 background: var(--content-background);
                 color: var(--content-color);
             }
-            .sys-tabs {
-                @apply --horizontal;
-                align-items: center;
-                gap: 6px;
-                padding: 8px 14px;
-                border-bottom: 1px solid var(--subtle-border, var(--border-color));
-                background: var(--subtle-background);
-                flex-wrap: wrap;
+            .sys-sidebar {
+                @apply --vertical;
+                width: 224px;
                 flex-shrink: 0;
+                padding: 12px 10px;
+                gap: 4px;
+                border-right: 1px solid var(--subtle-border, var(--border-color));
+                background: var(--subtle-background, #f8fafc);
+                overflow-y: auto;
+            }
+            .sys-sep {
+                height: 1px;
+                margin: 6px 8px;
+                background: var(--subtle-border, var(--border-color));
+                opacity: 0.7;
             }
             .sys-tab {
                 @apply --horizontal;
                 align-items: center;
-                gap: 6px;
-                padding: 6px 12px;
+                gap: 9px;
+                width: 100%;
+                padding: 8px 12px;
                 border-radius: 8px;
                 border: 1px solid transparent;
                 background: transparent;
                 color: var(--content-color);
                 font: inherit;
-                font-size: 13px;
-                font-weight: 600;
+                font-size: 13.5px;
+                font-weight: 500;
+                text-align: left;
                 cursor: pointer;
                 user-select: none;
+                transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
             }
             .sys-tab:hover {
-                background: var(--accent-soft);
+                background: color-mix(in srgb, var(--accent-color, #2563eb) 6%, transparent);
             }
             .sys-tab.active {
-                background: var(--content-background);
-                color: var(--accent-color);
-                border-color: var(--accent-color);
+                background: color-mix(in srgb, var(--accent-color, #2563eb) 10%, var(--content-background, #ffffff));
+                color: var(--accent-color, #2563eb);
+                border-color: color-mix(in srgb, var(--accent-color, #2563eb) 55%, transparent);
+                font-weight: 600;
             }
             .sys-body {
                 @apply --vertical;
                 @apply --flex;
+                min-width: 0;
                 min-height: 0;
                 overflow: hidden;
             }
@@ -103,14 +112,21 @@ export default {
             }
         </style>
 
-        <div class="sys-tabs">
-            <button type="button" class="sys-tab" ~for="availableTabs"
+        <nav class="sys-sidebar" aria-label="Разделы системы">
+            <button type="button" class="sys-tab" ~for="mainTabs"
                 ~class="{ active: currentTabId === $for.item.id }"
                 @tap="selectTab($for.item.id)">
                 <oda-icon :icon="$for.item.icon" icon-size="16"></oda-icon>
                 <span>{{$for.item.label}}</span>
             </button>
-        </div>
+            <div class="sys-sep" ~if="mainTabs.length && infraTabs.length"></div>
+            <button type="button" class="sys-tab" ~for="infraTabs"
+                ~class="{ active: currentTabId === $for.item.id }"
+                @tap="selectTab($for.item.id)">
+                <oda-icon :icon="$for.item.icon" icon-size="16"></oda-icon>
+                <span>{{$for.item.label}}</span>
+            </button>
+        </nav>
 
         <div class="sys-body">
             <div ~if="currentTabId === 'requisites'" class="req-wrap">
@@ -130,14 +146,12 @@ export default {
             <item-tree ~if="currentTabId === 'files'" flex :$item="storageFolder" show-size hide-system items-selector="entries" hide-tops="1" hide-roots="1"></item-tree>
             <system-tab-messengers ~if="currentTabId === 'messengers'" flex :$item="$item"></system-tab-messengers>
             <system-tab-database ~if="currentTabId === 'database'" flex :$item="$item"></system-tab-database>
-            <system-tab-search ~if="currentTabId === 'search'" flex :$item="$item" :initial-query="pendingQuery"></system-tab-search>
             <system-tab-license ~if="currentTabId === 'license'" flex :$item="$item"></system-tab-license>
             <system-tab-agent ~if="currentTabId === 'agent'" flex :$item="$item"></system-tab-agent>
         </div>
     `,
     activeTab: '',
     pendingPlace: '',
-    pendingQuery: '',
     hasStaticFields: false,
     dataAccessNode: null,
     requisitesBody: null,
@@ -156,7 +170,7 @@ export default {
     get storageFolder() {
         return this.$item?.storage_folder;
     },
-    get availableTabs() {
+    get mainTabs() {
         const t = this.$item?.type;
         const tabs = [];
         if (this.hasStaticFields)
@@ -165,16 +179,23 @@ export default {
             tabs.push({ id: 'profile', label: 'Профиль и токены', icon: 'icons:account-circle' });
         tabs.push({ id: 'staff', label: 'Пользователи', icon: 'icons:supervisor-account' });
         tabs.push({ id: 'files', label: 'Файлы', icon: 'fontawesome:r-folder-open' });
+        return tabs;
+    },
+    get infraTabs() {
+        const t = this.$item?.type;
+        const tabs = [];
         if (t !== '$user')
             tabs.push({ id: 'messengers', label: 'Мессенджеры', icon: 'communication:phonelink-ring' });
-        if (t === '$server' || t === '$base' || t === '$project')
-            tabs.push({ id: 'database', label: 'База данных', icon: 'carbon:data-base' });
-        tabs.push({ id: 'search', label: 'Поиск', icon: 'icons:search' });
         if (t !== '$user')
             tabs.push({ id: 'agent', label: 'Агент и правила', icon: 'bootstrap:robot' });
+        if (t === '$server' || t === '$base' || t === '$project')
+            tabs.push({ id: 'database', label: 'База данных', icon: 'carbon:data-base' });
         if (t === '$server')
             tabs.push({ id: 'license', label: 'Лицензия', icon: 'carbon:certificate' });
         return tabs;
+    },
+    get availableTabs() {
+        return [...this.mainTabs, ...this.infraTabs];
     },
     get currentTabId() {
         const tabs = this.availableTabs;
@@ -190,9 +211,11 @@ export default {
     async applyNav(nav = {}) {
         if (nav.place)
             this.pendingPlace = String(nav.place);
-        if (nav.q)
-            this.pendingQuery = String(nav.q);
         if (nav.tab) {
+            if (nav.tab === 'search' && this.$item && typeof window?.execute === 'function') {
+                window.execute(this.$item, { view: 'search', ...(nav.q ? { q: nav.q } : {}) });
+                return;
+            }
             const tabId = nav.tab === 'folder' ? 'files' : nav.tab === 'editor' ? 'requisites' : String(nav.tab);
             this.selectTab(tabId);
         }

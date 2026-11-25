@@ -184,10 +184,14 @@ Node:{
     Node.prototype.render = function (wake) {
         if (!this.__vnode__ || !this.isConnected)
             return;
-        this.throttle('render', ()=>{
-            const el = this.__vnode__.render(this) || this;
-            if(!el[R].states.sleep || wake)
-                if(el.nodeType === 1)
+        this.throttle('render', async ()=>{
+            let el = this.__vnode__.render(this) || this;
+            if (el?.then)
+                el = (await el) || this;
+            if (!el?.isConnected)
+                return;
+            if (!el?.[R]?.states?.sleep || wake)
+                if (el?.nodeType === 1)
                     el.renderChildren(wake);
         })
     };

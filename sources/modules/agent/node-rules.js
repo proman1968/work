@@ -223,14 +223,20 @@ export async function collectQuietDigest(storage) {
             events.push(`Ожидает решения: «${String(a.content || '').slice(0, 90)}»`);
         }
 
-        // 2. Неотвеченные обращения пользователей/клиентов в twin-диалогах этого узла
+        // 2. Неотвеченные текстовые обращения пользователей/клиентов в twin-диалогах этого узла (без .task-карточек, за последние 3 дня)
+        const threeDaysAgo = now - 3 * 86400_000;
         const threads = db.prepare(`
             SELECT id FROM chat_threads WHERE kind = 'twin' AND node_path = ?
         `).all(nodePath);
         let unansweredCount = 0;
         for (const t of threads) {
-            const lastMsg = db.prepare('SELECT sender, created FROM chat_messages WHERE thread_id = ? ORDER BY id DESC LIMIT 1').get(t.id);
-            if (lastMsg && lastMsg.sender !== '$twin' && Number(lastMsg.created) <= min15Ago)
+            const lastMsg = db.prepare('SELECT sender, kind, task_path, created FROM chat_messages WHERE thread_id = ? ORDER BY id DESC LIMIT 1').get(t.id);
+            if (lastMsg
+                && lastMsg.sender !== '$twin'
+                && lastMsg.kind === 'text'
+                && !lastMsg.task_path
+                && Number(lastMsg.created) <= min15Ago
+                && Number(lastMsg.created) >= threeDaysAgo)
                 unansweredCount++;
         }
         if (unansweredCount > 0)

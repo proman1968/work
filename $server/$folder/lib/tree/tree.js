@@ -536,7 +536,7 @@ export default {
             return;
         const target = this.$item || globalThis.WORK;
         if (target && typeof window?.execute === 'function')
-            window.execute(target, { view: 'system', tab: 'search', q });
+            window.execute(target, { view: 'search', q });
     },
     _onTreeScroll() {
         if (this._scrollRaf)

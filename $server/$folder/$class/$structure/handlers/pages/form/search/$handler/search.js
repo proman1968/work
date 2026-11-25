@@ -1,5 +1,6 @@
 export default {
     imports: 'oda//icon, oda//button, oda//tabs',
+    icon: 'icons:search',
     template: /*html*/`
         <style>
             :host {
@@ -166,6 +167,19 @@ export default {
     query: '',
     lastQuery: '',
     scopeTab: 'all',
+    $item: {
+        $def: null,
+        set(n, o) {
+            if (n && o && n !== o) {
+                this.files = [];
+                this.nodes = [];
+                this.objects = [];
+                this.searched = false;
+                if (this.query)
+                    this.runSearch();
+            }
+        }
+    },
     get scopeTabItems() {
         return [
             { id: 'all', label: 'Все', count: this.files.length + this.objects.length + this.nodes.length, showZeroCount: true },

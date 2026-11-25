@@ -9,6 +9,7 @@ import {
 } from './chat-task.js';
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const SORT_TIMES = new WeakMap();
 /** localStorage.workChatDebug = 1 — журнал времён создания задачи в консоли. */
 function chatDebug(...a) {
     try {
@@ -309,11 +310,18 @@ ODA({is: 'oda-chat',
             .mover>oda-button{
                 border-radius: 50%;
             }
-            .feed-mode-bar {
-                position: absolute;
-                top: 8px;
-                right: 12px;
+            .feed-top-bar {
+                position: relative;
                 z-index: 8;
+                display: flex;
+                align-items: center;
+                justify-content: flex-end;
+                gap: 6px;
+                flex-wrap: wrap;
+                padding: 6px 12px 4px;
+                flex-shrink: 0;
+            }
+            .feed-mode-bar {
                 display: inline-flex;
                 align-items: center;
                 gap: 2px;
@@ -322,7 +330,7 @@ ODA({is: 'oda-chat',
                 background: var(--content-background, #ffffff);
                 border: 1px solid var(--border-color, #cbd5e1);
                 box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-                opacity: 0.92;
+                opacity: 0.94;
             }
             .feed-mode-bar:hover {
                 opacity: 1;
@@ -365,10 +373,15 @@ ODA({is: 'oda-chat',
             }
         </style>
         <div class="back"></div>
-        <div class="feed-mode-bar" ~if="showFeedModeToggle">
-            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'dialog' }" @tap="setFeedMode('dialog')" title="Мой диалог и задачи с Агентом этого узла">Диалог</button>
-            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'local' }" @tap="setFeedMode('local')" title="Местный лог открытой точки (доступно только BOSS)">Местный лог</button>
-            <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'audit' }" @tap="setFeedMode('audit')" title="Взаимодействия пользователей и клиентов с Агентом (доступно только BOSS)">Взаимодействия</button>
+        <div class="feed-top-bar" ~if="showFeedModeToggle || ($item && $item.type !== '$user')">
+            <div class="feed-mode-bar" ~if="showFeedModeToggle">
+                <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'dialog' }" @tap="setFeedMode('dialog')" title="Мой диалог и задачи с Агентом этого узла">Диалог</button>
+                <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'local' }" @tap="setFeedMode('local')" title="Местный лог открытой точки (доступно только BOSS)">Местный лог</button>
+                <button type="button" class="feed-mode-btn" ~class="{ active: feedMode === 'audit' }" @tap="setFeedMode('audit')" title="Взаимодействия пользователей и клиентов с Агентом (доступно только BOSS)">Взаимодействия</button>
+            </div>
+            <div class="feed-mode-bar" ~if="$item && $item.type !== '$user'">
+                <button type="button" class="feed-mode-btn" ~class="{ active: showParticipants }" @tap="toggleParticipants()" title="Участники и рабочие места подразделения">Участники ({{participantsCount}})</button>
+            </div>
         </div>
         <div ~if="feedMode === 'audit' && showFeedModeToggle" style="position:absolute;inset:44px 12px 68px 12px;z-index:11;background:var(--content-background,#fff);border:1px solid var(--border-color,#cbd5e1);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,0.14);display:flex;overflow:hidden;">
             <div style="width:260px;border-right:1px solid var(--subtle-border,#e2e8f0);overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:4px;background:var(--subtle-background,#f8fafc);">
@@ -398,9 +411,6 @@ ODA({is: 'oda-chat',
                     </div>
                 </div>
             </div>
-        </div>
-        <div class="feed-mode-bar" ~if="$item && $item.type !== '$user'" :style="showFeedModeToggle ? 'top: 42px;' : 'top: 8px;'">
-            <button type="button" class="feed-mode-btn" ~class="{ active: showParticipants }" @tap="toggleParticipants()" title="Участники и рабочие места подразделения">Участники ({{participantsCount}})</button>
         </div>
         <div ~if="showParticipants && $item && $item.type !== '$user'" style="position:absolute;top:44px;right:12px;z-index:12;width:280px;max-height:360px;overflow-y:auto;background:var(--content-background,#fff);border:1px solid var(--border-color,#cbd5e1);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.16);padding:10px 12px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;">
             <div style="display:flex;align-items:center;justify-content:space-between;font-weight:700;">
@@ -623,8 +633,11 @@ ODA({is: 'oda-chat',
             const hitThread = d.threadId && this.$('#ribbon')?._threadId === d.threadId;
             if (hitTwin || hitDm || hitThread) {
                 this.$('#ribbon')?.refreshFeed?.();
-                if (d.threadId && ev.type === 'chat:message')
-                    cur.fetch?.('chat_mark_read', { threadId: d.threadId })?.catch?.(() => {});
+                if (d.threadId && ev.type === 'chat:message') {
+                    cur.fetch?.('chat_mark_read', { threadId: d.threadId })
+                        ?.then?.(res => WORK.applyChatReadLocal?.(res || { threadId: d.threadId, kind: d.kind, nodePath: curPath, peerId: cur.type === '$user' ? cur.id : '' }))
+                        ?.catch?.(() => {});
+                }
             }
         };
         globalThis.WORK.chatEvents.addEventListener('chat:message', this._onWsChatMsg);
@@ -1457,8 +1470,21 @@ ODA({is: 'chat-ribbon',
             arr.push(msg);
         }
         this._threadMessagesByDay = byDay;
-        if (threadRes?.thread?.unreadCount > 0 && threadRes?.thread?.id) {
-            this.$item.fetch?.('chat_mark_read', { threadId: threadRes.thread.id })?.catch?.(() => {});
+        const curPath = String(this.$item.path || '/').replace(/\/+$/, '') || '/';
+        const localUnread = this.$item.type === '$user'
+            ? (Number(WORK.chatUnread?.byPeer?.[this.$item.id]) || 0)
+            : (Number(WORK.chatUnread?.byNode?.[curPath]) || 0);
+        if ((threadRes?.thread?.unreadCount > 0 || localUnread > 0) && threadRes?.thread?.id) {
+            const fallbackInfo = {
+                threadId: threadRes.thread.id,
+                kind: this.$item.type === '$user' ? 'dm' : 'twin',
+                nodePath: curPath,
+                peerId: this.$item.type === '$user' ? this.$item.id : '',
+            };
+            this.$item.fetch?.('chat_mark_read', { threadId: threadRes.thread.id })
+                ?.then?.(res => WORK.applyChatReadLocal?.(res?.threadId ? res : fallbackInfo))
+                ?.catch?.(() => {});
+            WORK.applyChatReadLocal?.(fallbackInfo);
         }
         let dates = [...dateSet].sort();
         // Пока создаётся новая задача (awaitTask), не сбрасываем локально добавленный _openCreated день
@@ -1587,9 +1613,11 @@ ODA({is: 'chat-day',
     _logItemTime(f) {
         if (!f)
             return 0;
-        if (Number.isFinite(f._sortTime) && f._sortTime > 0)
-            return f._sortTime;
-        const rowTime = Number(f.logRow?.time || f.DATA?.logRow?.time || 0);
+        const st = SORT_TIMES.get(f);
+        if (Number.isFinite(st) && st > 0)
+            return st;
+        const isProxyItem = Boolean(typeof f.fetch === 'function' || f.short);
+        const rowTime = !isProxyItem ? Number(f.logRow?.time || f.DATA?.logRow?.time || 0) : 0;
         if (rowTime > 0)
             return rowTime;
         const idPrefix = parseInt(String(f.id || '').split('.')[0], 10);
@@ -1673,8 +1701,8 @@ ODA({is: 'chat-day',
         if (this._logsInitPromise)
             await Promise.race([this._logsInitPromise, sleep(400)]).catch(() => {});
         const key = taskKeyOf(file.path) || String(file.id);
-        if (!file._sortTime)
-            file._sortTime = this._logItemTime(file) || Date.now();
+        if (!SORT_TIMES.has(file))
+            SORT_TIMES.set(file, this._logItemTime(file) || Date.now());
         this._expandedTaskKey = key;
         (this._adopted ??= new Map()).set(key, file);
         const isSameTask = it => this._isMatchingTaskItem(it, key, file.id);
@@ -1755,7 +1783,7 @@ ODA({is: 'chat-day',
         };
         const existing = this._wrappedById.get(id);
         if (existing) {
-            existing._sortTime = rawRow.time;
+            SORT_TIMES.set(existing, rawRow.time);
             existing.logRow = rawRow;
             return existing;
         }
@@ -1764,10 +1792,10 @@ ODA({is: 'chat-day',
             name: id,
             ext: 'msg',
             path: '',
-            _sortTime: rawRow.time,
             logRow: rawRow,
             load: async () => ({ ...(wrapped.logRow || rawRow) }),
         };
+        SORT_TIMES.set(wrapped, rawRow.time);
         this._wrappedById.set(id, wrapped);
         return wrapped;
     },

@@ -480,6 +480,37 @@ WORK.login = async function(force = false){
             WORK.notifyAuth?.({ uid: '', reason: 'logout' });
         })();
 }
+WORK.applyChatReadLocal = function ({ threadId = '', kind = '', nodePath = '', peerId = '' } = {}) {
+    const u = WORK.chatUnread;
+    if (!u)
+        return;
+    let delta = 0;
+    if (threadId && u.byThread?.[threadId]) {
+        delta = Number(u.byThread[threadId]) || 0;
+        delete u.byThread[threadId];
+    }
+    const normNode = nodePath ? String(nodePath).replace(/\/+$/, '') || '/' : '';
+    if ((kind === 'twin' || normNode) && normNode && u.byNode?.[normNode]) {
+        const prevNode = Number(u.byNode[normNode]) || 0;
+        const drop = delta > 0 ? Math.min(prevNode, delta) : prevNode;
+        if (!delta) delta = drop;
+        const nextNode = prevNode - drop;
+        if (nextNode > 0) u.byNode[normNode] = nextNode;
+        else delete u.byNode[normNode];
+    }
+    if ((kind === 'dm' || peerId) && peerId && u.byPeer?.[peerId]) {
+        const prevPeer = Number(u.byPeer[peerId]) || 0;
+        const drop = delta > 0 ? Math.min(prevPeer, delta) : prevPeer;
+        if (!delta) delta = drop;
+        const nextPeer = prevPeer - drop;
+        if (nextPeer > 0) u.byPeer[peerId] = nextPeer;
+        else delete u.byPeer[peerId];
+    }
+    if (delta > 0)
+        u.total = Math.max(0, (Number(u.total) || 0) - delta);
+    WORK.chatEvents ??= new EventTarget();
+    WORK.chatEvents.dispatchEvent(new CustomEvent('chat:read', { detail: { threadId, kind, nodePath: normNode, peerId } }));
+};
 WORK.refreshChatUnread = async function () {
     if (!WORK.uid || typeof WORK.fetch !== 'function')
         return null;
@@ -638,14 +669,19 @@ class WebSocketEvents {
                     WORK.chatUnread ??= { total: 0, byThread: {}, byNode: {}, byPeer: {} };
                     if (data.threadId)
                         WORK.chatUnread.byThread[data.threadId] = (WORK.chatUnread.byThread[data.threadId] || 0) + 1;
-                    if (data.kind === 'twin' && data.nodePath)
-                        WORK.chatUnread.byNode[data.nodePath] = (WORK.chatUnread.byNode[data.nodePath] || 0) + 1;
+                    if (data.kind === 'twin' && data.nodePath) {
+                        const np = String(data.nodePath).replace(/\/+$/, '') || '/';
+                        WORK.chatUnread.byNode[np] = (WORK.chatUnread.byNode[np] || 0) + 1;
+                    }
+                    else if (data.kind === 'dm' && data.message?.sender) {
+                        const peer = String(data.message.sender);
+                        WORK.chatUnread.byPeer[peer] = (WORK.chatUnread.byPeer[peer] || 0) + 1;
+                    }
                     WORK.chatUnread.total = (WORK.chatUnread.total || 0) + 1;
                 }
-                else if (data.type === 'chat:read' && data.threadId && WORK.chatUnread?.byThread) {
-                    const prev = WORK.chatUnread.byThread[data.threadId] || 0;
-                    delete WORK.chatUnread.byThread[data.threadId];
-                    WORK.chatUnread.total = Math.max(0, (WORK.chatUnread.total || 0) - prev);
+                else if (data.type === 'chat:read' && data.threadId) {
+                    WORK.applyChatReadLocal?.(data);
+                    break;
                 }
                 WORK.chatEvents.dispatchEvent(new CustomEvent(data.type, { detail: data }));
             } break;

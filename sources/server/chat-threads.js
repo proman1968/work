@@ -8,10 +8,12 @@
  *  - kind = 'group' : тематическая группа людей; хранится в БД контекста создания.
  */
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import * as LOGS from './logs.js';
 import * as REFS from './access/refs.js';
 import * as WORKPLACES from './access/workplaces.js';
-import { dataDb, tx } from '../data/db.js';
+import { baseDbFile, dataDb, tx } from '../data/db.js';
 import { DEV_MODE } from '../host/config.js';
 
 function notifyChatEvent(uids, payload) {
@@ -430,6 +432,15 @@ export async function markRead(storage, params = {}) {
     if (!part)
         return { ok: false, lastReadId: 0 };
 
+    const threadRow = db.prepare('SELECT kind, node_path FROM chat_threads WHERE id = ?').get(threadId);
+    const kind = threadRow?.kind || kindHint;
+    const nodePath = threadRow?.node_path || '';
+    let peerId = '';
+    if (kind === 'dm' && threadId.startsWith('dm:')) {
+        const parts = threadId.slice(3).split('|');
+        peerId = parts[0] === uid && parts[1] === uid ? uid : (parts[0] === uid ? parts[1] : parts[0]);
+    }
+
     const maxRow = db.prepare('SELECT COALESCE(MAX(id), 0) AS max_id FROM chat_messages WHERE thread_id = ?').get(threadId);
     const targetId = params.lastMessageId != null ? Math.min(Number(params.lastMessageId) || 0, Number(maxRow?.max_id) || 0) : (Number(maxRow?.max_id) || 0);
     const nextRead = Math.max(Number(part.last_read_id) || 0, targetId);
@@ -437,42 +448,85 @@ export async function markRead(storage, params = {}) {
     notifyChatEvent([uid], {
         type: 'chat:read',
         threadId,
+        kind,
+        nodePath,
+        peerId,
         uid,
         lastReadId: nextRead,
     });
-    return { ok: true, lastReadId: nextRead };
+    return { ok: true, lastReadId: nextRead, threadId, kind, nodePath, peerId };
 }
 
-/** Сводка непрочитанного для текущего пользователя в БД данного узла/сервера. */
+/** Сводка непрочитанного для текущего пользователя в БД данного узла/сервера (на $server — включая БД организаций и проектов). */
 export async function unreadSummary(storage, params = {}) {
     const uid = resolveActorUid(storage, params);
     if (!uid)
         return { total: 0, byThread: {}, byNode: {}, byPeer: {} };
-    const db = await dbForThreadStorage(storage, params.kind || '');
-    const rows = db.prepare(`
-        SELECT t.id, t.kind, t.node_path,
-               (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id = t.id AND m.id > p.last_read_id AND m.sender != ?) AS unread
-        FROM chat_threads t
-        JOIN chat_participants p ON p.thread_id = t.id
-        WHERE p.uid = ?
-    `).all(uid, uid);
+
+    const dbs = [];
+    const primaryDb = await dbForThreadStorage(storage, params.kind || '');
+    if (primaryDb)
+        dbs.push(primaryDb);
+
+    if (storage?.type === '$server' && !params.kind) {
+        const rootDir = rootDirOf();
+        for (const container of ['ORGANIZATIONS', 'PROJECTS']) {
+            const dir = path.join(rootDir, container);
+            if (!fs.existsSync(dir))
+                continue;
+            try {
+                for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                    if (!ent.isDirectory() || ent.name.startsWith('$'))
+                        continue;
+                    const basePath = `/${container}/${ent.name}`;
+                    const dbFile = baseDbFile(rootDir, basePath);
+                    if (!fs.existsSync(dbFile))
+                        continue;
+                    const baseDb = await dataDb(basePath, rootDir).catch(() => null);
+                    if (baseDb && !dbs.includes(baseDb))
+                        dbs.push(baseDb);
+                }
+            }
+            catch { /* ignore unreadable directory */ }
+        }
+    }
+
     const byThread = {};
     const byNode = {};
     const byPeer = {};
     let total = 0;
-    for (const r of rows) {
-        const cnt = Number(r.unread) || 0;
-        if (!cnt) continue;
-        total += cnt;
-        byThread[r.id] = cnt;
-        if (r.kind === 'twin' && r.node_path) {
-            byNode[r.node_path] = (byNode[r.node_path] || 0) + cnt;
+    const seenThreads = new Set();
+    for (const db of dbs) {
+        let rows = [];
+        try {
+            rows = db.prepare(`
+                SELECT t.id, t.kind, t.node_path,
+                       (SELECT COUNT(*) FROM chat_messages m WHERE m.thread_id = t.id AND m.id > p.last_read_id AND m.sender != ?) AS unread
+                FROM chat_threads t
+                JOIN chat_participants p ON p.thread_id = t.id
+                WHERE p.uid = ?
+            `).all(uid, uid);
         }
-        else if (r.kind === 'dm') {
-            const parts = String(r.id).slice(3).split('|');
-            const peer = parts[0] === uid && parts[1] === uid ? uid : (parts[0] === uid ? parts[1] : parts[0]);
-            if (peer)
-                byPeer[peer] = (byPeer[peer] || 0) + cnt;
+        catch {
+            rows = [];
+        }
+        for (const r of rows) {
+            if (seenThreads.has(r.id))
+                continue;
+            seenThreads.add(r.id);
+            const cnt = Number(r.unread) || 0;
+            if (!cnt) continue;
+            total += cnt;
+            byThread[r.id] = cnt;
+            if (r.kind === 'twin' && r.node_path) {
+                byNode[r.node_path] = (byNode[r.node_path] || 0) + cnt;
+            }
+            else if (r.kind === 'dm') {
+                const parts = String(r.id).slice(3).split('|');
+                const peer = parts[0] === uid && parts[1] === uid ? uid : (parts[0] === uid ? parts[1] : parts[0]);
+                if (peer)
+                    byPeer[peer] = (byPeer[peer] || 0) + cnt;
+            }
         }
     }
     return { total, byThread, byNode, byPeer };

@@ -166,6 +166,17 @@ describe('Ядро бесед мессенджера (chat_threads, WebSocket-с
         const unreadAfter = await WORK.chat_unread_summary(as(USER2_UID));
         assert.equal(unreadAfter.total, 0);
 
+        // Twin-сообщение от имени $twin в подразделении OrgOne/sales попадает в глобальный WORK.chat_unread_summary и обнуляется markRead
+        const sales = await WORK.get_item('/ORGANIZATIONS/OrgOne/sales');
+        await sales.chat_send({ uid: USER1_UID, asTwin: true, message: 'Уведомление отдела продаж' });
+        const twinUnreadBefore = await WORK.chat_unread_summary(as(USER1_UID));
+        assert.equal(twinUnreadBefore.byNode['/ORGANIZATIONS/OrgOne/sales'], 1);
+        const markRes = await sales.chat_mark_read({ ...as(USER1_UID), threadId: `twin:/ORGANIZATIONS/OrgOne/sales:${USER1_UID}` });
+        assert.equal(markRes.kind, 'twin');
+        assert.equal(markRes.nodePath, '/ORGANIZATIONS/OrgOne/sales');
+        const twinUnreadAfter = await WORK.chat_unread_summary(as(USER1_UID));
+        assert.equal(twinUnreadAfter.byNode['/ORGANIZATIONS/OrgOne/sales'] || 0, 0);
+
         // Личная переписка людей приватна даже от BOSS организации
         await assert.rejects(
             () => u2Node.chat_messages_list({ ...as(BOSS_UID), threadId: dm.id }),

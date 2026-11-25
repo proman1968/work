@@ -1346,9 +1346,15 @@ describe('архитектура представлений формы (VIEW п�
                 .map(i => i.id);
             assert.deepEqual(serviceIds, ['turnovers', 'analysis', 'postings'], 'сервисные $handler счёта для подвала формы');
 
-            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'calendar', 'email', 'system'], 'Подразделение: у BOSS 4 представления формы $structure');
-            assert.deepEqual(await viewsOf(sales, 'USER'), ['chat', 'calendar', 'email'], 'Подразделение: у USER 3 рабочих представления формы');
+            assert.deepEqual(await viewsOf(sales, 'BOSS'), ['chat', 'calendar', 'email', 'search', 'system'], 'Подразделение: у BOSS 5 представлений формы $structure (включая Поиск и Систему)');
+            assert.deepEqual(await viewsOf(sales, 'USER'), ['chat', 'calendar', 'email', 'search'], 'Подразделение: у USER 4 рабочих представления формы');
             assert.deepEqual(await viewsOf(sales, 'CLIENT'), ['chat'], 'Подразделение: у внешнего CLIENT в форме только диалог');
+
+            const fsSync = await import('node:fs');
+            const pathMod = await import('node:path');
+            const sysSrc = fsSync.readFileSync(pathMod.resolve(import.meta.dirname, '../$server/$folder/$class/$structure/handlers/pages/form/system/$handler/system.js'), 'utf8');
+            assert.ok(sysSrc.includes('.sys-sidebar'), 'в представлении Система разделы расположены в левом боковом меню');
+            assert.ok(!sysSrc.includes('system-tab-search'), 'Поиск вынесен из Системы в самостоятельное представление form/search');
 
             const pagesOf = async (item, role) => {
                 const root = await item.handlers({ path: '/pages', role });

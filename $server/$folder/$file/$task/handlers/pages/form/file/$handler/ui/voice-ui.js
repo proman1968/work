@@ -77,11 +77,11 @@ ODA({ is: 'work-voice-picker',
         </style>
         <div class="vertical" ~for="models">
             <div class="group-title" :title="$for.item.path">{{$for.item.label}}</div>
-            <div class="v-row" ~for="$for.item.voices" ~for-item="v" :active="isSelected($for.item, v)" @tap="pick($for.item, v)">
-                <oda-icon no-flex :icon="isSelected($for.item, v) ? 'carbon:checkmark' : 'carbon:dot-mark'" :icon-size="13" :style="isSelected($for.item, v) ? '' : 'opacity:0.25;'"></oda-icon>
-                <span class="v-label">{{v.label}}</span>
-                <button type="button" class="preview-btn" title="Прослушать этот голос" @tap.stop="preview($for.item, v)">
-                    <oda-icon :icon="previewKey === keyOf($for.item, v) ? 'spinners:3-dots-scale' : 'carbon:volume-up'" :icon-size="14"></oda-icon>
+            <div class="v-row" ~for="$for.item.voices" :active="isSelected($for.$for.item, $for.item)" @tap="pick($for.$for.item, $for.item)">
+                <oda-icon no-flex :icon="isSelected($for.$for.item, $for.item) ? 'carbon:checkmark' : 'carbon:dot-mark'" :icon-size="13" :style="isSelected($for.$for.item, $for.item) ? '' : 'opacity:0.25;'"></oda-icon>
+                <span class="v-label">{{$for.item.label}}</span>
+                <button type="button" class="preview-btn" title="Прослушать этот голос" @tap.stop="preview($for.$for.item, $for.item)">
+                    <oda-icon :icon="previewKey === keyOf($for.$for.item, $for.item) ? 'spinners:3-dots-scale' : 'carbon:volume-up'" :icon-size="14"></oda-icon>
                 </button>
             </div>
         </div>

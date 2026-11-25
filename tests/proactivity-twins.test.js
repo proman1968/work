@@ -284,13 +284,8 @@ describe('Проактивность Агентов $structure, when-преди�
         const svcTools = await svcEnv.makeTools();
         assert.equal(svcTools.some(t => t.name === 'twin_rule_save'), false, 'в Service Plane инструменты настройки правил вырезаны');
 
-        // На чистом узле warehouse (без зависших карточек/обращений) тихая сводка молчит
-        const emptyDig = await collectQuietDigest(warehouse);
-        assert.equal(emptyDig.events.length, 0, 'на тихом узле 0 событий');
-        const silentRes = await runQuietDigests({ nodes: [warehouse] });
-        assert.equal(silentRes.length, 0, 'при 0 событий тихая сводка не спамит');
-
-        // Если в узле есть ожидающая карточка approval старше 1 часа — тихая сводка отправляется BOSS
+        // На чистом узле warehouse (без зависших карточек/обращений) тихая сводка молчит,
+        // даже если пользователь ранее создавал .task-задачу (task_path != '')
         const { dbForThreadStorage } = await import('../sources/server/chat-threads.js');
         const db = await dbForThreadStorage(warehouse, 'twin');
         const oldTs = Date.now() - 2 * 3600_000;
@@ -299,6 +294,15 @@ describe('Проактивность Агентов $structure, when-преди�
             .run(tid, USER_UID, oldTs, oldTs);
         db.prepare(`INSERT OR IGNORE INTO chat_participants (thread_id, uid, role, last_read_id, joined) VALUES (?, ?, 'member', 0, ?)`)
             .run(tid, USER_UID, oldTs);
+        db.prepare(`INSERT INTO chat_messages (thread_id, sender, kind, content, reply_to, mentions, attachments, task_path, meta, created) VALUES (?, ?, 'text', 'Создана задача', NULL, '[]', '[]', '/ORGANIZATIONS/OrgOne/warehouse/~/task/t1.task', '{}', ?)`)
+            .run(tid, USER_UID, oldTs);
+
+        const emptyDig = await collectQuietDigest(warehouse);
+        assert.equal(emptyDig.events.length, 0, 'на тихом узле (только .task) 0 событий');
+        const silentRes = await runQuietDigests({ nodes: [warehouse] });
+        assert.equal(silentRes.length, 0, 'при 0 событий тихая сводка не спамит');
+
+        // Если в узле есть ожидающая карточка approval старше 1 часа — тихая сводка отправляется BOSS
         db.prepare(`INSERT INTO chat_messages (thread_id, sender, kind, content, reply_to, mentions, attachments, task_path, meta, created) VALUES (?, '$twin', 'approval', 'Списание сверх нормы', NULL, '[]', '[]', '', '{"status":"pending"}', ?)`)
             .run(tid, oldTs);
 
