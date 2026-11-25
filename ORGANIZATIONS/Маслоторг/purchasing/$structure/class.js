@@ -5,7 +5,7 @@ export default {
         ROLES: [{
             id: "head",
             label: "Руководитель закупок",
-            USERS: ["83468374623940"],
+            USERS: [],
             LINKS: [
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Поставщики", access: "write" },
@@ -24,7 +24,7 @@ export default {
             ROLES: [{
                 id: "buyer",
                 label: "Менеджер по закупкам",
-                USERS: ["635243546352435"],
+                USERS: [],
                 LINKS: [
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Поставщики", access: "write" },

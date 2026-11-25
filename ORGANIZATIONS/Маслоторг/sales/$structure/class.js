@@ -2,11 +2,10 @@ export default {
     icon: 'icons:shopping-cart',
     label: "Продажи",
     "#security": {
-        USER: ["CA4E097FF6C1D387"],
         ROLES: [{
             id: "head",
             label: "Руководитель отдела",
-            USERS: ["83468374623940"],
+            USERS: [],
             LINKS: [
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Клиенты", access: "write" },
@@ -27,7 +26,7 @@ export default {
             ROLES: [{
                 id: "manager",
                 label: "Менеджер по продажам",
-                USERS: ["635243546352435"],
+                USERS: [],
                 LINKS: [
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Клиенты", access: "write" },

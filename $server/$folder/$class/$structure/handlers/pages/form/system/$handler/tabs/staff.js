@@ -47,6 +47,18 @@ function isDroppedClass(info) {
     return String(info.path || '').includes('/MODULES/');
 }
 
+function splitClassTitle(rawPath, mapEntry) {
+    if (mapEntry && typeof mapEntry === 'object')
+        return mapEntry;
+    const clean = String(rawPath || '')
+        .replace(/^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\//, '')
+        .replace(/^\/MODULES\//, '');
+    const parts = clean.split('/').filter(Boolean);
+    const title = parts.length ? parts[parts.length - 1] : clean;
+    const section = parts.length > 1 ? parts.slice(0, -1).join(' / ') : '';
+    return { title, section, icon: 'odant:class' };
+}
+
 export default {
     imports: 'oda//icon, oda//button',
     template: /*html*/`
@@ -54,412 +66,428 @@ export default {
             :host {
                 @apply --vertical;
                 @apply --flex;
-                padding: 16px 20px;
-                gap: 16px;
+                padding: 14px 18px;
+                gap: 10px;
                 overflow-y: auto;
                 background: var(--content-background);
                 color: var(--content-color);
+                font-size: 13px;
             }
-            .card {
+            .tree-box {
                 @apply --vertical;
-                gap: 10px;
-                padding: 14px 16px;
                 border: 1px solid var(--subtle-border);
                 border-radius: 10px;
-                background: var(--subtle-background);
-                transition: border-color .15s, box-shadow .15s;
-            }
-            .card.drop-hover, .role-card.drop-hover {
-                border-color: var(--accent-color, #2563eb);
-                box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-color, #2563eb) 22%, transparent);
-            }
-            .role-card {
-                @apply --vertical;
-                gap: 10px;
-                padding: 12px 14px;
-                border: 1px solid var(--subtle-border);
-                border-radius: 8px;
                 background: var(--content-background);
-                transition: border-color .15s, box-shadow .15s;
+                overflow: hidden;
             }
-            .role-card.active-role {
-                border-color: var(--accent-color);
-                box-shadow: 0 0 0 2px var(--accent-soft);
-            }
-            .card-header {
+            .root-row {
                 @apply --horizontal;
                 align-items: center;
                 gap: 8px;
+                padding: 10px 14px;
+                background: var(--subtle-background);
+                border-bottom: 1px solid var(--subtle-border);
+                flex-wrap: wrap;
+                transition: background .15s;
+            }
+            .root-row.drop-hover, .tree-row.drop-hover {
+                background: color-mix(in srgb, var(--accent-color, #2563eb) 10%, var(--content-background));
+                outline: 1px dashed var(--accent-color, #2563eb);
+                outline-offset: -2px;
+            }
+            .root-title {
                 font-weight: 700;
-                font-size: 15px;
-                flex-wrap: wrap;
+                font-size: 14px;
+                margin-right: 4px;
             }
-            .role-row {
-                @apply --horizontal;
-                align-items: center;
-                flex-wrap: wrap;
-                gap: 8px;
-            }
-            .role-title {
-                font-size: 13px;
-                font-weight: 600;
-                color: var(--muted-color);
-                min-width: 140px;
-            }
-            .hint {
+            .boss-label {
                 font-size: 12px;
                 color: var(--muted-color);
-                line-height: 1.4;
             }
-            .user-chip {
+            .tree-row {
                 @apply --horizontal;
                 align-items: center;
                 gap: 6px;
-                padding: 3px 9px;
+                padding: 6px 12px;
+                min-height: 34px;
+                border-bottom: 1px solid color-mix(in srgb, var(--subtle-border) 55%, transparent);
+                flex-wrap: wrap;
+            }
+            .tree-row:last-child {
+                border-bottom: none;
+            }
+            .tree-row.role-row {
+                background: var(--content-background);
+            }
+            .tree-row.role-row:hover {
+                background: color-mix(in srgb, var(--subtle-background) 65%, transparent);
+            }
+            .tree-row.class-row {
+                min-height: 30px;
+                padding-top: 4px;
+                padding-bottom: 4px;
+                background: color-mix(in srgb, var(--subtle-background) 35%, var(--content-background));
+            }
+            .tree-row.class-row:hover {
+                background: var(--subtle-background);
+            }
+            .expander {
+                width: 18px;
+                height: 18px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                color: var(--muted-color);
+                user-select: none;
+                border-radius: 4px;
+            }
+            .expander:hover {
+                background: var(--subtle-background);
+                color: var(--content-color);
+            }
+            .role-name {
+                font-weight: 600;
+                font-size: 13.5px;
+            }
+            .members-wrap {
+                @apply --horizontal;
+                align-items: center;
+                gap: 5px;
+                flex-wrap: wrap;
+                flex: 1;
+                min-width: 140px;
+            }
+            .chip {
+                @apply --horizontal;
+                align-items: center;
+                gap: 5px;
+                padding: 2px 8px 2px 4px;
                 border-radius: 14px;
                 background: var(--accent-soft);
                 color: var(--content-color);
-                font-size: 13px;
-            }
-            .user-chip.node-chip {
-                background: color-mix(in srgb, #0284c7 14%, var(--content-background));
-                border: 1px solid color-mix(in srgb, #0284c7 30%, transparent);
-            }
-            .user-chip.clickable {
+                font-size: 12.5px;
                 cursor: pointer;
             }
-            .user-chip.clickable:hover {
+            .chip.inherited {
+                opacity: .75;
+            }
+            .chip.node-chip {
+                background: color-mix(in srgb, #0284c7 13%, var(--content-background));
+                border: 1px solid color-mix(in srgb, #0284c7 28%, transparent);
+            }
+            .chip:hover {
                 filter: brightness(0.95);
+            }
+            .chip .rm {
+                font-weight: 700;
+                opacity: .6;
+                padding: 0 2px;
+                cursor: pointer;
+            }
+            .chip .rm:hover {
+                opacity: 1;
+                color: var(--error-color, #dc2626);
             }
             .badge {
                 font-size: 11px;
                 font-weight: 600;
-                padding: 2px 7px;
-                border-radius: 10px;
+                padding: 1px 6px;
+                border-radius: 8px;
                 background: var(--accent-soft);
                 color: var(--accent-color);
             }
-            .badge.external {
+            .badge.ext {
                 background: light-dark(#fef3c7, #422006);
                 color: light-dark(#92400e, #fcd34d);
             }
-            .ext-toggle {
+            .icon-btn {
+                border: 1px solid transparent;
+                background: transparent;
+                color: var(--muted-color);
+                border-radius: 6px;
+                padding: 3px 7px;
+                font: inherit;
+                font-size: 12px;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+            }
+            .icon-btn:hover {
+                background: var(--subtle-background);
+                border-color: var(--subtle-border);
+                color: var(--content-color);
+            }
+            .icon-btn.active {
+                background: var(--accent-soft);
+                color: var(--accent-color);
+                border-color: color-mix(in srgb, var(--accent-color) 35%, transparent);
+            }
+            .icon-btn.danger:hover {
+                color: var(--error-color, #dc2626);
+            }
+            .row-actions {
                 @apply --horizontal;
                 align-items: center;
-                gap: 5px;
-                font-size: 12px;
-                color: var(--muted-color);
-                cursor: pointer;
-                user-select: none;
+                gap: 2px;
+                margin-left: auto;
             }
-            .link-title {
-                flex: 1;
+            .class-title {
                 font-weight: 500;
                 cursor: pointer;
-                min-width: 160px;
             }
-            .link-title:hover {
+            .class-title:hover {
                 color: var(--accent-color);
                 text-decoration: underline;
             }
-            .user-chip .rm {
-                cursor: pointer;
-                font-weight: bold;
-                opacity: .65;
-                padding: 0 2px;
+            .class-section {
+                font-size: 11.5px;
+                color: var(--muted-color);
             }
-            .user-chip .rm:hover {
-                opacity: 1;
-                color: var(--error-color);
-            }
-            select, input[type="text"] {
-                padding: 5px 8px;
-                border: 1px solid var(--control-border-color);
-                border-radius: 6px;
-                font: inherit;
-                font-size: 13px;
-                background: var(--control-background);
-                color: var(--control-color);
-            }
-            .links-box {
-                @apply --vertical;
-                gap: 6px;
-                padding-top: 8px;
-                border-top: 1px dashed var(--subtle-border);
-            }
-            .link-row {
+            .write-check {
                 @apply --horizontal;
                 align-items: center;
-                gap: 8px;
-                font-size: 13px;
-                padding: 5px 8px;
-                background: var(--subtle-background);
-                border-radius: 6px;
-                flex-wrap: wrap;
-            }
-            .pill-group {
-                @apply --horizontal;
-                border: 1px solid var(--subtle-border);
-                border-radius: 6px;
-                overflow: hidden;
-                background: var(--content-background);
-            }
-            .pill-btn {
-                border: none;
-                background: transparent;
-                color: var(--muted-color);
-                padding: 3px 9px;
-                font: inherit;
-                font-size: 12px;
-                font-weight: 500;
+                gap: 5px;
+                font-size: 12.5px;
                 cursor: pointer;
+                user-select: none;
+                margin-left: auto;
+                padding-right: 6px;
             }
-            .pill-btn.active {
-                background: var(--accent-color, #2563eb);
-                color: #ffffff;
-                font-weight: 600;
-            }
-            .picker-box {
+            .inline-panel {
                 @apply --vertical;
                 gap: 8px;
-                padding: 10px 12px;
-                border: 1px solid var(--accent-color, #2563eb);
-                border-radius: 8px;
+                padding: 10px 14px;
                 background: var(--subtle-background);
+                border-bottom: 1px solid var(--subtle-border);
             }
-            .picker-tree {
+            .panel-list {
                 @apply --vertical;
                 gap: 2px;
-                max-height: 240px;
+                max-height: 220px;
                 overflow-y: auto;
-                padding: 4px;
                 border: 1px solid var(--subtle-border);
                 border-radius: 6px;
+                padding: 4px;
                 background: var(--content-background);
             }
-            .picker-row {
+            .panel-item {
                 @apply --horizontal;
                 align-items: center;
-                gap: 6px;
-                padding: 4px 6px;
+                gap: 8px;
+                padding: 5px 8px;
                 border-radius: 5px;
-                font-size: 13px;
                 cursor: pointer;
+                font-size: 13px;
             }
-            .picker-row:hover {
+            .panel-item:hover {
                 background: var(--subtle-background);
+            }
+            input[type="text"] {
+                padding: 5px 8px;
+                border: 1px solid var(--control-border-color, var(--subtle-border));
+                border-radius: 6px;
+                font: inherit;
+                font-size: 13px;
+                background: var(--content-background);
+                color: var(--control-color, inherit);
             }
             .muted {
                 color: var(--muted-color);
-                font-size: 13px;
+                font-size: 12px;
             }
         </style>
 
-        <!-- 1. Руководитель подразделения (ровно 1 BOSS или наследование) -->
-        <div class="card" ~class="{ 'drop-hover': bossDropHover }"
-            @dragover="onBossDragOver" @dragleave="bossDropHover = false" @drop="onBossDrop">
-            <div class="card-header">
-                <oda-icon :icon="$item?.icon || 'odant:structure'" icon-size="24"></oda-icon>
-                <span>{{$item?.label || $item?.id}} — Руководство подразделения</span>
-            </div>
-            <div class="hint">
-                Руководитель (BOSS) назначается один на подразделение: он видит все данные отдела, управляет ролями, агентом и настройками. Если не назначен — действует руководитель сверху. Можно перетащить человека из общего дерева прямо на эту карточку.
-            </div>
+        <div class="tree-box">
+            <!-- Корень дерева: BOSS подразделения -->
+            <div class="root-row" ~class="{ 'drop-hover': bossDropHover }"
+                @dragover="onBossDragOver" @dragleave="bossDropHover = false" @drop="onBossDrop">
+                <oda-icon :icon="$item?.icon || 'odant:structure'" icon-size="20"></oda-icon>
+                <span class="root-title">{{$item?.label || $item?.id}}</span>
+                <span class="boss-label">Руководитель (BOSS):</span>
 
-            <div class="role-row">
-                <span class="role-title">Руководитель (BOSS):</span>
-
-                <div ~if="currentBoss" class="user-chip clickable" title="Открыть диалог с руководителем" @tap="openUser(currentBoss)">
-                    <oda-icon round :icon="userIcon(currentBoss)" :icon-color="userColor(currentBoss)" icon-size="20"></oda-icon>
-                    <span>{{userLabel(currentBoss)}}</span>
-                    <span ~if="canEdit" class="rm" title="Снять локального руководителя (вернуть наследование сверху)" @tap.stop="clearBoss()">×</span>
+                <div ~if="visibleCurrentBoss" class="chip" title="Открыть профиль" @tap="openUser(visibleCurrentBoss)">
+                    <oda-icon round :icon="userIcon(visibleCurrentBoss)" :icon-color="userColor(visibleCurrentBoss)" icon-size="18"></oda-icon>
+                    <span>{{userLabel(visibleCurrentBoss)}}</span>
+                    <span ~if="canEdit" class="rm" title="Снять локального руководителя" @tap.stop="clearBoss()">×</span>
                 </div>
 
-                <span ~if="!currentBoss && !inheritedBossInfo?.users?.length" class="muted">не назначен (наследуется сверху)</span>
-                <span ~if="!currentBoss && inheritedBossInfo?.users?.length" class="muted">не назначен — наследуется от «{{inheritedBossInfo.fromLabel}}»:</span>
-                <div ~if="!currentBoss && inheritedBossInfo?.users?.length" class="user-chip clickable" style="opacity:0.85;" ~for="inheritedBossInfo.users" title="Наследуемый руководитель (открыть диалог)" @tap="openUser($for.item)">
-                    <oda-icon round :icon="userIcon($for.item)" :icon-color="userColor($for.item)" icon-size="20"></oda-icon>
-                    <span>{{userLabel($for.item)}}</span>
+                <div ~if="!visibleCurrentBoss && visibleInheritedBoss" class="chip inherited" title="Наследуется сверху" @tap="openUser(visibleInheritedBoss)">
+                    <oda-icon round :icon="userIcon(visibleInheritedBoss)" :icon-color="userColor(visibleInheritedBoss)" icon-size="18"></oda-icon>
+                    <span>{{userLabel(visibleInheritedBoss)}}</span>
+                    <span class="muted">({{inheritedBossInfo.fromLabel}})</span>
                 </div>
 
-                <div ~if="canEdit" class="horizontal" style="gap:6px;align-items:center;margin-left:auto;">
-                    <input type="text" placeholder="Поиск ФИО…" ::value="bossSearch" style="width:140px;">
-                    <select :value="currentBoss" @change="setBoss($event.target.value)">
-                        <option value="">Наследуется сверху</option>
-                        <option ~for="filteredBossUsers" :value="$for.item.id">{{$for.item.label}} ({{$for.item.id}})</option>
-                    </select>
+                <span ~if="!visibleCurrentBoss && !visibleInheritedBoss" class="muted">не назначен</span>
+
+                <div ~if="canEdit" class="row-actions">
+                    <button type="button" class="icon-btn" @tap="toggleBossPicker()">
+                        <oda-icon icon="editor:mode-edit" icon-size="14"></oda-icon>
+                        <span>{{visibleCurrentBoss ? 'Сменить' : 'Назначить'}}</span>
+                    </button>
+                    <button type="button" class="icon-btn" @tap="openAddRole('')">
+                        <oda-icon icon="icons:add" icon-size="15"></oda-icon>
+                        <span>Роль</span>
+                    </button>
                 </div>
             </div>
-        </div>
 
-        <!-- 2. Роли в подразделении (плоский список) -->
-        <div class="card">
-            <div class="card-header">
-                <oda-icon icon="icons:supervisor-account" icon-size="22"></oda-icon>
-                <span>Роли в подразделении ({{roleCards.length}})</span>
-                <div ~if="canEdit" class="horizontal" style="margin-left:auto;gap:8px;align-items:center;">
-                    <label class="ext-toggle" title="Внешний клиент (CLIENT) — видит только привязанные классы и чат с агентом, без внутренних файлов и чата отдела">
-                        <input type="checkbox" :checked="newRoleExternal" @change="newRoleExternal = $event.target.checked">
-                        <span>Внешний клиент</span>
-                    </label>
-                    <input type="text" placeholder="Название новой роли…" ::value="newRoleLabel" style="width:220px;" @keydown="onNewRoleKey($event)">
-                    <oda-button icon="icons:add" @tap="addRole()">Добавить роль</oda-button>
+            <!-- Выбор руководителя -->
+            <div ~if="canEdit && bossPickerOpen" class="inline-panel">
+                <div class="horizontal" style="gap:8px;align-items:center;">
+                    <input type="text" placeholder="Поиск сотрудника…" ::value="bossSearch" style="flex:1;">
+                    <oda-button ~if="currentBoss" @tap="clearBoss()">Наследовать сверху</oda-button>
+                    <oda-button icon="icons:close" @tap="bossPickerOpen = false">Закрыть</oda-button>
+                </div>
+                <div class="panel-list">
+                    <div ~if="!filteredBossUsers.length" class="muted" style="padding:6px;">Пользователи не найдены</div>
+                    <div class="panel-item" ~for="filteredBossUsers" @tap="pickBoss($for.item.id)">
+                        <oda-icon round :icon="userIcon($for.item.id)" :icon-color="userColor($for.item.id)" icon-size="18"></oda-icon>
+                        <span>{{$for.item.label}}</span>
+                    </div>
                 </div>
             </div>
-            <div class="hint">
-                На каждую роль можно назначить сотрудников, общие группы и даже другие подразделения (чтобы агент соседнего отдела получал данные только в рамках прав этой роли). Сюда можно перетаскивать людей, подразделения и классы прямо из левого дерева.
+
+            <!-- Добавление корневой роли -->
+            <div ~if="canEdit && addingRoleParent === ''" class="inline-panel">
+                <div class="horizontal" style="gap:8px;align-items:center;">
+                    <input type="text" placeholder="Название новой роли…" ::value="newRoleLabel" style="flex:1;" @keydown="onNewRoleKey($event)">
+                    <oda-button icon="icons:check" info-invert @tap="confirmAddRole()">Добавить</oda-button>
+                    <oda-button icon="icons:close" @tap="cancelAddRole()">Отмена</oda-button>
+                </div>
             </div>
 
-            <div ~if="!roleCards.length" class="muted">В этом подразделении ещё не созданы роли.</div>
+            <div ~if="!treeRows.length" class="muted" style="padding:16px;">Ролей пока нет</div>
 
-            <div ~for="roleCards" class="role-card"
-                ~class="{ 'active-role': focusedTrail === $for.item.trail || $for.item.mine, 'drop-hover': dropHoverTrail === $for.item.trail }"
-                @dragover="onRoleDragOver($event, $for.item.trail)"
-                @dragleave="onRoleDragLeave($for.item.trail)"
-                @drop="onRoleDrop($event, $for.item.trail)">
+            <!-- Единое дерево ролей и классов -->
+            <div ~for="treeRows" style="display:contents;">
+                <!-- Строка роли -->
+                <div ~if="$for.item.kind === 'role'" class="tree-row role-row"
+                    ~class="{ 'drop-hover': dropHoverTrail === $for.item.trail }"
+                    :style="'padding-left:' + (12 + $for.item.depth * 24) + 'px'"
+                    @dragover="onRoleDragOver($event, $for.item.trail)"
+                    @dragleave="onRoleDragLeave($for.item.trail)"
+                    @drop="onRoleDrop($event, $for.item.trail)">
 
-                <div class="card-header">
-                    <oda-icon :icon="$for.item.external ? 'icons:public' : 'fontawesome:s-user-tie'" icon-size="20"></oda-icon>
-                    <span>{{$for.item.label}}</span>
-                    <span ~if="$for.item.mine" class="badge">Ваша роль</span>
-                    <span ~if="$for.item.external" class="badge external" title="Внешний клиент: доступ только к привязанным классам и диалогу с агентом">Внешний клиент</span>
+                    <span class="expander" @tap="toggleRoleExpand($for.item.trail)">
+                        {{$for.item.hasChildren ? ($for.item.expanded ? '▾' : '▸') : ''}}
+                    </span>
+                    <oda-icon :icon="$for.item.external ? 'icons:public' : 'fontawesome:s-user-tie'" icon-size="16"></oda-icon>
+                    <span class="role-name">{{$for.item.label}}</span>
+                    <span ~if="$for.item.external" class="badge ext">клиент</span>
+                    <span ~if="$for.item.mine" class="badge">ваша роль</span>
 
-                    <div ~if="canEdit" class="horizontal" style="margin-left:auto;gap:6px;align-items:center;">
-                        <label class="ext-toggle" title="Пометить роль как контур внешнего клиента">
-                            <input type="checkbox" :checked="$for.item.external" @change="toggleRoleExternal($for.item.trail, $event.target.checked)">
-                            <span>Внешний клиент</span>
-                        </label>
-                        <oda-button icon="icons:send" title="Создать ссылку-приглашение в эту роль" @tap="openInvite($for.item.trail)">Пригласить</oda-button>
-                        <oda-button icon="icons:delete" title="Удалить роль" @tap="removeRole($for.item.trail)"></oda-button>
+                    <div class="members-wrap">
+                        <div class="chip" ~for="$for.item.memberEntries"
+                            ~class="{ 'node-chip': $for.$for.item.isNode }"
+                            @tap="openMember($for.$for.item)">
+                            <oda-icon :round="!$for.$for.item.isNode && !$for.$for.item.isGroup" :icon="$for.$for.item.icon" :icon-color="$for.$for.item.iconColor" icon-size="16"></oda-icon>
+                            <span>{{$for.$for.item.label}}</span>
+                            <span ~if="canEdit" class="rm" title="Убрать из роли" @tap.stop="removeRoleMember($for.item.trail, $for.$for.item.id)">×</span>
+                        </div>
+                        <button ~if="canEdit" type="button" class="icon-btn" title="Добавить участника (человека или подразделение)" @tap="toggleMemberPicker($for.item.trail)">
+                            <oda-icon icon="icons:add" icon-size="14"></oda-icon>
+                        </button>
+                    </div>
+
+                    <div ~if="canEdit" class="row-actions">
+                        <button type="button" class="icon-btn" title="Привязать классы" @tap="toggleClassPicker($for.item.trail)">
+                            <oda-icon icon="icons:add" icon-size="14"></oda-icon>
+                            <span>Класс</span>
+                        </button>
+                        <button type="button" class="icon-btn" title="Добавить дочернюю роль" @tap="openAddRole($for.item.trail)">
+                            <oda-icon icon="icons:add" icon-size="14"></oda-icon>
+                            <span>Подроль</span>
+                        </button>
+                        <button type="button" class="icon-btn" ~class="{ active: $for.item.external }" title="Режим внешнего клиента (CLIENT)" @tap="toggleRoleExternal($for.item.trail, !$for.item.external)">
+                            <oda-icon icon="icons:public" icon-size="14"></oda-icon>
+                        </button>
+                        <button type="button" class="icon-btn danger" title="Удалить роль" @tap="removeRole($for.item.trail)">
+                            <oda-icon icon="icons:delete" icon-size="14"></oda-icon>
+                        </button>
                     </div>
                 </div>
 
-                <!-- Компактная панель приглашения -->
-                <div ~if="canEdit && inviteTrail === $for.item.trail" class="picker-box">
-                    <div class="role-row">
-                        <span class="role-title">Приглашение в роль:</span>
-                        <select ::value="inviteChannel">
-                            <option value="link">🔗 Одноразовая ссылка</option>
-                            <option value="email">✉️ Email (почта)</option>
-                            <option value="telegram">✈️ Telegram</option>
-                            <option value="max">💬 Мессенджер MAX</option>
-                        </select>
-                        <input ~if="inviteChannel === 'email'" type="text" placeholder="Email (name@company.ru)…" ::value="inviteRecipient" style="flex:1;min-width:180px;">
-                        <input ~if="inviteChannel === 'telegram' || inviteChannel === 'max'" type="text" placeholder="Chat ID или заметка…" ::value="inviteRecipient" style="flex:1;min-width:180px;">
-                        <input type="text" placeholder="Комментарий (опционально)" ::value="inviteNote" style="width:170px;">
-                        <oda-button icon="icons:check" :disabled="inviteBusy" @tap="sendInvite()">{{inviteBusy ? 'Создание…' : 'Создать'}}</oda-button>
-                        <oda-button icon="icons:close" @tap="closeInvite()">Закрыть</oda-button>
-                    </div>
-                    <div ~if="inviteResult" class="role-row">
-                        <input type="text" readonly :value="inviteResult.url" style="flex:1;min-width:240px;font-family:monospace;font-size:12px;">
-                        <oda-button icon="icons:content-copy" @tap="copyText(inviteResult.url)">Копировать</oda-button>
-                        <a ~if="inviteResult.shareUrl" :href="inviteResult.shareUrl" target="_blank" rel="noopener" style="font-size:13px;color:var(--accent-color);text-decoration:none;font-weight:600;">Открыть в Telegram ↗</a>
-                        <span ~if="inviteResult.sent" style="color:#15803d;font-size:13px;font-weight:600;">✓ Отправлено ({{inviteResult.sentVia}})</span>
-                        <span ~if="inviteResult.warning" class="muted" style="color:#b45309;">{{inviteResult.warning}}</span>
+                <!-- Инлайн-добавление дочерней роли -->
+                <div ~if="$for.item.kind === 'role' && canEdit && addingRoleParent === $for.item.trail"
+                    class="inline-panel" :style="'padding-left:' + (36 + $for.item.depth * 24) + 'px'">
+                    <div class="horizontal" style="gap:8px;align-items:center;">
+                        <input type="text" placeholder="Название дочерней роли…" ::value="newRoleLabel" style="flex:1;" @keydown="onNewRoleKey($event)">
+                        <oda-button icon="icons:check" info-invert @tap="confirmAddRole()">Добавить</oda-button>
+                        <oda-button icon="icons:close" @tap="cancelAddRole()">Отмена</oda-button>
                     </div>
                 </div>
 
-                <!-- Участники роли: сотрудники и подразделения -->
-                <div class="role-row">
-                    <span class="role-title">Участники роли:</span>
-                    <div class="user-chip clickable" ~for="$for.item.memberEntries"
-                        ~class="{ 'node-chip': $for.$for.item.isNode }"
-                        :title="$for.$for.item.isNode ? 'Подразделение-участник (открыть)' : 'Открыть диалог'"
-                        @tap="openMember($for.$for.item)">
-                        <oda-icon :round="!$for.$for.item.isNode && !$for.$for.item.isGroup" :icon="$for.$for.item.icon" :icon-color="$for.$for.item.iconColor" icon-size="18"></oda-icon>
-                        <span>{{$for.$for.item.label}}</span>
-                        <span ~if="canEdit" class="rm" title="Убрать из роли" @tap.stop="removeRoleMember($for.item.trail, $for.$for.item.id)">×</span>
+                <!-- Инлайн-выбор участника (сотрудники / подразделения) -->
+                <div ~if="$for.item.kind === 'role' && canEdit && memberPickerTrail === $for.item.trail"
+                    class="inline-panel" :style="'padding-left:' + (36 + $for.item.depth * 24) + 'px'">
+                    <div class="horizontal" style="gap:8px;align-items:center;">
+                        <input type="text" placeholder="Поиск человека или подразделения…" ::value="memberSearch" style="flex:1;">
+                        <oda-button icon="icons:close" @tap="closeMemberPicker()">Закрыть</oda-button>
                     </div>
-                    <span ~if="!$for.item.memberEntries.length" class="muted">никто не назначен (перетащите из дерева или выберите справа)</span>
+                    <div class="panel-list">
+                        <div class="panel-item" ~for="filteredUsers" @tap="pickMember($for.item.trail, $for.$for.item.id)">
+                            <oda-icon round :icon="userIcon($for.$for.item.id)" :icon-color="userColor($for.$for.item.id)" icon-size="18"></oda-icon>
+                            <span>{{$for.$for.item.label}}</span>
+                        </div>
+                        <div class="panel-item" ~for="filteredStructures" @tap="pickMember($for.item.trail, $for.$for.item.path)">
+                            <oda-icon :icon="$for.$for.item.icon || 'odant:structure'" icon-size="18"></oda-icon>
+                            <span>{{$for.$for.item.label}}</span>
+                            <span class="muted">подразделение</span>
+                        </div>
+                        <div class="panel-item" @tap="pickMember($for.item.trail, 'USERS')">
+                            <oda-icon icon="social:people" icon-size="18"></oda-icon>
+                            <span>Все сотрудники</span>
+                        </div>
+                        <div class="panel-item" @tap="pickMember($for.item.trail, 'GUESTS')">
+                            <oda-icon icon="icons:public" icon-size="18"></oda-icon>
+                            <span>Все гости</span>
+                        </div>
+                    </div>
                 </div>
 
-                <div ~if="canEdit" class="role-row">
-                    <span class="role-title"></span>
-                    <input type="text" placeholder="Фильтр по ФИО…" ::value="userSearch" style="width:130px;">
-                    <select @change="addRoleMember($for.item.trail, $event)">
-                        <option value="">+ Добавить сотрудника…</option>
-                        <option value="USERS">👥 Все сотрудники (USERS)</option>
-                        <option value="GUESTS">🌐 Все гости (GUESTS)</option>
-                        <option ~for="filteredUsers" :value="$for.$for.item.id">{{$for.$for.item.label}} ({{$for.$for.item.id}})</option>
-                    </select>
-                    <select ~if="availableStructures.length" @change="addRoleMember($for.item.trail, $event)">
-                        <option value="">+ Добавить подразделение…</option>
-                        <option ~for="availableStructures" :value="$for.$for.item.path">🏛 {{$for.$for.item.label}}</option>
-                    </select>
-                </div>
-
-                <!-- Доступ к классам -->
-                <div class="links-box">
-                    <div class="role-row">
-                        <span class="role-title">Доступ к классам ({{$for.item.linkEntries.length}}):</span>
-                        <oda-button ~if="canEdit" icon="icons:add" @tap="toggleClassPicker($for.item.trail)">
-                            {{pickerTrail === $for.item.trail ? 'Скрыть выбор классов' : 'Привязать классы'}}
+                <!-- Инлайн-дерево выбора классов -->
+                <div ~if="$for.item.kind === 'role' && canEdit && pickerTrail === $for.item.trail"
+                    class="inline-panel" :style="'padding-left:' + (36 + $for.item.depth * 24) + 'px'">
+                    <div class="horizontal" style="gap:8px;align-items:center;">
+                        <input type="text" placeholder="Поиск класса…" ::value="classSearch" style="flex:1;">
+                        <oda-button icon="icons:check" info-invert :disabled="!selectedPickerCount" @tap="applyClassPicker($for.item.trail)">
+                            Добавить ({{selectedPickerCount}})
                         </oda-button>
-                        <span class="hint" ~if="canEdit">или перетащите класс из левого дерева на эту роль</span>
+                        <oda-button icon="icons:close" @tap="closeClassPicker()">Закрыть</oda-button>
                     </div>
+                    <div class="panel-list">
+                        <div ~if="!visibleClassNodes.length" class="muted" style="padding:6px;">Классы не найдены</div>
+                        <div class="panel-item" ~for="visibleClassNodes" :style="'padding-left:' + (6 + $for.$for.item.depth * 18) + 'px'">
+                            <span ~if="$for.$for.item.hasChildren" style="width:14px;text-align:center;font-weight:700;" @tap.stop="toggleClassExpand($for.$for.item.path)">
+                                {{$for.$for.item.expanded ? '▾' : '▸'}}
+                            </span>
+                            <span ~if="!$for.$for.item.hasChildren" style="width:14px;"></span>
+                            <input ~if="$for.$for.item.selectable" type="checkbox" :checked="$for.$for.item.checked" @change="togglePickerCheck($for.$for.item.path, $event.target.checked)">
+                            <oda-icon :icon="$for.$for.item.icon" icon-size="16"></oda-icon>
+                            <span style="flex:1;" @tap="onPickerLabelTap($for.$for.item)">{{$for.$for.item.label}}</span>
+                        </div>
+                    </div>
+                </div>
 
-                    <!-- Дерево выбора классов -->
-                    <div ~if="canEdit && pickerTrail === $for.item.trail" class="picker-box">
-                        <div class="role-row">
-                            <input type="text" placeholder="Поиск по названию класса или модуля…" ::value="classSearch" style="flex:1;min-width:220px;">
-                            <oda-button icon="icons:check" info-invert :disabled="!selectedPickerCount" @tap="applyClassPicker($for.item.trail)">
-                                Добавить выбранные ({{selectedPickerCount}})
-                            </oda-button>
-                            <oda-button icon="icons:close" @tap="closeClassPicker()">Закрыть</oda-button>
-                        </div>
-                        <div class="picker-tree">
-                            <div ~if="!visibleClassNodes.length" class="muted" style="padding:8px;">Нет доступных классов по запросу.</div>
-                            <div class="picker-row" ~for="visibleClassNodes" :style="'padding-left:' + (6 + $for.$for.item.depth * 18) + 'px'">
-                                <span ~if="$for.$for.item.hasChildren" style="width:16px;text-align:center;font-weight:700;user-select:none;" @tap.stop="toggleClassExpand($for.$for.item.path)">
-                                    {{$for.$for.item.expanded ? '▾' : '▸'}}
-                                </span>
-                                <span ~if="!$for.$for.item.hasChildren" style="width:16px;"></span>
-                                <input ~if="$for.$for.item.selectable" type="checkbox" :checked="$for.$for.item.checked" @change="togglePickerCheck($for.$for.item.path, $event.target.checked)">
-                                <oda-icon :icon="$for.$for.item.icon" icon-size="16"></oda-icon>
-                                <span style="flex:1;" @tap="onPickerLabelTap($for.$for.item)">{{$for.$for.item.label}}</span>
-                                <span class="muted" style="font-size:11px;">{{$for.$for.item.shortPath}}</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="link-row" ~for="$for.item.linkEntries">
-                        <oda-icon icon="odant:class" icon-size="16"></oda-icon>
-                        <span class="link-title" title="Открыть класс" @tap="openClass($for.$for.item.id)">{{$for.$for.item.title}}</span>
-                        <div class="pill-group">
-                            <button type="button" class="pill-btn" ~class="{ active: $for.$for.item.access === 'read' }"
-                                :disabled="!canEdit" @tap="updateRoleLinkAccess($for.item.trail, $for.$for.item.id, 'read')">Чтение</button>
-                            <button type="button" class="pill-btn" ~class="{ active: $for.$for.item.access === 'write' }"
-                                :disabled="!canEdit" @tap="updateRoleLinkAccess($for.item.trail, $for.$for.item.id, 'write')">Запись</button>
-                        </div>
-                        <select :disabled="!canEdit" title="Какие записи видит роль в этом классе" @change="updateRoleLinkScope($for.item.trail, $for.$for.item.id, $event.target.value)">
-                            <option value="" :selected="!$for.$for.item.scope">Все записи (по умолчанию)</option>
-                            <option value="all" :selected="$for.$for.item.scope === 'all'">Все записи организации</option>
-                            <option value="unit" :selected="$for.$for.item.scope === 'unit'">Только своего подразделения</option>
-                            <option value="place" :selected="$for.$for.item.scope === 'place'">Только своей роли</option>
-                            <option value="own" :selected="$for.$for.item.scope === 'own'">Только свои записи</option>
-                        </select>
-                        <span ~if="canEdit" style="cursor:pointer;color:#b91c1c;font-weight:bold;padding:0 4px;" title="Отвязать класс" @tap="removeRoleLink($for.item.trail, $for.$for.item.id)">×</span>
-                    </div>
+                <!-- Строка привязанного класса внутри роли -->
+                <div ~if="$for.item.kind === 'class'" class="tree-row class-row"
+                    :style="'padding-left:' + (28 + $for.item.depth * 24) + 'px'">
+                    <oda-icon :icon="$for.item.icon" icon-size="15"></oda-icon>
+                    <span class="class-title" :title="$for.item.id" @tap="openClass($for.item.id)">{{$for.item.title}}</span>
+                    <span ~if="$for.item.section" class="class-section">{{$for.item.section}}</span>
+                    <label class="write-check" title="Разрешить создание и изменение записей">
+                        <input type="checkbox" :checked="$for.item.isWrite" :disabled="!canEdit"
+                            @change="updateRoleLinkAccess($for.item.trail, $for.item.id, $event.target.checked ? 'write' : 'read')">
+                        <span>Изменение</span>
+                    </label>
+                    <button ~if="canEdit" type="button" class="icon-btn danger" title="Отвязать класс" @tap="removeRoleLink($for.item.trail, $for.item.id)">×</button>
                 </div>
             </div>
         </div>
 
-        <div ~if="canEdit && invitesList.length" class="card">
-            <div class="card-header">
-                <oda-icon icon="icons:send" icon-size="20"></oda-icon>
-                <span>Активные и отправленные приглашения ({{invitesList.length}})</span>
-            </div>
-            <div class="link-row" ~for="invitesList" style="justify-content:space-between;flex-wrap:wrap;">
-                <span><b>{{$for.item.placeLabel}}</b> · {{$for.item.channel}}{{$for.item.recipient ? ' (' + $for.item.recipient + ')' : ''}}</span>
-                <span class="muted">Статус: {{inviteStatusLabel($for.item.effectiveStatus)}}</span>
-                <div class="horizontal" style="gap:6px;">
-                    <oda-button ~if="$for.item.effectiveStatus === 'active'" icon="icons:content-copy" @tap="copyText(inviteLinkOf($for.item.token))">Ссылка</oda-button>
-                    <oda-button ~if="$for.item.effectiveStatus === 'active'" icon="icons:close" @tap="revokeInvite($for.item.id)">Отозвать</oda-button>
-                </div>
-            </div>
-        </div>
-
-        <div ~if="error" style="color:var(--error-color, #c00);">{{error}}</div>
+        <div ~if="error" style="color:var(--error-color, #dc2626);font-size:12.5px;">{{error}}</div>
     `,
     $item: {
         $def: null,
@@ -479,23 +507,19 @@ export default {
     classMap: {},
     canEdit: false,
     focusedTrail: '',
-    newRoleLabel: '',
-    newRoleExternal: false,
+    expandedRoles: {},
+    bossPickerOpen: false,
     bossSearch: '',
-    userSearch: '',
-    bossDropHover: false,
-    dropHoverTrail: '',
+    addingRoleParent: null,
+    newRoleLabel: '',
+    memberPickerTrail: '',
+    memberSearch: '',
     pickerTrail: '',
     classSearch: '',
     expandedClassPaths: {},
     pickerChecked: {},
-    inviteTrail: '',
-    inviteChannel: 'link',
-    inviteRecipient: '',
-    inviteNote: '',
-    inviteBusy: false,
-    inviteResult: null,
-    invitesList: [],
+    bossDropHover: false,
+    dropHoverTrail: '',
     error: '',
     async attached() {
         if (this.$item)
@@ -510,82 +534,131 @@ export default {
         const list = Array.isArray(this.security?.BOSS) ? this.security.BOSS : [];
         return list[0] || '';
     },
+    get visibleCurrentBoss() {
+        const id = this.currentBoss;
+        if (!id)
+            return '';
+        return this.userMap?.[id] ? id : '';
+    },
+    get visibleInheritedBoss() {
+        const id = this.inheritedBossInfo?.users?.[0] || '';
+        if (!id)
+            return '';
+        return this.userMap?.[id] ? id : '';
+    },
     get filteredBossUsers() {
         const q = String(this.bossSearch || '').trim().toLowerCase();
-        const cur = this.currentBoss;
         return (this.allUsers || []).filter(u =>
-            u.id === cur || !q || u.label.toLowerCase().includes(q) || u.id.toLowerCase().includes(q)
+            !q || u.label.toLowerCase().includes(q)
         );
     },
     get filteredUsers() {
-        const q = String(this.userSearch || '').trim().toLowerCase();
+        const q = String(this.memberSearch || '').trim().toLowerCase();
         if (!q)
             return this.allUsers || [];
-        return (this.allUsers || []).filter(u =>
-            u.label.toLowerCase().includes(q) || u.id.toLowerCase().includes(q)
-        );
+        return (this.allUsers || []).filter(u => u.label.toLowerCase().includes(q));
     },
-    get roleCards() {
-        const out = [];
-        const walk = (roles, prefix = '') => {
+    get filteredStructures() {
+        const q = String(this.memberSearch || '').trim().toLowerCase();
+        if (!q)
+            return this.availableStructures || [];
+        return (this.availableStructures || []).filter(s => String(s.label || '').toLowerCase().includes(q));
+    },
+    get treeRows() {
+        const rows = [];
+        const walk = (roles, prefix = '', depth = 0) => {
             for (const r of Array.isArray(roles) ? roles : []) {
                 if (!r?.id)
                     continue;
                 const trail = prefix ? `${prefix}/${r.id}` : r.id;
-                const members = Array.isArray(r.USERS) ? r.USERS : [];
-                const memberEntries = members.map(id => {
+                const links = Array.isArray(r.LINKS) ? r.LINKS : [];
+                const childRoles = Array.isArray(r.ROLES) ? r.ROLES : [];
+                const hasChildren = links.length > 0 || childRoles.length > 0;
+                const expanded = this.expandedRoles?.[trail] !== false;
+
+                const memberEntries = [];
+                for (const id of Array.isArray(r.USERS) ? r.USERS : []) {
                     if (typeof id === 'string' && id.startsWith('/')) {
                         const st = this.structureMap?.[id];
-                        return {
-                            id,
-                            isNode: true,
-                            isGroup: false,
-                            label: st?.label || id.split('/').pop() || id,
-                            icon: st?.icon || 'odant:structure',
-                            iconColor: '',
-                        };
+                        if (!st && !Object.keys(this.structureMap || {}).length) {
+                            memberEntries.push({
+                                id,
+                                isNode: true,
+                                isGroup: false,
+                                label: id.split('/').pop() || id,
+                                icon: 'odant:structure',
+                                iconColor: '',
+                            });
+                        }
+                        else if (st) {
+                            memberEntries.push({
+                                id,
+                                isNode: true,
+                                isGroup: false,
+                                label: st.label || id.split('/').pop() || id,
+                                icon: st.icon || 'odant:structure',
+                                iconColor: '',
+                            });
+                        }
                     }
-                    if (id === 'USERS' || id === 'GUESTS' || id === 'GUEST') {
-                        return {
+                    else if (id === 'USERS' || id === 'GUESTS' || id === 'GUEST') {
+                        memberEntries.push({
                             id,
                             isNode: false,
                             isGroup: true,
-                            label: this.userLabel(id),
+                            label: id === 'USERS' ? 'Все сотрудники' : 'Все гости',
                             icon: id === 'USERS' ? 'social:people' : 'icons:public',
                             iconColor: '',
-                        };
+                        });
                     }
-                    return {
-                        id,
-                        isNode: false,
-                        isGroup: false,
-                        label: this.userLabel(id),
-                        icon: this.userIcon(id),
-                        iconColor: this.userColor(id),
-                    };
-                });
-                const links = Array.isArray(r.LINKS) ? r.LINKS : [];
-                const linkEntries = links.map(l => ({
-                    id: l.id,
-                    title: this.classTitle(l.id),
-                    access: l.access === 'write' ? 'write' : 'read',
-                    scope: l.scope || '',
-                }));
-                out.push({
+                    else if (this.userMap?.[id]) {
+                        memberEntries.push({
+                            id,
+                            isNode: false,
+                            isGroup: false,
+                            label: this.userLabel(id),
+                            icon: this.userIcon(id),
+                            iconColor: this.userColor(id),
+                        });
+                    }
+                }
+
+                rows.push({
+                    kind: 'role',
                     trail,
                     id: r.id,
                     label: r.label || r.id,
-                    mine: Boolean(r.mine),
+                    depth,
+                    hasChildren,
+                    expanded,
                     external: Boolean(r.external),
+                    mine: Boolean(r.mine),
                     memberEntries,
-                    linkEntries,
                 });
-                if (Array.isArray(r.ROLES) && r.ROLES.length)
-                    walk(r.ROLES, trail);
+
+                if (expanded) {
+                    for (const l of links) {
+                        if (!l?.id)
+                            continue;
+                        const info = splitClassTitle(l.id, this.classMap?.[l.id]);
+                        rows.push({
+                            kind: 'class',
+                            trail,
+                            id: l.id,
+                            depth,
+                            title: info.title,
+                            section: info.section,
+                            icon: info.icon || 'odant:class',
+                            isWrite: l.access === 'write',
+                        });
+                    }
+                    if (childRoles.length)
+                        walk(childRoles, trail, depth + 1);
+                }
             }
         };
-        walk(this.security?.ROLES || []);
-        return out;
+        walk(this.security?.ROLES || [], '', 0);
+        return rows;
     },
     get selectedPickerCount() {
         return Object.keys(this.pickerChecked || {}).filter(k => this.pickerChecked[k]).length;
@@ -594,25 +667,21 @@ export default {
         const q = String(this.classSearch || '').trim().toLowerCase();
         const out = [];
         const matchSubtree = (node) => {
-            const selfMatch = String(node.label || '').toLowerCase().includes(q)
-                || String(node.shortPath || '').toLowerCase().includes(q);
+            const selfMatch = String(node.label || '').toLowerCase().includes(q);
             const kids = Array.isArray(node.children) ? node.children : [];
             if (!q)
-                return { match: true, childMatched: false };
-            const childMatched = kids.some(k => matchSubtree(k).match);
-            return { match: selfMatch || childMatched, childMatched };
+                return { match: true };
+            return { match: selfMatch || kids.some(k => matchSubtree(k).match) };
         };
         const walk = (nodes, depth = 0) => {
             for (const n of Array.isArray(nodes) ? nodes : []) {
                 const kids = Array.isArray(n.children) ? n.children : [];
-                const info = matchSubtree(n);
-                if (!info.match)
+                if (!matchSubtree(n).match)
                     continue;
                 const expanded = q ? true : Boolean(this.expandedClassPaths?.[n.path] ?? (depth === 0));
                 out.push({
                     path: n.path,
                     label: n.label,
-                    shortPath: n.shortPath || '',
                     depth,
                     icon: n.icon || 'odant:class',
                     selectable: Boolean(n.selectable),
@@ -628,10 +697,6 @@ export default {
         return out;
     },
     userLabel(uid) {
-        if (uid === 'USERS')
-            return 'Все сотрудники (USERS)';
-        if (uid === 'GUESTS' || uid === 'GUEST')
-            return 'Все гости (GUESTS)';
         return this.userMap?.[uid] || uid;
     },
     userIcon(uid) {
@@ -649,14 +714,6 @@ export default {
             return meta?.iconColor || '#3b82f6';
         return '';
     },
-    classTitle(path) {
-        if (this.classMap?.[path])
-            return this.classMap[path];
-        return String(path || '')
-            .replace(/^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\//, '')
-            .replace(/^\/MODULES\//, 'Общие / ')
-            .replace(/\//g, ' → ');
-    },
     async reload() {
         this.error = '';
         if (!this.$item)
@@ -670,7 +727,6 @@ export default {
                     this.loadUsers(),
                     this.loadAvailableClasses(),
                     this.loadAvailableStructures(),
-                    this.loadInvites(),
                 ]);
             }
             else {
@@ -686,7 +742,7 @@ export default {
                     ...(p.external ? { external: true } : {}),
                     ...(p.mine ? { mine: true } : {}),
                     USERS: Array.isArray(p.users) ? p.users : [],
-                    LINKS: Array.isArray(p.links) ? p.links.map(l => ({ id: l.id, access: l.access || 'read', scope: l.scope || '' })) : [],
+                    LINKS: Array.isArray(p.links) ? p.links.map(l => ({ id: l.id, access: l.access || 'read', ...(l.scope ? { scope: l.scope } : {}) })) : [],
                     ROLES: toRoles(p.roles),
                 }));
                 this.security = {
@@ -695,40 +751,12 @@ export default {
                 };
                 this.classTreeRoots = [];
                 this.availableStructures = [];
-                this.invitesList = [];
             }
             await this.loadInheritedBoss();
         }
         catch (e) {
             this.error = String(e?.message || e);
         }
-    },
-    async openUser(uid) {
-        if (!uid || uid === 'USERS' || uid === 'GUESTS' || uid === 'GUEST')
-            return;
-        if (typeof window?.execute !== 'function')
-            return;
-        const target = await WORK.get_item(`/USERS/${uid}`).catch(() => null);
-        if (target)
-            window.execute(target);
-    },
-    async openMember(entry) {
-        if (!entry || entry.isGroup || typeof window?.execute !== 'function')
-            return;
-        if (entry.isNode) {
-            const target = await WORK.get_item(entry.id).catch(() => null);
-            if (target)
-                window.execute(target);
-            return;
-        }
-        await this.openUser(entry.id);
-    },
-    async openClass(clsPath) {
-        if (!clsPath || typeof window?.execute !== 'function')
-            return;
-        const target = await WORK.get_item(clsPath).catch(() => null);
-        if (target)
-            window.execute(target);
     },
     async loadUsers() {
         try {
@@ -810,8 +838,14 @@ export default {
             const map = {};
             const indexNodes = (nodes) => {
                 for (const n of Array.isArray(nodes) ? nodes : []) {
-                    if (n?.path && n.selectable)
-                        map[n.path] = `${n.label || n.id} (${String(n.shortPath || n.path).replace(/\//g, ' → ')})`;
+                    if (n?.path && n.selectable) {
+                        const base = splitClassTitle(n.shortPath || n.path);
+                        map[n.path] = {
+                            title: n.label || base.title,
+                            section: base.section,
+                            icon: n.icon || 'odant:class',
+                        };
+                    }
                     if (Array.isArray(n?.children))
                         indexNodes(n.children);
                 }
@@ -859,6 +893,39 @@ export default {
             this.error = String(e?.message || e);
         }
     },
+    async openUser(uid) {
+        if (!uid || uid === 'USERS' || uid === 'GUESTS' || uid === 'GUEST' || typeof window?.execute !== 'function')
+            return;
+        const target = await WORK.get_item(`/USERS/${uid}`).catch(() => null);
+        if (target)
+            window.execute(target);
+    },
+    async openMember(entry) {
+        if (!entry || entry.isGroup || typeof window?.execute !== 'function')
+            return;
+        if (entry.isNode) {
+            const target = await WORK.get_item(entry.id).catch(() => null);
+            if (target)
+                window.execute(target);
+            return;
+        }
+        await this.openUser(entry.id);
+    },
+    async openClass(clsPath) {
+        if (!clsPath || typeof window?.execute !== 'function')
+            return;
+        const target = await WORK.get_item(clsPath).catch(() => null);
+        if (target)
+            window.execute(target);
+    },
+    toggleBossPicker() {
+        this.bossPickerOpen = !this.bossPickerOpen;
+        this.bossSearch = '';
+    },
+    async pickBoss(uid) {
+        this.bossPickerOpen = false;
+        await this.setBoss(uid);
+    },
     async setBoss(uid) {
         const sec = JSON.parse(JSON.stringify(this.security || {}));
         const cleanUid = String(uid || '').trim();
@@ -867,6 +934,7 @@ export default {
         await this.persist(sec, `Назначен руководитель: ${label}`, `В подразделении ${this.$item?.path || ''} руководитель (BOSS): ${label}.`);
     },
     async clearBoss() {
+        this.bossPickerOpen = false;
         await this.setBoss('');
     },
     onBossDragOver(e) {
@@ -884,7 +952,7 @@ export default {
         e.preventDefault();
         const dropped = parseDroppedItem(e);
         if (!isDroppedUser(dropped)) {
-            this.error = 'Для назначения руководителя перетащите пользователя из раздела «Пользователи».';
+            this.error = 'Для назначения руководителя перетащите пользователя из дерева.';
             return;
         }
         const uid = dropped.id || dropped.path.split('/').pop();
@@ -922,10 +990,13 @@ export default {
                 await this._addMemberToRole(trail, dropped.path);
             return;
         }
-        if (isDroppedClass(dropped)) {
-            if (dropped.path)
-                await this._addLinksToRole(trail, [dropped.path]);
+        if (isDroppedClass(dropped) && dropped.path) {
+            await this._addLinksToRole(trail, [dropped.path]);
         }
+    },
+    toggleRoleExpand(trail) {
+        const cur = this.expandedRoles?.[trail] !== false;
+        this.expandedRoles = { ...this.expandedRoles, [trail]: !cur };
     },
     _findRoleMut(sec, trail) {
         const steps = String(trail || '').split('/').filter(Boolean);
@@ -939,28 +1010,36 @@ export default {
         }
         return node;
     },
+    openAddRole(parentTrail = '') {
+        this.addingRoleParent = this.addingRoleParent === parentTrail ? null : parentTrail;
+        this.newRoleLabel = '';
+    },
+    cancelAddRole() {
+        this.addingRoleParent = null;
+        this.newRoleLabel = '';
+    },
     onNewRoleKey(e) {
         if (e?.key === 'Enter')
-            this.addRole();
+            this.confirmAddRole();
+        else if (e?.key === 'Escape')
+            this.cancelAddRole();
     },
-    async addRole() {
+    async confirmAddRole() {
         const label = String(this.newRoleLabel || '').trim();
         if (!label)
             return;
+        const parentTrail = this.addingRoleParent || '';
         const id = label.toLowerCase().replace(/[^a-zа-яё0-9_-]+/gi, '_').replace(/^_+|_+$/g, '') || ('role_' + Date.now());
         const sec = JSON.parse(JSON.stringify(this.security || {}));
-        sec.ROLES = Array.isArray(sec.ROLES) ? sec.ROLES : [];
-        if (!sec.ROLES.some(r => r.id === id)) {
-            sec.ROLES.push({
-                id,
-                label,
-                ...(this.newRoleExternal ? { external: true } : {}),
-                USERS: [],
-                LINKS: [],
-            });
+        const targetList = parentTrail
+            ? ((this._findRoleMut(sec, parentTrail) || {}).ROLES ??= [])
+            : (sec.ROLES ??= []);
+        if (!targetList.some(r => r.id === id)) {
+            targetList.push({ id, label, USERS: [], LINKS: [] });
         }
-        this.newRoleLabel = '';
-        this.newRoleExternal = false;
+        if (parentTrail)
+            this.expandedRoles = { ...this.expandedRoles, [parentTrail]: true };
+        this.cancelAddRole();
         await this.persist(sec, `Создана роль «${label}»`, `В подразделении ${this.$item?.path || ''} добавлена роль «${label}».`);
     },
     async toggleRoleExternal(trail, checked) {
@@ -990,6 +1069,23 @@ export default {
         }
         await this.persist(sec, `Удалена роль «${targetId}»`, `Из подразделения ${this.$item?.path || ''} удалена роль «${targetId}».`);
     },
+    toggleMemberPicker(trail) {
+        this.pickerTrail = '';
+        if (this.memberPickerTrail === trail) {
+            this.closeMemberPicker();
+            return;
+        }
+        this.memberPickerTrail = trail;
+        this.memberSearch = '';
+    },
+    closeMemberPicker() {
+        this.memberPickerTrail = '';
+        this.memberSearch = '';
+    },
+    async pickMember(trail, memberId) {
+        this.closeMemberPicker();
+        await this._addMemberToRole(trail, memberId);
+    },
     async _addMemberToRole(trail, memberId) {
         const sec = JSON.parse(JSON.stringify(this.security || {}));
         const node = this._findRoleMut(sec, trail);
@@ -1000,14 +1096,6 @@ export default {
             node.USERS.push(memberId);
         await this.persist(sec, `В роль «${node.label || node.id}» добавлен участник`, `В роль «${node.label || node.id}» добавлен ${memberId}.`);
     },
-    async addRoleMember(trail, e) {
-        const val = e?.target?.value;
-        if (e?.target)
-            e.target.value = '';
-        if (!val)
-            return;
-        await this._addMemberToRole(trail, val);
-    },
     async removeRoleMember(trail, memberId) {
         const sec = JSON.parse(JSON.stringify(this.security || {}));
         const node = this._findRoleMut(sec, trail);
@@ -1017,6 +1105,7 @@ export default {
         await this.persist(sec, `Из роли «${node.label || node.id}» исключён участник`, `Из роли «${node.label || node.id}» удалён ${memberId}.`);
     },
     toggleClassPicker(trail) {
+        this.memberPickerTrail = '';
         if (this.pickerTrail === trail) {
             this.closeClassPicker();
             return;
@@ -1070,8 +1159,10 @@ export default {
                 added++;
             }
         }
-        if (added)
+        if (added) {
+            this.expandedRoles = { ...this.expandedRoles, [trail]: true };
             await this.persist(sec, `К роли «${node.label || node.id}» привязаны классы (${added})`, `К роли «${node.label || node.id}» привязаны классы: ${paths.join(', ')}.`);
+        }
     },
     async updateRoleLinkAccess(trail, clsPath, access) {
         const sec = JSON.parse(JSON.stringify(this.security || {}));
@@ -1082,18 +1173,6 @@ export default {
         link.access = access === 'write' ? 'write' : 'read';
         await this.persist(sec, `Изменён доступ роли к классу`, `Роль «${node.label || node.id}»: для ${clsPath} установлен доступ «${link.access}».`);
     },
-    async updateRoleLinkScope(trail, clsPath, scope) {
-        const sec = JSON.parse(JSON.stringify(this.security || {}));
-        const node = this._findRoleMut(sec, trail);
-        const link = node?.LINKS?.find(l => l?.id === clsPath);
-        if (!link)
-            return;
-        if (scope)
-            link.scope = scope;
-        else
-            delete link.scope;
-        await this.persist(sec, `Изменена область записей в роли`, `Роль «${node.label || node.id}»: для ${clsPath} установлена область «${scope || 'по умолчанию'}».`);
-    },
     async removeRoleLink(trail, clsPath) {
         const sec = JSON.parse(JSON.stringify(this.security || {}));
         const node = this._findRoleMut(sec, trail);
@@ -1101,80 +1180,5 @@ export default {
             return;
         node.LINKS = node.LINKS.filter(l => l?.id !== clsPath);
         await this.persist(sec, `Отвязан класс от роли`, `От роли «${node.label || node.id}» отвязан класс ${clsPath}.`);
-    },
-    inviteStatusLabel(st) {
-        return ({ active: 'активно', used: 'принято', revoked: 'отозвано', expired: 'истекло' })[st] || st;
-    },
-    inviteLinkOf(token) {
-        return `${location.origin}/?invite=${encodeURIComponent(token || '')}`;
-    },
-    async copyText(text) {
-        try {
-            await navigator.clipboard?.writeText(String(text || ''));
-        }
-        catch {
-            window.prompt?.('Скопируйте ссылку приглашения:', String(text || ''));
-        }
-    },
-    async loadInvites() {
-        if (!this.canEdit || !this.$item?.fetch) {
-            this.invitesList = [];
-            return;
-        }
-        try {
-            const list = await this.$item.fetch('invite_list', {});
-            this.invitesList = Array.isArray(list) ? list : [];
-        }
-        catch {
-            this.invitesList = [];
-        }
-    },
-    openInvite(trail) {
-        if (this.inviteTrail === trail) {
-            this.closeInvite();
-            return;
-        }
-        this.inviteTrail = trail;
-        this.inviteChannel = 'link';
-        this.inviteRecipient = '';
-        this.inviteNote = '';
-        this.inviteResult = null;
-    },
-    closeInvite() {
-        this.inviteTrail = '';
-        this.inviteResult = null;
-    },
-    async sendInvite() {
-        if (!this.inviteTrail || this.inviteBusy)
-            return;
-        this.inviteBusy = true;
-        this.error = '';
-        try {
-            const res = await this.$item.fetch('invite_create', {}, {
-                trail: this.inviteTrail,
-                channel: this.inviteChannel,
-                recipient: this.inviteRecipient,
-                note: this.inviteNote,
-                origin: location.origin,
-            });
-            this.inviteResult = res;
-            await this.loadInvites();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
-        finally {
-            this.inviteBusy = false;
-        }
-    },
-    async revokeInvite(id) {
-        this.error = '';
-        try {
-            await this.$item.fetch('invite_revoke', {}, { id });
-            await this.loadInvites();
-        }
-        catch (e) {
-            this.error = String(e?.message || e);
-        }
     },
 }

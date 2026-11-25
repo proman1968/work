@@ -5,7 +5,7 @@ export default{
         ROLES: [{
             id: "head",
             label: "Руководитель логистики",
-            USERS: ["8346837462394056"],
+            USERS: [],
             LINKS: [
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Транспорт", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Клиенты", access: "read" },
@@ -21,7 +21,7 @@ export default{
             ROLES: [{
                 id: "dispatcher",
                 label: "Диспетчер",
-                USERS: ["635243546352435"],
+                USERS: [],
                 LINKS: [
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Транспорт", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Клиенты", access: "read" },

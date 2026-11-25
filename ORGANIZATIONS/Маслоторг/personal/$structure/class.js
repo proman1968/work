@@ -5,7 +5,7 @@ export default{
         ROLES: [{
             id: "head",
             label: "Руководитель кадров",
-            USERS: ["83468374623940"],
+            USERS: [],
             LINKS: [
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты/Физ. лица", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники", access: "write" },
@@ -16,7 +16,7 @@ export default{
             ROLES: [{
                 id: "officer",
                 label: "Инспектор по кадрам",
-                USERS: ["8346837462394056"],
+                USERS: [],
                 LINKS: [
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты/Физ. лица", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Сотрудники", access: "write" },

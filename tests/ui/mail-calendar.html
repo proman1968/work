@@ -156,11 +156,40 @@ await test('Система: левое боковое меню .sys-sidebar бе
     assert(labels.includes('Пользователи') && labels.includes('Мессенджеры') && labels.includes('Агент и правила'), 'основные разделы в левом меню');
     assert(!labels.includes('Поиск'), 'Поиск вынесен из Системы');
 
-    // 3. Проверка вкладки Пользователи: один BOSS, Роли, дерево классов и отсутствие дубля Мессенджеров
+    // 3. Проверка вкладки Пользователи: единое дерево ролей (BOSS -> роли -> классы с чекбоксом Изменение)
     const staffEl = await waitFor(() => el.$('system-tab-staff'), 'смонтирована вкладка Пользователи');
     assert(staffEl.$item?.set !== undefined || typeof (await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js')).default.$item?.set === 'function', '$item имеет сеттер reload');
+    staffEl.canEdit = true;
+    staffEl.userMap = { U_REAL: 'Харитонов Юрий' };
+    staffEl.security = {
+        BOSS: ['U_GHOST'], // несуществующий UID скрывается
+        ROLES: [{
+            id: 'head',
+            label: 'Главный бухгалтер',
+            USERS: ['U_REAL', 'U_GHOST'],
+            LINKS: [{ id: '/ORG/MODULES/Reg/OPERATIONS/Зарплата', access: 'write' }],
+            ROLES: [{
+                id: 'acc',
+                label: 'Бухгалтер',
+                USERS: [],
+                LINKS: [{ id: '/ORG/MODULES/Reg/CATALOGS/Договоры', access: 'read' }],
+            }],
+        }],
+    };
+    const roleRows = await waitFor(() => {
+        const rows = staffEl.$$('.tree-row.role-row');
+        return rows?.length === 2 ? rows : null;
+    }, 'единое дерево ролей (Главный бухгалтер и дочерний Бухгалтер)');
+    assert(roleRows[0].textContent.includes('Харитонов Юрий'), 'отображён реальный пользователь в строке роли');
+    const staffText = (staffEl.shadowRoot || staffEl).textContent;
+    assert(!staffText.includes('U_GHOST'), 'несуществующие UID не отображаются абракадаброй');
+    assert(!staffText.includes('Пригласить'), 'нет лишней кнопки Пригласить');
+    assert(!staffText.includes('Все записи'), 'нет непонятных селектов области записей');
+    const classRows = staffEl.$$('.tree-row.class-row');
+    assert(classRows.length === 2, 'видны привязанные классы внутри раскрытых ролей');
+    assert(classRows[0].querySelector('input[type="checkbox"]').checked === true, 'чекбокс Изменение отмечен для write');
+    assert(classRows[1].querySelector('input[type="checkbox"]').checked === false, 'чекбокс Изменение снят для read');
     const staffSrc = await fetch('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js').then(r => r.text());
-    assert(staffSrc.includes('Роли в подразделении'), 'терминология Роли в подразделении');
     assert(!staffSrc.includes('<oda-messenger-settings'), 'нет дублирующих настроек мессенджеров на вкладке Пользователи');
     assert(staffSrc.includes('onBossDrop') && staffSrc.includes('onRoleDrop'), 'поддержан drag&drop людей, подразделений и классов');
 
@@ -172,7 +201,7 @@ await test('Система: левое боковое меню .sys-sidebar бе
     assert(agentEl.maskPreview.ok && agentEl.maskPreview.text.includes('5-го числа'), 'расшифровка ODANT-маски YYYY-MM-05T10:15:00: ' + agentEl.maskPreview.text);
     const agentSrc = await fetch('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/agent.js').then(r => r.text());
     assert(agentSrc.includes('Системная инструкция для агента этого подразделения'), 'есть редактор системного промпта');
-    assert(agentSrc.includes('Автоматические реакции на события'), 'блок переименован в Автоматические реакции');
+    assert(agentSrc.includes('Автоматические реакции'), 'блок переименован в Автоматические реакции');
     assert(agentSrc.includes('Повторять задачу'), 'можно выбрать готовую задачу в расписание');
     el.remove();
 });

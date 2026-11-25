@@ -5,7 +5,7 @@ export default{
         ROLES: [{
             id: "head",
             label: "Главный бухгалтер",
-            USERS: ["83468374623940"],
+            USERS: [],
             LINKS: [
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS", access: "read" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "write" },
@@ -21,7 +21,7 @@ export default{
             ROLES: [{
                 id: "accountant",
                 label: "Бухгалтер",
-                USERS: ["8346837462394056"],
+                USERS: [],
                 LINKS: [
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS", access: "read" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Субъекты", access: "write" },

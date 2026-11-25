@@ -274,6 +274,8 @@ export class $folder extends $item {
                 || method.startsWith('license_')
                 || method.startsWith('messenger_')
                 || method.startsWith('distro_')
+                || method.startsWith('agent_')
+                || method === 'security_update'
                 || method === 'export_distro'
             ))
             || (method === 'logs' && params.mode && params.mode !== 'folder' && params.mode !== 'files');

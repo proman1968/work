@@ -54,8 +54,6 @@ export default {
     },
     icon: "fontawesome:s-building",
     "#security": {
-        BOSS: ["CA4E097FF6C1D387"],
-
         ROLES: [{
             id: "heads",
             label: "Руководство",
@@ -78,7 +76,7 @@ export default {
                 id: "deputies",
                 label: "Заместители"
             }],
-            USERS: ["83468374623940","635243546352435"]
+            USERS: []
         }]
     }
 }

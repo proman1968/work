@@ -5,7 +5,7 @@ export default {
         ROLES: [{
             id: "head",
             label: "Заведующий складом",
-            USERS: ["8346837462394056"],
+            USERS: [],
             LINKS: [
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Склады", access: "write" },
                 { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Партии", access: "write" },
@@ -26,7 +26,7 @@ export default {
             ROLES: [{
                 id: "keeper",
                 label: "Кладовщик",
-                USERS: ["635243546352435"],
+                USERS: [],
                 LINKS: [
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Склады", access: "write" },
                     { id: "/ORGANIZATIONS/Маслоторг/MODULES/Register/CATALOGS/Партии", access: "write" },

@@ -410,5 +410,12 @@ describe('Проактивность Агентов $structure, when-преди�
         });
         assert.equal(askRes.ok, true);
         assert.match(askRes.answer, /Продажи за период/);
+
+        // 4. Все новые методы вкладок Системы зарегистрированы в gateway.js (MEMBERS)
+        const { MEMBERS, resolveMember } = await import('../sources/server/access/gateway.js');
+        for (const m of ['agent_system_get', 'agent_system_save', 'agent_available_classes', 'agent_structures_list', 'agent_tasks_list', 'security_update']) {
+            assert.ok(MEMBERS[m], `метод ${m} зарегистрирован в gateway.js MEMBERS`);
+            assert.ok(resolveMember(sales, m), `метод ${m} разрешается на $structure`);
+        }
     });
 });

@@ -655,7 +655,10 @@ export async function listNodeStructures(storage, params = {}) {
         }
         const items = await Promise.resolve(node.items).catch(() => []) || [];
         for (const ch of items) {
-            if (ch && ch.id?.[0] !== '$' && ['$domain', '$base', '$project', '$structure'].includes(ch.type))
+            if (!ch || ch.id?.[0] === '$')
+                continue;
+            await ch.init?.catch?.(() => {});
+            if (['$domain', '$base', '$project', '$structure'].includes(ch.type))
                 await visit(ch, depth + 1);
         }
     };
