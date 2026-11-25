@@ -201,6 +201,18 @@ describe('Ядро бесед мессенджера (chat_threads, WebSocket-с
         assert.equal(bossEntry.external, false);
     });
 
+    it('раздел USERS в корне расположен сразу под PROJECTS и скрыт от внешних клиентов (CLIENT)', async () => {
+        const usersNode = await WORK.get_item('/USERS');
+        assert.equal(await usersNode.allowAccess(as(BOSS_UID)), true, 'BOSS видит /USERS');
+        assert.equal(await usersNode.allowAccess(as(USER1_UID)), true, 'сотрудник USER видит /USERS');
+        assert.equal(await usersNode.allowAccess(as(CLIENT_UID)), false, 'внешний CLIENT не видит /USERS в дереве');
+
+        const rootInfo = await WORK.info({ deep: 1 });
+        const ids = (rootInfo?.items || []).map(it => it.id);
+        assert.ok(ids.indexOf('ORGANIZATIONS') >= 0 && ids.indexOf('PROJECTS') > ids.indexOf('ORGANIZATIONS'));
+        assert.equal(ids.indexOf('USERS'), ids.indexOf('PROJECTS') + 1, 'USERS идёт сразу после PROJECTS');
+    });
+
     it('work-dot поддерживает профессиональные аксессуары (wrench, tie, calc, headphones)', () => {
         for (const acc of ['glasses', 'cap', 'wrench', 'tie', 'calc', 'headphones']) {
             assert.ok(ACCESSORIES.includes(acc));

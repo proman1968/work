@@ -1409,7 +1409,7 @@ describe('архитектура представлений формы (VIEW п�
         // Проводник: корень сервера виден администратору (hideTops: 0), вкладки Организации и Модули убраны из левой панели,
         // внизу есть панель закладок открытых форм (bookmarksBar) с сохранением в localStorage и раскрытием дерева (revealPath)
         assert.equal(baseExplorer.hideTops, 0, 'корневой элемент сервера WORK виден администратору в дереве');
-        assert.deepEqual(structExplorer.list, ['/USERS', '/NODES'], 'вкладки /ORGANIZATIONS и /MODULES убраны из панели переключателей слева');
+        assert.deepEqual(structExplorer.list, ['/NODES'], 'вкладка /USERS перенесена в основное дерево под Проекты; слева только /NODES');
         assert.ok(baseExplorer.template.includes('id="bookmarksBar"'), 'внизу проводника есть панель закладок открытых форм (#bookmarksBar)');
         assert.equal(typeof baseExplorer._saveBookmarksState, 'function', 'закладки открытых форм сохраняются в localStorage');
         assert.equal(typeof baseExplorer._restoreBookmarksState, 'function', 'закладки открытых форм восстанавливаются при входе');

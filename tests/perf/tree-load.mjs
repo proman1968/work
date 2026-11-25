@@ -37,7 +37,7 @@ const freePort = () => new Promise(res => {
 const port = await freePort();
 const server = spawn(process.execPath, ['sources/work.js'], {
     cwd: ROOT,
-    env: { ...process.env, WORK_DEV: 'true', WORK_PORT: String(port), WORK_STUN_PORT: String(await freePort()), WORK_WATCH: '0' },
+    env: { ...process.env, WORK_DEV: 'true', WORK_NO_BROWSER: '1', WORK_DISABLE_AUTO_WARMUP: '1', WORK_PORT: String(port), WORK_STUN_PORT: String(await freePort()), WORK_WATCH: '0' },
     stdio: 'ignore',
     windowsHide: true,
 });

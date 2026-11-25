@@ -1,3 +1,20 @@
+import { isLinkNode } from '../tree/link-nodes.js';
+
+function bossAvatarInfo(u) {
+    if (!u)
+        return { icon: '', color: '' };
+    const lbl = String(u.label || u.DATA?.label || u.id || '').trim();
+    let icon = u.icon || u.DATA?.icon || '';
+    if (!icon && lbl) {
+        const initials = lbl.split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
+        if (initials)
+            icon = '@:' + initials;
+    }
+    const isText = typeof icon === 'string' && icon.startsWith('@');
+    const color = isText ? (u.iconColor || '#3b82f6') : (icon ? '#ffffff' : '');
+    return { icon, color, label: lbl };
+}
+
 export default {
     imports: 'oda//icon, ~/lib//menu, ~/lib//popover',
     extends: 'oda-icon',
@@ -34,12 +51,29 @@ export default {
             return false;
         }
     },
+    get _bossUsers() {
+        const it = this.$item;
+        if (!it || this.isUser || isLinkNode(it) || ('isPlace' in Object(it) && it.isPlace))
+            return null;
+        const t = it.type;
+        if (t !== '$base' && t !== '$project' && t !== '$structure' && t !== '$server')
+            return null;
+        it.__version;
+        const bossIds = it.DATA?.roleIds?.BOSS;
+        if (!Array.isArray(bossIds) || !bossIds.length || typeof WORK?.usersByIds !== 'function')
+            return null;
+        return WORK.usersByIds(bossIds)
+            .then(list => (Array.isArray(list) ? list.filter(Boolean) : []))
+            .catch(() => []);
+    },
     subIcon:{
         $def: '',
         get (){
             if (!this.isUser) {
                 if (this.$item?.type === '$virtual')
                     return 'carbon:filter';
+                if (this._bossUsers)
+                    return this._bossUsers.then(list => bossAvatarInfo(list[0]).icon);
                 return this.$item?.subIcon;
             }
             return Promise.resolve(this.online).then(res => res ? 'unicon:check-circle' : '');
@@ -51,9 +85,25 @@ export default {
             if (!this.isUser) {
                 if (this.$item?.type === '$virtual')
                     return '#ede9fe';
+                if (this._bossUsers)
+                    return this._bossUsers.then(list => bossAvatarInfo(list[0]).color);
                 return '';
             }
             return Promise.resolve(this.online).then(res => res ? 'lime' : '');
+        }
+    },
+    subTitle: {
+        $def: '',
+        get() {
+            if (this._bossUsers) {
+                return this._bossUsers.then(list => {
+                    if (!list.length)
+                        return '';
+                    const names = list.map(u => bossAvatarInfo(u).label).filter(Boolean);
+                    return names.length ? 'Руководитель: ' + names.join(', ') : '';
+                });
+            }
+            return this.$item?.subTitle || '';
         }
     },
     fill: {

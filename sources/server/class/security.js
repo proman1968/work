@@ -647,7 +647,51 @@ export const classSecurityMethods = {
         }
     },
 
+    /** Есть ли у субъекта хотя бы одна внутренняя роль сотрудника (BOSS или USER), а не только CLIENT. */
+    async _hasInternalWorkRole(params = {}) {
+        if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
+            return true;
+        const uid = this.constructor.resolveUid(params);
+        if (!uid)
+            return false;
+        const rootRoles = await globalThis.WORK?.roles?.(params).catch(() => []) || [];
+        if (rootRoles.includes('BOSS') || rootRoles.includes('USER'))
+            return true;
+        const checkContainer = async (domainPath) => {
+            const dom = await globalThis.WORK?.get_item?.(domainPath).catch(() => null);
+            const roots = dom ? ((await Promise.resolve(dom.items).catch(() => [])) || []).filter(b => b && b.id?.[0] !== '$') : [];
+            const stack = roots.map(node => ({ node, depth: 0 }));
+            while (stack.length) {
+                const { node, depth } = stack.pop();
+                const r = await Promise.resolve(node.roles?.(params)).catch(() => []) || [];
+                if (r.includes('BOSS') || r.includes('USER'))
+                    return true;
+                if (depth >= 5)
+                    continue;
+                const sub = await Promise.resolve(node.items).catch(() => []) || [];
+                for (const s of sub) {
+                    if (s?.type === '$structure' && s.id?.[0] !== '$')
+                        stack.push({ node: s, depth: depth + 1 });
+                }
+            }
+            return false;
+        };
+        if (await checkContainer('/ORGANIZATIONS'))
+            return true;
+        if (await checkContainer('/PROJECTS'))
+            return true;
+        return false;
+    },
+
     async allowAccess(params) {
+        // Раздел /USERS ($users): виден сотрудникам (BOSS/USER) и скрыт от внешних клиентов (CLIENT-only) и гостей
+        if (this.type === '$users') {
+            if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
+                return true;
+            if (params?.session?.principal?.kind === 'node')
+                return false;
+            return this._hasInternalWorkRole(params);
+        }
         let result = await this.canSee(this, params);
         if (!result) {
             const items = await this.items;

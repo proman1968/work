@@ -347,10 +347,11 @@ await test('Проводник: порядок вкладок [контекст,
     eq(knownHasItems(orgNode, { itemsSelector: 'items', cleanStructure: true }), undefined, 'в cleanStructure у $base стрелка определяется по дочерним $structure');
 
     const usersProto = (await import('/$server/$folder/lib/security/users/users.js')).default;
+    const iconProto = (await import('/$server/$folder/lib/icon/icon.js')).default;
     const prevByIds = WORK.usersByIds;
-    WORK.usersByIds = async (ids) => ids.map(id => ({ id, label: 'User ' + id }));
+    WORK.usersByIds = async (ids) => ids.map(id => ({ id, label: 'Харитонов Юрий', icon: '@:ХЮ', iconColor: '#2563eb' }));
     try {
-        WORK.__bind({ path: '/ORGANIZATIONS/O1', id: 'O1', label: 'Орг 1', type: '$base', roleIds: { BOSS: ['b_parent'], USER: [] } });
+        const orgWithBoss = WORK.__bind({ path: '/ORGANIZATIONS/O1', id: 'O1', label: 'Орг 1', type: '$base', roleIds: { BOSS: ['b_parent'], USER: [] } });
         const deptEmpty = WORK.__bind({ path: '/ORGANIZATIONS/O1/dev', id: 'dev', label: 'Разработка', type: '$structure', roleIds: { BOSS: [], USER: [] } });
         const host = {
             role: 'BOSS',
@@ -367,6 +368,23 @@ await test('Проводник: порядок вкладок [контекст,
         eq(eff.map(u => u.id), ['b_parent'], 'если локальный BOSS не назначен, показывается вышестоящий BOSS');
         eq(host.inheritedFrom, 'Орг 1', 'фиксируется источник унаследованного BOSS');
         eq((await usersProto._localBossUsers.call(host)).length, 0, 'локальный список BOSS при этом пуст для меню назначения');
+
+        // Проверка subIcon руководителя на иконке ноды: показывается только на узле с локальным BOSS
+        const treeSrc = await fetch('/$server/$folder/lib/tree/tree.js').then(r => r.text());
+        assert(!treeSrc.includes('role="BOSS"'), 'кружок босса справа в строке дерева убран');
+        const makeIconCtx = (item) => {
+            const ctx = { isUser: false, $item: item };
+            Object.defineProperty(ctx, '_bossUsers', Object.getOwnPropertyDescriptor(iconProto, '_bossUsers'));
+            return ctx;
+        };
+        const orgSub = await iconProto.subIcon.get.call(makeIconCtx(orgWithBoss));
+        const orgCol = await iconProto.subIconColor.get.call(makeIconCtx(orgWithBoss));
+        const orgTitle = await iconProto.subTitle.get.call(makeIconCtx(orgWithBoss));
+        eq(orgSub, '@:ХЮ', 'на узле с локальным BOSS отображается subIcon руководителя');
+        eq(orgCol, '#2563eb', 'цвет subIcon берётся из цвета руководителя');
+        eq(orgTitle, 'Руководитель: Харитонов Юрий', 'подсказка subIcon содержит ФИО руководителя');
+        const deptSub = await iconProto.subIcon.get.call(makeIconCtx(deptEmpty));
+        eq(deptSub, '', 'на дочернем отделе без локального BOSS subIcon не дублируется');
     }
     finally {
         WORK.usersByIds = prevByIds;

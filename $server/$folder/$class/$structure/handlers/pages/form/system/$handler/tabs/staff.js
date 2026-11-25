@@ -144,12 +144,17 @@ export default {
 
             <div class="role-row">
                 <span class="role-title">Руководитель (BOSS):</span>
-                <div class="user-chip" ~for="bossList">
-                    <oda-icon icon="fontawesome:s-user-tie" icon-size="14"></oda-icon>
+                <div class="user-chip clickable" ~for="bossList" title="Открыть диалог с руководителем" @tap="openUser($for.item)">
+                    <oda-icon round :icon="userIcon($for.item)" :icon-color="userColor($for.item)" icon-size="20"></oda-icon>
                     <span>{{userLabel($for.item)}}</span>
-                    <span ~if="canEdit" class="rm" title="Снять руководителя" @tap="removeRoleUser('BOSS', $for.item)">×</span>
+                    <span ~if="canEdit" class="rm" title="Снять руководителя" @tap.stop="removeRoleUser('BOSS', $for.item)">×</span>
                 </div>
-                <span ~if="!bossList.length" class="muted">не назначен (наследуется сверху)</span>
+                <span ~if="!bossList.length && !inheritedBossInfo?.users?.length" class="muted">не назначен (наследуется сверху)</span>
+                <span ~if="!bossList.length && inheritedBossInfo?.users?.length" class="muted">не назначен — наследуется от «{{inheritedBossInfo.fromLabel}}»:</span>
+                <div ~if="!bossList.length && inheritedBossInfo?.users?.length" class="user-chip clickable" style="opacity:0.85;" ~for="inheritedBossInfo.users" title="Наследуемый руководитель (открыть диалог)" @tap="openUser($for.item)">
+                    <oda-icon round :icon="userIcon($for.item)" :icon-color="userColor($for.item)" icon-size="20"></oda-icon>
+                    <span>{{userLabel($for.item)}}</span>
+                </div>
                 <select ~if="canEdit" @change="addRoleUser('BOSS', $event)">
                     <option value="">+ Назначить руководителя…</option>
                     <option ~for="allUsers" :value="$for.item.id">{{$for.item.label}} ({{$for.item.id}})</option>
@@ -278,6 +283,8 @@ export default {
     security: null,
     allUsers: [],
     userMap: {},
+    userMetaMap: {},
+    inheritedBossInfo: null,
     availableClasses: [],
     classMap: {},
     canEdit: false,
@@ -333,6 +340,21 @@ export default {
             return '🌐 Все гости (GUESTS)';
         return this.userMap?.[uid] || uid;
     },
+    userIcon(uid) {
+        const meta = this.userMetaMap?.[uid];
+        if (meta?.icon)
+            return meta.icon;
+        const lbl = String(this.userLabel(uid) || uid || '').trim();
+        const initials = lbl.split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
+        return initials ? ('@:' + initials) : 'icons:person';
+    },
+    userColor(uid) {
+        const meta = this.userMetaMap?.[uid];
+        const icon = this.userIcon(uid);
+        if (typeof icon === 'string' && icon.startsWith('@'))
+            return meta?.iconColor || '#3b82f6';
+        return '';
+    },
     classTitle(path) {
         return this.classMap?.[path] || String(path || '').replace(/^\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\/[^/]+\//, '');
     },
@@ -370,6 +392,7 @@ export default {
                 this.availableClasses = [];
                 this.invitesList = [];
             }
+            await this.loadInheritedBoss();
         }
         catch (e) {
             this.error = String(e?.message || e);
@@ -397,17 +420,54 @@ export default {
             const items = (await uRoot?.items) || [];
             const list = [];
             const map = {};
+            const metaMap = {};
             for (const u of items) {
                 if (!u?.id || u.id[0] === '$')
                     continue;
                 const label = u.label || u.DATA?.label || u.id;
                 list.push({ id: u.id, label });
                 map[u.id] = label;
+                metaMap[u.id] = {
+                    icon: u.icon || u.DATA?.icon || '',
+                    iconColor: u.iconColor || '',
+                    label,
+                };
             }
             this.allUsers = list;
             this.userMap = map;
+            this.userMetaMap = metaMap;
         }
         catch { /* ignore */ }
+    },
+    async loadInheritedBoss() {
+        if (this.bossList.length || !this.$item?.path) {
+            this.inheritedBossInfo = null;
+            return;
+        }
+        try {
+            const segs = String(this.$item.path || '').split('/').filter(Boolean);
+            for (let i = segs.length - 1; i >= 0; i--) {
+                const pPath = i === 0 ? '/' : '/' + segs.slice(0, i).join('/');
+                const anc = CORE?.$item?.ITEMS?.[pPath] || await WORK.get_item(pPath).catch(() => null);
+                if (!anc)
+                    continue;
+                let ids = Array.isArray(anc?.DATA?.roleIds?.BOSS) ? anc.DATA.roleIds.BOSS : null;
+                if (!ids) {
+                    const b = await Promise.resolve(anc.bosses).catch(() => []);
+                    ids = Array.isArray(b) ? b.map(u => u?.id || u).filter(Boolean) : [];
+                }
+                if (ids.length) {
+                    this.inheritedBossInfo = {
+                        fromPath: pPath,
+                        fromLabel: anc.label || anc.DATA?.label || anc.id || (pPath === '/' ? 'WORK' : pPath),
+                        users: ids,
+                    };
+                    return;
+                }
+            }
+        }
+        catch { /* ignore */ }
+        this.inheritedBossInfo = null;
     },
     async loadAvailableClasses() {
         try {
@@ -452,6 +512,19 @@ export default {
             this.security = JSON.parse(JSON.stringify(nextSec));
             this.$item.reset?.();
             this.$item.fire?.('changed', { value: null });
+            await this.loadInheritedBoss();
+            try {
+                if (window.top && window.top !== window && window.top.CORE?.$item?.ITEMS) {
+                    const topItems = window.top.CORE.$item.ITEMS;
+                    const topItem = topItems[this.$item.path] || topItems[this.$item.short];
+                    if (topItem) {
+                        await topItem.fetch?.('info').catch(() => {});
+                        topItem.increaseVersion?.();
+                        topItem.fire?.('changed', { value: null });
+                    }
+                }
+            }
+            catch { /* ignore cross-origin */ }
             this.shadowRoot?.querySelector?.('oda-messenger-settings')?.reload?.();
         }
         catch (e) {

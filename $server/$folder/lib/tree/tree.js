@@ -652,7 +652,6 @@ ODA({is: 'oda-tree-node',
                 <div horizontal flex style="min-width: 0; overflow: hidden; align-items: center;">
                     <oda-icon ~show="showCheckbox" :disabled="!checkboxIcon || (isModule && $item?.DATA?.systemBlocked)" :icon="checkboxIcon" :icon-size="20" :title="moduleCheckboxTitle" @tap.stop="checked = !checked"></oda-icon>
                     <item-node flex style="min-width: 0;" :expanded auto-run :show-users :show-size="showSize && !isCategory" :hide-icon="isCategory" :show-tools="isFocused && showTools" :menu-mode :$item :show-status @tap="setItemFocus">
-                        <item-users ~if="isStructureNode" :$item="$item" role="BOSS" :select-mode="false" :icon-size="20"></item-users>
                         <item-users ~if="isPlace" :$item="$item.owner" :place="$item.trail" :select-mode="false" :icon-size="20"></item-users>
                         <span class="access" ~if="isLinkWrite">A</span>
                         <span class="access" ~if="isLinkRead">R</span>
@@ -1028,12 +1027,15 @@ ODA({is: 'oda-tree-node',
             }
             if (this.$pdp?.cleanStructure && this.$item?.path === '/USERS' && Array.isArray(items) && globalThis.WORK?.uid) {
                 try {
-                    const contacts = await globalThis.WORK.fetch('/', 'visible_contacts').catch(() => null);
-                    if (Array.isArray(contacts) && contacts.length) {
-                        const order = new Map(contacts.map((c, idx) => [c.id, idx]));
-                        items = items
-                            .filter(u => order.has(u?.id))
-                            .sort((a, b) => (order.get(a.id) ?? 9999) - (order.get(b.id) ?? 9999));
+                    const isAdm = Boolean(WORK?.DEV_MODE || await globalThis.WORK.isAdmin?.catch?.(() => false));
+                    if (!isAdm) {
+                        const contacts = await globalThis.WORK.fetch('/', 'visible_contacts').catch(() => []);
+                        if (Array.isArray(contacts)) {
+                            const order = new Map(contacts.map((c, idx) => [c.id, idx]));
+                            items = items
+                                .filter(u => order.has(u?.id))
+                                .sort((a, b) => (order.get(a.id) ?? 9999) - (order.get(b.id) ?? 9999));
+                        }
                     }
                 }
                 catch { /* оставляем исходный список */ }

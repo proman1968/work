@@ -21,6 +21,7 @@ ODA({is: 'oda-icon',
                 bottom: 0px;
                 border-radius: 50% !important;
                 overflow: hidden;
+                box-shadow: 0 0 0 3px var(--content-background, #ffffff);
             }
             .subicon .icon{
                 border-radius: 50%;
@@ -90,7 +91,7 @@ ODA({is: 'oda-icon',
             :icon="subIcon"
             :default="subDefault"
             :icon-size
-            style="transform: scale(.4); transform-origin: bottom right; border-radius: 50% important;"
+            style="transform: scale(.4); transform-origin: bottom right; border-radius: 50% !important;"
         ></oda-icon>
     `,
     $public: {
@@ -241,6 +242,10 @@ ODA({is: 'oda-icon',
             const fontSize = `${(this.iconSize / 2) / Math.sqrt(this._icon.name?.length || 1)}px`;
             style.fontSize = fontSize;
             style.transform = `rotate(${this.rotate + this._icon.rotation}deg)`;
+            if (this._icon.lib === '@' && this.iconColor) {
+                style.color = '#ffffff';
+                style.fontWeight = '700';
+            }
         }
         return style;
     }
