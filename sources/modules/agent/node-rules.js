@@ -704,6 +704,222 @@ export async function listNodeNetworkNodes(storage, params = {}) {
 }
 
 /**
+ * Единый контекст для вкладки «Пользователи» и «Классы и модули» подразделения / $base:
+ * реальные пользователи, подразделения, серверы сети, унаследованный BOSS,
+ * полное дерево классов вышестоящего $base и доступные модули /MODULES.
+ */
+export async function getNodeStaffContext(storage, params = {}) {
+    await assertBoss(storage, params);
+    const WORK = globalThis.WORK;
+    if (!WORK)
+        return { users: [], structures: [], networkNodes: [], inheritedBoss: null, baseClasses: [], systemModules: [], basePath: '' };
+
+    // 1. Пользователи /USERS
+    const users = [];
+    const userMap = new Map();
+    const uRoot = (await WORK.get_item('/USERS').catch(() => null)) || (await WORK.get_item('/users').catch(() => null));
+    const uItems = await Promise.resolve(uRoot?.items).catch(() => []) || [];
+    for (const u of uItems) {
+        if (!u?.id || u.id[0] === '$')
+            continue;
+        await u.init?.catch?.(() => {});
+        const entry = {
+            id: u.id,
+            label: u.DATA?.label || u.label || u.id,
+            icon: u.DATA?.icon || u.icon || '',
+            iconColor: u.iconColor || '',
+        };
+        users.push(entry);
+        userMap.set(u.id, entry);
+    }
+
+    // 2. Унаследованный руководитель (BOSS) вверх по дереву (включая корень '/')
+    let inheritedBoss = null;
+    try {
+        const chain = [];
+        for (let anc = storage?.$parent; anc; anc = anc.$parent) {
+            if (anc instanceof FS.$class)
+                chain.push(anc);
+        }
+        if (!chain.some(a => a === WORK || a.path === '/'))
+            chain.push(WORK);
+        for (const anc of chain) {
+            await anc.init?.catch?.(() => {});
+            const localIds = typeof anc._roleIds === 'function'
+                ? anc._roleIds('BOSS')
+                : (Array.isArray(anc.DATA?.['#security']?.BOSS) ? anc.DATA['#security'].BOSS : []);
+            const cleanIds = (Array.isArray(localIds) ? localIds : []).filter(v => typeof v === 'string' && v.trim());
+            if (cleanIds.length) {
+                const resolved = cleanIds.slice(0, 1).map(uid => {
+                    const found = userMap.get(uid);
+                    return found
+                        ? { ...found, missing: false }
+                        : { id: uid, label: `${uid} (не найден в /USERS)`, icon: 'icons:person', iconColor: '', missing: true };
+                });
+                const ancPath = anc.path || '/';
+                inheritedBoss = {
+                    fromPath: ancPath,
+                    fromLabel: anc.DATA?.label || anc.label || anc.id || (ancPath === '/' ? 'WORK' : ancPath),
+                    users: resolved,
+                };
+                break;
+            }
+        }
+    }
+    catch { /* ignore */ }
+
+    // 3. Подразделения и серверы сети
+    const [structRes, netRes] = await Promise.all([
+        listNodeStructures(storage, params).catch(() => ({ structures: [] })),
+        listNodeNetworkNodes(storage, params).catch(() => ({ nodes: [] })),
+    ]);
+
+    // 4. Полное дерево всех классов, установленных в вышестоящий $base ($project)
+    const selfPath = String(storage?.path || '/').replace(/\/+$/, '') || '/';
+    const baseMatch = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(selfPath);
+    const basePath = baseMatch ? baseMatch[1] : '';
+    const modRootPath = basePath ? `${basePath}/MODULES` : '/MODULES';
+    const baseClasses = [];
+    const installedModIds = new Set();
+
+    const walkClasses = async (node, depth = 0) => {
+        if (!node || depth > 7)
+            return null;
+        await node.init?.catch?.(() => {});
+        if (!node.id || node.id[0] === '$')
+            return null;
+        const t = node.type;
+        const isAllowed = DATA_CLASS_TYPES.has(t) || t === '$module' || t === '$domain' || t === '$class' || t === '$folder';
+        if (!isAllowed)
+            return null;
+        if (t === '$module')
+            installedModIds.add(node.id);
+        const items = await Promise.resolve(node.items).catch(() => []) || [];
+        const children = [];
+        for (const ch of items) {
+            if (!ch || ch.id?.[0] === '$')
+                continue;
+            const built = await walkClasses(ch, depth + 1);
+            if (built)
+                children.push(built);
+        }
+        return {
+            id: node.id,
+            path: node.path,
+            label: node.DATA?.label || node.label || node.id,
+            type: t,
+            icon: node.DATA?.icon || node.icon || (t === '$module' ? 'odant:module' : 'odant:class'),
+            children,
+        };
+    };
+
+    const modRootItem = await WORK.get_item(modRootPath).catch(() => null);
+    if (modRootItem) {
+        const modKids = await Promise.resolve(modRootItem.items).catch(() => []) || [];
+        for (const mk of modKids) {
+            if (!mk || mk.id?.[0] === '$')
+                continue;
+            const built = await walkClasses(mk, 0);
+            if (built)
+                baseClasses.push(built);
+        }
+    }
+
+    // 5. Доступные эталонные модули в корневом /MODULES
+    const systemModules = [];
+    const sysModRoot = await WORK.get_item('/MODULES').catch(() => null);
+    if (sysModRoot) {
+        const sysKids = await Promise.resolve(sysModRoot.items).catch(() => []) || [];
+        for (const sm of sysKids) {
+            if (!sm || sm.id?.[0] === '$' || sm.type !== '$module')
+                continue;
+            await sm.init?.catch?.(() => {});
+            systemModules.push({
+                id: sm.id,
+                path: sm.path,
+                label: sm.DATA?.label || sm.label || sm.id,
+                icon: sm.DATA?.icon || sm.icon || 'odant:module',
+                installed: installedModIds.has(sm.id),
+            });
+        }
+    }
+
+    return {
+        users,
+        structures: structRes.structures || [],
+        networkNodes: netRes.nodes || [],
+        inheritedBoss,
+        basePath,
+        modRootPath,
+        baseClasses,
+        systemModules,
+    };
+}
+
+/**
+ * Подключить эталонный модуль из `/MODULES/<id>` в `<$base>/MODULES`.
+ */
+export async function installBaseModule(storage, params = {}) {
+    await assertBoss(storage, params);
+    const post = (typeof params.post === 'string' ? JSON.parse(params.post) : params.post) || params;
+    const modId = String(post.moduleId || post.id || '').trim();
+    if (!modId || /[\\/.$#]/.test(modId))
+        throw new Error('Укажите корректный идентификатор модуля');
+    const selfPath = String(storage?.path || '/').replace(/\/+$/, '') || '/';
+    const baseMatch = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(selfPath);
+    if (!baseMatch)
+        throw new Error('Подключение модулей выполняется в контексте организации или проекта');
+    const baseItem = await globalThis.WORK.get_item(baseMatch[1]).catch(() => null);
+    if (!baseItem)
+        throw new Error('Не найден корневой объект организации');
+    let modDomain = await globalThis.WORK.get_item(`${baseMatch[1]}/MODULES`).catch(() => null);
+    if (!modDomain && typeof baseItem.create === 'function') {
+        await baseItem.create({ ...params, id: 'MODULES', type: '$domain', label: 'Модули' });
+        modDomain = await globalThis.WORK.get_item(`${baseMatch[1]}/MODULES`).catch(() => null);
+    }
+    if (!modDomain)
+        throw new Error('Не найден домен MODULES');
+    const exists = await globalThis.WORK.get_item(`${baseMatch[1]}/MODULES/${modId}`).catch(() => null);
+    if (exists)
+        return { ok: true, alreadyInstalled: true, path: exists.path };
+    await modDomain.create({ ...params, id: modId, type: '$module' });
+    await recordBossSettingTask(storage, params, {
+        title: `Подключён модуль «${modId}»`,
+        summary: `В ${baseMatch[1]} подключён модуль /MODULES/${modId}.`,
+    });
+    return { ok: true, path: `${baseMatch[1]}/MODULES/${modId}` };
+}
+
+/**
+ * Создать новый класс или подкласс внутри `<$base>/MODULES`.
+ */
+export async function createBaseClass(storage, params = {}) {
+    await assertBoss(storage, params);
+    const post = (typeof params.post === 'string' ? JSON.parse(params.post) : params.post) || params;
+    const parentPath = String(post.parentPath || '').trim();
+    const id = String(post.id || post.label || '').trim();
+    const label = String(post.label || id).trim();
+    const type = String(post.type || '$catalog').trim();
+    if (!id)
+        throw new Error('Укажите название класса');
+    const selfPath = String(storage?.path || '/').replace(/\/+$/, '') || '/';
+    const baseMatch = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(selfPath);
+    if (!baseMatch)
+        throw new Error('Создание класса выполняется в контексте организации или проекта');
+    const modPrefix = `${baseMatch[1]}/MODULES`;
+    const targetParentPath = parentPath && parentPath.startsWith(modPrefix) ? parentPath : modPrefix;
+    const parentItem = await globalThis.WORK.get_item(targetParentPath).catch(() => null);
+    if (!parentItem || typeof parentItem.create !== 'function')
+        throw new Error('Не найден родительский контейнер: ' + targetParentPath);
+    await parentItem.create({ ...params, id, label, type });
+    await recordBossSettingTask(storage, params, {
+        title: `Создан класс «${label}» (${type})`,
+        summary: `В ${targetParentPath} создан класс «${label}» типа ${type}.`,
+    });
+    return { ok: true, path: `${targetParentPath}/${id}` };
+}
+
+/**
  * Последние выполненные задачи `.task` подразделения (для повторения по расписанию).
  */
 export async function listNodeTasks(storage, params = {}) {

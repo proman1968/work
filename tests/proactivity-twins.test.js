@@ -413,10 +413,16 @@ describe('Проактивность Агентов $structure, when-преди�
 
         // 4. Все новые методы вкладок Системы зарегистрированы в gateway.js (MEMBERS)
         const { MEMBERS, resolveMember } = await import('../sources/server/access/gateway.js');
-        for (const m of ['agent_system_get', 'agent_system_save', 'agent_available_classes', 'agent_structures_list', 'agent_network_nodes', 'agent_tasks_list', 'security_update']) {
+        for (const m of ['agent_system_get', 'agent_system_save', 'agent_available_classes', 'agent_structures_list', 'agent_network_nodes', 'agent_staff_context', 'agent_base_module_install', 'agent_base_class_create', 'agent_tasks_list', 'security_update']) {
             assert.ok(MEMBERS[m], `метод ${m} зарегистрирован в gateway.js MEMBERS`);
             assert.ok(resolveMember(sales, m), `метод ${m} разрешается на $structure`);
         }
+
+        // 4.1 Единый контекст agent_staff_context: унаследованный BOSS сверху и дерево классов $base
+        const staffCtx = await sales.agent_staff_context(as(BOSS_UID));
+        assert.ok(staffCtx.inheritedBoss || staffCtx.users.some(u => u.id === BOSS_UID));
+        assert.ok(Array.isArray(staffCtx.baseClasses) && staffCtx.baseClasses.some(m => m.id === 'Reg'), 'в контексте роли есть модули вышестоящего $base');
+        assert.equal(staffCtx.basePath, '/ORGANIZATIONS/OrgOne');
 
         // 5. Узлы сети (/NODES) как активные участники ролей: agent_network_nodes и доступ node_principal
         fs.mkdirSync(path.join(tmpDir, 'NODES/$node'), { recursive: true });

@@ -46,7 +46,7 @@ export const MEMBERS = Object.freeze({
     mail_draft_save: L.WRITE, mail_send: L.WRITE, mail_state: L.WRITE, mail_refresh: L.WRITE,
     calendar_list: L.READ, calendar_save: L.WRITE,
     agent_rules_list: L.READ, agent_rule_save: L.ADMIN, agent_schedule_save: L.ADMIN, agent_proactivity_save: L.ADMIN,
-    agent_system_get: L.READ, agent_system_save: L.ADMIN, agent_available_classes: L.READ, agent_structures_list: L.READ, agent_network_nodes: L.READ, agent_tasks_list: L.READ,
+    agent_system_get: L.READ, agent_system_save: L.ADMIN, agent_available_classes: L.READ, agent_structures_list: L.READ, agent_network_nodes: L.READ, agent_staff_context: L.READ, agent_base_module_install: L.ADMIN, agent_base_class_create: L.ADMIN, agent_tasks_list: L.READ,
     security_update: L.ADMIN,
     roles: L.READ, members: L.READ, is_data_type: L.READ, reset: L.READ,
     work_zone: L.READ, places: L.READ,

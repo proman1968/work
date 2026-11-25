@@ -1,4 +1,5 @@
 import staffProto from './tabs/staff.js';
+import modulesProto from './tabs/modules.js';
 import messengersProto from './tabs/messengers.js';
 import databaseProto from './tabs/database.js';
 import licenseProto from './tabs/license.js';
@@ -25,6 +26,7 @@ function regTab(tag, raw) {
 }
 
 regTab('system-tab-staff', staffProto);
+regTab('system-tab-modules', modulesProto);
 regTab('system-tab-messengers', messengersProto);
 regTab('system-tab-database', databaseProto);
 regTab('system-tab-license', licenseProto);
@@ -147,6 +149,7 @@ export default {
 
             <user-profile ~if="currentTabId === 'profile'" flex></user-profile>
             <system-tab-staff ~if="currentTabId === 'staff'" flex :$item="$item" :focused-trail="pendingPlace"></system-tab-staff>
+            <system-tab-modules ~if="currentTabId === 'modules'" flex :$item="$item"></system-tab-modules>
             <item-tree ~if="currentTabId === 'files'" flex :$item="storageFolder" show-size hide-system items-selector="entries" hide-tops="1" hide-roots="1"></item-tree>
             <system-tab-messengers ~if="currentTabId === 'messengers'" flex :$item="$item"></system-tab-messengers>
             <system-tab-database ~if="currentTabId === 'database'" flex :$item="$item"></system-tab-database>
@@ -200,6 +203,8 @@ export default {
         if (t === '$user')
             tabs.push({ id: 'profile', label: 'Профиль и токены', icon: 'icons:account-circle' });
         tabs.push({ id: 'staff', label: 'Пользователи', icon: 'icons:supervisor-account' });
+        if (t === '$base' || t === '$project')
+            tabs.push({ id: 'modules', label: 'Классы и модули', icon: 'odant:module' });
         tabs.push({ id: 'files', label: 'Файлы', icon: 'fontawesome:r-folder-open' });
         return tabs;
     },

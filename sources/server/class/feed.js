@@ -254,6 +254,24 @@ export const classFeedMethods = {
         return listNodeNetworkNodes(this, params);
     },
 
+    /** Единый контекст для вкладки «Пользователи» и «Классы и модули» (только BOSS). */
+    async agent_staff_context(params = {}) {
+        const { getNodeStaffContext } = await import('../../modules/agent/node-rules.js');
+        return getNodeStaffContext(this, params);
+    },
+
+    /** Подключить эталонный модуль из /MODULES в организацию/проект (только BOSS). */
+    async agent_base_module_install(params = {}) {
+        const { installBaseModule } = await import('../../modules/agent/node-rules.js');
+        return installBaseModule(this, params);
+    },
+
+    /** Создать новый класс внутри модулей организации/проекта (только BOSS). */
+    async agent_base_class_create(params = {}) {
+        const { createBaseClass } = await import('../../modules/agent/node-rules.js');
+        return createBaseClass(this, params);
+    },
+
     /** Список последних выполненных задач (.task) узла для повторения по расписанию (только BOSS). */
     async agent_tasks_list(params = {}) {
         const { listNodeTasks } = await import('../../modules/agent/node-rules.js');

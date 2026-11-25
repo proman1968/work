@@ -141,61 +141,132 @@ await test('Система: левое боковое меню .sys-sidebar бе
     assert(!deniedEl.$('.sys-sidebar'), 'меню Системы скрыто от не-BOSS');
     deniedEl.remove();
 
-    // 2. Для BOSS меню Системы открыто
+    // 2. Для BOSS меню Системы открыто (у $base есть и Классы и модули)
     const el = document.createElement('test-sys-view');
     el.style.cssText = 'display:flex;width:900px;height:550px;';
     document.body.appendChild(el);
     el.$item = {
-        id: 'logistics', path: '/ORG/logistics', type: '$structure',
+        id: 'OrgDemo', path: '/ORGANIZATIONS/OrgDemo', type: '$base',
         isBoss: Promise.resolve(true),
         METADATA: Promise.resolve({ STATIC: [], FIELDS: [] }),
-        async fetch() { return {}; },
+        get body() {
+            return Promise.resolve({
+                '#security': {
+                    BOSS: [],
+                    ROLES: [{
+                        id: 'head',
+                        label: 'Главный бухгалтер',
+                        readonly: true,
+                        USERS: ['U_REAL', 'AABBCCDDEEFF001', 'U_GHOST'],
+                        LINKS: [{ id: '/ORGANIZATIONS/OrgDemo/MODULES/Register/OPERATIONS/Зарплата', access: 'read' }],
+                        ROLES: [{
+                            id: 'acc',
+                            label: 'Бухгалтер',
+                            USERS: [],
+                            LINKS: [],
+                        }],
+                    }],
+                },
+            });
+        },
+        async fetch(method) {
+            if (method === 'agent_staff_context') {
+                return {
+                    users: [
+                        { id: 'U_REAL', label: 'Харитонов Юрий', icon: '', iconColor: '' },
+                        { id: 'U_TOP', label: 'Главный Босс', icon: '', iconColor: '' },
+                    ],
+                    structures: [],
+                    networkNodes: [
+                        { id: 'partner-1', path: '/NODES/partner-1', principalId: 'AABBCCDDEEFF001', label: 'Сервер Партнёра', icon: 'icons:dns' },
+                    ],
+                    inheritedBoss: { fromPath: '/', fromLabel: 'WORK', users: [{ id: 'U_TOP', label: 'Главный Босс', icon: 'icons:person', iconColor: '' }] },
+                    baseClasses: [{
+                        id: 'Register',
+                        path: '/ORGANIZATIONS/OrgDemo/MODULES/Register',
+                        label: 'Бухучёт',
+                        icon: 'odant:module',
+                        children: [{
+                            id: 'OPERATIONS',
+                            path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/OPERATIONS',
+                            label: 'Операции',
+                            icon: 'carbon:task-complete',
+                            children: [{
+                                id: 'Зарплата',
+                                path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/OPERATIONS/Зарплата',
+                                label: 'Зарплата',
+                                icon: 'odant:class',
+                                children: [],
+                            }],
+                        }, {
+                            id: 'CATALOGS',
+                            path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/CATALOGS',
+                            label: 'Справочники',
+                            icon: 'carbon:catalog',
+                            children: [{
+                                id: 'Склады',
+                                path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/CATALOGS/Склады',
+                                label: 'Склады',
+                                icon: 'odant:class',
+                                children: [],
+                            }],
+                        }],
+                    }],
+                    systemModules: [],
+                };
+            }
+            return {};
+        },
     };
     const nav = await waitFor(() => el.$('.sys-sidebar'), 'левое боковое меню Системы');
     const labels = [...nav.querySelectorAll('.sys-tab')].map(b => b.textContent.trim());
-    assert(labels.includes('Пользователи') && labels.includes('Мессенджеры') && labels.includes('Агент и правила'), 'основные разделы в левом меню');
+    assert(labels.includes('Пользователи') && labels.includes('Классы и модули') && labels.includes('Мессенджеры') && labels.includes('Агент и правила'), 'разделы Системы у $base включают Классы и модули');
     assert(!labels.includes('Поиск'), 'Поиск вынесен из Системы');
 
-    // 3. Проверка вкладки Пользователи: единое дерево ролей (BOSS -> роли -> классы с чекбоксом Изменение)
+    // 3. Проверка вкладки Пользователи: BOSS сверху, дерево классов $base, Настройка и Только просмотр
     const staffEl = await waitFor(() => el.$('system-tab-staff'), 'смонтирована вкладка Пользователи');
     assert(staffEl.$item?.set !== undefined || typeof (await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js')).default.$item?.set === 'function', '$item имеет сеттер reload');
-    staffEl.canEdit = true;
-    staffEl.userMap = { U_REAL: 'Харитонов Юрий' };
-    staffEl.networkNodeMap = {
-        AABBCCDDEEFF001: { id: 'partner-1', path: '/NODES/partner-1', principalId: 'AABBCCDDEEFF001', label: 'Сервер Партнёра', icon: 'icons:dns' },
-    };
-    staffEl.security = {
-        BOSS: ['U_GHOST'], // несуществующий UID скрывается
-        ROLES: [{
-            id: 'head',
-            label: 'Главный бухгалтер',
-            USERS: ['U_REAL', 'AABBCCDDEEFF001', 'U_GHOST'],
-            LINKS: [{ id: '/ORG/MODULES/Reg/OPERATIONS/Зарплата', access: 'write' }],
-            ROLES: [{
-                id: 'acc',
-                label: 'Бухгалтер',
-                USERS: [],
-                LINKS: [{ id: '/ORG/MODULES/Reg/CATALOGS/Договоры', access: 'read' }],
-            }],
-        }],
-    };
-    const roleRows = await waitFor(() => {
-        const rows = staffEl.$$('.tree-row.role-row');
-        return rows?.length === 2 ? rows : null;
-    }, 'единое дерево ролей (Главный бухгалтер и дочерний Бухгалтер)');
-    assert(roleRows[0].textContent.includes('Харитонов Юрий'), 'отображён реальный пользователь в строке роли');
-    assert(roleRows[0].textContent.includes('Сервер Партнёра'), 'отображён сервер сети в строке роли');
-    const staffText = (staffEl.shadowRoot || staffEl).textContent;
-    assert(!staffText.includes('U_GHOST'), 'несуществующие UID не отображаются абракадаброй');
-    assert(!staffText.includes('Пригласить'), 'нет лишней кнопки Пригласить');
-    assert(!staffText.includes('Все записи'), 'нет непонятных селектов области записей');
-    const classRows = staffEl.$$('.tree-row.class-row');
-    assert(classRows.length === 2, 'видны привязанные классы внутри раскрытых ролей');
-    assert(classRows[0].querySelector('input[type="checkbox"]').checked === true, 'чекбокс Изменение отмечен для write');
-    assert(classRows[1].querySelector('input[type="checkbox"]').checked === false, 'чекбокс Изменение снят для read');
+    const rootRoleNode = await waitFor(() => staffEl.$('staff-role-node'), () => `единое дерево ролей (nodes=${staffEl.$$('staff-role-node')?.length}, err=${staffEl.error}, secRoles=${staffEl.security?.ROLES?.length})`);
+    await waitFor(() => {
+        const t = staffEl.$('.tree-box')?.textContent || '';
+        return t.includes('Главный Босс') ? t : null;
+    }, () => `отображается унаследованный BOSS сверху (text=${staffEl.$('.tree-box')?.textContent?.slice(0, 200)})`);
+    const childRoleNode = await waitFor(() => rootRoleNode.$('staff-role-node'), 'дочерняя роль Бухгалтер внутри Главного бухгалтера');
+    assert(childRoleNode, 'дочерняя роль отрисована рекурсивным компонентом');
+    const roleHeaderText = rootRoleNode.$('.role-row')?.textContent || '';
+    assert(roleHeaderText.includes('Харитонов Юрий'), 'отображён реальный пользователь в строке роли');
+    assert(roleHeaderText.includes('Сервер Партнёра'), 'отображён сервер сети в строке роли');
+    assert(!(staffEl.$('.tree-box')?.textContent || '').includes('U_GHOST'), 'несуществующие UID не отображаются абракадаброй');
+    assert(!roleHeaderText.includes('U_GHOST'), 'несуществующие UID не отображаются в строке роли');
+    assert(!roleHeaderText.includes('Пригласить'), 'нет лишней кнопки Пригласить');
+
+    // Обычный режим: видна полная иерархия промежуточных классов (Бухучёт -> Операции -> Зарплата), без Справочники/Склады
+    const filteredClasses = rootRoleNode.$$('.tree-row.class-row');
+    assert(filteredClasses.length === 3, 'в обычном режиме сохранена иерархия Бухучёт -> Операции -> Зарплата (получено ' + filteredClasses.length + ': ' + JSON.stringify(filteredClasses.map(r => r.textContent.trim())) + ')');
+    assert(!filteredClasses.some(r => r.textContent.includes('Склады')), 'неотмеченный класс Склады скрыт до включения Настройки');
+
+    // Включаем режим "Настройка" у роли Главный бухгалтер реальным кликом по кнопке — появляются все ветки (Справочники с ▸)
+    const setupBtn = [...rootRoleNode.$$('button.icon-btn')].find(b => b.textContent.includes('Настройка'));
+    setupBtn.click();
+    await waitFor(() => rootRoleNode.$$('.tree-row.class-row')?.length === 4, () => 'в режиме Настройка видны все 4 узла (setupMode=' + rootRoleNode.setupMode + ', classRows=' + rootRoleNode.classRows?.length + ', rows=' + rootRoleNode.$$('.tree-row.class-row')?.length + ')');
+    // Раскрываем ветку Справочники кликом по стрелке — виден лист Склады (всего 5 строк)
+    const catalogRow = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Справочники'));
+    catalogRow.querySelector('.expander').click();
+    await waitFor(() => rootRoleNode.$$('.tree-row.class-row')?.length === 5, 'после раскрытия ветки видны все 5 классов/веток');
+    const checks = [...rootRoleNode.$$('.tree-row.class-row input[type="checkbox"]')].filter(c => getComputedStyle(c).display !== 'none');
+    assert(checks.length === 5, 'у каждого узла дерева классов один видимый чекбокс (получено ' + checks.length + ')');
+    assert(checks.some(c => c.checked) && checks.some(c => !c.checked), 'отмечен только привязанный класс');
+
+    // Проверяем вкладку "Классы и модули"
+    const modTabBtn = [...nav.querySelectorAll('.sys-tab')].find(b => b.textContent.includes('Классы и модули'));
+    modTabBtn.dispatchEvent(new MouseEvent('tap', { bubbles: true, composed: true }));
+    if (el.currentTabId !== 'modules') el.selectTab('modules');
+    await waitFor(() => el.$('system-tab-modules'), 'смонтирована вкладка Классы и модули');
+
     const staffSrc = await fetch('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js').then(r => r.text());
     assert(!staffSrc.includes('<oda-messenger-settings'), 'нет дублирующих настроек мессенджеров на вкладке Пользователи');
-    assert(staffSrc.includes('onBossDrop') && staffSrc.includes('onRoleDrop'), 'поддержан drag&drop людей, подразделений и классов');
+    assert(staffSrc.includes('WORK.showDropdown') && staffSrc.includes('window.prompt'), 'используются штатный showDropdown и нативный prompt');
+    assert(staffSrc.includes('onBossDrop') && staffSrc.includes('onRoleDrop'), 'поддержан drag&drop людей, подразделений, серверов и классов');
 
     // 4. Проверка вкладки Агент и правила: инструкция, скрытая форма реакций и ODANT-маска времени
     const agentTabBtn = [...nav.querySelectorAll('.sys-tab')].find(b => b.textContent.includes('Агент и правила'));

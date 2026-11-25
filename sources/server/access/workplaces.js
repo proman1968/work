@@ -130,6 +130,7 @@ export function normalizePlaces(raw, seen = new Set(), depth = 0) {
             label: typeof r.label === 'string' && r.label ? r.label : id,
             icon: typeof r.icon === 'string' ? r.icon : '',
             ...(r.external ? { external: true } : {}),
+            ...(r.readonly ? { readonly: true } : {}),
             USERS: Array.isArray(r.USERS) ? r.USERS.filter(u => typeof u === 'string') : [],
             LINKS: links,
             ROLES: normalizePlaces(r.ROLES, seen, depth + 1),
