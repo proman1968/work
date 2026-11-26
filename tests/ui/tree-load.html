@@ -493,6 +493,91 @@ await test('Проводник: порядок вкладок [контекст,
     ci.log = { ext: 'task', path: '/ORG/1.u1.task' };
     eq(ci.cardLayoutStyle.marginLeft, 'auto', 'карточка таска — по центру (marginLeft=auto)');
     eq(ci.cardLayoutStyle.marginRight, 'auto', 'карточка таска — по центру (marginRight=auto)');
+
+    // 12. Плашка версии на корневой ноде WORK ($server): обычная -> проверка -> зелёная с обновлением -> подтверждение
+    const waitVerFor = async (fn, label, ms = 2500) => {
+        const end = Date.now() + ms;
+        while (Date.now() < end) {
+            const v = fn();
+            if (v) return v;
+            await new Promise(r => setTimeout(r, 25));
+        }
+        throw new Error('не дождались: ' + label);
+    };
+    await import('/$server/$folder/lib/node/node.js');
+    await ODA.waitReg('item-node');
+    const prevConfirm = WORK.showConfirm;
+    let confirmCalls = 0;
+    let updateRestartCalls = 0;
+    let checkCalls = 0;
+    let currentServerState = {
+        runningVersion: '1.0.79',
+        diskVersion: '1.0.79',
+        latestVersion: '1.0.79',
+        updateAvailable: false,
+        canUpdate: true,
+    };
+    const rootMockItem = {
+        id: 'WORK',
+        path: '/',
+        short: '/',
+        type: '$server',
+        label: 'WORK',
+        async fetch(method, params) {
+            if (method === 'version_status') {
+                if (params?.check) {
+                    checkCalls++;
+                    currentServerState = {
+                        runningVersion: '1.0.79',
+                        diskVersion: '1.0.79',
+                        latestVersion: '1.0.80',
+                        updateAvailable: true,
+                        canUpdate: true,
+                    };
+                }
+                return currentServerState;
+            }
+            if (method === 'version_update_restart') {
+                updateRestartCalls++;
+                return { restarted: false, updated: true, status: currentServerState };
+            }
+            return {};
+        },
+    };
+    const vNode = document.createElement('item-node');
+    vNode.style.cssText = 'display:flex;width:280px;';
+    document.body.appendChild(vNode);
+    vNode.$item = rootMockItem;
+    const verEl = await waitVerFor(() => vNode.$('.work-ver'), 'плашка версии на корневой ноде WORK');
+    eq(verEl.textContent.trim(), 'v1.0.79', 'показана текущая версия WORK');
+    eq(verEl.classList.contains('has-update'), false, 'без новой версии плашка обычного цвета');
+    eq(verEl.classList.contains('clickable'), true, 'для BOSS плашка кликабельна');
+
+    // На is-explorer (хлебных крошках) плашка не рисуется
+    const crumbNode = document.createElement('item-node');
+    crumbNode.setAttribute('is-explorer', '');
+    crumbNode.$item = rootMockItem;
+    document.body.appendChild(crumbNode);
+    await new Promise(r => setTimeout(r, 80));
+    eq(Boolean(crumbNode.$('.work-ver')), false, 'в хлебных крошках плашка версии скрыта');
+    crumbNode.remove();
+
+    try {
+        WORK.showConfirm = async () => {
+            confirmCalls++;
+            return true;
+        };
+        verEl.click();
+        await waitVerFor(() => verEl.classList.contains('has-update') && updateRestartCalls === 1, 'после проверки и появления 1.0.80 плашка сменила цвет и вызвала обновление');
+        eq(checkCalls, 1, 'клик по актуальной плашке вызвал мгновенную проверку');
+        eq(verEl.textContent.trim(), 'v1.0.79 ↑ 1.0.80', 'в тексте плашки видна текущая и новая версия');
+        eq(confirmCalls, 1, 'после обнаружения новой версии показано подтверждение');
+        eq(updateRestartCalls, 1, 'после подтверждения вызвано обновление и перезапуск сервера');
+    }
+    finally {
+        WORK.showConfirm = prevConfirm;
+        vNode.remove();
+    }
 });
 
 window.__done = true;

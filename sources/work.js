@@ -119,12 +119,17 @@ if (process.env.WORK_SWEEP !== '0') {
     }, 2 * 60_000).unref?.();
 }
 
-// Автообновление из npm (с сохранением пользовательских баз, классов, файлов и настроек)
+// Автообновление из npm (проверка каждые 10 мин; применение и перезапуск — по клику на ноде WORK)
 // и периодическая синхронизация лицензий по привязанному токену владельца (#system/owner-token.json)
+import('./host/auto-updater.js')
+    .then(m => {
+        m.getRunningVersion('.');
+        if (process.env.WORK_AUTO_UPDATE !== '0' && !process.env.WORK_TEST)
+            m.startAutoUpdateDaemon();
+    })
+    .catch(e => console.warn('[auto-updater]', e?.message || e));
+
 if (process.env.WORK_AUTO_UPDATE !== '0' && !process.env.WORK_TEST) {
-    import('./host/auto-updater.js')
-        .then(m => m.startAutoUpdateDaemon())
-        .catch(e => console.warn('[auto-updater]', e?.message || e));
 
     // Первичная и адаптивная автосинхронизация лицензий (Q10):
     // через 5 с после старта; каждые 30 с пока базовая лицензия ожидает активации, затем каждые 15 мин.

@@ -21,10 +21,11 @@ import { spawn } from 'node:child_process';
 
 export const PACKAGE_NAME = 'odant-work';
 export const DEFAULT_NPM_REGISTRY = process.env.WORK_NPM_REGISTRY || 'https://registry.npmjs.org';
-export const DEFAULT_CHECK_INTERVAL_MS = 6 * 3600_000; // каждые 6 часов
+export const DEFAULT_CHECK_INTERVAL_MS = 10 * 60_000; // каждые 10 минут
 
 const MANIFEST_REL_PATH = '#system/package-manifest.json';
 const STATE_REL_PATH = '#system/auto-update.json';
+const RUNNING_VERSIONS = new Map();
 
 /**
  * Сравнить две semver-версии (например, "1.0.4" и "1.0.3").
@@ -279,7 +280,7 @@ export function loadAutoUpdateState(rootDir = '.') {
         enabled: true,
         packageName: PACKAGE_NAME,
         registryUrl: DEFAULT_NPM_REGISTRY,
-        checkIntervalHours: 6,
+        checkIntervalMinutes: 10,
         lastCheckAt: null,
         lastUpdateAt: null,
         lastVersionFrom: null,
@@ -315,6 +316,48 @@ export function saveAutoUpdateState(patch = {}, rootDir = '.') {
 }
 
 /**
+ * Запомнить (при первом обращении) и вернуть версию пакета, с которой стартовал текущий процесс.
+ */
+export function getRunningVersion(rootDir = '.') {
+    const absRoot = path.resolve(rootDir);
+    if (!RUNNING_VERSIONS.has(absRoot))
+        RUNNING_VERSIONS.set(absRoot, readLocalPackageVersion(absRoot));
+    return RUNNING_VERSIONS.get(absRoot);
+}
+
+/**
+ * Текущий статус версий (без сетевого запроса):
+ * запущенная в памяти, версия на диске и последняя известная из npm.
+ */
+export function getVersionStatus({ rootDir = '.' } = {}) {
+    const absRoot = path.resolve(rootDir);
+    const runningVersion = getRunningVersion(absRoot);
+    const diskVersion = readLocalPackageVersion(absRoot);
+    const state = loadAutoUpdateState(absRoot);
+    const npmVersion = state.latestAvailableVersion ? String(state.latestAvailableVersion) : '';
+
+    let latestVersion = runningVersion;
+    if (compareSemver(diskVersion, latestVersion) > 0)
+        latestVersion = diskVersion;
+    if (npmVersion && compareSemver(npmVersion, latestVersion) > 0)
+        latestVersion = npmVersion;
+
+    const updateAvailable = compareSemver(latestVersion, runningVersion) > 0;
+    const needsDownload = Boolean(npmVersion && compareSemver(npmVersion, diskVersion) > 0);
+    return {
+        packageName: state.packageName || PACKAGE_NAME,
+        runningVersion,
+        diskVersion,
+        latestVersion,
+        npmVersion: npmVersion || null,
+        updateAvailable,
+        needsDownload,
+        checkedAt: state.lastCheckAt || null,
+        lastError: state.lastError || null,
+    };
+}
+
+/**
  * Проверить наличие более свежей версии пакета odant-work в npm registry.
  */
 export async function checkForNpmUpdates({
@@ -323,40 +366,50 @@ export async function checkForNpmUpdates({
     packageName,
     fetchImpl = globalThis.fetch,
 } = {}) {
-    const state = loadAutoUpdateState(rootDir);
+    const absRoot = path.resolve(rootDir);
+    const runningVersion = getRunningVersion(absRoot);
+    const state = loadAutoUpdateState(absRoot);
     const pkgName = packageName || state.packageName || PACKAGE_NAME;
     const regUrl = String(registryUrl || state.registryUrl || DEFAULT_NPM_REGISTRY).replace(/\/+$/, '');
-    const currentVersion = readLocalPackageVersion(rootDir);
+    const currentVersion = readLocalPackageVersion(absRoot);
     const now = Date.now();
 
     const metaUrl = `${regUrl}/${encodeURIComponent(pkgName)}/latest`;
     const res = await fetchImpl(metaUrl, {
-        headers: { 'Accept': 'application/json' },
+        headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache' },
     });
     if (!res.ok) {
         const errText = await res.text().catch(() => '');
         const errMsg = `npm registry (${metaUrl}) ответил HTTP ${res.status}: ${errText.slice(0, 160)}`;
-        saveAutoUpdateState({ lastCheckAt: now, lastError: errMsg }, rootDir);
+        saveAutoUpdateState({ lastCheckAt: now, lastError: errMsg }, absRoot);
         throw new Error(errMsg);
     }
 
     const meta = await res.json();
-    const latestVersion = String(meta.version || currentVersion);
-    const updateAvailable = compareSemver(latestVersion, currentVersion) > 0;
+    const npmVersion = String(meta.version || currentVersion);
+    let latestVersion = npmVersion;
+    if (compareSemver(currentVersion, latestVersion) > 0)
+        latestVersion = currentVersion;
+    const diskNeedsUpdate = compareSemver(npmVersion, currentVersion) > 0;
+    const updateAvailable = compareSemver(latestVersion, runningVersion) > 0 || diskNeedsUpdate;
     const tarballUrl = String(meta.dist?.tarball || '');
     const shasum = String(meta.dist?.shasum || '');
 
     const updatedState = saveAutoUpdateState({
         lastCheckAt: now,
-        latestAvailableVersion: latestVersion,
+        latestAvailableVersion: npmVersion,
         updateAvailable,
         lastError: null,
-    }, rootDir);
+    }, absRoot);
 
     return {
         packageName: pkgName,
+        runningVersion,
         currentVersion,
+        diskVersion: currentVersion,
         latestVersion,
+        npmVersion,
+        diskNeedsUpdate,
         updateAvailable,
         tarballUrl,
         shasum,
@@ -751,7 +804,14 @@ export async function checkAndApplyNpmUpdate({
     installDeps = false,
 } = {}) {
     const check = await checkForNpmUpdates({ rootDir, registryUrl, packageName, fetchImpl });
-    if (!check.updateAvailable) {
+    if (!check.diskNeedsUpdate) {
+        if (compareSemver(check.latestVersion, check.runningVersion) > 0) {
+            return {
+                updated: true,
+                alreadyOnDisk: true,
+                ...check,
+            };
+        }
         return {
             updated: false,
             ...check,
@@ -810,14 +870,16 @@ export async function checkAndApplyNpmUpdate({
 let updateTimer = null;
 
 /**
- * Запустить фоновую периодическую проверку и автообновление из npm.
+ * Запустить фоновую периодическую проверку обновлений из npm (по умолчанию каждые 10 мин, только проверка).
  */
 export function startAutoUpdateDaemon({
     rootDir = '.',
     intervalMs,
     runOnStart = true,
+    autoApply = process.env.WORK_AUTO_APPLY === '1',
     fetchImpl = globalThis.fetch,
 } = {}) {
+    getRunningVersion(rootDir);
     ensurePackageManifest(rootDir);
     const state = loadAutoUpdateState(rootDir);
     if (updateTimer) {
@@ -828,7 +890,10 @@ export function startAutoUpdateDaemon({
         try {
             const cur = loadAutoUpdateState(rootDir);
             if (!cur.enabled) return;
-            await checkAndApplyNpmUpdate({ rootDir, fetchImpl, installDeps: true });
+            if (autoApply)
+                await checkAndApplyNpmUpdate({ rootDir, fetchImpl, installDeps: true });
+            else
+                await checkForNpmUpdates({ rootDir, fetchImpl });
         }
         catch (err) {
             console.warn('[auto-updater]', err?.message || err);
@@ -838,7 +903,7 @@ export function startAutoUpdateDaemon({
         const bootTimer = setTimeout(runCheck, 5_000);
         bootTimer.unref?.();
     }
-    const period = Number(intervalMs || (state.checkIntervalHours || 6) * 3600_000 || DEFAULT_CHECK_INTERVAL_MS);
+    const period = Number(intervalMs || (state.checkIntervalMinutes ? state.checkIntervalMinutes * 60_000 : DEFAULT_CHECK_INTERVAL_MS));
     updateTimer = setInterval(runCheck, period);
     updateTimer.unref?.();
     return updateTimer;

@@ -85,10 +85,10 @@ export const MEMBERS = Object.freeze({
     ...Object.fromEntries(Object.entries(KLADR_METHODS).map(([name, m]) => [name, m.level])),
     remove_push_subscription: L.WRITE, send_push_notification: L.WRITE,
     // администрирование
-    delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, read_secret: L.ADMIN,
+    delete: L.ADMIN, npm: L.ADMIN, restart_normal: L.ADMIN, restart_server: L.ADMIN, read_secret: L.ADMIN,
     save_secret: L.ADMIN, clear_rag: L.ADMIN, security_log: L.ADMIN, agent_panel: L.ADMIN,
     set_enabled: L.ADMIN, export_archive: L.READ, import_archive: L.ADMIN, delete_log_entry: L.WRITE,
-    distro_info: L.READ, export_distro: L.READ,
+    distro_info: L.READ, export_distro: L.READ, version_status: L.READ, version_update_restart: L.ADMIN,
 });
 
 /** Никогда не вызываются снаружи, даже если объявлены в class.js. */

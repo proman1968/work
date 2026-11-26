@@ -277,6 +277,9 @@ export class $folder extends $item {
                 || method.startsWith('agent_')
                 || method === 'security_update'
                 || method === 'export_distro'
+                || method === 'version_status'
+                || method === 'version_update_restart'
+                || method === 'restart_server'
             ))
             || (method === 'logs' && params.mode && params.mode !== 'folder' && params.mode !== 'files');
         return WORK.fetch?.(this.short || '/', method, params, post_data).then(res => {

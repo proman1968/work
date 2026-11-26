@@ -1,6 +1,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import * as mime from "mime-types";
 import * as fsp from "node:fs/promises";
@@ -721,21 +722,84 @@ export class $server extends $class {
     }
 
     /**
-     * Отложенный штатный перезапуск процесса WORK (например после правки ядра sources/).
-     * Работает как в DEV_MODE, так и в обычном режиме; доступен только BOSS корневого WORK.
+     * Получить статус версии WORK (запущенная, на диске, последняя в npm).
+     * Если передан check=1 и пользователь — BOSS корня, выполняет мгновенную проверку npm.
      */
-    async restart_server(params = {}) {
+    async version_status(params = {}) {
+        const rootDir = this.dir || process.cwd();
+        const uid = $class.resolveUid(params);
+        const roles = uid ? await this.roles(params).catch(() => []) : [];
+        const canUpdate = Boolean(DEV_MODE || roles.includes('BOSS'));
+        const { checkForNpmUpdates, getVersionStatus } = await import('../host/auto-updater.js');
+        let checkError = null;
+        if (params.check && params.check !== '0' && params.check !== 'false' && canUpdate) {
+            try {
+                await checkForNpmUpdates({ rootDir });
+            }
+            catch (err) {
+                checkError = String(err?.message || err);
+            }
+        }
+        const status = getVersionStatus({ rootDir });
+        return {
+            ...status,
+            canUpdate,
+            ...(checkError ? { checkError } : {}),
+        };
+    }
+
+    /**
+     * При наличии новой версии скачать и применить её из npm (с сохранением данных и правок),
+     * затем перезапустить сервер уже в новой версии. Доступно только BOSS корневого WORK.
+     */
+    async version_update_restart(params = {}) {
         const uid = $class.resolveUid(params);
         if (!uid)
             throw new Error('Доступ запрещён');
         const roles = await this.roles(params).catch(() => []);
         if (!roles.includes('BOSS'))
             throw new Error('Доступ запрещён');
+
+        const rootDir = path.resolve(this.dir || process.cwd());
+        const { checkAndApplyNpmUpdate, getVersionStatus } = await import('../host/auto-updater.js');
+        const before = getVersionStatus({ rootDir });
+        let applyResult = null;
+        if (before.needsDownload || !before.updateAvailable) {
+            applyResult = await checkAndApplyNpmUpdate({ rootDir, installDeps: true });
+        }
+        const after = getVersionStatus({ rootDir });
+        if (!after.updateAvailable && !applyResult?.updated) {
+            return {
+                restarted: false,
+                updated: false,
+                status: after,
+            };
+        }
+
+        const localRunMjs = path.join(rootDir, 'run.mjs');
+        const extraArgs = process.argv.slice(2);
+        const entryArgs = fs.existsSync(localRunMjs)
+            ? [localRunMjs, ...extraArgs]
+            : (process.argv.slice(1).length ? process.argv.slice(1) : ['run.mjs']);
+        const delayMs = await this._scheduleProcessRestart({ cwd: rootDir, entryArgs, delayMs: params.delayMs });
+        return {
+            restarted: true,
+            updated: true,
+            fromVersion: before.runningVersion,
+            toVersion: after.latestVersion,
+            delayMs,
+            status: after,
+        };
+    }
+
+    async _scheduleProcessRestart({ cwd = process.cwd(), entryArgs, delayMs: rawDelay } = {}) {
         const { spawn } = await import('node:child_process');
         const env = { ...process.env };
         delete env.NODE_OPTIONS;
-        const entryArgs = process.argv.slice(1).length ? process.argv.slice(1) : ['run.mjs'];
-        const delayMs = Math.max(1500, Math.min(10000, Number(params.delayMs) || 2500));
+        const args = Array.isArray(entryArgs) && entryArgs.length
+            ? entryArgs
+            : (process.argv.slice(1).length ? process.argv.slice(1) : ['run.mjs']);
+        const delayMs = Math.max(1500, Math.min(10000, Number(rawDelay) || 2500));
         const helper = `
             const fs = await import('node:fs');
             const path = await import('node:path');
@@ -756,10 +820,25 @@ export class $server extends $class {
             child.unref();
         `;
         spawn(process.execPath, ['--input-type=module', '-e', helper,
-            String(process.pid), process.cwd(), JSON.stringify(env), JSON.stringify(entryArgs)], {
+            String(process.pid), cwd, JSON.stringify(env), JSON.stringify(args)], {
             detached: true, stdio: 'ignore', env,
         }).unref();
         setTimeout(() => process.exit(0), delayMs).unref?.();
+        return delayMs;
+    }
+
+    /**
+     * Отложенный штатный перезапуск процесса WORK (например после правки ядра sources/).
+     * Работает как в DEV_MODE, так и в обычном режиме; доступен только BOSS корневого WORK.
+     */
+    async restart_server(params = {}) {
+        const uid = $class.resolveUid(params);
+        if (!uid)
+            throw new Error('Доступ запрещён');
+        const roles = await this.roles(params).catch(() => []);
+        if (!roles.includes('BOSS'))
+            throw new Error('Доступ запрещён');
+        const delayMs = await this._scheduleProcessRestart({ delayMs: params.delayMs });
         return { scheduled: true, delayMs };
     }
 }
