@@ -279,6 +279,77 @@ await test('Мобильная адаптация Почты, Системы и 
     }
 });
 
+await test('Мобильный режим (390x844): верхний бар work-form переносится через flex-wrap с gap:8px, закладки explorer скрыты, у Чата нет шестерёнки настроек', async () => {
+    await setViewport(390, 844);
+    await sleep(60);
+
+    // 1. Закладки explorer скрываются в мобильном режиме
+    const expMod = await import('/$server/$folder/lib/explorer/explorer.js');
+    const fakeDesktop = { mobile: false, bookmarks: [{ url: '/a' }], visibleMode: 'main' };
+    const fakeMobile = { mobile: true, bookmarks: [{ url: '/a' }], visibleMode: 'main' };
+    const hasBmDesc = Object.getOwnPropertyDescriptor(expMod.default, 'hasBookmarks');
+    assert(hasBmDesc.get.call(fakeDesktop) === true, 'на десктопе панель закладок видна');
+    assert(hasBmDesc.get.call(fakeMobile) === false, 'в мобильном режиме нижняя панель закладок спрятана');
+
+    // 2. У form/chat нет шестерёнки настроек мессенджеров
+    const chatMeta = (await import('/$server/$folder/$class/$structure/handlers/pages/form/chat/$handler/class.js')).default;
+    assert(typeof chatMeta.showSettings !== 'function' && !chatMeta.hasSettings, 'у form/chat убрана шестерёнка настроек мессенджеров');
+
+    // 3. Верхний бар work-form на 390px: flex-wrap: wrap, gap: 8px, кнопки не уходят за правый край
+    await import('/$server/$folder/handlers/pages/form/$handler/form.js');
+    await ODA.waitReg('work-form');
+    const wf = document.createElement('work-form');
+    wf.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;';
+    const views = [
+        { id: 'chat', type: '$handler', label: 'Чат', icon: 'icons:question-answer', DATA: { label: 'Чат' }, importView: async () => null },
+        { id: 'calendar', type: '$handler', label: 'Календарь', icon: 'enterprise:calendar', DATA: { label: 'Календарь' }, importView: async () => null },
+        { id: 'email', type: '$handler', label: 'Почта', icon: 'communication:email', DATA: { label: 'Почта' }, importView: async () => null },
+        { id: 'search', type: '$handler', label: 'Поиск', icon: 'icons:search', DATA: { label: 'Поиск' }, importView: async () => null },
+        { id: 'system', type: '$handler', label: 'Система', icon: 'icons:settings', DATA: { label: 'Система' }, importView: async () => null },
+    ];
+    wf.$item = {
+        id: 'Маслоторг',
+        path: '/ORGANIZATIONS/Маслоторг',
+        short: '/ORGANIZATIONS/Маслоторг',
+        type: '$base',
+        label: 'ООО «Маслоторг»',
+        icon: 'odant:base',
+        DATA: { label: 'ООО «Маслоторг»' },
+        myRoles: Promise.resolve(['BOSS']),
+        selectableRoles: Promise.resolve(['BOSS']),
+        async fetch(method) {
+            if (method === 'handlers') return { items: views };
+            return {};
+        },
+    };
+    wf.activeRole = 'BOSS';
+    document.body.appendChild(wf);
+    try {
+        await waitFor(() => wf.$('#tools') && wf.$$('#tools item-node').length === 5, 'в шапке work-form отрисованы 5 кнопок представлений');
+        await sleep(100);
+        const inner = wf.$('.form-header-inner');
+        const tools = wf.$('#tools');
+        const csInner = getComputedStyle(inner);
+        const csTools = getComputedStyle(tools);
+        assert(csInner.flexWrap === 'wrap', `form-header-inner должен переносить строки (получено ${csInner.flexWrap})`);
+        assert(csTools.flexWrap === 'wrap', `#tools должен переносить кнопки (получено ${csTools.flexWrap})`);
+        assert(parseFloat(csTools.columnGap || csTools.gap) >= 7.5, `#tools должен иметь gap 8px (получено ${csTools.gap})`);
+        assert(parseFloat(csInner.columnGap || csInner.gap) >= 7.5, `form-header-inner должен иметь gap 8px (получено ${csInner.gap})`);
+        const nodes = wf.$$('#tools item-node');
+        for (const n of nodes) {
+            const r = n.getBoundingClientRect();
+            assert(r.width > 0 && r.right <= window.innerWidth + 1, `кнопка представления «${n.$item?.label}» не должна вылезать за правый край 390px (right=${r.right})`);
+        }
+        const closeBtn = wf.$('#formHeader > oda-button[icon="icons:close"]');
+        assert(closeBtn, 'кнопка закрытия формы присутствует');
+        const cr = closeBtn.getBoundingClientRect();
+        assert(cr.right <= window.innerWidth + 1 && cr.left >= 0, `крестик закрытия целиком в экране 390px (left=${cr.left}, right=${cr.right})`);
+    }
+    finally {
+        wf.remove();
+    }
+});
+
 window.__done = true;
 </script>
 </body>

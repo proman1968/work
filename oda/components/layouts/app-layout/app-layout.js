@@ -189,11 +189,11 @@ ODA({is: 'app-layout-drawer',
                 white-space: nowrap;
             }
             .back {
-                position: fixed;
-                bottom: calc(14px + var(--safe-bottom, 0px));
-                {{align === 'right' ? 'right: calc(12px + var(--safe-right, 0px));' : 'left: calc(12px + var(--safe-left, 0px));'}}
+                position: absolute;
+                top: 0px;
+                {{align === 'right' ? 'right: 0px;' : 'left: 0px;'}}
                 z-index: 100;
-                opacity: 0.92;
+                margin: 6px;
             }
         </style>
 
@@ -207,7 +207,7 @@ ODA({is: 'app-layout-drawer',
             </div>
         </div>
         <oda-splitter ~if="!mobile && !closed" ::width right :reverse @touchstart.stop></oda-splitter>
-        <oda-button info round shadow class='back' ~if="mobile && closed && showTabs && !hideBackButton" @tap="closed = false" :rotate="align === 'right'? 180: 0" icon="icons:menu" title="Навигация"></oda-button>
+        <oda-button info round shadow class='back' ~if="mobile && closed && showTabs" @tap="closed = false" :rotate="align === 'right'? 180: 0" icon="icons:arrow-back" title="Навигация"></oda-button>
     `,
     get mobile() {
         return this.host.mobile;
@@ -319,10 +319,6 @@ ODA({is: 'app-layout-drawer',
             $list: ['left', 'right'],
         },
         hideTabs: {
-            $def: false,
-            $type: Boolean,
-        },
-        hideBackButton: {
             $def: false,
             $type: Boolean,
         },

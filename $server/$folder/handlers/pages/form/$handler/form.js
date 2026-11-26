@@ -39,10 +39,22 @@ export default {
                 pointer-events: none;
             }
             #tools {
-                gap: 4px;
-                overflow-x: auto;
+                gap: 8px;
+                flex-wrap: wrap;
+                overflow: visible;
                 align-items: center;
-                padding: 2px;
+                padding: 2px 2px 4px;
+            }
+            .form-header-inner item-node-explorer {
+                min-width: 0;
+                max-width: 100%;
+                flex-shrink: 1;
+            }
+            #formToolbar,
+            #formToolbar .toolbar-zone,
+            #formFooter {
+                flex-wrap: wrap;
+                min-width: 0;
             }
             #tools item-node {
                 flex-shrink: 0;
@@ -177,7 +189,7 @@ ODA({is: 'work-form',
             .form-header-inner {
                 min-width: 0;
                 flex-wrap: wrap;
-                gap: 4px;
+                gap: 8px;
                 margin: 4px;
                 align-items: center;
             }
@@ -186,21 +198,44 @@ ODA({is: 'work-form',
                 max-width: 100%;
                 flex-shrink: 1;
             }
+            .mobile-back-spacer {
+                width: 36px;
+                flex-shrink: 0;
+            }
             .consultant-btn {
                 border-radius: 50%;
-                margin-right: 12px;
+                margin-right: 4px;
                 flex-shrink: 0;
             }
             .call-btn {
                 border-radius: 50%;
-                margin-right: 32px;
+                margin-right: 24px;
                 flex-shrink: 0;
             }
             .view-selector {
-                justify-content: space-between;
-                overflow-x: auto;
+                justify-content: flex-end;
+                flex-wrap: wrap;
                 max-width: 100%;
                 min-width: 0;
+                overflow: visible;
+            }
+            .view-selector .flow {
+                flex-wrap: wrap;
+                gap: 8px;
+                border-radius: 4px;
+                align-items: center;
+                max-width: 100%;
+                min-width: 0;
+            }
+            #tools {
+                min-height: 32px;
+                align-items: center;
+                flex-wrap: wrap;
+                gap: 8px;
+                padding: 2px 2px 4px;
+                max-width: 100%;
+                min-width: 0;
+                border-bottom: 2px solid color-mix(in oklch, var(--accent-back) 65%, transparent);
             }
             #formToolbar {
                 flex-wrap: wrap;
@@ -213,15 +248,18 @@ ODA({is: 'work-form',
                 flex-wrap: wrap;
                 padding-bottom: max(4px, var(--safe-bottom, 0px)) !important;
             }
-            @media (max-width: 520px) {
+            @media (max-width: 768px) {
+                #formHeader {
+                    align-items: flex-start !important;
+                }
                 .consultant-btn {
-                    margin-right: 8px;
+                    margin-right: 0;
                 }
                 .call-btn {
-                    margin-right: 16px;
+                    margin-right: 0;
                 }
-                .form-header-inner {
-                    margin: 2px;
+                .view-selector {
+                    justify-content: flex-start;
                 }
             }
             @keyframes view-fade-in {
@@ -229,15 +267,20 @@ ODA({is: 'work-form',
                 to { opacity: 1; }
             }
         </style>
-        <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center; min-width: 0;">
-            <div center flex horizontal class="form-header-inner">
+        <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex
+            :style="'padding: 4px; gap: 8px; min-width: 0; align-items: ' + (ODA.states?.mobileMode ? 'flex-start' : 'center') + ';'">
+            <div center flex horizontal class="form-header-inner" style="min-width: 0; flex-wrap: wrap; gap: 8px; margin: 4px; align-items: center;">
+                <div ~if="ODA.states?.mobileMode && !isEmbeddedNoTree" class="mobile-back-spacer" style="width: 36px; flex-shrink: 0;"></div>
                 <item-node-explorer no-flex :$item="rootItem"></item-node-explorer>
                 <div flex></div>
-                <oda-button ~if="showConsultantBtn" id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info class="consultant-btn"></oda-button>
-                <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success class="call-btn"></oda-button>
+                <oda-button ~if="showConsultantBtn" id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info class="consultant-btn"
+                    :style="'border-radius: 50%; flex-shrink: 0; margin-right: ' + (ODA.states?.mobileMode ? '0px' : '4px') + ';'"></oda-button>
+                <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success class="call-btn"
+                    :style="'border-radius: 50%; flex-shrink: 0; margin-right: ' + (ODA.states?.mobileMode ? '0px' : '24px') + ';'"></oda-button>
                 <slot name="top-panel"></slot>
-                <div class="view-selector" no-flex horizontal>
-                    <div class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
+                <div class="view-selector" no-flex horizontal
+                    :style="'flex-wrap: wrap; max-width: 100%; min-width: 0; overflow: visible; justify-content: ' + (ODA.states?.mobileMode ? 'flex-start' : 'flex-end') + ';'">
+                    <div class="flow" no-flex horizontal style="flex-wrap: wrap; gap: 8px; border-radius: 4px; align-items: center; max-width: 100%; min-width: 0;">
 
                         <div
                             ~if="allowSave"
@@ -266,7 +309,7 @@ ODA({is: 'work-form',
                             ></oda-button>
 
                         </div>
-                        <div id="tools" no-flex horizontal style="min-height: 32px; align-items: center; gap: 6px; overflow-x: auto; padding: 2px 2px 4px; border-bottom: 2px solid color-mix(in oklch, var(--accent-back) 65%, transparent);">
+                        <div id="tools" no-flex horizontal style="min-height: 32px; align-items: center; flex-wrap: wrap; gap: 8px; padding: 2px 2px 4px; max-width: 100%; min-width: 0; border-bottom: 2px solid color-mix(in oklch, var(--accent-back) 65%, transparent);">
                             <item-node
                                 ~for="visibleFormViews"
                                 :$item="$for.item"
@@ -282,8 +325,8 @@ ODA({is: 'work-form',
                     </div>
                 </div>
             </div>
-            <oda-button @tap="toggleFullscreen" ~if="currentItem?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%;"></oda-button>
-            <oda-button ~if="!isEmbeddedNoTree" @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px;"></oda-button>
+            <oda-button @tap="toggleFullscreen" ~if="currentItem?.type === '$file'" :icon-size content icon="icons:fullscreen" style="border-radius: 50%; flex-shrink: 0;"></oda-button>
+            <oda-button ~if="!isEmbeddedNoTree" @tap="close" error :icon-size content-invert icon="icons:close" style="border-radius: 50%; margin: 4px; flex-shrink: 0;"></oda-button>
         </div>
         <div id="formTabsBar" slot="top" class="form-tabs-bar" accent-invert horizontal-center no-flex :hidden="!showTabsBar" ~show="showTabsBar" style="width: 100%; padding: 0 4px 0 8px; gap: 6px; box-sizing: border-box; min-height: 38px;">
             <oda-button id="classTreeToggleBtn" ~if="hasClassTree" no-flex allow-toggle

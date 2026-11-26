@@ -13,20 +13,17 @@ export default {
                 <iframe ~show="focusedPage === $for.item" style="border: none;" flex ~for="pages" :src="$for.item"></iframe>
             </div>
         </div>
-        <div slot="footer" class="pe-no-print" horizontal ~show="hasBookmarks" style="z-index: 2; align-items: center; padding-bottom: var(--safe-bottom, 0px); background: var(--accent-color, var(--header-background));">
-            <oda-button ~if="mobile && left_drawer?.closed" accent-invert no-flex icon="icons:menu" title="Навигация" style="margin: 0 2px; flex-shrink: 0;" @tap="left_drawer.closed = false"></oda-button>
-            <oda-tabs id="bookmarksBar" flex variant="rail" allow-close allow-drag
-                :hidden="!hasBookmarks"
-                :items="bookmarkTabItems" :focused-index="bookmarkFocusedIndex"
-                @tab-select="onBookmarkSelect($event)"
-                @tab-close="onBookmarkClose($event)"
-                @close-others="onBookmarkCloseOthers($event)"
-                @close-right="onBookmarkCloseRight($event)"
-                @close-all="closeAllBookmarks($event)"
-                @reorder="onBookmarksReorder($event)"
-                style="min-width: 0;">
-            </oda-tabs>
-        </div>
+        <oda-tabs id="bookmarksBar" slot="footer" class="pe-no-print" variant="rail" allow-close allow-drag
+            :hidden="!hasBookmarks" ~show="hasBookmarks"
+            :items="bookmarkTabItems" :focused-index="bookmarkFocusedIndex"
+            @tab-select="onBookmarkSelect($event)"
+            @tab-close="onBookmarkClose($event)"
+            @close-others="onBookmarkCloseOthers($event)"
+            @close-right="onBookmarkCloseRight($event)"
+            @close-all="closeAllBookmarks($event)"
+            @reorder="onBookmarksReorder($event)"
+            style="z-index: 2;">
+        </oda-tabs>
     `,
     visibleMode: 'main',
     showSize: false,
@@ -36,10 +33,7 @@ export default {
     get hasBookmarks() {
         if (typeof window !== 'undefined' && window !== window.top)
             return false;
-        const ok = Array.isArray(this.bookmarks) && this.bookmarks.length > 0 && this.visibleMode === 'main';
-        if (this.left_drawer)
-            this.left_drawer.hideBackButton = Boolean(ok && this.mobile);
-        return ok;
+        return !this.mobile && Array.isArray(this.bookmarks) && this.bookmarks.length > 0 && this.visibleMode === 'main';
     },
     get bookmarkTabItems() {
         return (this.bookmarks || []).map(b => ({
