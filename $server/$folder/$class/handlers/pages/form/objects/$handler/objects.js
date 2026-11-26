@@ -1975,10 +1975,16 @@ ODA({
     <style>
         :host {
             @apply --vertical;
+            width: min(680px, calc(100vw - 24px));
+            max-width: 100%;
+            min-height: 0;
+            box-sizing: border-box;
             overflow: hidden;
         }
         oda-editor-form {
-            flex: 1;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
         }
         .error {
             color: var(--error-color);
@@ -2007,7 +2013,8 @@ ODA({
         }
         .traj-row {
             @apply --horizontal;
-            gap: 8px;
+            flex-wrap: wrap;
+            gap: 4px 8px;
             align-items: center;
         }
         .traj-link {
@@ -2017,15 +2024,20 @@ ODA({
         .traj-num {
             margin-left: auto;
             text-align: right;
+            white-space: nowrap;
         }
         .bar {
             @apply --horizontal;
             flex-wrap: wrap;
+            justify-content: flex-end;
             gap: var(--space-s);
             padding: var(--space-m);
+            border-top: 1px solid var(--subtle-border, var(--border-color, #ddd));
+            flex-shrink: 0;
         }
         .context {
             @apply --horizontal;
+            flex-wrap: wrap;
             align-items: center;
             gap: var(--space-s);
             padding: var(--space-m) var(--space-m) 0;

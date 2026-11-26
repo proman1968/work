@@ -68,20 +68,23 @@ ODA({
         :host {
             display: flex;
             flex-direction: row;
+            flex-wrap: wrap;
             align-items: center;
-            gap: 8px;
+            gap: 6px 8px;
             width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
             font-size: inherit;
         }
         .field-label {
-            flex: 0 0 auto;
-            min-width: 96px;
+            flex: 0 1 auto;
+            min-width: min(96px, 100%);
             font-weight: 500;
-            white-space: nowrap;
+            overflow-wrap: anywhere;
         }
         .editor-box {
             @apply --vertical;
-            @apply --flex;
+            flex: 1 1 180px;
             min-width: 0;
         }
         .children-box {

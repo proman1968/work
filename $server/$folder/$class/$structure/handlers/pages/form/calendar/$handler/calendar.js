@@ -152,17 +152,22 @@ export default {
             .cal-header {
                 @apply --horizontal;
                 align-items: center;
-                gap: 10px;
+                gap: 8px 10px;
                 padding: 8px 14px;
                 border-bottom: 1px solid var(--subtle-border, #e2e8f0);
                 background: var(--subtle-background, #f8fafc);
                 flex-wrap: wrap;
                 flex-shrink: 0;
+                max-width: 100%;
+                box-sizing: border-box;
             }
             .cal-group {
                 @apply --horizontal;
                 align-items: center;
+                flex-wrap: wrap;
                 gap: 4px;
+                max-width: 100%;
+                min-width: 0;
             }
             .btn-new {
                 @apply --horizontal;
@@ -244,6 +249,7 @@ export default {
             .seg-tabs {
                 @apply --horizontal;
                 align-items: center;
+                flex-wrap: wrap;
                 padding: 2px;
                 border-radius: 8px;
                 border: 1px solid var(--subtle-border, #cbd5e1);
@@ -269,10 +275,10 @@ export default {
             .att-popover {
                 position: absolute;
                 top: 50px;
-                right: 16px;
+                right: 12px;
                 z-index: 20;
-                width: 250px;
-                max-height: 320px;
+                width: min(260px, calc(100vw - 24px));
+                max-height: min(320px, 60dvh);
                 overflow-y: auto;
                 background: var(--content-background, #ffffff);
                 border: 1px solid var(--border-color, #cbd5e1);
@@ -283,6 +289,17 @@ export default {
                 flex-direction: column;
                 gap: 6px;
                 font-size: 12.5px;
+                box-sizing: border-box;
+            }
+            @media (max-width: 768px) {
+                .period-title {
+                    font-size: 13.5px;
+                    white-space: normal;
+                }
+                .seg-btn {
+                    padding: 4px 7px;
+                    font-size: 12px;
+                }
             }
             .att-row {
                 @apply --horizontal;
@@ -342,10 +359,10 @@ export default {
             </div>
 
             <div class="seg-tabs">
-                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'day' }" @tap="viewMode = 'day'">День</button>
-                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'workweek' }" @tap="viewMode = 'workweek'">Раб. неделя</button>
-                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'week' }" @tap="viewMode = 'week'">Неделя</button>
-                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'month' }" @tap="viewMode = 'month'">Месяц</button>
+                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'day' }" @tap="setViewMode('day')">День</button>
+                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'workweek' }" @tap="setViewMode('workweek')">Раб. неделя</button>
+                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'week' }" @tap="setViewMode('week')">Неделя</button>
+                <button type="button" class="seg-btn" ~class="{ active: viewMode === 'month' }" @tap="setViewMode('month')">Месяц</button>
             </div>
 
             <button type="button" class="btn-outline" @tap="reloadEvents()" title="Обновить календарь" style="padding: 5px 8px;">
@@ -396,9 +413,16 @@ export default {
     },
     showPeopleMenu: false,
     contacts: [],
+    _userChangedViewMode: false,
+    setViewMode(m) {
+        this._userChangedViewMode = true;
+        this.viewMode = m;
+    },
     async attached() {
         if (!this.currentDate)
             this.currentDate = new Date();
+        if (typeof window !== 'undefined' && window.innerWidth <= 768 && !this._userChangedViewMode && this.viewMode === 'week')
+            this.viewMode = 'day';
         if (typeof globalThis.WORK?.visible_contacts === 'function') {
             try {
                 const list = await globalThis.WORK.visible_contacts();
@@ -691,6 +715,12 @@ ODA({
             .grid-row {
                 display: grid;
                 grid-template-columns: 56px repeat(var(--cols, 7), minmax(0, 1fr));
+            }
+            @media (max-width: 768px) {
+                .grid-row,
+                .body-grid {
+                    min-width: calc(56px + var(--cols, 7) * 110px);
+                }
             }
             .time-corner {
                 border-right: 1px solid var(--subtle-border, #e2e8f0);

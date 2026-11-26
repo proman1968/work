@@ -3,12 +3,15 @@ export default{
     template:/* html */`
         <style>
             :host {
-                max-width: 250px;
+                width: min(360px, calc(100vw - 32px));
+                max-width: 100%;
+                box-sizing: border-box;
                 border-radius: 8px;
                 @apply --light;
             }
             fieldset {
                 border: none;
+                min-width: 0;
             }
             .btn {
                 padding: 8px;
@@ -17,19 +20,22 @@ export default{
             }
             span {
                 text-align: center;
-                font-size: x-large;
-                margin: 16px 2px;
+                font-size: large;
+                margin: 12px 2px;
                 padding: 4px;
                 border-radius: 8px;
                 white-space: break-spaces;
+                word-break: break-word;
             }
             input {
-                width: -webkit-fill-available;
-                outline: node;
-                border: node;
-                padding: 2px 4px;
-                margin-top: 16px;
-                margin-bottom: 16px;
+                width: 100%;
+                box-sizing: border-box;
+                outline: none;
+                border: 1px solid var(--control-border-color, var(--subtle-border));
+                border-radius: var(--control-radius, 6px);
+                padding: 6px 8px;
+                margin-top: 12px;
+                margin-bottom: 12px;
             }
         </style>
         <fieldset vertical>

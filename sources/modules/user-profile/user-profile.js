@@ -7,28 +7,50 @@ ODA({ is: 'user-profile', imports: 'oda//otp.js',
             @apply --light;
             @apply --vertical;
             @apply --flex;
-            padding: 8px;
+            padding: max(8px, var(--safe-top, 0px)) max(12px, var(--safe-right, 0px)) max(16px, var(--safe-bottom, 0px)) max(12px, var(--safe-left, 0px));
+            box-sizing: border-box;
         }
         input {
             border: 1px solid gray;
             padding: 8px;
             border-radius: 8px;
             font-size: large;
+            width: 100%;
+            box-sizing: border-box;
         }
         button {
-            height: 48px;
+            min-height: 44px;
+            padding: 8px 14px;
             border-radius: 8px;
-            font-size: x-large;
+            font-size: medium;
             cursor: pointer;
+            max-width: 100%;
+            box-sizing: border-box;
         }
         legend {
-            font-size: x-large;
+            font-size: large;
         }
         .photo {
             background-color: {{photoColor}};
         }
+        .profile-wrap {
+            gap: 14px;
+            width: min(360px, 100%);
+            align-self: center;
+            margin: 0 auto auto auto;
+            box-sizing: border-box;
+        }
+        .token-row {
+            gap: 8px;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            border: 1px solid gray;
+            border-radius: 8px;
+            padding: 6px 8px;
+        }
     </style>
-    <div no-flex vertical style="gap: 16px; width: 280px; align-self: center; margin: 0px auto auto auto;">
+    <div no-flex vertical class="profile-wrap">
         <div ~if="pendingInvite?.valid" style="padding:10px 12px;border-radius:8px;border:1px solid #10b981;background:rgba(16,185,129,0.1);font-size:small;line-height:1.4;text-align:center;">
             <b>Приглашение:</b> {{pendingInvite.pointLabel}} → <b>{{pendingInvite.placeLabel}}</b>
         </div>

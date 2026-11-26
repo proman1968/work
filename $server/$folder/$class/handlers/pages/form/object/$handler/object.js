@@ -769,8 +769,9 @@ if (typeof ODA === 'function') {
         <style>
             :host {
                 @apply --vertical;
-                min-width: min(680px, 92vw);
-                max-height: 78vh;
+                min-width: min(680px, calc(100vw - 24px));
+                max-width: 100%;
+                max-height: 78dvh;
                 background: var(--content-background, #fff);
                 color: var(--content-color, #1f2937);
                 font-size: 13px;
@@ -778,9 +779,9 @@ if (typeof ODA === 'function') {
             }
             .binder-body {
                 @apply --vertical;
-                flex: 1;
-                min-height: 220px;
-                max-height: 64vh;
+                flex: 1 1 auto;
+                min-height: min(200px, 32dvh);
+                max-height: 64dvh;
                 overflow-y: auto;
                 padding: 10px 14px;
                 gap: 12px;
@@ -803,8 +804,9 @@ if (typeof ODA === 'function') {
             }
             .doc-row {
                 @apply --horizontal;
+                flex-wrap: wrap;
                 align-items: center;
-                gap: 10px;
+                gap: 6px 10px;
                 padding: 6px 10px;
                 border-bottom: 1px solid var(--subtle-border, #e5e7eb);
             }

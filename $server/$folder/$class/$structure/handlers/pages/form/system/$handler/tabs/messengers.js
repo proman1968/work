@@ -190,22 +190,22 @@ export default {
                             <option value="telegram">Telegram Bot API</option>
                             <option value="max">MAX Bot API</option>
                         </select>
-                        <span class="field-label" style="min-width: 120px;">Название бота:</span>
-                        <input type="text" placeholder="Например: Бот Бизнес Интер Софт" :value="draftBotLabel" @input="draftBotLabel = $event.target.value" style="min-width: 220px;">
+                        <span class="field-label" style="min-width: 110px;">Название бота:</span>
+                        <input type="text" placeholder="Например: Бот Бизнес Интер Софт" :value="draftBotLabel" @input="draftBotLabel = $event.target.value" style="min-width: 140px; flex: 1 1 180px; max-width: 100%; box-sizing: border-box;">
                     </div>
                     <div class="row">
                         <span class="field-label">Токен бота:</span>
-                        <input type="password" :placeholder="ownBot?.tokenMask ? 'Сохранён (' + ownBot.tokenMask + ') — введите новый для замены' : 'Вставьте токен от @BotFather или MAX'" :value="draftBotToken" @input="draftBotToken = $event.target.value" style="min-width: 280px; flex: 1;">
-                        <span class="field-label" style="min-width: 95px;">@username:</span>
-                        <input type="text" placeholder="определится авто" :value="draftBotUsername" @input="draftBotUsername = $event.target.value" style="width: 160px;">
+                        <input type="password" :placeholder="ownBot?.tokenMask ? 'Сохранён (' + ownBot.tokenMask + ') — введите новый для замены' : 'Вставьте токен от @BotFather или MAX'" :value="draftBotToken" @input="draftBotToken = $event.target.value" style="min-width: 160px; flex: 1 1 200px; max-width: 100%; box-sizing: border-box;">
+                        <span class="field-label" style="min-width: 90px;">@username:</span>
+                        <input type="text" placeholder="определится авто" :value="draftBotUsername" @input="draftBotUsername = $event.target.value" style="min-width: 120px; flex: 0 1 160px; max-width: 100%; box-sizing: border-box;">
                     </div>
                 </div>
 
                 <!-- Общий групповой чат подразделения -->
                 <div class="row" style="padding-top: 8px; border-top: 1px dashed var(--subtle-border, var(--border-color));">
                     <span class="field-label">Общий чат точки:</span>
-                    <input type="text" placeholder="chat_id группы (необязательно)" :value="draftGroupChatId" @input="draftGroupChatId = $event.target.value" style="width: 190px;">
-                    <input type="text" placeholder="Название группы" :value="draftGroupTitle" @input="draftGroupTitle = $event.target.value" style="width: 190px;">
+                    <input type="text" placeholder="chat_id группы (необязательно)" :value="draftGroupChatId" @input="draftGroupChatId = $event.target.value" style="min-width: 140px; flex: 1 1 170px; max-width: 100%; box-sizing: border-box;">
+                    <input type="text" placeholder="Название группы" :value="draftGroupTitle" @input="draftGroupTitle = $event.target.value" style="min-width: 140px; flex: 1 1 170px; max-width: 100%; box-sizing: border-box;">
                     <oda-button icon="av:vpn-key" label="Код привязки группы" title="Сгенерировать код и отправить в групповой чат с ботом" @tap="requestLinkCode('group')"></oda-button>
                     <oda-button ~if="draftGroupChatId" icon="icons:close" title="Отвязать группу" @tap="unbind('group')"></oda-button>
                 </div>

@@ -404,7 +404,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                                         <label for="reqCompanyName">Наименование организации / ИП *</label>
                                         <input type="text" id="reqCompanyName" placeholder="ООО «Маслоторг»">
                                     </div>
-                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                                    <div class="req-subgrid">
                                         <div class="field" style="margin:0">
                                             <label for="reqInn">ИНН *</label>
                                             <input type="text" id="reqInn" placeholder="10 или 12 цифр" maxlength="12">
@@ -430,7 +430,7 @@ export function renderLandingPage({ publicKey = '', regions = null, assetVersion
                                         <label for="reqBankName">Наименование банка</label>
                                         <input type="text" id="reqBankName" placeholder="ПАО Сбербанк">
                                     </div>
-                                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                                    <div class="req-subgrid">
                                         <div class="field" style="margin:0">
                                             <label for="reqBik">БИК</label>
                                             <input type="text" id="reqBik" placeholder="9 цифр" maxlength="9">

@@ -760,7 +760,7 @@
                                     <span class="small"><b>Реквизиты организации (Лицензиата) для выставления счёта-договора:</b> <span class="muted">(автоматически сохраняются в ЛК)</span></span>
                                     <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-cab-tab="requisites">Полные банковские реквизиты →</button>
                                 </div>
-                                <div style="display:grid;grid-template-columns:2fr 1fr 1fr 2fr auto;gap:8px;align-items:end">
+                                <div class="inv-grid">
                                     <div class="field" style="margin:0">
                                         <label style="font-size:11.5px">Организация / ИП *</label>
                                         <input type="text" id="invCompany-${esc(o.orderId)}" value="${esc(ordComp)}" placeholder="ООО «Маслоторг»" style="padding:6px 10px;font-size:13px">

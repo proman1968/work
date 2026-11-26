@@ -162,14 +162,15 @@ ODA({is: 'app-layout-drawer',
                 transition: opacity ease-in-out .5s, transform ease-in-out .2s;
                 flex-direction: row{{align === 'right'?'-reverse':''}};
                 border-color: var(--border-color);
-                width: {{(align === 'left') && (mobile && !closed)?'100%':'auto'}};
+                width: {{(mobile && !closed)?'100%':'auto'}};
             }
             .drawer {
                 height: 100%;
                 position: relative;
                 overflow: hidden;
                 z-index: 1;
-                width: {{!closed ? (width + 'px'): 'auto'}} !important;
+                width: {{mobile ? '100%' : (!closed ? (width + 'px'): 'auto')}} !important;
+                max-width: 100%;
                 flex-direction: {{!!mobile ? 'column' : (align === 'right') ? 'row-reverse' : 'row'}} !important;
             }
 
@@ -188,24 +189,25 @@ ODA({is: 'app-layout-drawer',
                 white-space: nowrap;
             }
             .back {
-                position: absolute;
-                top: 0px;
+                position: fixed;
+                bottom: calc(14px + var(--safe-bottom, 0px));
+                {{align === 'right' ? 'right: calc(12px + var(--safe-right, 0px));' : 'left: calc(12px + var(--safe-left, 0px));'}}
                 z-index: 100;
-                margin: 6px;
+                opacity: 0.92;
             }
         </style>
 
         <div :vertical="mobile" :horizontal="!mobile" ~show="(!mobile && showTabs) || !closed" class="drawer" flex>
             <app-tabs ~if="showTabs" accent-invert no-flex :buttons :items :horizontal="mobile" ::focused-index></app-tabs>
-            <div horizontal header flex style="overflow: hidden; min-height: 0;">
-                <div flex vertical style="overflow: hidden; min-height: 0;" ~show="!closed">
+            <div horizontal header flex style="overflow: hidden; min-height: 0; min-width: 0;">
+                <div flex vertical style="overflow: hidden; min-height: 0; min-width: 0;" ~show="!closed">
                     <slot name="title" horizontal></slot>
-                    <slot id="slot" @slotchange="_onSlotchange" flex vertical style="min-height: 0; overflow: hidden;"></slot>
+                    <slot id="slot" @slotchange="_onSlotchange" flex vertical style="min-height: 0; min-width: 0; overflow: hidden;"></slot>
                 </div>
             </div>
         </div>
         <oda-splitter ~if="!mobile && !closed" ::width right :reverse @touchstart.stop></oda-splitter>
-        <oda-button info round shadow class='back' ~if="mobile && closed && showTabs" @tap="closed = false" :rotate="align === 'right'? 180: 0" icon="icons:arrow-back"></oda-button>
+        <oda-button info round shadow class='back' ~if="mobile && closed && showTabs && !hideBackButton" @tap="closed = false" :rotate="align === 'right'? 180: 0" icon="icons:menu" title="Навигация"></oda-button>
     `,
     get mobile() {
         return this.host.mobile;
@@ -320,6 +322,10 @@ ODA({is: 'app-layout-drawer',
             $def: false,
             $type: Boolean,
         },
+        hideBackButton: {
+            $def: false,
+            $type: Boolean,
+        },
         width: {
             $def: 340,
             $save: true
@@ -386,12 +392,22 @@ ODA({is: 'app-tabs',
                 order: {{mobile?1:0}};
                 user-select: none;
             }
+            :host([horizontal]) {
+                flex-direction: row;
+                width: 100%;
+                min-width: 0;
+                padding: 4px 8px calc(4px + var(--safe-bottom, 0px));
+                overflow-x: auto;
+                overflow-y: hidden;
+                gap: 4px;
+            }
             .nav-list {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
                 gap: 4px;
                 width: 100%;
+                flex-shrink: 0;
             }
             .nav-list[horizontal] {
                 flex-direction: row;
@@ -404,6 +420,7 @@ ODA({is: 'app-tabs',
                 min-height: 44px;
                 padding: 4px 2px !important;
                 box-sizing: border-box;
+                flex-shrink: 0;
                 transition: background 140ms ease, transform 120ms ease, box-shadow 140ms ease;
             }
             .nav-list oda-button:not([light]):hover {
@@ -413,12 +430,18 @@ ODA({is: 'app-tabs',
                 font-weight: 700;
                 box-shadow: 0 2px 6px var(--shadow-color);
             }
+            .tab-action-btn {
+                margin: 4px;
+                flex-shrink: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
         </style>
         <div class="nav-list" :horizontal="mobile">
             <oda-button :label="$for.item.label" :light="focusedIndex === $for?.index" ~for="items" ~props="$for.item" icon-pos="top" style="min-width: 44px; max-width: 44px; font-size: xx-small;" @tap="setIndex($for.index)"></oda-button>
         </div>
         <div flex></div>
-        <span ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" style="margin: 6px; overflow: hidden; text-overflow: ellipsis;" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>
+        <span class="tab-action-btn" ~is="$for.item.is || 'oda-button'" ~for="buttons" ~props="$for.item" @tap="($for.item.click?.($event), $pdp.closed = true)"></span>
     `,
     get mobile() {
         return this.host.mobile

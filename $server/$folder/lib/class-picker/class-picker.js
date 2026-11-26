@@ -247,12 +247,15 @@ export const CLASS_PICKER_DEF = {
             @apply --content;
             padding: 12px 14px;
             gap: 12px;
+            min-width: 0;
+            max-width: 100%;
             box-sizing: border-box;
         }
         .tree-box {
             @apply --vertical;
-            min-height: 320px;
-            max-height: 62vh;
+            flex: 1 1 auto;
+            min-height: min(240px, 38dvh);
+            max-height: 62dvh;
             overflow: auto;
             border: 1px solid var(--border-color);
             background: var(--content-background);

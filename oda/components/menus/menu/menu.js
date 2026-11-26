@@ -8,8 +8,8 @@ ODA({ is: 'oda-menu',
             overflow: hidden;
             margin: 0px;
             padding: 0px;
-            max-height: 100vh;
-            max-width: 300px;
+            max-height: calc(100dvh - 16px);
+            max-width: min(300px, calc(100vw - 16px));
             animation: fadeIn .1s ease-in;
             border-radius: 4px;
         }

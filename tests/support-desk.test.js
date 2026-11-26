@@ -299,4 +299,17 @@ describe('Служба поддержки WORK → work.odant.org, роль SUPP
         }).then(r => r.json());
         assert.ok(ovAdm.tickets.length >= 2);
     });
+
+    it('Адаптивность портала work.odant.org и PWA-манифеста WORK: модалки с 100dvh, скролл таблиц и safe-area', async () => {
+        const css = await fetch(`${hubUrl}/assets/landing.css`).then(r => r.text());
+        assert.ok(css.includes('100dvh'), 'landing.css использует 100dvh для модалок и виджета');
+        assert.ok(css.includes('safe-area-inset-bottom'), 'landing.css учитывает safe-area-inset');
+        assert.ok(css.includes('.inv-grid') && css.includes('.req-subgrid'), 'адаптивные сетки кабинета вынесены в CSS-классы');
+        assert.ok(!css.includes('.top-actions .btn-primary { display: none; }'), 'главная кнопка действия не скрывается на мобильных');
+
+        const manifest = JSON.parse(fs.readFileSync(path.resolve('sources/manifest.json'), 'utf8'));
+        assert.equal(manifest.theme_color, '#4b0082');
+        assert.equal(manifest.lang, 'ru');
+        assert.ok(manifest.icons.some(i => String(i.purpose || '').includes('maskable')), 'манифест содержит maskable-иконки');
+    });
 });

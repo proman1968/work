@@ -59,7 +59,7 @@ export const MESSENGER_SETTINGS_DEF = {
                 font-size: 12px;
                 font-weight: 600;
                 color: var(--muted-color);
-                min-width: 140px;
+                min-width: min(120px, 100%);
             }
             .badge {
                 display: inline-flex;
@@ -186,7 +186,7 @@ export const MESSENGER_SETTINGS_DEF = {
                     </div>
                     <span ~if="!currentUser?.telegram" class="muted">не привязан</span>
 
-                    <span class="field-label" style="min-width: 70px; margin-left: 12px;">MAX:</span>
+                    <span class="field-label" style="min-width: 70px;">MAX:</span>
                     <div ~if="currentUser?.max" class="chip">
                         <span>Привязан: {{currentUser.max.username || currentUser.max.firstName || currentUser.max.chatId}}</span>
                         <span style="cursor:pointer; font-weight:bold;" title="Отвязать MAX" @tap="unbind('user', 'max')">×</span>
@@ -225,11 +225,11 @@ export const MESSENGER_SETTINGS_DEF = {
                             <option value="max">MAX Bot API</option>
                         </select>
                         <span class="field-label" style="min-width: 110px;">Название бота:</span>
-                        <input type="text" placeholder="Например: Бот Маслоторг" :value="draftBotLabel" @input="draftBotLabel = $event.target.value" style="min-width: 180px;">
+                        <input type="text" placeholder="Например: Бот Маслоторг" :value="draftBotLabel" @input="draftBotLabel = $event.target.value" style="min-width: 140px; flex: 1 1 160px; max-width: 100%; box-sizing: border-box;">
                     </div>
                     <div class="row">
                         <span class="field-label">Токен бота:</span>
-                        <input type="password" :placeholder="ownBot?.tokenMask ? 'Сохранён (' + ownBot.tokenMask + ') — введите новый для замены' : 'Токен от @BotFather или MAX'" :value="draftBotToken" @input="draftBotToken = $event.target.value" style="min-width: 280px; flex: 1;">
+                        <input type="password" :placeholder="ownBot?.tokenMask ? 'Сохранён (' + ownBot.tokenMask + ') — введите новый для замены' : 'Токен от @BotFather или MAX'" :value="draftBotToken" @input="draftBotToken = $event.target.value" style="min-width: 160px; flex: 1 1 200px; max-width: 100%; box-sizing: border-box;">
                         <span class="field-label" style="min-width: 90px;">@username:</span>
                         <input type="text" placeholder="авто или имя_бота" :value="draftBotUsername" @input="draftBotUsername = $event.target.value" style="width: 150px;">
                     </div>

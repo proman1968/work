@@ -364,11 +364,11 @@ ODA({ is: 'work-prompt-bar',
             .file oda-button { padding: 0; border-radius: 50%; }
             textarea {
                 border: none; outline: none; resize: none; background: transparent; color: inherit;
-                font: inherit; font-size: 15px; line-height: 1.5; padding: 12px 16px 4px; height: 24px; max-height: 40vh;
+                font: inherit; font-size: 15px; line-height: 1.5; padding: 12px 16px 4px; height: 24px; max-height: 36dvh;
                 overflow-y: auto; box-sizing: content-box;
             }
             textarea::placeholder { color: var(--muted-color, inherit); opacity: .8; }
-            .row { @apply --horizontal; align-items: center; gap: 4px; padding: 6px 8px 8px; min-width: 0; }
+            .row { @apply --horizontal; align-items: center; flex-wrap: wrap; gap: 4px; padding: 6px 8px 8px; min-width: 0; }
             .pill {
                 @apply --horizontal; align-items: center; gap: 4px; height: 30px; padding: 0 10px; border-radius: 999px; flex-shrink: 1; min-width: 0;
                 border: none; background: transparent; color: inherit; fill: currentColor; font: inherit; font-size: small; cursor: pointer; white-space: nowrap;

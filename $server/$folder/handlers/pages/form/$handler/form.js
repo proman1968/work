@@ -174,20 +174,61 @@ ODA({is: 'work-form',
             .view-enter {
                 animation: view-fade-in 0.5s ease;
             }
+            .form-header-inner {
+                min-width: 0;
+                flex-wrap: wrap;
+                gap: 4px;
+                margin: 4px;
+                align-items: center;
+            }
+            .form-header-inner item-node-explorer {
+                min-width: 0;
+                max-width: 100%;
+                flex-shrink: 1;
+            }
+            .call-btn {
+                border-radius: 50%;
+                margin-right: 12px;
+                flex-shrink: 0;
+            }
+            .view-selector {
+                justify-content: space-between;
+                overflow-x: auto;
+                max-width: 100%;
+                min-width: 0;
+            }
+            #formToolbar {
+                flex-wrap: wrap;
+            }
+            #formToolbar .toolbar-zone {
+                flex-wrap: wrap;
+                min-width: 0;
+            }
+            #formFooter {
+                flex-wrap: wrap;
+                padding-bottom: max(4px, var(--safe-bottom, 0px)) !important;
+            }
+            @media (max-width: 768px) {
+                .call-btn {
+                    margin-right: 2px;
+                }
+                .form-header-inner {
+                    margin: 2px;
+                }
+            }
             @keyframes view-fade-in {
                 from { opacity: 0; }
                 to { opacity: 1; }
             }
         </style>
-        <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center;">
-            <div center flex horizontal style="overflow: hidden; flex-wrap: balance; gap: 4px; margin: 4px;">
-                <div :flex="ODA.states?.mobileMode"></div>
+        <div id="formHeader" ~show="!fullScreen" accent-invert slot="header" shadow horizontal flex style="padding: 2px; gap: 4px; align-items: center; min-width: 0;">
+            <div center flex horizontal class="form-header-inner">
                 <item-node-explorer no-flex :$item="rootItem"></item-node-explorer>
                 <div flex></div>
-                <oda-button ~if="showConsultantBtn" id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 8px; flex-shrink: 0;"></oda-button>
-                <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success style="border-radius: 50%;margin-right:32px;"></oda-button>
+                <oda-button ~if="showConsultantBtn" id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 4px; flex-shrink: 0;"></oda-button>
+                <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success class="call-btn"></oda-button>
                 <slot name="top-panel"></slot>
-                <div class="view-selector" no-flex horizontal style="justify-content: space-between; overflow: hidden;">
+                <div class="view-selector" no-flex horizontal>
                     <div class="flow" no-flex horizontal style="gap: 8px; border-radius: 4px; align-items: center;">
 
                         <div

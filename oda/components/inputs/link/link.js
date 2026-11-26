@@ -72,8 +72,9 @@ ODA({is: 'oda-table-link-picker',
     <style>
         :host {
             @apply --vertical;
-            min-width: min(620px, 90vw);
-            max-height: 74vh;
+            min-width: min(620px, calc(100vw - 24px));
+            max-width: 100%;
+            max-height: 74dvh;
             background: var(--content-background, #ffffff);
             color: var(--content-color, #1f2937);
             font-size: 13px;
@@ -81,6 +82,7 @@ ODA({is: 'oda-table-link-picker',
         }
         .picker-top {
             @apply --horizontal;
+            flex-wrap: wrap;
             align-items: center;
             gap: 8px;
             padding: 8px 12px;
@@ -119,9 +121,9 @@ ODA({is: 'oda-table-link-picker',
         }
         .list-wrap {
             @apply --vertical;
-            flex: 1;
-            min-height: 220px;
-            max-height: 52vh;
+            flex: 1 1 auto;
+            min-height: min(200px, 32dvh);
+            max-height: 52dvh;
             overflow-y: auto;
         }
         .item-row {

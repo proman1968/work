@@ -71,16 +71,37 @@ await new Promise(r => ws.once('open', r));
 let seq = 0;
 const pending = new Map();
 let pageErrors = [];
-ws.on('message', raw => {
+const send = (method, params = {}) => new Promise(r => { const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
+ws.on('message', async raw => {
     const m = JSON.parse(String(raw));
     if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
     if (m.method === 'Runtime.exceptionThrown')
         pageErrors.push((m.params.exceptionDetails.exception?.description || m.params.exceptionDetails.text || '').split('\n').slice(0, 3).join(' | '));
+    if (m.method === 'Runtime.bindingCalled' && m.params?.name === '__cdpSetViewport') {
+        try {
+            const p = JSON.parse(m.params.payload || '{}');
+            if (p.clear) {
+                await send('Emulation.clearDeviceMetricsOverride');
+            }
+            else {
+                await send('Emulation.setDeviceMetricsOverride', {
+                    width: Number(p.width) || 1280,
+                    height: Number(p.height) || 900,
+                    deviceScaleFactor: Number(p.scale) || 1,
+                    mobile: Boolean(p.mobile),
+                });
+            }
+            await send('Runtime.evaluate', { expression: `window.__vpAck?.(${JSON.stringify(p.id || '')})` });
+        }
+        catch (err) {
+            await send('Runtime.evaluate', { expression: `window.__vpAck?.(${JSON.stringify(p?.id || '')}, ${JSON.stringify(String(err))})` });
+        }
+    }
 });
-const send = (method, params = {}) => new Promise(r => { const id = ++seq; pending.set(id, r); ws.send(JSON.stringify({ id, method, params })); });
 const evaluate = async expr => (await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise: true })).result?.result?.value;
 await send('Runtime.enable');
 await send('Page.enable');
+await send('Runtime.addBinding', { name: '__cdpSetViewport' });
 
 let failed = 0, passed = 0;
 const report = (ok, name, err) => {
@@ -106,6 +127,7 @@ for (const file of pages) {
         report(false, file + ': не завершилась за 30с', pageErrors.join('\n'));
     for (const e of pageErrors)
         report(false, file + ': исключение на странице', e);
+    await send('Emulation.clearDeviceMetricsOverride');
 }
 
 // --- smoke-экраны: открываются без исключений ---

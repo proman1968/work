@@ -563,7 +563,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                 <button class="icon-btn" data-action="close-sched-modal" aria-label="Закрыть">${icon('close')}</button>
             </div>
             <div id="admSchedSummary" style="margin-bottom:12px"></div>
-            <div style="max-height:420px;overflow-y:auto">
+            <div style="max-height:min(420px,50dvh);overflow:auto">
                 <table class="sec-table">
                     <thead><tr>
                         <th>Месяц</th>
@@ -635,13 +635,13 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                 </div>
                 <button class="icon-btn" data-action="close-media-modal" aria-label="Закрыть">${icon('close')}</button>
             </div>
-            <div id="admMediaBody" style="display:flex;justify-content:center;align-items:center;max-height:74vh;overflow:auto;background:#0b1220;border-radius:10px;padding:8px"></div>
+            <div id="admMediaBody" style="display:flex;justify-content:center;align-items:center;max-height:70dvh;overflow:auto;background:#0b1220;border-radius:10px;padding:8px"></div>
         </div>
     </div>
 
     <!-- Модальное окно: Встроенный Remote Desktop оператора поддержки -->
     <div class="modal" id="admRemoteModal" role="dialog" aria-modal="true">
-        <div class="card" style="max-width:1120px;width:96vw">
+        <div class="card" style="max-width:1120px;width:min(1120px,calc(100vw - 24px))">
             <div class="modal-head">
                 <img src="/assets/odant-logo.png" alt="">
                 <div>
@@ -653,7 +653,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                     <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger)" data-action="remote-end-close">Завершить сессию</button>
                 </div>
             </div>
-            <div id="admRemoteStage" tabindex="0" style="position:relative;width:100%;aspect-ratio:16/9;max-height:68vh;background:#090d16;border-radius:10px;overflow:hidden;border:1px solid var(--line-strong);display:flex;align-items:center;justify-content:center;cursor:crosshair;outline:none">
+            <div id="admRemoteStage" tabindex="0" style="position:relative;width:100%;aspect-ratio:16/9;max-height:62dvh;background:#090d16;border-radius:10px;overflow:hidden;border:1px solid var(--line-strong);display:flex;align-items:center;justify-content:center;cursor:crosshair;outline:none">
                 <video id="admRemoteVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:contain;display:none"></video>
                 <img id="admRemoteImg" alt="" style="width:100%;height:100%;object-fit:contain;display:none;pointer-events:none">
                 <div id="admRemotePlaceholder" class="small muted" style="text-align:center;padding:24px">
@@ -661,7 +661,7 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                 </div>
             </div>
             <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">
-                <input type="text" id="admRemoteTextInput" placeholder="Ввести текст в активное поле у пользователя (когда включено управление)…" style="flex:1;min-width:220px;padding:7px 10px;font-size:13px">
+                <input type="text" id="admRemoteTextInput" placeholder="Ввести текст в активное поле у пользователя (когда включено управление)…" style="flex:1 1 180px;min-width:160px;padding:7px 10px;font-size:13px">
                 <button type="button" class="btn btn-primary btn-sm" data-action="remote-send-text">Отправить ввод</button>
                 <span class="small muted">Двигайте мышью для указки; при разрешённом управлении работают клики, скролл и ввод.</span>
             </div>

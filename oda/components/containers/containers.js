@@ -164,7 +164,7 @@ ODA.showMenu = async function (params = {}, e) {
     return ODA.showPopover(menu, { ...params, popoverType: 'menu' }, e);
 };
 ODA.showConfirm = function (textContent = 'Подтвердить?', params = {}) {
-    const el = ODA.createElement('p', { textContent, style: 'margin: var(--space-l);' });
+    const el = ODA.createElement('p', { textContent, style: 'margin: var(--space-l); max-width: min(440px, 100%); word-break: break-word;' });
     return ODA.showDialog(el, {
         allowClose: true,
         TITLE: { label: 'Подтверждение' },
@@ -176,7 +176,7 @@ ODA.showConfirm = function (textContent = 'Подтвердить?', params = {}
 /** Ввод строки: результат — введённое значение (пусто → отмена). */
 ODA.showPrompt = function (label = '', params = {}) {
     const input = ODA.createElement('input', { value: params.value ?? '', placeholder: params.placeholder ?? '' });
-    input.style.cssText = 'margin: var(--space-l); padding: var(--control-padding); border: 1px solid var(--control-border-color); border-radius: var(--control-radius); font: inherit;';
+    input.style.cssText = 'margin: var(--space-l); width: min(360px, calc(100% - 32px)); box-sizing: border-box; padding: var(--control-padding); border: 1px solid var(--control-border-color); border-radius: var(--control-radius); font: inherit;';
     queueMicrotask(() => input.focus());
     return ODA.showDialog(input, {
         allowClose: true,

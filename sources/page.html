@@ -4,8 +4,11 @@
     <meta charset="UTF-8">
     <meta name="theme-color" content="#4b0082">
     <meta name="color-scheme" id="color-scheme" content="light dark">
-    <meta name="viewport" content="initial-scale=1, maximum-scale=3, width=device-width">
-    <meta name="description" content="odb content">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=3, viewport-fit=cover">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="description" content="ODANT-WORK">
     <link rel="manifest" href="{item_path}?manifest" crossorigin="use-credentials">
     <link rel="icon" type="image/svg+xml" href="{item_icon_path}" crossorigin="use-credentials">
     <title>{title}</title>
@@ -115,8 +118,8 @@
                     @apply --center;
                     flex-wrap: wrap;
                     width: 100%;
-                    padding: 4px 12px;
-                    gap: 10px;
+                    padding: max(4px, var(--safe-top, 0px)) max(12px, var(--safe-right, 0px)) 4px max(12px, var(--safe-left, 0px));
+                    gap: 8px;
                     box-sizing: border-box;
 
                     div{

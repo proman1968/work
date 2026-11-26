@@ -102,6 +102,7 @@ export default {
                 @apply --horizontal;
                 align-items: center;
                 justify-content: space-between;
+                flex-wrap: wrap;
                 gap: 10px;
                 padding: 10px 16px;
                 border-bottom: 1px solid var(--subtle-border, var(--border-color));
@@ -111,6 +112,38 @@ export default {
             .req-status {
                 font-size: 12.5px;
                 color: var(--muted-color);
+            }
+            @media (max-width: 768px) {
+                :host {
+                    flex-direction: column;
+                }
+                .sys-sidebar {
+                    width: 100%;
+                    flex-direction: row;
+                    align-items: center;
+                    overflow-x: auto;
+                    overflow-y: hidden;
+                    border-right: none;
+                    border-bottom: 1px solid var(--subtle-border, var(--border-color));
+                    padding: 6px 8px;
+                    gap: 6px;
+                    box-sizing: border-box;
+                }
+                .sys-sep {
+                    width: 1px;
+                    height: 22px;
+                    margin: 0 2px;
+                    flex-shrink: 0;
+                }
+                .sys-tab {
+                    width: auto;
+                    white-space: nowrap;
+                    flex-shrink: 0;
+                    padding: 7px 11px;
+                }
+                .req-bar {
+                    padding: 8px 12px;
+                }
             }
         </style>
 

@@ -128,15 +128,31 @@ ODA({
             :host {
                 @apply --horizontal;
                 @apply --flex;
-                min-width: 640px;
-                min-height: 320px;
+                width: min(680px, calc(100vw - 24px));
+                max-width: 100%;
+                min-height: min(320px, 50dvh);
+                box-sizing: border-box;
                 overflow: hidden;
             }
             .accounts {
                 width: 220px;
-                min-width: 180px;
+                min-width: 170px;
+                flex-shrink: 0;
                 @apply --light;
                 border-right: 1px solid var(--subtle-border);
+                overflow-y: auto;
+            }
+            @media (max-width: 640px) {
+                :host {
+                    flex-direction: column;
+                }
+                .accounts {
+                    width: 100%;
+                    min-width: 0;
+                    border-right: none;
+                    border-bottom: 1px solid var(--subtle-border);
+                    max-height: 32dvh;
+                }
             }
             .accounts-toolbar {
                 padding: 6px var(--space-m);
@@ -604,8 +620,77 @@ export default {
             .compose-footer {
                 @apply --horizontal;
                 align-items: center;
+                flex-wrap: wrap;
                 gap: 8px;
                 padding-top: 4px;
+            }
+            .mail-back-btn {
+                display: none;
+            }
+            @media (max-width: 960px) {
+                .mail-sidebar {
+                    width: 176px;
+                }
+                .mail-list-pane {
+                    width: 270px;
+                    min-width: 210px;
+                }
+            }
+            @media (max-width: 768px) {
+                :host {
+                    flex-direction: column;
+                }
+                .mail-sidebar {
+                    width: 100%;
+                    flex-direction: row;
+                    align-items: center;
+                    overflow-x: auto;
+                    overflow-y: hidden;
+                    border-right: none;
+                    border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+                    padding: 6px 8px;
+                    gap: 6px;
+                    box-sizing: border-box;
+                }
+                .compose-btn {
+                    margin-bottom: 0;
+                    padding: 7px 11px;
+                    white-space: nowrap;
+                    flex-shrink: 0;
+                }
+                .nav-btn {
+                    width: auto;
+                    white-space: nowrap;
+                    flex-shrink: 0;
+                    padding: 6px 10px;
+                }
+                .side-sep, .side-label, .mail-side-spacer {
+                    display: none;
+                }
+                .mail-list-pane {
+                    width: 100%;
+                    min-width: 0;
+                    flex: 1 1 auto;
+                    border-right: none;
+                }
+                .mail-list-pane.mobile-hidden {
+                    display: none;
+                }
+                .mail-view-pane {
+                    width: 100%;
+                    flex: 1 1 auto;
+                    min-height: 0;
+                }
+                .mail-view-pane.mobile-hidden {
+                    display: none;
+                }
+                .mail-back-btn {
+                    display: inline-flex;
+                }
+                .view-head, .view-body, .compose-wrap {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                }
             }
         </style>
 
@@ -636,9 +721,9 @@ export default {
                 <span>{{$for.item.address}}</span>
             </button>
 
-            <div style="flex: 1;"></div>
+            <div class="mail-side-spacer" style="flex: 1;"></div>
             <div class="side-sep" ~if="canConfigure"></div>
-            <label ~if="canConfigure && accounts.length" style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;cursor:pointer;">
+            <label ~if="canConfigure && accounts.length" style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:12px;cursor:pointer;white-space:nowrap;flex-shrink:0;">
                 <input type="checkbox" :checked="autoRefresh" @change="toggleAutoRefresh($event.target.checked)">
                 <span>Автопроверка почты</span>
             </label>
@@ -648,7 +733,7 @@ export default {
             </button>
         </aside>
 
-        <section class="mail-list-pane">
+        <section class="mail-list-pane" ~class="{ 'mobile-hidden': mode !== 'idle' }">
             <div class="list-toolbar">
                 <input class="search-input" type="search" placeholder="Поиск писем…" :value="searchQuery" @input="onSearchInput($event)">
                 <button type="button" class="icon-btn" ~class="{ active: unreadOnly }" @tap="toggleUnreadOnly()" title="Только непрочитанные">●</button>
@@ -681,7 +766,7 @@ export default {
             </div>
         </section>
 
-        <main class="mail-view-pane">
+        <main class="mail-view-pane" ~class="{ 'mobile-hidden': mode === 'idle' }">
             <div ~if="mode === 'idle'" class="empty-pane">
                 <oda-icon icon="enterprise:email" icon-size="40" style="opacity:0.35;"></oda-icon>
                 <div style="font-size:14px;font-weight:600;">Выберите письмо для просмотра</div>
@@ -695,6 +780,7 @@ export default {
 
             <div ~if="mode === 'view' && selected" style="display:flex;flex-direction:column;flex:1;min-height:0;">
                 <div class="view-actions">
+                    <oda-button class="mail-back-btn" icon="icons:arrow-back" @tap="mode = 'idle'">Письма</oda-button>
                     <oda-button ~if="selected.box === 'drafts'" icon="editor:mode-edit" info-invert @tap="editDraft(selected)">Продолжить черновик</oda-button>
                     <oda-button ~if="selected.box !== 'drafts'" icon="icons:reply" @tap="reply(false)">Ответить</oda-button>
                     <oda-button ~if="selected.box !== 'drafts' && (selected.cc || (selected.to || '').includes(','))" icon="icons:reply-all" @tap="reply(true)">Ответить всем</oda-button>
@@ -727,7 +813,8 @@ export default {
             </div>
 
             <div ~if="mode === 'compose'" class="compose-wrap">
-                <div style="display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                    <oda-button class="mail-back-btn" icon="icons:arrow-back" @tap="mode = 'idle'">Письма</oda-button>
                     <span style="font-size:15px;font-weight:700;">{{draft.uid ? 'Редактирование черновика' : 'Новое письмо'}}</span>
                 </div>
 

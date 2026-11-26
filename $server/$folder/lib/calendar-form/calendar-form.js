@@ -47,10 +47,9 @@ ODA({
                 @apply --vertical;
                 padding: 10px 14px;
                 gap: 10px;
-                min-width: 420px;
-                max-width: 560px;
-                max-height: 75vh;
-                overflow-y: auto;
+                width: min(520px, calc(100vw - 24px));
+                max-width: 100%;
+                box-sizing: border-box;
                 font-size: 13px;
                 color: var(--content-color);
             }
@@ -75,6 +74,7 @@ ODA({
                 font-family: inherit;
                 font-size: 13px;
                 width: 100%;
+                min-width: 0;
                 padding: 3px 0;
                 box-sizing: border-box;
             }
@@ -84,11 +84,13 @@ ODA({
             }
             .row {
                 @apply --horizontal;
+                flex-wrap: wrap;
                 gap: 10px;
                 align-items: stretch;
             }
             .row > fieldset {
-                @apply --flex;
+                flex: 1 1 180px;
+                min-width: 0;
             }
             .box {
                 @apply --vertical;

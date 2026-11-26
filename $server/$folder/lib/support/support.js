@@ -143,21 +143,39 @@ ODA({
             }
             .pill {
                 position: fixed;
-                top: 10px;
+                top: max(10px, var(--safe-top, 0px));
                 left: 50%;
                 transform: translateX(-50%);
                 pointer-events: auto;
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                justify-content: center;
+                flex-wrap: wrap;
+                row-gap: 6px;
+                column-gap: 8px;
+                max-width: calc(100vw - 16px - var(--safe-left, 0px) - var(--safe-right, 0px));
+                box-sizing: border-box;
                 padding: 7px 14px;
-                border-radius: 999px;
+                border-radius: 20px;
                 background: #0f172a;
                 color: #f8fafc;
                 border: 1px solid rgba(56, 189, 248, 0.45);
                 box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
                 font-size: 12.5px;
-                white-space: nowrap;
+                text-align: center;
+            }
+            .pill-title {
+                display: inline-flex;
+                align-items: center;
+                gap: 7px;
+                min-width: 0;
+            }
+            .pill-actions {
+                display: inline-flex;
+                align-items: center;
+                flex-wrap: wrap;
+                justify-content: center;
+                gap: 6px;
             }
             .dot {
                 width: 9px;
@@ -221,12 +239,16 @@ ODA({
             }
         </style>
         <div class="pill">
-            <span class="dot"></span>
-            <span>Поддержка видит экран · <b>{{ticketId}}</b></span>
-            <button type="button" class="mode-btn" :class="{ control: mode === 'control' }" @tap="toggleMode()">
-                {{mode === 'control' ? 'Управление WORK (вкл)' : 'Только просмотр'}}
-            </button>
-            <button type="button" class="stop-btn" @tap="stopSession()">Прервать</button>
+            <span class="pill-title">
+                <span class="dot"></span>
+                <span>Поддержка видит экран · <b>{{ticketId}}</b></span>
+            </span>
+            <span class="pill-actions">
+                <button type="button" class="mode-btn" :class="{ control: mode === 'control' }" @tap="toggleMode()">
+                    {{mode === 'control' ? 'Управление WORK (вкл)' : 'Только просмотр'}}
+                </button>
+                <button type="button" class="stop-btn" @tap="stopSession()">Прервать</button>
+            </span>
         </div>
         <div class="cursor" ~if="cursorVisible" :style="'left:' + cursorX + 'px;top:' + cursorY + 'px'">
             <div class="cursor-dot"></div>
@@ -419,6 +441,8 @@ ODA({
                 display: flex;
                 align-items: center;
                 justify-content: center;
+                padding: max(12px, var(--safe-top, 0px)) max(12px, var(--safe-right, 0px)) max(12px, var(--safe-bottom, 0px)) max(12px, var(--safe-left, 0px));
+                box-sizing: border-box;
                 background: rgba(15, 23, 42, 0.45);
                 backdrop-filter: blur(3px);
                 font-family: system-ui, -apple-system, sans-serif;
@@ -430,15 +454,19 @@ ODA({
                 pointer-events: none;
                 align-items: flex-end;
                 justify-content: flex-end;
-                padding: 16px;
+                padding: max(12px, var(--safe-top, 0px)) max(16px, var(--safe-right, 0px)) max(16px, var(--safe-bottom, 0px)) max(12px, var(--safe-left, 0px));
             }
             .rec-bar {
                 pointer-events: auto;
                 display: flex;
                 align-items: center;
+                flex-wrap: wrap;
+                justify-content: center;
                 gap: 10px;
+                max-width: 100%;
+                box-sizing: border-box;
                 padding: 10px 16px;
-                border-radius: 999px;
+                border-radius: 20px;
                 background: #0f172a;
                 color: #fff;
                 box-shadow: 0 12px 32px rgba(0,0,0,.35);
@@ -450,47 +478,57 @@ ODA({
                 border-radius: 50%;
                 background: #ef4444;
                 animation: pulse 1s infinite;
+                flex-shrink: 0;
             }
             @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
             .card {
-                width: min(820px, 94vw);
-                max-height: 88vh;
-                display: flex;
-                flex-direction: column;
-                background: var(--content-background, #ffffff);
-                color: var(--content-color, #0f172a);
-                border: 1px solid var(--subtle-border, #cbd5e1);
+                @apply --dialog-card;
+                width: min(820px, 100%);
+                max-width: 100%;
+                max-height: 100%;
                 border-radius: 14px;
-                box-shadow: 0 24px 64px rgba(15, 23, 42, 0.28);
-                overflow: hidden;
+            }
+            .card.tab-list {
+                height: min(640px, 100%);
             }
             .head {
-                display: flex;
-                align-items: center;
-                gap: 10px;
-                padding: 12px 16px;
+                @apply --dialog-head;
+                padding: 10px 14px;
                 background: var(--subtle-background, #f8fafc);
                 border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+            }
+            .head-brand {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                min-width: 0;
+                flex: 0 1 auto;
             }
             .head-title {
                 font-weight: 700;
                 font-size: 15px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
             .tabs {
                 display: flex;
+                flex-wrap: wrap;
                 gap: 6px;
-                margin-left: 12px;
+                min-width: 0;
             }
             .tab-btn {
                 border: 1px solid var(--subtle-border, #cbd5e1);
                 background: var(--content-background, #fff);
                 color: inherit;
                 border-radius: 8px;
-                padding: 5px 12px;
+                padding: 6px 12px;
                 font: inherit;
                 font-size: 12.5px;
                 font-weight: 600;
                 cursor: pointer;
+                min-height: 32px;
+                box-sizing: border-box;
             }
             .tab-btn.active {
                 background: var(--accent-color, #4f46e5);
@@ -503,27 +541,42 @@ ODA({
                 background: transparent;
                 color: var(--muted-color, #64748b);
                 font-size: 20px;
+                line-height: 1;
                 cursor: pointer;
-                padding: 2px 8px;
-                border-radius: 6px;
+                min-width: 34px;
+                min-height: 34px;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 8px;
+                flex-shrink: 0;
             }
             .close-x:hover {
                 background: var(--subtle-background, #e2e8f0);
                 color: var(--content-color, #0f172a);
             }
             .body {
-                padding: 16px;
-                overflow-y: auto;
+                @apply --dialog-body;
+                padding: 14px 16px;
                 display: flex;
                 flex-direction: column;
                 gap: 12px;
-                min-height: 320px;
+            }
+            .body.list-body {
+                overflow: hidden;
+            }
+            .footer {
+                @apply --dialog-footer;
+                padding: 10px 16px;
+                background: var(--subtle-background, #f8fafc);
+                border-top: 1px solid var(--subtle-border, #e2e8f0);
             }
             .capture-row {
                 display: flex;
                 gap: 8px;
                 flex-wrap: wrap;
                 align-items: center;
+                min-width: 0;
             }
             .btn {
                 border: 1px solid var(--subtle-border, #cbd5e1);
@@ -531,13 +584,17 @@ ODA({
                 color: inherit;
                 border-radius: 8px;
                 padding: 7px 12px;
+                min-height: 34px;
+                box-sizing: border-box;
                 font: inherit;
                 font-size: 13px;
                 font-weight: 600;
                 cursor: pointer;
                 display: inline-flex;
                 align-items: center;
+                justify-content: center;
                 gap: 6px;
+                max-width: 100%;
             }
             .btn:hover { filter: brightness(0.96); }
             .btn.primary {
@@ -557,6 +614,7 @@ ODA({
             }
             textarea, input[type="text"] {
                 width: 100%;
+                max-width: 100%;
                 box-sizing: border-box;
                 padding: 9px 12px;
                 border-radius: 8px;
@@ -565,6 +623,7 @@ ODA({
                 color: inherit;
                 font: inherit;
                 font-size: 13px;
+                resize: vertical;
             }
             .preview-box {
                 border: 1px solid var(--subtle-border, #cbd5e1);
@@ -574,10 +633,13 @@ ODA({
                 display: flex;
                 flex-direction: column;
                 gap: 8px;
+                min-width: 0;
             }
             .shot-canvas {
                 max-width: 100%;
-                max-height: 280px;
+                max-height: min(260px, 34dvh);
+                width: auto;
+                height: auto;
                 border-radius: 6px;
                 border: 1px solid var(--subtle-border, #cbd5e1);
                 cursor: crosshair;
@@ -585,19 +647,19 @@ ODA({
                 background: #0f172a;
             }
             .tickets-split {
-                display: grid;
-                grid-template-columns: 260px 1fr;
+                display: flex;
+                flex: 1 1 auto;
+                min-height: 0;
+                min-width: 0;
                 gap: 12px;
-                min-height: 360px;
-            }
-            @media (max-width: 680px) {
-                .tickets-split { grid-template-columns: 1fr; }
             }
             .t-list {
+                width: 255px;
+                flex-shrink: 0;
                 border: 1px solid var(--subtle-border, #e2e8f0);
                 border-radius: 10px;
                 overflow-y: auto;
-                max-height: 460px;
+                min-height: 0;
                 display: flex;
                 flex-direction: column;
             }
@@ -608,6 +670,7 @@ ODA({
                 display: flex;
                 flex-direction: column;
                 gap: 4px;
+                min-width: 0;
             }
             .t-item:hover { background: var(--subtle-background, #f8fafc); }
             .t-item.active {
@@ -615,27 +678,35 @@ ODA({
                 border-left: 3px solid var(--accent-color, #4f46e5);
             }
             .t-thread {
+                flex: 1 1 auto;
+                min-width: 0;
+                min-height: 0;
                 border: 1px solid var(--subtle-border, #e2e8f0);
                 border-radius: 10px;
                 padding: 12px;
                 display: flex;
                 flex-direction: column;
                 gap: 10px;
-                max-height: 460px;
+            }
+            .t-back {
+                display: none;
             }
             .msgs {
-                flex: 1;
+                flex: 1 1 auto;
+                min-height: 0;
                 overflow-y: auto;
                 display: flex;
                 flex-direction: column;
                 gap: 8px;
+                overscroll-behavior: contain;
             }
             .msg {
                 padding: 8px 11px;
                 border-radius: 10px;
                 background: var(--subtle-background, #f1f5f9);
                 font-size: 13px;
-                max-width: 90%;
+                max-width: 92%;
+                word-break: break-word;
             }
             .msg.support {
                 align-self: flex-start;
@@ -645,6 +716,17 @@ ODA({
             .msg.client {
                 align-self: flex-end;
                 background: color-mix(in srgb, var(--accent-color, #4f46e5) 10%, var(--content-background, #fff));
+            }
+            .reply-bar {
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-shrink: 0;
+                min-width: 0;
+            }
+            .reply-bar input {
+                flex: 1 1 auto;
+                min-width: 0;
             }
             .tag {
                 display: inline-flex;
@@ -667,9 +749,61 @@ ODA({
                 flex-direction: column;
                 gap: 8px;
                 font-size: 13px;
+                flex-shrink: 0;
             }
             .err { color: #dc2626; font-size: 12.5px; }
             .muted { color: var(--muted-color, #64748b); font-size: 12px; }
+            @media (max-width: 680px) {
+                .tickets-split {
+                    flex-direction: column;
+                }
+                .t-list {
+                    width: 100%;
+                    flex: 1 1 auto;
+                }
+                .tickets-split.mobile-thread .t-list {
+                    display: none;
+                }
+                .tickets-split:not(.mobile-thread) .t-thread {
+                    display: none;
+                }
+                .t-back {
+                    display: inline-flex;
+                }
+            }
+            @media (max-width: 640px) {
+                :host(:not([minimized])) {
+                    padding: 0;
+                }
+                .card {
+                    width: 100%;
+                    height: 100%;
+                    max-width: 100%;
+                    max-height: 100%;
+                    border-radius: 0;
+                    border: none;
+                }
+                .head {
+                    padding: max(10px, var(--safe-top, 0px)) max(12px, var(--safe-right, 0px)) 10px max(12px, var(--safe-left, 0px));
+                }
+                .tabs {
+                    order: 3;
+                    width: 100%;
+                }
+                .tabs .tab-btn {
+                    flex: 1 1 auto;
+                    text-align: center;
+                }
+                .body {
+                    padding: 12px max(12px, var(--safe-right, 0px)) 12px max(12px, var(--safe-left, 0px));
+                }
+                .footer {
+                    padding: 10px max(12px, var(--safe-right, 0px)) max(10px, var(--safe-bottom, 0px)) max(12px, var(--safe-left, 0px));
+                }
+                .footer .btn {
+                    flex: 1 1 auto;
+                }
+            }
         </style>
 
         <div ~if="recording" class="rec-bar">
@@ -678,10 +812,12 @@ ODA({
             <button type="button" class="btn danger" style="padding:4px 10px;font-size:12px" @tap="stopVideoCapture()">⏹ Остановить</button>
         </div>
 
-        <div ~if="!minimized" class="card">
+        <div ~if="!minimized" class="card" :class="{ 'tab-list': activeTab === 'list' && tickets.length > 0 }">
             <div class="head">
-                <oda-icon icon="icons:help" icon-size="20"></oda-icon>
-                <span class="head-title">Служба поддержки ODANT-WORK</span>
+                <div class="head-brand">
+                    <oda-icon icon="icons:help" icon-size="20" style="flex-shrink:0"></oda-icon>
+                    <span class="head-title">Служба поддержки ODANT-WORK</span>
+                </div>
                 <div class="tabs">
                     <button type="button" class="tab-btn" :class="{ active: activeTab === 'new' }" @tap="activeTab = 'new'">Новое обращение</button>
                     <button type="button" class="tab-btn" :class="{ active: activeTab === 'list' }" @tap="openListTab()">
@@ -707,7 +843,7 @@ ODA({
                 <div class="preview-box" ~if="hasScreenshot">
                     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
                         <span class="muted">Можно обвести проблемное место прямо мышью по скриншоту:</span>
-                        <div style="display:flex;gap:6px">
+                        <div style="display:flex;gap:6px;flex-wrap:wrap">
                             <button type="button" class="btn" style="padding:4px 9px;font-size:12px" @tap="clearScreenshotMarkup()">Сбросить пометки</button>
                             <button type="button" class="btn" style="padding:4px 9px;font-size:12px;color:#dc2626" @tap="removeScreenshot()">Удалить скриншот</button>
                         </div>
@@ -721,43 +857,43 @@ ODA({
 
                 <!-- Предпросмотр видео -->
                 <div class="preview-box" ~if="videoDataUrl">
-                    <div style="display:flex;align-items:center;justify-content:space-between">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
                         <span class="muted">Записанное видео ({{videoName}})</span>
                         <button type="button" class="btn" style="padding:4px 9px;font-size:12px;color:#dc2626" @tap="removeVideo()">Удалить видео</button>
                     </div>
-                    <video controls :src="videoDataUrl" style="max-height:240px;border-radius:6px;background:#000"></video>
+                    <video controls :src="videoDataUrl" style="max-width:100%;max-height:min(240px,32dvh);border-radius:6px;background:#000"></video>
                 </div>
 
                 <div>
                     <textarea rows="4" placeholder="Опишите проблему: что делали, что ожидали и что пошло не так…" ::value="problemText"></textarea>
                 </div>
 
-                <label style="display:flex;align-items:center;gap:8px;font-size:12.5px;cursor:pointer;user-select:none">
-                    <input type="checkbox" ::checked="includeTech">
+                <label style="display:flex;align-items:flex-start;gap:8px;font-size:12.5px;cursor:pointer;user-select:none">
+                    <input type="checkbox" style="margin-top:2px;flex-shrink:0" ::checked="includeTech">
                     <span>Приложить технические данные (версия WORK, путь текущей формы и ошибки)</span>
                 </label>
 
                 <div ~if="error" class="err">{{error}}</div>
+            </div>
 
-                <div style="display:flex;justify-content:flex-end;gap:8px">
-                    <button type="button" class="btn" @tap="closePanel()">Отмена</button>
-                    <button type="button" class="btn primary" :disabled="sending" @tap="submitTicket()">
-                        {{sending ? 'Отправка…' : 'Отправить в поддержку'}}
-                    </button>
-                </div>
+            <div class="footer" ~if="activeTab === 'new'">
+                <button type="button" class="btn" @tap="closePanel()">Отмена</button>
+                <button type="button" class="btn primary" :disabled="sending" @tap="submitTicket()">
+                    {{sending ? 'Отправка…' : 'Отправить в поддержку'}}
+                </button>
             </div>
 
             <!-- Вкладка: Список обращений и переписка -->
-            <div class="body" ~if="activeTab === 'list'">
+            <div class="body list-body" ~if="activeTab === 'list'">
                 <div ~if="error" class="err">{{error}}</div>
                 <div ~if="!tickets.length && !loading" class="muted" style="padding:24px;text-align:center">
                     Обращений пока нет. Нажмите «Новое обращение», чтобы написать в службу поддержки.
                 </div>
-                <div class="tickets-split" ~if="tickets.length">
+                <div class="tickets-split" :class="{ 'mobile-thread': mobileTicketOpen }" ~if="tickets.length">
                     <div class="t-list">
-                        <div class="t-item" ~for="tickets" :class="{ active: selectedTicketId === $for.item.ticketId }" @tap="selectTicket($for.item.ticketId)">
-                            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
-                                <b style="font-size:12.5px">{{$for.item.ticketId}}</b>
+                        <div class="t-item" ~for="tickets" :class="{ active: selectedTicketId === $for.item.ticketId }" @tap="selectTicket($for.item.ticketId, true)">
+                            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0">
+                                <b style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{$for.item.ticketId}}</b>
                                 <span class="tag" :class="$for.item.status === 'answered' ? 'ok' : ($for.item.status === 'in_progress' ? 'info' : 'warn')">
                                     {{statusLabel($for.item.status)}}
                                 </span>
@@ -774,11 +910,12 @@ ODA({
                     </div>
 
                     <div class="t-thread" ~if="selectedTicket">
-                        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--subtle-border,#e2e8f0);padding-bottom:8px">
-                            <div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;border-bottom:1px solid var(--subtle-border,#e2e8f0);padding-bottom:8px;flex-shrink:0">
+                            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0">
+                                <button type="button" class="btn t-back" style="padding:4px 8px;font-size:12px" @tap="mobileTicketOpen = false">← Список</button>
                                 <b>{{selectedTicket.ticketId}}</b>
-                                <span class="tag" style="margin-left:6px">{{selectedTicket.tierName || 'Поддержка'}}</span>
-                                <span ~if="selectedTicket.assignedSupportName" class="muted" style="margin-left:6px">Инженер: {{selectedTicket.assignedSupportName}}</span>
+                                <span class="tag">{{selectedTicket.tierName || 'Поддержка'}}</span>
+                                <span ~if="selectedTicket.assignedSupportName" class="muted">Инженер: {{selectedTicket.assignedSupportName}}</span>
                             </div>
                             <button ~if="selectedTicket.status !== 'closed'" type="button" class="btn" style="padding:4px 9px;font-size:12px" @tap="startRemoteDesktop(selectedTicket.ticketId, 'view')">
                                 🖥 Поделиться экраном
@@ -801,16 +938,16 @@ ODA({
                                 <div style="white-space:pre-wrap">{{$for.item.text}}</div>
                                 <div ~if="$for.item.attachments?.length" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
                                     <div ~for="$for.item.attachments">
-                                        <img ~if="$for.$for.item.kind !== 'video'" :src="mediaUrl($for.$for.item)" style="max-width:220px;max-height:140px;border-radius:6px;border:1px solid var(--subtle-border);cursor:pointer" @tap="loadMediaInto($event, selectedTicket.ticketId, $for.$for.item)">
-                                        <video ~if="$for.$for.item.kind === 'video'" controls preload="metadata" :src="mediaUrl($for.$for.item)" style="max-width:260px;max-height:160px;border-radius:6px;background:#000"></video>
+                                        <img ~if="$for.$for.item.kind !== 'video'" :src="mediaUrl($for.$for.item)" style="max-width:min(220px,100%);max-height:140px;border-radius:6px;border:1px solid var(--subtle-border);cursor:pointer" @tap="loadMediaInto($event, selectedTicket.ticketId, $for.$for.item)">
+                                        <video ~if="$for.$for.item.kind === 'video'" controls preload="metadata" :src="mediaUrl($for.$for.item)" style="max-width:min(260px,100%);max-height:160px;border-radius:6px;background:#000"></video>
                                     </div>
                                 </div>
                             </div>
                         </div>
 
-                        <div ~if="selectedTicket.status !== 'closed'" style="display:flex;gap:8px;align-items:center">
+                        <div ~if="selectedTicket.status !== 'closed'" class="reply-bar">
                             <input type="text" placeholder="Написать сообщение инженеру…" ::value="replyText" @keydown.enter="sendReply()">
-                            <button type="button" class="btn primary" :disabled="sending" @tap="sendReply()">Отправить</button>
+                            <button type="button" class="btn primary" style="flex-shrink:0" :disabled="sending" @tap="sendReply()">Отправить</button>
                         </div>
                     </div>
                 </div>
@@ -842,6 +979,7 @@ ODA({
     tickets: [],
     unreadTotal: 0,
     selectedTicketId: '',
+    mobileTicketOpen: false,
     replyText: '',
     _mediaCache: {},
     _pollTimer: null,
@@ -878,9 +1016,10 @@ ODA({
     },
     async openListTab() {
         this.activeTab = 'list';
+        this.mobileTicketOpen = false;
         await this.refreshTickets();
         if (this.selectedTicket)
-            await this.selectTicket(this.selectedTicket.ticketId);
+            await this.selectTicket(this.selectedTicket.ticketId, false);
     },
     async refreshTickets() {
         this.loading = true;
@@ -901,8 +1040,10 @@ ODA({
             this.loading = false;
         }
     },
-    async selectTicket(ticketId) {
+    async selectTicket(ticketId, openOnMobile = false) {
         this.selectedTicketId = ticketId;
+        if (openOnMobile)
+            this.mobileTicketOpen = true;
         const t = (this.tickets || []).find(x => x.ticketId === ticketId);
         if (t && t.unreadCount > 0) {
             await WORK.fetch('/', 'support_mark_read', {}, JSON.stringify({ ticketId })).catch(() => {});

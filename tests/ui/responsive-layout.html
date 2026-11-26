@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Responsive Layout & Dialogs Matrix UI tests</title>
+</head>
+<body>
+<script type="module">
+await import('/sources/client.js');
+await import('/$server/$folder/lib/support/support.js');
+await import('/$server/$folder/lib/calendar-form/calendar-form.js');
+const calMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/calendar/$handler/calendar.js');
+const emailMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/email.js');
+const sysMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/system.js');
+
+function cloneProto(src, is) {
+    const proto = {};
+    for (const k of [...Object.getOwnPropertyNames(src), ...Object.getOwnPropertySymbols(src)])
+        Object.defineProperty(proto, k, Object.getOwnPropertyDescriptor(src, k));
+    proto.is = is;
+    return proto;
+}
+await ODA(cloneProto(calMod.default, 'resp-cal-view'));
+await ODA(cloneProto(emailMod.default, 'resp-email-view'));
+await ODA(cloneProto(sysMod.default, 'resp-sys-view'));
+await ODA.waitReg('work-support-panel');
+await ODA.waitReg('work-support-remote-bar');
+await ODA.waitReg('calendar-form');
+await ODA.waitReg('resp-cal-view');
+await ODA.waitReg('resp-email-view');
+await ODA.waitReg('resp-sys-view');
+
+const results = [];
+window.__results = results;
+async function test(name, fn) {
+    try { await fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, error: String(e?.stack || e) }); }
+}
+const assert = (c, m) => { if (!c) throw new Error(m || 'assertion failed'); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function waitFor(fn, msg, ms = 3500) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+        const v = fn();
+        if (v) return v;
+        await sleep(30);
+    }
+    throw new Error('не дождались: ' + (typeof msg === 'function' ? msg() : msg));
+}
+
+let vpSeq = 0;
+const vpWaiters = new Map();
+window.__vpAck = (id, err) => {
+    const w = vpWaiters.get(id);
+    if (w) {
+        vpWaiters.delete(id);
+        err ? w.reject(new Error(err)) : w.resolve();
+    }
+};
+async function setViewport(width, height, mobile = false) {
+    if (typeof window.__cdpSetViewport === 'function') {
+        const id = 'vp_' + (++vpSeq);
+        const p = new Promise((resolve, reject) => vpWaiters.set(id, { resolve, reject }));
+        window.__cdpSetViewport(JSON.stringify({ id, width, height, mobile }));
+        await p;
+        await sleep(80);
+    }
+}
+
+function assertInViewport(el, label, tol = 2) {
+    assert(el, `${label}: элемент не найден`);
+    const r = el.getBoundingClientRect();
+    assert(r.width > 0 && r.height > 0, `${label}: нулевой размер (${r.width}x${r.height})`);
+    assert(r.left >= -tol, `${label}: вылез слева (${r.left.toFixed(1)}px)`);
+    assert(r.top >= -tol, `${label}: вылез сверху (${r.top.toFixed(1)}px)`);
+    assert(r.right <= window.innerWidth + tol, `${label}: вылез справа (${r.right.toFixed(1)} > ${window.innerWidth})`);
+    assert(r.bottom <= window.innerHeight + tol, `${label}: обрезан снизу (${r.bottom.toFixed(1)} > ${window.innerHeight})`);
+}
+
+const VIEWPORTS = [
+    { name: 'Desktop 1440x900', w: 1440, h: 900, mobile: false },
+    { name: 'Compact/Zoom 1024x600', w: 1024, h: 600, mobile: false },
+    { name: 'Mobile PWA 390x844', w: 390, h: 844, mobile: true },
+];
+
+await test('ODA.states.mobileMode корректно переключается по ширине экрана', async () => {
+    await setViewport(1440, 900, false);
+    assert(ODA.states.mobileMode === false, '1440x900 не должен быть mobileMode');
+    await setViewport(1024, 600, false);
+    assert(ODA.states.mobileMode === false, '1024x600 не должен быть mobileMode');
+    await setViewport(390, 844, true);
+    assert(ODA.states.mobileMode === true, '390x844 должен включать mobileMode');
+});
+
+await test('<work-support-panel>: на всех 3 экранах (и со скриншотом) шапка, крестик и кнопки Отмена/Отправить полностью видны и не режутся', async () => {
+    const prevFetch = WORK.fetch;
+    WORK.fetch = async () => ({ ok: true, tickets: [], unreadTotal: 0, remoteRequests: 0 });
+    try {
+        for (const vp of VIEWPORTS) {
+            await setViewport(vp.w, vp.h, vp.mobile);
+            const sp = document.createElement('work-support-panel');
+            document.body.appendChild(sp);
+            try {
+                await waitFor(() => sp.$('.footer .btn.primary') && sp.$('.close-x'), `${vp.name}: футер и крестик смонтированы`);
+                const card = sp.$('.card');
+                const closeBtn = sp.$('.close-x');
+                const submitBtn = sp.$('.footer .btn.primary');
+                const cancelBtn = sp.$('.footer .btn:not(.primary)');
+                assertInViewport(card, `${vp.name} (пустая форма) card`);
+                assertInViewport(closeBtn, `${vp.name} (пустая форма) close-x`);
+                assertInViewport(cancelBtn, `${vp.name} (пустая форма) Отмена`);
+                assertInViewport(submitBtn, `${vp.name} (пустая форма) Отправить`);
+
+                // Проверяем отсутствие лишней пустой дыры под кнопками на десктопе: футер внизу карточки
+                const cardR = card.getBoundingClientRect();
+                const footR = sp.$('.footer').getBoundingClientRect();
+                assert(Math.abs(cardR.bottom - footR.bottom) <= 2, `${vp.name}: под футером не должно быть пустой дыры`);
+
+                // Теперь имитируем прикреплённый большой скриншот (как на 2-м скрине пользователя)
+                sp.hasScreenshot = true;
+                await waitFor(() => sp.$('#shotCanvas'), `${vp.name}: canvas скриншота появился`);
+                const canvas = sp.$('#shotCanvas');
+                canvas.width = 1920;
+                canvas.height = 1080;
+                await sleep(60);
+
+                assertInViewport(card, `${vp.name} (со скриншотом) card`);
+                assertInViewport(closeBtn, `${vp.name} (со скриншотом) close-x`);
+                assertInViewport(cancelBtn, `${vp.name} (со скриншотом) Отмена`);
+                assertInViewport(submitBtn, `${vp.name} (со скриншотом) Отправить`);
+                assert(sp.$('.body').scrollWidth <= sp.$('.body').clientWidth + 2, `${vp.name}: в теле поддержки нет горизонтального переполнения`);
+            }
+            finally {
+                sp.remove();
+            }
+        }
+    }
+    finally {
+        WORK.fetch = prevFetch;
+    }
+});
+
+await test('<work-support-remote-bar>: плашка и кнопки Управление/Прервать целиком в экране на всех 3 размерах', async () => {
+    for (const vp of VIEWPORTS) {
+        await setViewport(vp.w, vp.h, vp.mobile);
+        const bar = document.createElement('work-support-remote-bar');
+        bar.ticketId = 'TCK-2026-0001';
+        document.body.appendChild(bar);
+        try {
+            await waitFor(() => bar.$('.mode-btn') && bar.$('.stop-btn'), `${vp.name}: кнопки плашки смонтированы`);
+            assertInViewport(bar.$('.pill'), `${vp.name} pill`);
+            assertInViewport(bar.$('.mode-btn'), `${vp.name} mode-btn`);
+            assertInViewport(bar.$('.stop-btn'), `${vp.name} stop-btn`);
+        }
+        finally {
+            bar.remove();
+        }
+    }
+});
+
+await test('WORK.showDialog (oda-popover) с высоким содержимым: подвал с OK/Отмена не обрезается на всех 3 экранах', async () => {
+    for (const vp of VIEWPORTS) {
+        await setViewport(vp.w, vp.h, vp.mobile);
+        const tall = document.createElement('div');
+        tall.style.cssText = 'width: 520px; max-width: 100%; padding: 16px; box-sizing: border-box;';
+        tall.innerHTML = Array.from({ length: 60 }, (_, i) => `<p style="margin:6px 0">Строка содержимого диалога #${i + 1}</p>`).join('');
+        const dlgPromise = WORK.showDialog(tall, {
+            allowClose: true,
+            TITLE: { label: 'Проверка длинного диалога ' + vp.name },
+        }).catch(() => {});
+        const pop = await waitFor(() => ODA.popovers.at(-1), `${vp.name}: popover создан`);
+        await waitFor(() => pop.visible && pop.$('.footer'), `${vp.name}: popover показан`);
+        try {
+            assertInViewport(pop, `${vp.name} popover`);
+            assertInViewport(pop.$('.title'), `${vp.name} popover title`);
+            assertInViewport(pop.$('.footer'), `${vp.name} popover footer`);
+            const body = pop.$('.popover-body');
+            assert(body.scrollHeight > body.clientHeight, `${vp.name}: тело высокого диалога должно скроллиться внутри .popover-body`);
+        }
+        finally {
+            pop.close();
+            await dlgPromise;
+        }
+    }
+});
+
+await test('<calendar-form> внутри WORK.showDialog на мобильном 390x844 помещается по ширине и кнопки видны', async () => {
+    await setViewport(390, 844, true);
+    const cf = document.createElement('calendar-form');
+    const p = WORK.showDialog(cf, { allowClose: true, TITLE: { label: 'Новая встреча' } }).catch(() => {});
+    const pop = await waitFor(() => ODA.popovers.at(-1), 'popover calendar-form');
+    await waitFor(() => pop.visible && pop.$('.footer'), 'calendar-form показан');
+    try {
+        assertInViewport(pop, '390x844 calendar-form popover');
+        assertInViewport(pop.$('.footer'), '390x844 calendar-form footer');
+    }
+    finally {
+        pop.close();
+        await p;
+    }
+});
+
+await test('Мобильная адаптация Почты, Системы и Календаря (390x844): однопанельный режим и отсутствие горизонтального вылезания', async () => {
+    await setViewport(390, 844, true);
+
+    // 1. Почта
+    const email = document.createElement('resp-email-view');
+    email.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;';
+    email.$item = {
+        path: '/ORGANIZATIONS/O1',
+        short: '/ORGANIZATIONS/O1',
+        type: '$structure',
+        role: 'BOSS',
+        isAdmin: true,
+        async fetch() { return { accounts: [], messages: [] }; },
+    };
+    document.body.appendChild(email);
+    try {
+        await waitFor(() => email.$('.mail-list-pane') && email.$('.mail-view-pane'), 'почта смонтирована');
+        await sleep(60);
+        assert(email.scrollWidth <= email.clientWidth + 2, `Почта 390px: scrollWidth (${email.scrollWidth}) > clientWidth (${email.clientWidth})`);
+        const viewDisplayIdle = getComputedStyle(email.$('.mail-view-pane')).display;
+        assert(viewDisplayIdle === 'none', 'Почта 390px: при mode=idle панель письма скрыта');
+        email.mode = 'compose';
+        await sleep(60);
+        const listDisplayCompose = getComputedStyle(email.$('.mail-list-pane')).display;
+        assert(listDisplayCompose === 'none', 'Почта 390px: при mode=compose список писем скрыт');
+        assert(getComputedStyle(email.$('.mail-back-btn')).display !== 'none', 'Почта 390px: кнопка возврата «Письма» видна');
+    }
+    finally {
+        email.remove();
+    }
+
+    // 2. Система
+    const sys = document.createElement('resp-sys-view');
+    sys.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;';
+    sys.$item = {
+        path: '/ORGANIZATIONS/O1',
+        short: '/ORGANIZATIONS/O1',
+        type: '$structure',
+        role: 'BOSS',
+        isAdmin: true,
+        async roles() { return ['BOSS']; },
+        async fetch() { return {}; },
+    };
+    document.body.appendChild(sys);
+    try {
+        await waitFor(() => sys.$('.sys-sidebar'), 'система смонтирована');
+        await sleep(60);
+        const navR = sys.$('.sys-sidebar').getBoundingClientRect();
+        assert(navR.width >= 370, `Система 390px: навигация должна быть сверху на всю ширину (получено ${navR.width})`);
+        assert(sys.scrollWidth <= sys.clientWidth + 2, `Система 390px: нет горизонтального переполнения (${sys.scrollWidth} > ${sys.clientWidth})`);
+    }
+    finally {
+        sys.remove();
+    }
+
+    // 3. Календарь
+    const cal = document.createElement('resp-cal-view');
+    cal.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;';
+    cal.$item = {
+        path: '/ORGANIZATIONS/O1',
+        short: '/ORGANIZATIONS/O1',
+        type: '$structure',
+        role: 'BOSS',
+        async logs() { return []; },
+        async fetch() { return {}; },
+    };
+    document.body.appendChild(cal);
+    try {
+        await waitFor(() => cal.$('.cal-header'), 'календарь смонтирован');
+        await sleep(80);
+        assert(cal.viewMode === 'day', `Календарь 390px: по умолчанию включается режим «День» (получено ${cal.viewMode})`);
+        assert(cal.scrollWidth <= cal.clientWidth + 2, `Календарь 390px: нет горизонтального переполнения (${cal.scrollWidth} > ${cal.clientWidth})`);
+    }
+    finally {
+        cal.remove();
+    }
+});
+
+window.__done = true;
+</script>
+</body>
+</html>

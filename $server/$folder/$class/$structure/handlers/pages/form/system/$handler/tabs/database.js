@@ -345,12 +345,33 @@ export default {
             .inspector {
                 @apply --vertical;
                 width: 410px;
-                min-width: 340px;
+                min-width: 300px;
                 max-width: 480px;
                 border-left: 1px solid var(--border-color);
                 background: var(--subtle-background);
                 flex-shrink: 0;
                 overflow: hidden;
+            }
+            @media (max-width: 820px) {
+                .workspace {
+                    flex-direction: column;
+                }
+                .sidebar {
+                    width: 100%;
+                    min-width: 0;
+                    max-width: 100%;
+                    max-height: 200px;
+                    border-right: none;
+                    border-bottom: 1px solid var(--border-color);
+                }
+                .inspector {
+                    width: 100%;
+                    min-width: 0;
+                    max-width: 100%;
+                    max-height: 45dvh;
+                    border-left: none;
+                    border-top: 1px solid var(--border-color);
+                }
             }
             .inspector-head {
                 @apply --horizontal;

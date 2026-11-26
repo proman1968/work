@@ -8,8 +8,9 @@ const TRANSFER_STYLE = /*css*/`
         @apply --vertical;
         gap: 12px;
         padding: 14px 18px;
-        width: min(820px, 92vw);
-        max-height: 78vh;
+        width: min(820px, calc(100vw - 24px));
+        max-width: 100%;
+        max-height: 78dvh;
         overflow-y: auto;
         box-sizing: border-box;
         background: var(--content-background, #ffffff);

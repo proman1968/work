@@ -464,12 +464,23 @@ else {
     window.addEventListener('load', loadedCallback);
 }
 globalThis.ODA.states = {}
+const _mobileMql = (typeof window !== 'undefined' && typeof window.matchMedia === 'function')
+    ? window.matchMedia('(max-width: 768px), (max-height: 500px) and (pointer: coarse)')
+    : null;
 Object.defineProperty(globalThis.ODA.states, 'mobileMode', {
     enumerable: true,
     get(){
-        return window.innerWidth / window.innerHeight < .7;
+        if (_mobileMql)
+            return _mobileMql.matches;
+        return typeof window !== 'undefined' && window.innerWidth <= 768;
     }
-})
+});
+if (_mobileMql) {
+    const _onMobileModeChange = () => {
+        try { window.dispatchEvent(new Event('resize')); } catch {}
+    };
+    _mobileMql.addEventListener?.('change', _onMobileModeChange);
+}
 
 Object.defineProperty(String.prototype, 'fixKeyboardLayout', {
     enumerable: true,

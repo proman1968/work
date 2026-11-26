@@ -154,8 +154,72 @@ let style = /*css*/`
     --duration-fast: 120ms;
     --duration: 200ms;
     --easing: cubic-bezier(.2, 0, 0, 1);
+
+    /* Адаптивные отступы PWA (вырезы экрана / жестовая полоса iOS и Android) и единые размеры диалогов */
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-right: env(safe-area-inset-right, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-left: env(safe-area-inset-left, 0px);
+    --dialog-max-h: calc(100dvh - 24px - var(--safe-top) - var(--safe-bottom));
+    --dialog-max-w: calc(100vw - 24px - var(--safe-left) - var(--safe-right));
 }
 :root {
+    /* Единый трёхсекционный flex-каркас для диалогов и модальных окон (шапка / скролл-тело / закреплённый футер) */
+    --dialog-card: {
+        display: flex;
+        flex-direction: column;
+        max-width: var(--dialog-max-w);
+        max-height: var(--dialog-max-h);
+        min-height: 0;
+        min-width: 0;
+        box-sizing: border-box;
+        background-color: var(--content-background);
+        color: var(--content-color);
+        border: 1px solid var(--subtle-border);
+        border-radius: var(--radius-m);
+        box-shadow: var(--elevation-3);
+        overflow: hidden;
+    };
+    --dialog-head: {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: var(--space-m);
+        flex-shrink: 0;
+        min-width: 0;
+        box-sizing: border-box;
+    };
+    --dialog-body: {
+        flex: 1 1 auto;
+        min-height: 0;
+        min-width: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        overscroll-behavior: contain;
+        box-sizing: border-box;
+    };
+    --dialog-footer: {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: var(--space-m);
+        flex-shrink: 0;
+        min-width: 0;
+        box-sizing: border-box;
+    };
+    --flex-shrink: {
+        flex: 1 1 0%;
+        min-width: 0;
+        min-height: 0;
+    };
+    --wrap-row: {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        min-width: 0;
+    };
     /* рамка поля ввода; состояния (:hover/:focus-within/[invalid]/[disabled]) — в oda-input */
     --control: {
         box-sizing: border-box;
@@ -345,6 +409,7 @@ html {
     -ms-text-size-adjust: 100%;
     -webkit-text-size-adjust: 100%;
     height: 100%;
+    height: 100dvh;
 }
 @media print {
     html, body {
@@ -419,6 +484,9 @@ body{
     margin: 0px;
     padding: 0px;
     height: 100%;
+    height: 100dvh;
+    min-height: 0;
+    box-sizing: border-box;
     overscroll-behavior: contain;
 }
 [hidden]{

@@ -355,6 +355,88 @@ ODA({is: 'oda-chat',
                 background: var(--accent-color, #2563eb);
                 color: var(--accent-back, #ffffff);
             }
+            .audit-overlay {
+                position: absolute;
+                inset: 44px 12px 68px 12px;
+                z-index: 11;
+                background: var(--content-background, #fff);
+                border: 1px solid var(--border-color, #cbd5e1);
+                border-radius: 10px;
+                box-shadow: 0 6px 24px rgba(0,0,0,0.14);
+                display: flex;
+                overflow: hidden;
+            }
+            .audit-sidebar {
+                width: 260px;
+                flex-shrink: 0;
+                border-right: 1px solid var(--subtle-border, #e2e8f0);
+                overflow-y: auto;
+                padding: 8px;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                background: var(--subtle-background, #f8fafc);
+                box-sizing: border-box;
+            }
+            .audit-messages {
+                flex: 1 1 auto;
+                min-width: 0;
+                min-height: 0;
+                display: flex;
+                flex-direction: column;
+                overflow-y: auto;
+                padding: 12px 16px;
+                gap: 8px;
+            }
+            .participants-popover {
+                position: absolute;
+                top: 44px;
+                right: 12px;
+                z-index: 12;
+                width: min(280px, calc(100vw - 24px));
+                max-height: min(360px, 60dvh);
+                overflow-y: auto;
+                background: var(--content-background, #fff);
+                border: 1px solid var(--border-color, #cbd5e1);
+                border-radius: 10px;
+                box-shadow: 0 6px 20px rgba(0,0,0,0.16);
+                padding: 10px 12px;
+                display: flex;
+                flex-direction: column;
+                gap: 8px;
+                font-size: 12.5px;
+                box-sizing: border-box;
+            }
+            .chat-composer {
+                z-index: 10;
+                max-height: 50%;
+                overflow: visible;
+                padding-bottom: var(--safe-bottom, 0px);
+            }
+            @media (max-width: 768px) {
+                .feed-top-bar {
+                    padding: 4px 8px;
+                }
+                .feed-mode-bar {
+                    max-width: 100%;
+                    overflow-x: auto;
+                }
+                .audit-overlay {
+                    inset: 42px 6px 64px 6px;
+                    flex-direction: column;
+                }
+                .audit-sidebar {
+                    width: 100%;
+                    max-height: 36%;
+                    border-right: none;
+                    border-bottom: 1px solid var(--subtle-border, #e2e8f0);
+                }
+                .participants-popover {
+                    left: 8px;
+                    right: 8px;
+                    width: auto;
+                }
+            }
         </style>
 
         <style>
@@ -383,8 +465,8 @@ ODA({is: 'oda-chat',
                 <button type="button" class="feed-mode-btn" ~class="{ active: showParticipants }" @tap="toggleParticipants()" title="Участники и рабочие места подразделения">Участники ({{participantsCount}})</button>
             </div>
         </div>
-        <div ~if="feedMode === 'audit' && showFeedModeToggle" style="position:absolute;inset:44px 12px 68px 12px;z-index:11;background:var(--content-background,#fff);border:1px solid var(--border-color,#cbd5e1);border-radius:10px;box-shadow:0 6px 24px rgba(0,0,0,0.14);display:flex;overflow:hidden;">
-            <div style="width:260px;border-right:1px solid var(--subtle-border,#e2e8f0);overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:4px;background:var(--subtle-background,#f8fafc);">
+        <div ~if="feedMode === 'audit' && showFeedModeToggle" class="audit-overlay">
+            <div class="audit-sidebar">
                 <div style="font-size:12px;font-weight:700;padding:4px 6px;color:var(--muted-color);">Диалоги с Агентом ({{auditThreads.length}})</div>
                 <div ~if="!auditThreads.length" style="font-size:12.5px;color:var(--muted-color);padding:8px 6px;">Взаимодействий пока нет</div>
                 <div ~for="auditThreads" @tap="openAuditThread($for.item)" ~class="{ active: auditSelectedId === $for.item.id }" style="padding:7px 9px;border-radius:7px;cursor:pointer;border:1px solid var(--subtle-border,transparent);background:var(--content-background,#fff);font-size:12.5px;">
@@ -395,15 +477,15 @@ ODA({is: 'oda-chat',
                     <div ~if="$for.item.lastMessage" style="font-size:11.5px;color:var(--muted-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px;">{{$for.item.lastMessage.content || ($for.item.lastMessage.taskPath ? 'Задача' : 'Вложение')}}</div>
                 </div>
             </div>
-            <div style="flex:1;display:flex;flex-direction:column;overflow-y:auto;padding:12px 16px;gap:8px;">
-                <div ~if="!auditSelectedId" style="color:var(--muted-color);font-size:13px;margin:auto;">Выберите пользователя слева для просмотра истории взаимодействия с Агентом</div>
+            <div class="audit-messages">
+                <div ~if="!auditSelectedId" style="color:var(--muted-color);font-size:13px;margin:auto;">Выберите пользователя для просмотра истории взаимодействия с Агентом</div>
                 <div ~for="auditMessages" style="padding:8px 11px;border-radius:8px;border:1px solid var(--subtle-border,#e2e8f0);background:var(--subtle-background,#f8fafc);font-size:13px;">
-                    <div style="font-size:11px;color:var(--muted-color);display:flex;justify-content:space-between;margin-bottom:3px;">
+                    <div style="font-size:11px;color:var(--muted-color);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:3px;">
                         <b>{{$for.item.sender === '$twin' ? 'Агент узла' : $for.item.sender}}</b>
                         <span>{{new Date($for.item.created).toLocaleString()}}</span>
                     </div>
-                    <div style="white-space:pre-wrap;">{{$for.item.content || ($for.item.taskPath ? 'Задача: ' + $for.item.taskPath : '')}}</div>
-                    <div ~if="$for.item.kind === 'approval'" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+                    <div style="white-space:pre-wrap;word-break:break-word;">{{$for.item.content || ($for.item.taskPath ? 'Задача: ' + $for.item.taskPath : '')}}</div>
+                    <div ~if="$for.item.kind === 'approval'" style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:6px;">
                         <span ~if="$for.item.meta?.status === 'approved'" style="font-size:11.5px;font-weight:700;color:#059669;">✓ Утверждено</span>
                         <span ~if="$for.item.meta?.status === 'rejected'" style="font-size:11.5px;font-weight:700;color:#dc2626;">✕ Отклонено</span>
                         <oda-button ~if="$for.item.meta?.status === 'pending'" icon="icons:check" info-invert @tap="resolveApprovalMsg($for.item, 'approve')">Утвердить</oda-button>
@@ -412,7 +494,7 @@ ODA({is: 'oda-chat',
                 </div>
             </div>
         </div>
-        <div ~if="showParticipants && $item && $item.type !== '$user'" style="position:absolute;top:44px;right:12px;z-index:12;width:280px;max-height:360px;overflow-y:auto;background:var(--content-background,#fff);border:1px solid var(--border-color,#cbd5e1);border-radius:10px;box-shadow:0 6px 20px rgba(0,0,0,0.16);padding:10px 12px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;">
+        <div ~if="showParticipants && $item && $item.type !== '$user'" class="participants-popover">
             <div style="display:flex;align-items:center;justify-content:space-between;font-weight:700;">
                 <span>Участники ({{participantsCount}})</span>
                 <oda-button icon="icons:close" :icon-size="14" @tap="showParticipants = false"></oda-button>
@@ -431,7 +513,7 @@ ODA({is: 'oda-chat',
             <oda-button :hidden="$('#ribbon').scrollTop < 0" content shadow icon="icons:chevron-right:270" @tap="$('#ribbon').scrollTop = -($('#ribbon').scrollHeight)"></oda-button>
             <oda-button :hidden="$('#ribbon').scrollTop > 0" content shadow icon="icons:chevron-right:90"  @tap="$('#ribbon').scrollTop = 0"></oda-button>
         </div>
-        <div vertical shadow content :hidden="hasExpandedCard" style="z-index: 10; max-height: 50%; overflow: visible;">
+        <div vertical shadow content :hidden="hasExpandedCard" class="chat-composer">
             <div ~if="replyTarget" horizontal accent-invert style="padding: 4px;">
                 <div horizontal flex style="overflow: auto; align-self: center;"></div>
                 <oda-button icon="icons:close" @tap="clear" style="padding: 0"></oda-button>
