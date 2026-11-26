@@ -159,6 +159,7 @@ export const classSecurityMethods = {
             return (await this.hasNodeRole(twinFrom)) ? ['USER'] : [];
         }
         const uid = this.constructor.resolveUid(params);
+        const subject = WORKPLACES.buildSubject(uid, params);
         const declared = this._declaredRolesSync();
         if (!uid) {
             if (WORKPLACES.matchesUserList(this._roleIds('USER', declared), null) || await this._isPlaceMember(null))
@@ -169,7 +170,7 @@ export const classSecurityMethods = {
         }
         const roles = [];
         for (const id of Object.keys(declared)) {
-            if (WORKPLACES.matchesUserList(this._roleIds(id, declared), uid)) {
+            if (WORKPLACES.matchesUserList(this._roleIds(id, declared), subject)) {
                 roles.push(id);
                 continue;
             }
@@ -186,9 +187,9 @@ export const classSecurityMethods = {
                 }
             }
         }
-        if (!roles.includes('USER') && (await this._isPlaceMember(uid) || (twinFrom && await this.hasNodeRole(twinFrom))))
+        if (!roles.includes('USER') && (await this._isPlaceMember(subject) || (twinFrom && await this.hasNodeRole(twinFrom))))
             roles.push('USER');
-        if (!roles.includes('CLIENT') && await this._isClientMember(uid))
+        if (!roles.includes('CLIENT') && await this._isClientMember(subject))
             roles.push('CLIENT');
         const principal = params.session?.principal;
         if (principal?.kind === 'node') {
@@ -247,22 +248,23 @@ export const classSecurityMethods = {
         if (!roles.length && !boss)
             return [];
         const uid = this.constructor.resolveUid(params);
-        const rank = { read: 1, write: 2, admin: 3 };
+        const subject = WORKPLACES.buildSubject(uid, params);
+        const rank = WORKPLACES.ACCESS_RANK;
         const eff = new Map();
         const add = (id, access, via) => {
             const cur = eff.get(id);
-            if ((rank[access] || 0) <= (rank[cur?.access] || 0) && cur)
+            if (cur && (rank[access] || 0) <= (rank[cur.access] || 0))
                 cur.via.push(...via.filter(v => !cur.via.includes(v)));
             else
                 eff.set(id, { access, via: [...new Set([...(cur?.via || []), ...via])] });
         };
         if (boss) {
             for (const l of common)
-                add(l.id, l.access === 'write' ? 'admin' : 'read', [null]);
+                add(l.id, l.access === 'none' ? 'none' : (WORKPLACES.hasAccess(l.access, 'write') ? 'admin' : 'read'), [null]);
             for (const { node, trail } of WORKPLACES.walkPlaces(places)) {
                 const via = [WORKPLACES.trailKey(trail)];
                 for (const l of node.LINKS)
-                    add(l.id, l.access === 'write' ? 'admin' : 'read', via);
+                    add(l.id, l.access === 'none' ? 'none' : (WORKPLACES.hasAccess(l.access, 'write') ? 'admin' : 'read'), via);
             }
         }
         else {
@@ -270,20 +272,27 @@ export const classSecurityMethods = {
                 for (const l of common)
                     add(l.id, l.access, [null]);
             }
-            for (const [id, e] of WORKPLACES.placeLinksFor(sec, uid, { bossAll: false }))
+            for (const [id, e] of WORKPLACES.placeLinksFor(sec, subject, { bossAll: false }))
                 add(id, e.access, e.via);
         }
         return this._linkTrie(eff);
     },
 
-    /** Собрать цепочки ссылок от корней типов (включая всё дочернее поддерево прилинкованного класса). */
+    /** Собрать цепочки ссылок от корней типов (включая всё дочернее поддерево прилинкованного класса, с учётом переопределений RWCD и `none`). */
     async _linkTrie(eff) {
-        const rank = { read: 1, write: 2, admin: 3 };
+        const rank = WORKPLACES.ACCESS_RANK;
         const byPath = new Map();
         const resolvedItems = new Map();
+        const explicitPaths = new Map();
+        const deniedPaths = new Set();
         const roots = [];
         const targetPaths = [];
         for (const [id, e] of eff) {
+            if (e.access === 'none') {
+                deniedPaths.add(id);
+                continue;
+            }
+            explicitPaths.set(id, e);
             const modMatch = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+\/MODULES\/[^/]+|\/MODULES\/[^/]+)\/(.+)$/.exec(id);
             if (modMatch) {
                 try {
@@ -329,7 +338,10 @@ export const classSecurityMethods = {
                 const childPath = child.path;
                 if (!childPath)
                     continue;
+                if (deniedPaths.has(childPath))
+                    continue;
                 resolvedItems.set(childPath, child);
+                const explicit = explicitPaths.get(childPath);
                 let cn = byPath.get(childPath);
                 if (!cn) {
                     cn = {
@@ -337,8 +349,8 @@ export const classSecurityMethods = {
                         label: child.id,
                         icon: '',
                         type: '',
-                        access: inherited.access,
-                        via: [...(inherited.via || [])],
+                        access: explicit ? explicit.access : inherited.access,
+                        via: [...(explicit ? explicit.via : (inherited.via || []))],
                         objectCount: 0,
                         children: [],
                     };
@@ -346,7 +358,7 @@ export const classSecurityMethods = {
                     parentNode.children.push(cn);
                 }
                 else {
-                    if ((rank[inherited.access] || 0) > (rank[cn.access] || 0))
+                    if (!explicit && (rank[inherited.access] || 0) > (rank[cn.access] || 0))
                         cn.access = inherited.access;
                     cn.via = [...new Set([...(cn.via || []), ...(inherited.via || [])])];
                     if (!parentNode.children.includes(cn))
@@ -427,7 +439,7 @@ export const classSecurityMethods = {
             return seen.get(id);
         };
         const toEff = (links, via) => {
-            const rank = { read: 1, write: 2, admin: 3 };
+            const rank = WORKPLACES.ACCESS_RANK;
             const eff = new Map();
             for (const l of links) {
                 const cur = eff.get(l.id);
@@ -468,8 +480,8 @@ export const classSecurityMethods = {
         return promise;
     },
 
-    /** Право писать объекты точки (create/update/delete). */
-    async _assertDataWrite(params = {}) {
+    /** Проверить требуемый уровень доступа RWCD к данным класса ('read'|'write'|'create'|'delete'). */
+    async _assertDataAccess(requiredLevel = 'write', params = {}) {
         if (params.session?.$user === globalThis.WORK)
             return globalThis.WORK?.id || 'system';
         const uid = this.constructor.resolveUid(params);
@@ -478,9 +490,14 @@ export const classSecurityMethods = {
         if (!uid || !(await this.canSee(this, params)))
             throw new Error(ACCESS_DENIED);
         const level = await this.data_access(params);
-        if (level !== 'write' && level !== 'admin')
+        if (!WORKPLACES.hasAccess(level, requiredLevel))
             throw new Error(ACCESS_DENIED);
         return uid;
+    },
+
+    /** Право писать объекты точки (уровень W и выше). */
+    async _assertDataWrite(params = {}) {
+        return this._assertDataAccess('write', params);
     },
 
     _secretPath(filename) {

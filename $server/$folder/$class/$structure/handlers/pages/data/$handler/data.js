@@ -140,7 +140,7 @@ export default {
                         <oda-icon :icon="$for.item.icon || 'odant:class'" icon-size="17"></oda-icon>
                         <span class="row-label" :title="$for.item.path">{{$for.item.label}}</span>
                         <span ~if="$for.item.objectCount" class="badge">{{$for.item.objectCount}}</span>
-                        <span class="badge" ~class="{ write: $for.item.access === 'write' || $for.item.access === 'admin' }">{{accessShort($for.item.access)}}</span>
+                        <span class="badge" ~class="{ write: $for.item.access && $for.item.access !== 'read' && $for.item.access !== 'none' }">{{accessShort($for.item.access)}}</span>
                     </div>
 
                     <div ~if="isBoss && visibleModuleRows.length" class="sec-title">Модули и классы ({{visibleModuleRows.length}})</div>
@@ -240,7 +240,10 @@ export default {
     },
     accessShort(a) {
         if (a === 'admin') return 'A';
+        if (a === 'delete') return 'D';
+        if (a === 'create') return 'C';
         if (a === 'write') return 'W';
+        if (a === 'none') return '—';
         return 'R';
     },
     async reload() {

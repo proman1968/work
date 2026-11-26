@@ -714,24 +714,54 @@ export async function getNodeStaffContext(storage, params = {}) {
     if (!WORK)
         return { users: [], structures: [], networkNodes: [], inheritedBoss: null, baseClasses: [], systemModules: [], basePath: '' };
 
-    // 1. Пользователи /USERS
+    // 1. Пользователи /USERS (плоский список + иерархия, если есть подпапки)
     const users = [];
+    const usersTree = [];
     const userMap = new Map();
     const uRoot = (await WORK.get_item('/USERS').catch(() => null)) || (await WORK.get_item('/users').catch(() => null));
-    const uItems = await Promise.resolve(uRoot?.items).catch(() => []) || [];
-    for (const u of uItems) {
-        if (!u?.id || u.id[0] === '$')
-            continue;
-        await u.init?.catch?.(() => {});
-        const entry = {
-            id: u.id,
-            label: u.DATA?.label || u.label || u.id,
-            icon: u.DATA?.icon || u.icon || '',
-            iconColor: u.iconColor || '',
-        };
-        users.push(entry);
-        userMap.set(u.id, entry);
-    }
+    const walkUsers = async (container, depth = 0) => {
+        if (!container || depth > 4)
+            return [];
+        const items = await Promise.resolve(container.items).catch(() => []) || [];
+        const out = [];
+        for (const u of items) {
+            if (!u?.id || u.id[0] === '$')
+                continue;
+            await u.init?.catch?.(() => {});
+            const t = u.type;
+            if (t === '$user' || (!t && !u.items)) {
+                const entry = {
+                    id: u.id,
+                    path: u.path || `/USERS/${u.id}`,
+                    type: '$user',
+                    label: u.DATA?.label || u.label || u.id,
+                    icon: u.DATA?.icon || u.icon || '',
+                    iconColor: u.iconColor || '',
+                    children: [],
+                };
+                users.push({ id: entry.id, label: entry.label, icon: entry.icon, iconColor: entry.iconColor });
+                userMap.set(entry.id, entry);
+                out.push(entry);
+            }
+            else if (['$domain', '$folder', '$group', '$structure'].includes(t)) {
+                const children = await walkUsers(u, depth + 1);
+                if (children.length) {
+                    out.push({
+                        id: u.id,
+                        path: u.path || '',
+                        type: t,
+                        label: u.DATA?.label || u.label || u.id,
+                        icon: u.DATA?.icon || u.icon || 'odant:folder',
+                        iconColor: '',
+                        children,
+                    });
+                }
+            }
+        }
+        return out;
+    };
+    if (uRoot)
+        usersTree.push(...await walkUsers(uRoot, 0));
 
     // 2. Унаследованный руководитель (BOSS) вверх по дереву (включая корень '/')
     let inheritedBoss = null;
@@ -753,7 +783,7 @@ export async function getNodeStaffContext(storage, params = {}) {
                 const resolved = cleanIds.slice(0, 1).map(uid => {
                     const found = userMap.get(uid);
                     return found
-                        ? { ...found, missing: false }
+                        ? { id: found.id, label: found.label, icon: found.icon, iconColor: found.iconColor, missing: false }
                         : { id: uid, label: `${uid} (не найден в /USERS)`, icon: 'icons:person', iconColor: '', missing: true };
                 });
                 const ancPath = anc.path || '/';
@@ -768,14 +798,73 @@ export async function getNodeStaffContext(storage, params = {}) {
     }
     catch { /* ignore */ }
 
-    // 3. Подразделения и серверы сети
-    const [structRes, netRes] = await Promise.all([
-        listNodeStructures(storage, params).catch(() => ({ structures: [] })),
+    // 3. Подразделения (деревья /ORGANIZATIONS и /PROJECTS + плоский structures) и серверы сети
+    const selfPath = String(storage?.path || '/').replace(/\/+$/, '') || '/';
+    const flatStructures = [];
+    const seenStructPaths = new Set();
+    const walkStructureDomain = async (domainPath) => {
+        const rootNode = await WORK.get_item(domainPath).catch(() => null);
+        if (!rootNode)
+            return [];
+        const visit = async (node, depth = 0) => {
+            if (!node || depth > 5)
+                return null;
+            await node.init?.catch?.(() => {});
+            if (!node.id || node.id[0] === '$')
+                return null;
+            if (!['$base', '$project', '$structure'].includes(node.type))
+                return null;
+            // Проверяем видимость для текущего пользователя (не показываем чужие скрытые организации)
+            if (typeof node.canSee === 'function') {
+                const ok = await node.canSee(node, params).catch(() => false);
+                if (!ok)
+                    return null;
+            }
+            const p = String(node.path || '').replace(/\/+$/, '') || '/';
+            const entry = {
+                id: node.id,
+                path: p,
+                label: node.DATA?.label || node.label || node.id,
+                type: node.type,
+                icon: node.DATA?.icon || node.icon || (node.type === '$base' ? 'odant:base' : node.type === '$project' ? 'odant:project' : 'odant:structure'),
+                isSelf: p === selfPath,
+                children: [],
+            };
+            if (p !== selfPath && !seenStructPaths.has(p)) {
+                seenStructPaths.add(p);
+                flatStructures.push({ path: p, id: entry.id, label: entry.label, type: entry.type, icon: entry.icon });
+            }
+            const items = await Promise.resolve(node.items).catch(() => []) || [];
+            for (const ch of items) {
+                if (!ch || ch.id?.[0] === '$')
+                    continue;
+                await ch.init?.catch?.(() => {});
+                if (['$base', '$project', '$structure'].includes(ch.type)) {
+                    const built = await visit(ch, depth + 1);
+                    if (built)
+                        entry.children.push(built);
+                }
+            }
+            return entry;
+        };
+        const items = await Promise.resolve(rootNode.items).catch(() => []) || [];
+        const res = [];
+        for (const ch of items) {
+            if (!ch || ch.id?.[0] === '$')
+                continue;
+            const built = await visit(ch, 0);
+            if (built)
+                res.push(built);
+        }
+        return res;
+    };
+    const [organizationsTree, projectsTree, netRes] = await Promise.all([
+        walkStructureDomain('/ORGANIZATIONS').catch(() => []),
+        walkStructureDomain('/PROJECTS').catch(() => []),
         listNodeNetworkNodes(storage, params).catch(() => ({ nodes: [] })),
     ]);
 
     // 4. Полное дерево всех классов, установленных в вышестоящий $base ($project)
-    const selfPath = String(storage?.path || '/').replace(/\/+$/, '') || '/';
     const baseMatch = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(selfPath);
     const basePath = baseMatch ? baseMatch[1] : '';
     const modRootPath = basePath ? `${basePath}/MODULES` : '/MODULES';
@@ -846,7 +935,10 @@ export async function getNodeStaffContext(storage, params = {}) {
 
     return {
         users,
-        structures: structRes.structures || [],
+        usersTree,
+        structures: flatStructures,
+        organizationsTree,
+        projectsTree,
         networkNodes: netRes.nodes || [],
         inheritedBoss,
         basePath,

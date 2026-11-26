@@ -23,6 +23,7 @@
 import { getClass, descendants } from './classes.js';
 import { FAMILY } from './schema.js';
 import { DataError } from './errors.js';
+import { hasAccess } from '../server/access/workplaces.js';
 
 export const SCOPES = Object.freeze(['own', 'place', 'unit', 'all']);
 
@@ -68,10 +69,11 @@ function rowsOf(db, link, scope, uid) {
  * @param {object} [opts] { uid, write — только ссылки с правом записи }
  * @returns {Array<object>|null} null — видно всё
  */
-export function scopeGrants(db, cls, links, { uid, write = false } = {}) {
+export function scopeGrants(db, cls, links, { uid, write = false, minAccess = null } = {}) {
+    const req = minAccess || (write ? 'write' : 'read');
     const grants = new Map();
     for (const l of links || []) {
-        if (write && l.access !== 'write' && l.access !== 'admin')
+        if (!hasAccess(l.access, req))
             continue;
         let branch = null, type = cls.type;
         if (!under(cls.path, l.id)) {
@@ -84,11 +86,25 @@ export function scopeGrants(db, cls, links, { uid, write = false } = {}) {
             if (FAMILY[c.type])
                 type = c.type;
         }
+        const excludeSet = new Set();
+        for (const dp of l.deniedPaths || []) {
+            const dc = getClass(db, dp);
+            if (!dc)
+                continue;
+            for (const cid of descendants(db, dc.cid))
+                excludeSet.add(cid);
+        }
+        if (branch && excludeSet.size) {
+            branch = branch.filter(cid => !excludeSet.has(cid));
+            if (!branch.length)
+                continue;
+        }
         const defScope = l.external ? 'own' : defaultScope(type);
         const rows = rowsOf(db, l, SCOPES.includes(l.scope) ? l.scope : defScope, uid);
-        if (!branch && !Object.keys(rows).length)
+        const excludeCids = !branch && excludeSet.size ? [...excludeSet] : null;
+        if (!branch && !excludeCids && !Object.keys(rows).length)
             return null;
-        const g = branch ? { cids: branch, ...rows } : rows;
+        const g = { ...(branch ? { cids: branch } : {}), ...(excludeCids ? { excludeCids } : {}), ...rows };
         grants.set(JSON.stringify(g), g);
     }
     return [...grants.values()];
@@ -96,7 +112,7 @@ export function scopeGrants(db, cls, links, { uid, write = false } = {}) {
 
 /** Права без веток (чтение реестра через виртуальный справочник, проводки объекта). */
 export function withoutBranches(grants) {
-    return grants && grants.map(({ cids, ...rows }) => rows);
+    return grants && grants.map(({ cids, excludeCids, ...rows }) => rows);
 }
 
 /**
@@ -107,7 +123,16 @@ export function entryGrants(grants, family, objectCid) {
     if (grants == null)
         return null;
     const out = [];
-    for (const { cids, ...rows } of grants) {
+    for (const { cids, excludeCids, ...rows } of grants) {
+        if (excludeCids?.length) {
+            if (family === 'account')
+                out.push({ ...(cids ? { accounts: cids } : {}), excludeAccounts: excludeCids, ...rows });
+            else if (family === 'operation')
+                out.push({ ...(cids ? { ops: cids } : {}), excludeOps: excludeCids, ...rows });
+            else if (objectCid === undefined || !excludeCids.includes(objectCid))
+                out.push(rows);
+            continue;
+        }
         if (!cids)
             out.push(rows);
         else if (family === 'account')
@@ -123,6 +148,11 @@ export function entryGrants(grants, family, objectCid) {
 function inList(col, list) {
     const values = [...new Set(list.map(String))];
     return values.length ? [`${col} IN (${values.map(() => '?').join(',')})`, values] : ['0', []];
+}
+
+function notInList(col, list) {
+    const values = [...new Set(list.map(String))];
+    return values.length ? [`${col} NOT IN (${values.map(() => '?').join(',')})`, values] : ['1', []];
 }
 
 /** Условия строк (подразделения, места, автор) на таблицу с колонками unit/place/author. */
@@ -159,7 +189,11 @@ function anyOf(grants, partsOf) {
 
 /** Условие видимости объектов (алиас таблицы `o`): [sql, args] или null — без ограничений. */
 export function objectCond(grants, alias = 'o') {
-    return anyOf(grants, g => [...(g.cids ? [inList(`${alias}.cid`, g.cids)] : []), ...rowParts(g, alias, false)]);
+    return anyOf(grants, g => [
+        ...(g.cids ? [inList(`${alias}.cid`, g.cids)] : []),
+        ...(g.excludeCids?.length ? [notInList(`${alias}.cid`, g.excludeCids)] : []),
+        ...rowParts(g, alias, false),
+    ]);
 }
 
 /**
@@ -173,8 +207,14 @@ export function entryCond(grants, accCols = ['e.debit_cid', 'e.credit_cid']) {
             const c = accCols.map(col => inList(col, g.accounts));
             parts.push([`(${c.map(x => x[0]).join(' OR ')})`, c.flatMap(x => x[1])]);
         }
+        if (g.excludeAccounts?.length) {
+            const c = accCols.map(col => notInList(col, g.excludeAccounts));
+            parts.push([`(${c.map(x => x[0]).join(' AND ')})`, c.flatMap(x => x[1])]);
+        }
         if (g.ops)
             parts.push(inList('e.op_cid', g.ops));
+        if (g.excludeOps?.length)
+            parts.push(notInList('e.op_cid', g.excludeOps));
         return [...parts, ...rowParts(g, 'e', true)];
     });
 }
@@ -198,7 +238,7 @@ export function visibleUnits(grants) {
  * на класс или его предка. ADMIN подразделения — любое его место (`any`).
  * @returns {Array<{ unit, unit_label, place, place_label, any? }>}
  */
-export function writeContexts(db, cls, links) {
+export function writeContexts(db, cls, links, minAccess = 'create') {
     const out = new Map();
     const add = (l, place, any = false) => {
         const unit = unitOf(db, l.structure);
@@ -217,7 +257,7 @@ export function writeContexts(db, cls, links) {
         });
     };
     for (const l of links || []) {
-        if ((l.access !== 'write' && l.access !== 'admin') || !under(cls.path, l.id))
+        if (!hasAccess(l.access, minAccess) || !under(cls.path, l.id))
             continue;
         if (l.relation === 'admin')
             add(l, null, true);

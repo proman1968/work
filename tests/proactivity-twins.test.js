@@ -55,7 +55,7 @@ describe('Проактивность Агентов $structure, when-преди�
         write('ORGANIZATIONS/OrgOne/sales/$structure/class.js', `export default {
             label: 'Продажи',
             '#security': {
-                ROLES: [{ id: 'mgr', label: 'Менеджер', USERS: ['${USER_UID}'], LINKS: [{ id: '/ORGANIZATIONS/OrgOne/MODULES/Reg/SALE', access: 'write' }] }]
+                ROLES: [{ id: 'mgr', label: 'Менеджер', USERS: ['${USER_UID}'], LINKS: [{ id: '/ORGANIZATIONS/OrgOne/MODULES/Reg/SALE', access: 'create' }] }]
             }
         }`);
         write('ORGANIZATIONS/OrgOne/warehouse/$structure/class.js', `export default {

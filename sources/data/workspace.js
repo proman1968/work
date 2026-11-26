@@ -11,19 +11,21 @@
  */
 import { getClass, children } from './classes.js';
 import { FAMILY } from './schema.js';
-import { normalizeSecurity, walkPlaces, trailKey, memberTrailKeys } from '../server/access/workplaces.js';
+import { normalizeSecurity, walkPlaces, trailKey, memberTrailKeys, ACCESS_RANK } from '../server/access/workplaces.js';
 
-const RANK = { read: 1, write: 2 };
+const RANK = ACCESS_RANK;
 const SCOPE_RANK = { null: 0, own: 1, place: 2, unit: 3, all: 4 };
 const LIMIT_CLASSES = 5000;
 
-/** Права на ссылку: у BOSS и вышестоящего места — только чтение. */
-const readOnly = links => links.map(l => ({ ...l, access: 'read' }));
+/** Права на ссылку: у BOSS и вышестоящего места — только чтение (явный none остаётся скрытым). */
+const readOnly = links => links.filter(l => l.access !== 'none').map(l => ({ ...l, access: 'read' }));
 
-/** Слияние ссылок по id: выше доступ, при равном — шире видимость. */
+/** Слияние ссылок по id: выше доступ, при равном — шире видимость; явные none отфильтровываются. */
 function mergeLinks(...lists) {
     const out = new Map();
     for (const l of lists.flat()) {
+        if (!l || l.access === 'none')
+            continue;
         const cur = out.get(l.id);
         const better = !cur
             || (RANK[l.access] ?? 0) > (RANK[cur.access] ?? 0)
@@ -34,7 +36,7 @@ function mergeLinks(...lists) {
     return [...out.values()];
 }
 
-const ownLinks = node => node.LINKS.map(l => ({ id: l.id, access: l.access, scope: l.scope ?? null }));
+const ownLinks = node => node.LINKS.filter(l => l.access !== 'none').map(l => ({ id: l.id, access: l.access, scope: l.scope ?? null }));
 
 /**
  * Подразделения и места пользователя с меню.

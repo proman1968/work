@@ -44,7 +44,7 @@ import { DataError } from './errors.js';
 import { localDay } from './time.js';
 import { buildWorkspace } from './workspace.js';
 import * as SQL_INSPECTOR from './sql-inspector.js';
-import { normalizeSecurity, walkPlaces, trailKey } from '../server/access/workplaces.js';
+import { normalizeSecurity, walkPlaces, trailKey, hasAccess } from '../server/access/workplaces.js';
 
 /** Ссылки рабочих мест — модулем по требованию: links.js тянет сервер, который сам импортирует этот модуль. */
 const linksModule = () => import('../server/access/links.js');
@@ -375,35 +375,36 @@ function reportAccount(db, cls, ref) {
  * админ WORK, назначение в самом классе (роль #security, системные — и сверху); для чтения —
  * и класс, открытый гостям. Для записи назначение должно давать запись.
  */
-async function fullAccess(item, p, write) {
+async function fullAccess(item, p, requiredLevel = 'read') {
+    const req = typeof requiredLevel === 'boolean' ? (requiredLevel ? 'write' : 'read') : (requiredLevel || 'read');
     if (!p?.session || DEV_MODE || p.session.$user === globalThis.WORK)
         return true;
     const users = item.DATA?.['#security']?.USER;
-    if (!write && Array.isArray(users) && (users.includes('GUEST') || users.includes('GUESTS')))
+    if (req === 'read' && Array.isArray(users) && (users.includes('GUEST') || users.includes('GUESTS')))
         return true;
     if (await item._isWorkBoss?.(p).catch(() => false))
         return true;
     const level = await (await linksModule()).directAccess(item, p).catch(() => null);
-    return write ? level === 'write' || level === 'admin' : level != null;
+    return hasAccess(level, req);
 }
 
 /**
  * Видимость вызова: { full, links — ссылки рабочих мест пользователя на класс, его предков
- * и поддерево, grants — права (null — всё, [] — ничего) }. Для записи — только ссылки на запись.
+ * и поддерево, grants — права (null — всё, [] — ничего) }.
+ * Для write/create/delete — только ссылки с достаточным уровнем RWCD.
  */
-async function scopeOf(item, p, db, cls, write) {
-    const full = await fullAccess(item, p, write);
+async function scopeOf(item, p, db, cls, requiredLevel = 'read') {
+    const req = typeof requiredLevel === 'boolean' ? (requiredLevel ? 'write' : 'read') : (requiredLevel || 'read');
+    const full = await fullAccess(item, p, req);
     const uid = item.constructor.resolveUid?.(p);
-    const links = await (await linksModule()).scopeLinks(item, p).catch(() => []);
-    return { full, links, grants: full ? null : scopeGrants(db, cls, links, { uid, write }) };
+    const links = await (await linksModule()).scopeLinks(item, p, req).catch(() => []);
+    return { full, links, grants: full ? null : scopeGrants(db, cls, links, { uid, minAccess: req }) };
 }
 
 const admin = async (item, p) => item.assertAccess(p, item.constructor.ACCESS_LEVEL.ADMIN);
 
 /**
- * Обёртка метода: права, БД, класс вызова, видимость (`vis` — права scope.js).
- * Чтение: страница класса видна (предок ссылки — как каркас цепочки) и есть хоть одна видимая
- * ветка: ссылка на класс, его предка или ниже.
+ * Обёртка метода: права RWCD (`read`/`write`/`create`/`delete`/`admin`), БД, класс вызова, видимость (`vis`).
  */
 function method(level, fn) {
     return async (item, p = {}) => {
@@ -412,8 +413,10 @@ function method(level, fn) {
         let uid = null;
         if (level === 'read')
             await item.assertAccess(p, item.constructor.ACCESS_LEVEL.READ);
-        else if (level === 'write')
-            uid = await item._assertDataWrite(p);
+        else if (level === 'write' || level === 'create' || level === 'delete')
+            uid = typeof item._assertDataAccess === 'function'
+                ? await item._assertDataAccess(level, p)
+                : await item._assertDataWrite(p);
         else
             await admin(item, p);
         const basePath = resolveBasePath(item, p);
@@ -421,7 +424,7 @@ function method(level, fn) {
         const cls = await classOf(db, item, basePath);
         const scope = level === 'admin'
             ? { full: true, links: [], grants: null }
-            : await scopeOf(item, p, db, cls, level === 'write');
+            : await scopeOf(item, p, db, cls, level);
         if (scope.grants?.length === 0)
             throw new Error('Доступ запрещён');
         return fn({ db, cls, item, p, uid, scope, vis: scope.grants });
@@ -834,9 +837,9 @@ export const DATA_METHODS = Object.freeze({
 
     /**
      * Создать объект в листе: { post|body, time?, unit?, place?, ext_of?, valid_from? }.
-     * Подразделение и место — из мест записи пользователя: не указаны — единственные доступные.
+     * Требует уровень C (create) или выше.
      */
-    db_create: { level: 'write', fn: method('write', async ({ db, cls, item, p, uid, scope }) => {
+    db_create: { level: 'write', fn: method('create', async ({ db, cls, item, p, uid, scope }) => {
         const at = await writePlace(db, cls, p, scope);
         const obj = createObject(db, {
             cid: cls.cid, body: bodyOf(p) ?? {}, time: p.time, unit: at.unit, place: at.place,
@@ -861,7 +864,7 @@ export const DATA_METHODS = Object.freeze({
     /** Версии объекта: { id }. */
     db_versions: { level: 'read', fn: method('read', async ({ db, cls, p, vis }) => objectVersions(db, await visibleObject(db, cls, p.id, vis, p))) },
 
-    /** Изменить объект: { id, post|body, replace?, time?, valid_from?, version? }. */
+    /** Изменить объект (уровень W и выше): { id, post|body, replace?, time?, valid_from?, version? }. */
     db_update: { level: 'write', fn: method('write', ({ db, cls, item, p, uid, vis }) => {
         const obj = updateObject(db, {
             id: ownObject(db, cls, p.id, vis), body: bodyOf(p), replace: flag(p.replace), time: p.time,
@@ -872,11 +875,11 @@ export const DATA_METHODS = Object.freeze({
         return obj;
     }) },
 
-    /** Удалить объект (отметка): { id, version? }. */
-    db_delete: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => deleteObject(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid })) },
+    /** Удалить объект (отметка, уровень D): { id, version? }. */
+    db_delete: { level: 'write', fn: method('delete', ({ db, cls, p, uid, vis }) => deleteObject(db, { id: ownObject(db, cls, p.id, vis), version: p.version, author: uid })) },
 
-    /** Восстановить удалённый: { id }. */
-    db_restore: { level: 'write', fn: method('write', ({ db, cls, p, uid, vis }) => restoreObject(db, { id: ownObject(db, cls, p.id, vis), author: uid })) },
+    /** Восстановить удалённый (уровень D): { id }. */
+    db_restore: { level: 'write', fn: method('delete', ({ db, cls, p, uid, vis }) => restoreObject(db, { id: ownObject(db, cls, p.id, vis), author: uid })) },
 
     /** Выборка объектов класса (с потомками): параметры queryObjects; `names` — названия объектов по ссылкам. */
     db_query: { level: 'read', fn: method('read', ({ db, cls, p, vis }) => {
@@ -975,8 +978,8 @@ export const DATA_METHODS = Object.freeze({
         });
     }) },
 
-    /** Удалить собственный HTML-шаблон печатной формы из класса операции: { name }. */
-    db_print_delete: { level: 'write', fn: method('write', async ({ db, cls, p }) => deletePrintTemplate(db, {
+    /** Удалить собственный HTML-шаблон печатной формы из класса операции (уровень D): { name }. */
+    db_print_delete: { level: 'write', fn: method('delete', async ({ db, cls, p }) => deletePrintTemplate(db, {
         ref: cls.cid,
         name: p.name,
         root: process.cwd(),

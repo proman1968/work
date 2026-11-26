@@ -41,9 +41,9 @@ before(async () => {
         '#security': {
             USER: ['${USER1}'],
             LINKS: [
-                { id: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', access: 'write' },
+                { id: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', access: 'create' },
                 { id: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', access: 'write' },
-                { id: '/DATA/CATALOGS/Контрагенты/Поставщики', access: 'write' },
+                { id: '/DATA/CATALOGS/Контрагенты/Поставщики', access: 'create' },
                 { id: '/DATA/REGISTER/62', access: 'read' },
             ],
         } }`);
@@ -88,7 +88,7 @@ describe('link_tree', () => {
                     path: '/DATA/OPERATIONS/Финансы/Платежи', label: 'Платежи', access: 'read',
                     children: [
                         { path: '/DATA/OPERATIONS/Финансы/Платежи/Покупатель', label: 'Покупатель', access: 'write', children: [] },
-                        { path: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', label: 'Поставщик', access: 'write', children: [] },
+                        { path: '/DATA/OPERATIONS/Финансы/Платежи/Поставщик', label: 'Поставщик', access: 'create', children: [] },
                     ],
                 }],
             }],
@@ -117,7 +117,7 @@ describe('link_tree', () => {
         assert.equal(await fin.canSee(fin, as(USER1)), true);
         assert.equal(await fin.data_access(as(USER1)), null);
         const pay = await WORK.get_item('/DATA/OPERATIONS/Финансы/Платежи/Поставщик');
-        assert.equal(await pay.data_access(as(USER1)), 'write');
+        assert.equal(await pay.data_access(as(USER1)), 'create');
         const zar = await WORK.get_item('/DATA/OPERATIONS/Финансы/Зарплата');
         assert.equal(await zar.canSee(zar, as(USER1)), false);
         assert.equal(await zar.data_access(as(USER1)), null);

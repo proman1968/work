@@ -141,7 +141,7 @@ export default {
                 <div class="card" ~for="links" @tap="openLink($for.item)" :title="$for.item.path">
                     <oda-icon :icon="$for.item.icon || 'bootstrap:database'" :icon-size="28"></oda-icon>
                     <div class="name">{{$for.item.label}}</div>
-                    <span class="chip">{{$for.item.access === 'read' ? 'чтение' : 'работа'}}</span>
+                    <span class="chip">{{$for.item.access === 'delete' ? 'удаление' : $for.item.access === 'create' ? 'создание' : $for.item.access === 'write' ? 'правка' : 'чтение'}}</span>
                 </div>
             </div>
         </section>

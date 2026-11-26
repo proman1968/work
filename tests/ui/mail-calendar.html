@@ -169,14 +169,31 @@ await test('Система: левое боковое меню .sys-sidebar бе
                 },
             });
         },
-        async fetch(method) {
+        async fetch(method, params, post) {
+            if (method === 'security_update') {
+                const parsed = typeof post === 'string' ? JSON.parse(post) : (post || {});
+                return { ok: true, security: parsed.security || {} };
+            }
             if (method === 'agent_staff_context') {
                 return {
                     users: [
                         { id: 'U_REAL', label: 'Харитонов Юрий', icon: '', iconColor: '' },
                         { id: 'U_TOP', label: 'Главный Босс', icon: '', iconColor: '' },
                     ],
-                    structures: [],
+                    usersTree: [
+                        { id: 'U_REAL', path: '/USERS/U_REAL', type: '$user', label: 'Харитонов Юрий', icon: '', iconColor: '', children: [] },
+                        { id: 'U_TOP', path: '/USERS/U_TOP', type: '$user', label: 'Главный Босс', icon: '', iconColor: '', children: [] },
+                    ],
+                    structures: [
+                        { path: '/ORGANIZATIONS/OrgDemo/sales', id: 'sales', label: 'Продажи', type: '$structure', icon: 'odant:structure' },
+                    ],
+                    organizationsTree: [{
+                        id: 'OrgDemo', path: '/ORGANIZATIONS/OrgDemo', type: '$base', label: 'ООО Демо', icon: 'odant:base', isSelf: true,
+                        children: [{
+                            id: 'sales', path: '/ORGANIZATIONS/OrgDemo/sales', type: '$structure', label: 'Продажи', icon: 'odant:structure', isSelf: false, children: [],
+                        }],
+                    }],
+                    projectsTree: [],
                     networkNodes: [
                         { id: 'partner-1', path: '/NODES/partner-1', principalId: 'AABBCCDDEEFF001', label: 'Сервер Партнёра', icon: 'icons:dns' },
                     ],
@@ -223,39 +240,85 @@ await test('Система: левое боковое меню .sys-sidebar бе
     assert(labels.includes('Пользователи') && labels.includes('Классы и модули') && labels.includes('Мессенджеры') && labels.includes('Агент и правила'), 'разделы Системы у $base включают Классы и модули');
     assert(!labels.includes('Поиск'), 'Поиск вынесен из Системы');
 
-    // 3. Проверка вкладки Пользователи: BOSS сверху, дерево классов $base, Настройка и Только просмотр
+    // 3. Проверка вкладки Пользователи: кликабельная плашка BOSS без кнопки Назначить, 2 подгруппы (Пользователи / Классы), RWCD-движок и иерархический пикер
     const staffEl = await waitFor(() => el.$('system-tab-staff'), 'смонтирована вкладка Пользователи');
     assert(staffEl.$item?.set !== undefined || typeof (await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js')).default.$item?.set === 'function', '$item имеет сеттер reload');
     const rootRoleNode = await waitFor(() => staffEl.$('staff-role-node'), () => `единое дерево ролей (nodes=${staffEl.$$('staff-role-node')?.length}, err=${staffEl.error}, secRoles=${staffEl.security?.ROLES?.length})`);
     await waitFor(() => {
-        const t = staffEl.$('.tree-box')?.textContent || '';
-        return t.includes('Главный Босс') ? t : null;
-    }, () => `отображается унаследованный BOSS сверху (text=${staffEl.$('.tree-box')?.textContent?.slice(0, 200)})`);
+        const pill = staffEl.$('.boss-pill.inherited');
+        return pill && pill.textContent.includes('Главный Босс') ? pill : null;
+    }, () => `отображается приглушённая кликабельная плашка унаследованного BOSS (text=${staffEl.$('.root-row')?.textContent?.slice(0, 200)})`);
+    const rootRowText = staffEl.$('.root-row')?.textContent || '';
+    assert(!rootRowText.includes('Назначить') && !rootRowText.includes('Сменить'), 'нет отдельной кнопки Назначить/Сменить для BOSS');
+    assert(!rootRowText.includes('не назначен'), 'нет надписи «не назначен» при наличии вышестоящего BOSS');
+
     const childRoleNode = await waitFor(() => rootRoleNode.$('staff-role-node'), 'дочерняя роль Бухгалтер внутри Главного бухгалтера');
-    assert(childRoleNode, 'дочерняя роль отрисована рекурсивным компонентом');
+    assert(childRoleNode, 'дочерняя роль из старых данных совместимо отрисована');
+
     const roleHeaderText = rootRoleNode.$('.role-row')?.textContent || '';
-    assert(roleHeaderText.includes('Харитонов Юрий'), 'отображён реальный пользователь в строке роли');
-    assert(roleHeaderText.includes('Сервер Партнёра'), 'отображён сервер сети в строке роли');
+    assert(!roleHeaderText.includes('Только просмотр'), 'убран флажок Только просмотр из строки роли');
+    assert(!roleHeaderText.includes('Подроль'), 'убрана кнопка Подроль из строки роли');
+    assert(!roleHeaderText.includes('Харитонов Юрий'), 'участники не лежат внавалку в строке заголовка роли');
+
+    // Проверяем подгруппу «Пользователи»
+    const memberRows = rootRoleNode.$$('.tree-row.member-row');
+    const membersText = memberRows.map(r => r.textContent).join(' | ');
+    assert(membersText.includes('Харитонов Юрий'), 'в подгруппе Пользователи отображён реальный пользователь');
+    assert(membersText.includes('Сервер Партнёра'), 'в подгруппе Пользователи отображён сервер сети');
     assert(!(staffEl.$('.tree-box')?.textContent || '').includes('U_GHOST'), 'несуществующие UID не отображаются абракадаброй');
-    assert(!roleHeaderText.includes('U_GHOST'), 'несуществующие UID не отображаются в строке роли');
-    assert(!roleHeaderText.includes('Пригласить'), 'нет лишней кнопки Пригласить');
 
-    // Обычный режим: видна полная иерархия промежуточных классов (Бухучёт -> Операции -> Зарплата), без Справочники/Склады
+    // Проверяем иерархический пикер участников (корни Пользователи / Организации / Сеть, без «Все сотрудники» и «Все гости»)
+    const pickerRoots = staffEl._buildMemberTreeRoots();
+    const rootLabels = pickerRoots.map(r => r.label);
+    assert(rootLabels.includes('Пользователи') && rootLabels.includes('Организации') && rootLabels.includes('Сеть'), 'иерархический пикер содержит корневые группы Пользователи, Организации, Сеть');
+    const pickerJson = JSON.stringify(pickerRoots);
+    assert(!pickerJson.includes('Все сотрудники') && !pickerJson.includes('Все гости'), 'из пикера убраны непонятные группы Все сотрудники и Все гости');
+
+    // Обычный режим подгруппы Классы: видна полная иерархия Бухучёт -> Операции -> Зарплата, без Справочники/Склады
     const filteredClasses = rootRoleNode.$$('.tree-row.class-row');
-    assert(filteredClasses.length === 3, 'в обычном режиме сохранена иерархия Бухучёт -> Операции -> Зарплата (получено ' + filteredClasses.length + ': ' + JSON.stringify(filteredClasses.map(r => r.textContent.trim())) + ')');
-    assert(!filteredClasses.some(r => r.textContent.includes('Склады')), 'неотмеченный класс Склады скрыт до включения Настройки');
+    assert(filteredClasses.length === 3, 'в обычном режиме сохранена иерархия Бухучёт -> Операции -> Зарплата (получено ' + filteredClasses.length + ')');
+    assert(!filteredClasses.some(r => r.textContent.includes('Склады')), 'невыданный класс Склады скрыт до включения Настройки');
 
-    // Включаем режим "Настройка" у роли Главный бухгалтер реальным кликом по кнопке — появляются все ветки (Справочники с ▸)
-    const setupBtn = [...rootRoleNode.$$('button.icon-btn')].find(b => b.textContent.includes('Настройка'));
+    // Включаем режим "Настройка" у подгруппы Классы
+    const setupBtn = rootRoleNode.$('.setup-classes-btn');
     setupBtn.click();
-    await waitFor(() => rootRoleNode.$$('.tree-row.class-row')?.length === 4, () => 'в режиме Настройка видны все 4 узла (setupMode=' + rootRoleNode.setupMode + ', classRows=' + rootRoleNode.classRows?.length + ', rows=' + rootRoleNode.$$('.tree-row.class-row')?.length + ')');
+    await waitFor(() => rootRoleNode.$$('.tree-row.class-row')?.length === 4, () => 'в режиме Настройка видны все 4 узла (rows=' + rootRoleNode.$$('.tree-row.class-row')?.length + ')');
     // Раскрываем ветку Справочники кликом по стрелке — виден лист Склады (всего 5 строк)
     const catalogRow = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Справочники'));
     catalogRow.querySelector('.expander').click();
     await waitFor(() => rootRoleNode.$$('.tree-row.class-row')?.length === 5, 'после раскрытия ветки видны все 5 классов/веток');
-    const checks = [...rootRoleNode.$$('.tree-row.class-row input[type="checkbox"]')].filter(c => getComputedStyle(c).display !== 'none');
-    assert(checks.length === 5, 'у каждого узла дерева классов один видимый чекбокс (получено ' + checks.length + ')');
-    assert(checks.some(c => c.checked) && checks.some(c => !c.checked), 'отмечен только привязанный класс');
+
+    // Проверяем 4-уровневый движок RWCD с проваливанием вниз, явным запретом и кнопкой сброса ↩
+    const sliders = rootRoleNode.$$('.tree-row.class-row .rwcd-slider');
+    assert(sliders.length === 5, 'у каждого узла дерева классов есть движок RWCD (получено ' + sliders.length + ')');
+
+    // Ставим C на папке Справочники -> Склады наследуют C (inherited)
+    const catalogBtnC = catalogRow.querySelector('.rwcd-seg.seg-c');
+    catalogBtnC.click();
+    await waitFor(() => {
+        const skRow = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Склады'));
+        const sl = skRow?.querySelector('.rwcd-slider');
+        return sl && sl.dataset.access === 'create' && sl.classList.contains('inherited') ? sl : null;
+    }, 'уровень C на папке Справочники провалился вниз на Склады как inherited');
+
+    // Ставим явный запрет (—) на Складах -> появляется кнопка сброса ↩ и класс denied
+    const skladRow1 = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Склады'));
+    skladRow1.querySelector('.rwcd-seg.seg-none').click();
+    await waitFor(() => {
+        const skRow = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Склады'));
+        const sl = skRow?.querySelector('.rwcd-slider');
+        const rst = skRow?.querySelector('.rwcd-reset');
+        return sl && sl.dataset.access === 'none' && sl.classList.contains('denied') && rst ? rst : null;
+    }, 'явный запрет — на дочернем классе подсвечен как denied и показывает кнопку ↩');
+
+    // Нажимаем ↩ -> Склады возвращаются к унаследованному C
+    const skladRow2 = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Склады'));
+    skladRow2.querySelector('.rwcd-reset').click();
+    await waitFor(() => {
+        const skRow = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Склады'));
+        const sl = skRow?.querySelector('.rwcd-slider');
+        return sl && sl.dataset.access === 'create' && sl.classList.contains('inherited') && !skRow.querySelector('.rwcd-reset') ? sl : null;
+    }, 'кнопка ↩ сбрасывает переопределение и возвращает наследование от родителя');
 
     // Проверяем вкладку "Классы и модули"
     const modTabBtn = [...nav.querySelectorAll('.sys-tab')].find(b => b.textContent.includes('Классы и модули'));

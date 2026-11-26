@@ -46,8 +46,8 @@ const item = p => WORK.get_item(p);
 const ids = res => res.items.map(o => o.id).sort();
 
 const SALES_LINKS = `[
-    { id: '${SALE}', access: 'write' },
-    { id: '/DATA/CATALOGS/SUBJECTS', access: 'write' },
+    { id: '${SALE}', access: 'delete' },
+    { id: '/DATA/CATALOGS/SUBJECTS', access: 'delete' },
     { id: '/DATA/CATALOGS/CLIENTS', access: 'read', scope: 'unit' },
     { id: '/DATA/REGISTER/62', access: 'read' }]`;
 
@@ -69,7 +69,7 @@ before(async () => {
     cls('BASE/NORTH', '$structure', `{ label: 'Север', '#security': { BOSS: ['${BOSS}'], ROLES: [
         { id: 'sales', label: 'Продажи', USERS: ['${N1}', '${M1}'], LINKS: ${SALES_LINKS},
             ROLES: [{ id: 'junior', label: 'Стажёр', USERS: ['${J1}'], LINKS: [
-                { id: '${SALE}', access: 'write', scope: 'own' }, { id: '/DATA/CATALOGS/SUBJECTS', access: 'read' }] }] }] } }`);
+                { id: '${SALE}', access: 'create', scope: 'own' }, { id: '/DATA/CATALOGS/SUBJECTS', access: 'read' }] }] }] } }`);
     cls('BASE/SOUTH', '$structure', `{ label: 'Юг', '#security': { ROLES: [
         { id: 'sales', label: 'Продажи', USERS: ['${S1}', '${M1}'], LINKS: ${SALES_LINKS} }] } }`);
 

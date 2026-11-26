@@ -153,6 +153,8 @@ export async function verifyNodeRequest(request) {
     const principal = Object.freeze({
         kind: 'node',
         id: nodeId,
+        nodePath: node.item?.path || '',
+        actorId: actor || '',
         actor: actor ? actor + '@' + nodeId : undefined,
         actorLabel: actorLabel || undefined,
         roles: Object.freeze(roles),
