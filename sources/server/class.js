@@ -30,6 +30,7 @@ import {
     findProviderPreset,
 } from '../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../modules/license/index.js';
+import { SUPPORT_METHODS } from '../modules/support/index.js';
 import { NOTIFY_METHODS, resolveBotForPoint, sanitizeBotForUi } from '../modules/notify/index.js';
 import { INVITE_METHODS } from './access/invites.js';
 import { KLADR_METHODS } from '../modules/kladr/index.js';
@@ -891,6 +892,16 @@ for (const [name, m] of Object.entries(TRAINER_METHODS)) {
 }
 // методы управления лицензией ПАК WORK (license_*)
 for (const [name, m] of Object.entries(LICENSE_METHODS)) {
+    Object.defineProperty($class.prototype, name, {
+        value: function (params = {}) {
+            return m.fn.call(this, params);
+        },
+        writable: true,
+        configurable: true,
+    });
+}
+// методы службы поддержки и Remote Desktop (support_*)
+for (const [name, m] of Object.entries(SUPPORT_METHODS)) {
     Object.defineProperty($class.prototype, name, {
         value: function (params = {}) {
             return m.fn.call(this, params);

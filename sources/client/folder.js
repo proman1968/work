@@ -272,6 +272,7 @@ export class $folder extends $item {
                 || method.startsWith('trainer_')
                 || method.startsWith('provider_')
                 || method.startsWith('license_')
+                || method.startsWith('support_')
                 || method.startsWith('messenger_')
                 || method.startsWith('distro_')
                 || method.startsWith('agent_')

@@ -578,6 +578,59 @@ await test('Проводник: порядок вкладок [контекст,
         WORK.showConfirm = prevConfirm;
         vNode.remove();
     }
+
+    // 13. Поддержка WORK в левой панели и <work-support-panel> + <work-support-remote-bar>
+    const prevUid = WORK.uid;
+    const prevFetch = WORK.fetch;
+    try {
+        WORK.uid = 'u1';
+        const btnsLoggedIn = explorerProto._buildLeftButtons.call({ showUser: false, showCall: false, _supportUnread: 1, _supportRemotePending: 0 });
+        assert(btnsLoggedIn.some(b => b.icon === 'icons:help'), 'в левой панели есть кнопка Поддержка (icons:help)');
+
+        const createdTickets = [];
+        WORK.fetch = async (_path, method, _params, post) => {
+            if (method === 'support_list')
+                return { ok: true, tickets: createdTickets, unreadTotal: 0, remoteRequests: 0 };
+            if (method === 'support_create') {
+                const body = JSON.parse(post || '{}');
+                const t = {
+                    ticketId: 'TCK-TEST-1',
+                    status: 'open',
+                    tierName: 'Пробное обращение',
+                    createdAt: Date.now(),
+                    messages: [{ from: 'client', author: 'Тест', text: body.text, time: Date.now() }],
+                };
+                createdTickets.unshift(t);
+                return { ok: true, ticket: t };
+            }
+            return { ok: true };
+        };
+
+        await import('/$server/$folder/lib/support/support.js');
+        await ODA.waitReg('work-support-panel');
+        const sp = document.createElement('work-support-panel');
+        document.body.appendChild(sp);
+        await waitVerFor(() => sp.$('textarea'), 'форма создания обращения смонтирована');
+        sp.problemText = 'Кнопка не реагирует на клик';
+        await sp.submitTicket();
+        await waitVerFor(() => sp.activeTab === 'list' && sp.$('.t-item'), 'тикет создан и открыта вкладка Обращения');
+        assert(sp.$('.t-item').textContent.includes('TCK-TEST-1'), 'новый тикет отображается в списке');
+        sp.remove();
+
+        await ODA.waitReg('work-support-remote-bar');
+        const rBar = document.createElement('work-support-remote-bar');
+        rBar.ticketId = 'TCK-TEST-1';
+        document.body.appendChild(rBar);
+        await waitVerFor(() => rBar.$('.mode-btn'), 'плавающая плашка Remote Desktop смонтирована');
+        eq(rBar.mode, 'view', 'по умолчанию включён режим Только просмотр');
+        rBar.$('.mode-btn').click();
+        await waitVerFor(() => rBar.mode === 'control', 'переключение режима на Управление WORK');
+        rBar.remove();
+    }
+    finally {
+        WORK.uid = prevUid;
+        WORK.fetch = prevFetch;
+    }
 });
 
 window.__done = true;

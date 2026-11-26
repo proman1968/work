@@ -18,6 +18,7 @@ import { audit } from './audit.js';
 import { DATA_METHODS } from '../../data/api.js';
 import { TRAINER_METHODS } from '../../modules/trainer/index.js';
 import { LICENSE_METHODS } from '../../modules/license/index.js';
+import { SUPPORT_METHODS } from '../../modules/support/index.js';
 import { NOTIFY_METHODS } from '../../modules/notify/index.js';
 import { INVITE_METHODS } from './invites.js';
 import { KLADR_METHODS } from '../../modules/kladr/index.js';
@@ -77,6 +78,8 @@ export const MEMBERS = Object.freeze({
     ...Object.fromEntries(Object.entries(TRAINER_METHODS).map(([name, m]) => [name, m.level])),
     // лицензирование ПАК WORK (sources/modules/license/index.js)
     ...Object.fromEntries(Object.entries(LICENSE_METHODS).map(([name, m]) => [name, m.level])),
+    // служба поддержки и Remote Desktop (sources/modules/support/index.js)
+    ...Object.fromEntries(Object.entries(SUPPORT_METHODS).map(([name, m]) => [name, m.level])),
     // каналы уведомлений Telegram / MAX (sources/modules/notify/index.js)
     ...Object.fromEntries(Object.entries(NOTIFY_METHODS).map(([name, m]) => [name, m.level])),
     // одноразовые приглашения пользователей на рабочие места (sources/server/access/invites.js)

@@ -1,6 +1,6 @@
 export default {
     icon: 'odant:structure',
-    imports: 'oda//app-layout.js, oda//tabs.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js, ~/lib//class-picker.js',
+    imports: 'oda//app-layout.js, oda//tabs.js, oda//icon, oda//button, ~/lib//tree.js, ~/lib//node-explorer.js, ~/lib//consultant.js, ~/lib//class-picker.js, ~/lib//support.js',
     extends: 'oda-app-layout',
     template: /*html*/`
         <item-tree order="0" slot='left-panel' allow-search clean-structure :items-selector :show-size show-status show-users allow-focus :hide-roots :hide-tops :$item style="height: 0"></item-tree>
@@ -118,6 +118,20 @@ export default {
                 },
             });
         }
+        if (WORK?.uid) {
+            const supPending = Number(this._supportUnread || 0) + Number(this._supportRemotePending || 0);
+            buttons.push({
+                round: true,
+                icon: 'icons:help',
+                title: supPending > 0
+                    ? `Служба поддержки (${supPending} уведомл.)`
+                    : 'Служба поддержки (скриншот, видео, удалённый экран)',
+                rainbow: Boolean(this._supportRemotePending > 0 || this._supportUnread > 0),
+                click: () => {
+                    this.openSupportPanel?.();
+                },
+            });
+        }
         buttons.push({
             round: true,
             icon: user?.icon || 'icons:account-circle',
@@ -157,6 +171,42 @@ export default {
             }).catch(() => { /* ignore */ });
         }
         return this.left_buttons;
+    },
+    _supportUnread: 0,
+    _supportRemotePending: 0,
+    async openSupportPanel() {
+        if (typeof document === 'undefined') return;
+        const existing = document.querySelector('work-support-panel');
+        if (existing) {
+            existing.minimized = false;
+            return;
+        }
+        await ODA.waitReg?.('work-support-panel').catch(() => {});
+        const panel = document.createElement('work-support-panel');
+        if (this._supportUnread > 0 || this._supportRemotePending > 0)
+            panel.activeTab = 'list';
+        panel.addEventListener('support-closed', (e) => {
+            if (typeof e?.detail?.unreadTotal === 'number') {
+                this._supportUnread = e.detail.unreadTotal;
+                this._refreshLeftButtons();
+            }
+            this._refreshSupportBadge();
+        });
+        document.body.appendChild(panel);
+    },
+    async _refreshSupportBadge() {
+        if (!WORK?.uid || typeof WORK?.fetch !== 'function') return;
+        try {
+            const res = await WORK.fetch('/', 'support_list');
+            const nextUnread = Number(res?.unreadTotal || 0);
+            const nextRemote = Number(res?.remoteRequests || 0);
+            if (nextUnread !== this._supportUnread || nextRemote !== this._supportRemotePending) {
+                this._supportUnread = nextUnread;
+                this._supportRemotePending = nextRemote;
+                this._refreshLeftButtons();
+            }
+        }
+        catch { /* ignore */ }
     },
     _onFocusedIndexChanged(e) {
         this.visibleMode = 'main';
@@ -668,10 +718,15 @@ export default {
         }
         this._refreshLeftButtons();
         this._initTopLicenseBanner();
+        this._refreshSupportBadge();
+        if (!this._supportBadgeTimer && typeof window !== 'undefined') {
+            this._supportBadgeTimer = setInterval(() => this._refreshSupportBadge(), 60_000);
+        }
         WORK.authEvents?.addEventListener('auth', () => {
             this.user_icon = undefined;
             this._refreshLeftButtons();
             this._initTopLicenseBanner();
+            this._refreshSupportBadge();
             this.render?.();
         });
         window.execute = async ($item, nav) => {

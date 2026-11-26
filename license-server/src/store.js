@@ -437,13 +437,20 @@ export function mergeStoreStates(baseState = {}, incomingState = {}) {
         const incCreated = Number(incUser.createdAt || Date.now());
         const [olderU, newerU] = incCreated >= curCreated ? [curUser, incUser] : [incUser, curUser];
 
+        const isAdm = Boolean(curUser.isAdmin || incUser.isAdmin);
+        const isSup = !isAdm && Boolean(curUser.isSupport || incUser.isSupport || curUser.role === 'SUPPORT' || incUser.role === 'SUPPORT');
         const mergedUser = {
             ...olderU,
             ...newerU,
             userId: olderU.userId || newerU.userId,
             email,
-            isAdmin: Boolean(curUser.isAdmin || incUser.isAdmin),
-            role: (curUser.isAdmin || incUser.isAdmin) ? 'ADMIN' : 'CLIENT',
+            isAdmin: isAdm,
+            isSupport: isSup,
+            role: isAdm ? 'ADMIN' : (isSup ? 'SUPPORT' : 'CLIENT'),
+            assignedSupportIds: Array.from(new Set([
+                ...(Array.isArray(curUser.assignedSupportIds) ? curUser.assignedSupportIds : []),
+                ...(Array.isArray(incUser.assignedSupportIds) ? incUser.assignedSupportIds : []),
+            ])),
             createdAt: Math.min(curCreated, incCreated),
             lastLoginAt: Math.max(Number(curUser.lastLoginAt || 0), Number(incUser.lastLoginAt || 0)),
             name: isRealName(newerU.name) ? newerU.name : (isRealName(olderU.name) ? olderU.name : (newerU.name || olderU.name || emailPrefix)),
@@ -593,6 +600,7 @@ export class LicenseStore {
 
         fs.mkdirSync(this.dataDir, { recursive: true });
         this.backupDir = path.join(this.dataDir, 'backups');
+        this.ticketMediaDir = path.join(this.dataDir, 'ticket-media');
         this.stateFile = path.join(this.dataDir, 'store.json');
         this.prevStateFile = path.join(this.dataDir, 'store.prev.json');
         this.keyFile = path.join(this.dataDir, 'authority-key.json');
@@ -668,24 +676,31 @@ export class LicenseStore {
         return Boolean(this.getAdminIdentity(token)?.authenticated);
     }
 
-    getAdminIdentity(token = '') {
+    verifySupportOrAdminToken(token = '') {
+        return Boolean(this.getPortalStaffIdentity(token)?.authenticated);
+    }
+
+    getPortalStaffIdentity(token = '') {
         const clean = String(token || '').trim();
         if (!clean || this.revokedSessions.has(clean))
             return null;
         const userFromTok = this._findUser(clean);
-        if (userFromTok && userFromTok.isAdmin) {
+        if (userFromTok && (userFromTok.isAdmin || userFromTok.isSupport || userFromTok.role === 'SUPPORT')) {
+            const role = userFromTok.isAdmin ? 'ADMIN' : 'SUPPORT';
             return {
                 authenticated: true,
                 login: userFromTok.email,
                 email: userFromTok.email,
+                name: userFromTok.name || userFromTok.email,
                 userId: userFromTok.userId,
-                role: 'ADMIN',
+                role,
             };
         }
         if (clean === this.adminPassword && this.adminPassword.length >= 6) {
             return {
                 authenticated: true,
                 login: this.adminLogin,
+                name: 'Администратор портала',
                 role: 'ADMIN',
             };
         }
@@ -699,8 +714,16 @@ export class LicenseStore {
         return {
             authenticated: true,
             login: sess.login || this.adminLogin,
+            name: 'Администратор портала',
             role: 'ADMIN',
         };
+    }
+
+    getAdminIdentity(token = '') {
+        const staff = this.getPortalStaffIdentity(token);
+        if (!staff || staff.role !== 'ADMIN')
+            return null;
+        return staff;
     }
 
     /**
@@ -724,9 +747,9 @@ export class LicenseStore {
     }
 
     /**
-     * Назначить или снять права администратора у пользователя по Email или userId.
+     * Назначить роль пользователя ('ADMIN' | 'SUPPORT' | 'CLIENT') по Email или userId.
      */
-    setUserAdminRole(emailOrUserId = '', isAdmin = true) {
+    setUserRole(emailOrUserId = '', role = 'CLIENT') {
         const key = String(emailOrUserId || '').trim();
         let user = Object.values(this.state.users || {}).find(
             u => u.userId === key || String(u.email || '').toLowerCase() === key.toLowerCase()
@@ -737,17 +760,58 @@ export class LicenseStore {
         }
         if (!user)
             throw new Error('Пользователь не найден');
-        const nextAdmin = Boolean(isAdmin);
-        if (!nextAdmin && user.isAdmin) {
+        const nextRole = ['ADMIN', 'SUPPORT', 'CLIENT'].includes(String(role || '').toUpperCase())
+            ? String(role).toUpperCase()
+            : 'CLIENT';
+        if (nextRole !== 'ADMIN' && user.isAdmin) {
             const otherAdmins = Object.values(this.state.users || {}).filter(u => u.isAdmin && u.userId !== user.userId);
             if (!otherAdmins.length) {
                 throw new Error('Нельзя снять права у единственного администратора сервера');
             }
         }
-        user.isAdmin = nextAdmin;
-        user.role = nextAdmin ? 'ADMIN' : 'CLIENT';
+        user.isAdmin = nextRole === 'ADMIN';
+        user.isSupport = nextRole === 'SUPPORT';
+        user.role = nextRole;
         this._save();
         return this._formatUserResponse(user);
+    }
+
+    /**
+     * Назначить или снять права администратора у пользователя по Email или userId.
+     */
+    setUserAdminRole(emailOrUserId = '', isAdmin = true) {
+        return this.setUserRole(emailOrUserId, isAdmin ? 'ADMIN' : 'CLIENT');
+    }
+
+    /**
+     * Закрепить сотрудников поддержки (SUPPORT / ADMIN) за клиентом.
+     */
+    assignClientSupport(clientEmailOrUserId = '', supportIds = []) {
+        const key = String(clientEmailOrUserId || '').trim();
+        const client = Object.values(this.state.users || {}).find(
+            u => u.userId === key || String(u.email || '').toLowerCase() === key.toLowerCase()
+        );
+        if (!client)
+            throw new Error('Клиент не найден');
+        const validSupportIds = new Set(
+            Object.values(this.state.users || {})
+                .filter(u => u && (u.isSupport || u.role === 'SUPPORT' || u.isAdmin))
+                .map(u => u.userId)
+        );
+        const cleanIds = Array.from(new Set(
+            (Array.isArray(supportIds) ? supportIds : [])
+                .map(x => String(x || '').trim())
+                .filter(id => id && validSupportIds.has(id))
+        ));
+        client.assignedSupportIds = cleanIds;
+        for (const lic of Object.values(this.state.licenses || {})) {
+            if (!lic) continue;
+            if (lic.ownerAccountId === client.userId || String(lic.ownerEmail || '').toLowerCase() === String(client.email || '').toLowerCase()) {
+                lic.assignedSupportIds = [...cleanIds];
+            }
+        }
+        this._save();
+        return this._formatUserResponse(client);
     }
 
     _ensureSettingsObject() {
@@ -2304,9 +2368,326 @@ export class LicenseStore {
     }
 
     /**
+     * Сохранить прикреплённые медиафайлы (скриншот/видео) обращения на диск.
+     */
+    _saveTicketAttachments(ticketId, attachments = []) {
+        const saved = [];
+        if (!Array.isArray(attachments) || !attachments.length)
+            return saved;
+        const dir = path.join(this.ticketMediaDir, String(ticketId).replace(/[^a-zA-Z0-9_-]/g, '_'));
+        fs.mkdirSync(dir, { recursive: true });
+        for (let i = 0; i < Math.min(attachments.length, 6); i++) {
+            const att = attachments[i];
+            if (!att || typeof att !== 'object') continue;
+            const rawB64 = String(att.dataBase64 || '');
+            if (!rawB64) continue;
+            const b64Payload = rawB64.includes(',') ? rawB64.split(',').pop() : rawB64;
+            const buf = Buffer.from(b64Payload, 'base64');
+            if (!buf.length || buf.length > 22 * 1024 * 1024)
+                continue;
+            const mime = String(att.mime || 'application/octet-stream').toLowerCase();
+            if (!mime.startsWith('image/') && !mime.startsWith('video/'))
+                continue;
+            const ext = mime.includes('png') ? '.png'
+                : mime.includes('jpeg') || mime.includes('jpg') ? '.jpg'
+                : mime.includes('webp') ? '.webp'
+                : mime.includes('webm') ? '.webm'
+                : mime.includes('mp4') ? '.mp4'
+                : '.bin';
+            const fileId = `${Date.now()}-${i}-${crypto.randomBytes(3).toString('hex')}${ext}`;
+            fs.writeFileSync(path.join(dir, fileId), buf);
+            saved.push({
+                id: fileId,
+                name: String(att.name || fileId).slice(0, 120),
+                mime,
+                kind: mime.startsWith('video/') ? 'video' : 'image',
+                size: buf.length,
+                url: `/api/support/media/${encodeURIComponent(ticketId)}/${encodeURIComponent(fileId)}`,
+            });
+        }
+        return saved;
+    }
+
+    getTicketMediaFile(ticketId, fileName) {
+        const safeTicket = String(ticketId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const safeFile = path.basename(String(fileName || ''));
+        if (!safeTicket || !safeFile)
+            return null;
+        const full = path.join(this.ticketMediaDir, safeTicket, safeFile);
+        if (!fs.existsSync(full))
+            return null;
+        const ext = path.extname(safeFile).toLowerCase();
+        const mime = ext === '.png' ? 'image/png'
+            : (ext === '.jpg' || ext === '.jpeg') ? 'image/jpeg'
+            : ext === '.webp' ? 'image/webp'
+            : ext === '.webm' ? 'video/webm'
+            : ext === '.mp4' ? 'video/mp4'
+            : 'application/octet-stream';
+        return { fullPath: full, mime };
+    }
+
+    /**
+     * Создать обращение в поддержку напрямую из интерфейса WORK (с поддержкой привязанной лицензии и гостевых/пробных серверов).
+     */
+    createWorkSupportTicket({
+        ownerToken = '',
+        licenseId = '',
+        serverId = '',
+        serverName = '',
+        customerName = '',
+        userId = '',
+        userName = 'Пользователь WORK',
+        userEmail = '',
+        text = '',
+        techContext = null,
+        attachments = [],
+    } = {}) {
+        let resolvedOwnerId = '';
+        let resolvedLicId = '';
+        let summary = null;
+
+        if (ownerToken) {
+            const parsedTok = verifyOwnerToken(ownerToken, this.authorityKeys.publicKey);
+            if (parsedTok?.ownerAccountId)
+                resolvedOwnerId = parsedTok.ownerAccountId;
+        }
+        if (licenseId && this.state.licenses[licenseId]) {
+            summary = this.getLicenseSummary(licenseId);
+            resolvedLicId = summary?.licenseId || '';
+        }
+        else if (resolvedOwnerId) {
+            const ownerLic = Object.values(this.state.licenses || {}).find(
+                l => l && l.ownerAccountId === resolvedOwnerId
+            );
+            if (ownerLic) {
+                summary = this.getLicenseSummary(ownerLic.licenseId);
+                resolvedLicId = summary?.licenseId || '';
+            }
+        }
+
+        const now = Date.now();
+        let tier = 'trial';
+        let tierName = 'Пробное обращение';
+        let reactionMinutes = 240;
+        let reactionLabel = 'до 4 часов';
+        let resolvedCustomerName = String(customerName || '').trim() || 'Сервер WORK';
+
+        if (summary) {
+            resolvedOwnerId = resolvedOwnerId || summary.ownerAccountId || '';
+            resolvedCustomerName = summary.customer?.name || resolvedCustomerName;
+            tier = summary.support.tier;
+            tierName = summary.support.tierName;
+            reactionMinutes = summary.support.reactionMinutes;
+            reactionLabel = summary.support.reactionLabel;
+            const rawLic = this.state.licenses[summary.licenseId];
+            if (rawLic?.support)
+                rawLic.support.ticketsUsed = Number(rawLic.support?.ticketsUsed || 0) + 1;
+        }
+
+        // Ищем закреплённого сотрудника поддержки у клиента
+        let assignedSupportId = '';
+        let assignedSupportName = '';
+        const ownerUser = resolvedOwnerId
+            ? Object.values(this.state.users || {}).find(u => u.userId === resolvedOwnerId)
+            : null;
+        const supIds = Array.isArray(ownerUser?.assignedSupportIds) && ownerUser.assignedSupportIds.length
+            ? ownerUser.assignedSupportIds
+            : (Array.isArray(this.state.licenses[resolvedLicId]?.assignedSupportIds) ? this.state.licenses[resolvedLicId].assignedSupportIds : []);
+        if (supIds.length) {
+            const supUser = Object.values(this.state.users || {}).find(u => u.userId === supIds[0]);
+            if (supUser) {
+                assignedSupportId = supUser.userId;
+                assignedSupportName = supUser.name || supUser.email;
+            }
+        }
+
+        const ticketId = 'TCK-' + Object.keys(this.state.tickets).length.toString().padStart(4, '0') + '-' + crypto.randomBytes(2).toString('hex').toUpperCase();
+        const ticketAccessKey = 'tck_' + crypto.randomBytes(20).toString('hex');
+        const savedAttachments = this._saveTicketAttachments(ticketId, attachments);
+        const slaDeadlineAt = now + reactionMinutes * 60_000;
+
+        const ticket = {
+            ticketId,
+            ticketAccessKey,
+            licenseId: resolvedLicId,
+            ownerAccountId: resolvedOwnerId,
+            serverId: String(serverId || ''),
+            serverName: String(serverName || ''),
+            customerName: resolvedCustomerName,
+            channel: 'work',
+            chatId: String(serverId || resolvedLicId || 'work'),
+            userId: String(userId || ''),
+            userName: String(userName || 'Пользователь WORK'),
+            userEmail: String(userEmail || ''),
+            tier,
+            tierName,
+            reactionMinutes,
+            reactionLabel,
+            slaDeadlineAt,
+            status: 'open',
+            assignedSupportId,
+            assignedSupportName,
+            techContext: techContext && typeof techContext === 'object' ? techContext : null,
+            attachments: savedAttachments,
+            createdAt: now,
+            firstReplyAt: null,
+            slaMet: null,
+            messages: [
+                {
+                    from: 'client',
+                    author: String(userName || 'Пользователь WORK'),
+                    text: String(text || '').trim(),
+                    attachments: savedAttachments,
+                    time: now,
+                },
+            ],
+        };
+
+        this.state.tickets[ticketId] = ticket;
+        this._save();
+        return {
+            ticket: this._sanitizeTicketForClient(ticket, { includeAccessKey: true }),
+            license: resolvedLicId ? this.getLicenseSummary(resolvedLicId) : null,
+        };
+    }
+
+    _sanitizeTicketForClient(ticket, { includeAccessKey = false } = {}) {
+        if (!ticket) return null;
+        const copy = structuredClone(ticket);
+        if (!includeAccessKey)
+            delete copy.ticketAccessKey;
+        return copy;
+    }
+
+    verifyTicketAccessKey(ticketId, accessKey) {
+        const t = this.state.tickets[ticketId];
+        if (!t || !accessKey)
+            return null;
+        if (t.ticketAccessKey && t.ticketAccessKey === String(accessKey).trim())
+            return t;
+        return null;
+    }
+
+    canStaffAccessTicket(staff, ticket) {
+        if (!staff?.authenticated || !ticket)
+            return false;
+        if (staff.role === 'ADMIN')
+            return true;
+        if (staff.role !== 'SUPPORT')
+            return false;
+        if (ticket.assignedSupportId === staff.userId)
+            return true;
+        if (!ticket.assignedSupportId)
+            return true; // общая очередь нераспределённых обращений
+        const owner = ticket.ownerAccountId
+            ? Object.values(this.state.users || {}).find(u => u.userId === ticket.ownerAccountId)
+            : null;
+        if (owner && Array.isArray(owner.assignedSupportIds) && owner.assignedSupportIds.includes(staff.userId))
+            return true;
+        return false;
+    }
+
+    listTicketsForStaff(staff) {
+        const all = Object.values(this.state.tickets).sort((a, b) => b.createdAt - a.createdAt);
+        const visible = staff?.role === 'ADMIN'
+            ? all
+            : all.filter(t => this.canStaffAccessTicket(staff, t));
+        return visible.map(t => this._sanitizeTicketForClient(t, { includeAccessKey: false }));
+    }
+
+    listClientsForStaff(staff) {
+        const users = Object.values(this.state.users || {});
+        if (staff?.role === 'ADMIN')
+            return users.map(u => {
+                const f = this._formatUserResponse(u);
+                delete f.sessionKey;
+                return f;
+            });
+        if (staff?.role !== 'SUPPORT')
+            return [];
+        const visibleUsers = users.filter(u =>
+            Array.isArray(u.assignedSupportIds) && u.assignedSupportIds.includes(staff.userId)
+        );
+        return visibleUsers.map(u => {
+            const f = this._formatUserResponse(u);
+            delete f.sessionKey;
+            delete f.hubToken;
+            return f;
+        });
+    }
+
+    /**
+     * Взять тикет на контроль (перевести в статус in_progress, назначить ответственного инженера).
+     */
+    takeTicketInWork(ticketId, { engineerId = '', engineerName = 'Инженер поддержки ODANT' } = {}) {
+        const t = this.state.tickets[ticketId];
+        if (!t)
+            throw new Error(`Тикет ${ticketId} не найден`);
+        const now = Date.now();
+        if (!t.firstReplyAt) {
+            t.firstReplyAt = now;
+            t.slaMet = now <= t.slaDeadlineAt;
+        }
+        if (t.status !== 'closed')
+            t.status = 'in_progress';
+        if (engineerId)
+            t.assignedSupportId = String(engineerId);
+        t.assignedSupportName = String(engineerName || t.assignedSupportName || 'Инженер поддержки ODANT');
+        t.takenAt = now;
+        this._save();
+        return this._sanitizeTicketForClient(t);
+    }
+
+    /**
+     * Переназначить ответственного сотрудника поддержки на тикет (доступно ADMIN).
+     */
+    assignTicketSupport(ticketId, supportUserId = '') {
+        const t = this.state.tickets[ticketId];
+        if (!t)
+            throw new Error(`Тикет ${ticketId} не найден`);
+        if (!supportUserId) {
+            t.assignedSupportId = '';
+            t.assignedSupportName = '';
+        }
+        else {
+            const sup = Object.values(this.state.users || {}).find(u => u.userId === supportUserId);
+            if (!sup)
+                throw new Error('Сотрудник поддержки не найден');
+            t.assignedSupportId = sup.userId;
+            t.assignedSupportName = sup.name || sup.email;
+        }
+        this._save();
+        return this._sanitizeTicketForClient(t);
+    }
+
+    /**
+     * Добавить ответное сообщение клиента в существующий тикет (из WORK).
+     */
+    addClientTicketMessage(ticketId, { author = 'Пользователь WORK', userId = '', text = '', attachments = [] } = {}) {
+        const t = this.state.tickets[ticketId];
+        if (!t)
+            throw new Error(`Тикет ${ticketId} не найден`);
+        const now = Date.now();
+        const savedAttachments = this._saveTicketAttachments(ticketId, attachments);
+        const msg = {
+            from: 'client',
+            author: String(author || t.userName || 'Клиент'),
+            userId: String(userId || ''),
+            text: String(text || '').trim(),
+            ...(savedAttachments.length ? { attachments: savedAttachments } : {}),
+            time: now,
+        };
+        t.messages.push(msg);
+        if (t.status === 'answered' || t.status === 'closed')
+            t.status = t.assignedSupportId ? 'in_progress' : 'open';
+        this._save();
+        return this._sanitizeTicketForClient(t);
+    }
+
+    /**
      * Ответить на тикет от лица инженера поддержки (и зафиксировать выполнение SLA времени реакции).
      */
-    replyToTicket(ticketId, { engineerName = 'Инженер поддержки ODANT', text = '' } = {}) {
+    replyToTicket(ticketId, { engineerId = '', engineerName = 'Инженер поддержки ODANT', text = '' } = {}) {
         const t = this.state.tickets[ticketId];
         if (!t)
             throw new Error(`Тикет ${ticketId} не найден`);
@@ -2316,6 +2697,10 @@ export class LicenseStore {
             t.slaMet = now <= t.slaDeadlineAt;
         }
         t.status = 'answered';
+        if (engineerId && !t.assignedSupportId) {
+            t.assignedSupportId = String(engineerId);
+            t.assignedSupportName = String(engineerName || '');
+        }
         t.messages.push({
             from: 'support',
             author: engineerName,
@@ -2323,7 +2708,7 @@ export class LicenseStore {
             time: now,
         });
         this._save();
-        return t;
+        return this._sanitizeTicketForClient(t);
     }
 
     closeTicket(ticketId) {
@@ -2333,11 +2718,13 @@ export class LicenseStore {
         t.status = 'closed';
         t.closedAt = Date.now();
         this._save();
-        return t;
+        return this._sanitizeTicketForClient(t);
     }
 
     listTickets({ licenseId = '' } = {}) {
-        const all = Object.values(this.state.tickets).sort((a, b) => b.createdAt - a.createdAt);
+        const all = Object.values(this.state.tickets)
+            .sort((a, b) => b.createdAt - a.createdAt)
+            .map(t => this._sanitizeTicketForClient(t));
         if (licenseId)
             return all.filter(t => t.licenseId === licenseId);
         return all;
@@ -2597,11 +2984,14 @@ export class LicenseStore {
         const userFranchises = this.listUserFranchises(user, now);
         const userServers = this.listUserServers(user, now);
         const cleanCompany = (user.companyName && !String(user.companyName).includes('@')) ? user.companyName : '';
+        const normRole = user.isAdmin ? 'ADMIN' : ((user.isSupport || user.role === 'SUPPORT') ? 'SUPPORT' : 'CLIENT');
         return {
             userId: user.userId,
             email: user.email,
             isAdmin: Boolean(user.isAdmin),
-            role: user.isAdmin ? 'ADMIN' : 'CLIENT',
+            isSupport: normRole === 'SUPPORT',
+            role: normRole,
+            assignedSupportIds: Array.isArray(user.assignedSupportIds) ? user.assignedSupportIds : [],
             authProvider: user.authProvider || 'email',
             name: user.name,
             position: user.position || '',

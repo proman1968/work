@@ -11,10 +11,12 @@
     const TOKEN_KEY = 'odant_work_admin_token';
     let adminToken = '';
     let lastAdminData = null;
+    let currentStaffRole = 'ADMIN';
     let currentCertLic = null;
     let currentScheduleResId = '';
     let activeTab = 'clients';
     let admCountdownTimer = null;
+    let remoteSession = null;
     const expandedClients = new Set();
     const expandedFranchisers = new Set();
 
@@ -127,11 +129,28 @@
         ind.style.width = active.offsetWidth + 'px';
     }
 
-    function showAdminApp(login = 'Администратор') {
+    function applyStaffRoleVisibility(role = 'ADMIN') {
+        currentStaffRole = role === 'SUPPORT' ? 'SUPPORT' : 'ADMIN';
+        const isSup = currentStaffRole === 'SUPPORT';
+        ['navAdmFranchisers', 'navAdmOrders', 'navAdmSmtp', 'navAdmYookassa', 'navAdmBots', 'navAdmLegal', 'admNavBackupSep', 'admNavBackupBox', 'btnAdmOpenCreateServer'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.style.display = isSup ? 'none' : '';
+        });
+        const badge = $('#admProfileRoleBadge');
+        if (badge) {
+            badge.textContent = isSup ? 'Сотрудник поддержки (SUPPORT)' : 'Администратор портала';
+        }
+        if (isSup && activeTab !== 'tickets' && activeTab !== 'clients') {
+            setTab('tickets');
+        }
+    }
+
+    function showAdminApp(login = 'Администратор', role = 'ADMIN') {
         $('#adminLoginScreen').style.display = 'none';
         $('#adminAppShell').style.display = '';
         if ($('#admUserLabel')) $('#admUserLabel').textContent = login;
         if ($('#admProfileEmail')) $('#admProfileEmail').textContent = login;
+        applyStaffRoleVisibility(role);
         requestAnimationFrame(moveIndicator);
     }
 
@@ -192,12 +211,13 @@
             if (!res.ok || !user.sessionKey) {
                 throw new Error(user.error || 'Неверный код подтверждения');
             }
-            if (!user.isAdmin) {
-                throw new Error(`Аккаунт ${user.email} не обладает правами администратора сервера лицензирования.`);
+            if (!user.isAdmin && !user.isSupport && user.role !== 'SUPPORT') {
+                throw new Error(`Аккаунт ${user.email} не обладает правами администратора или сотрудника поддержки.`);
             }
+            currentStaffRole = user.isAdmin ? 'ADMIN' : 'SUPPORT';
             setStoredToken(user.sessionKey, user.email, user);
             resetAdmStep();
-            showAdminApp(user.email);
+            showAdminApp(user.email, currentStaffRole);
             await refreshRegistry();
         }
         catch (err) {
@@ -226,8 +246,11 @@
         try {
             const me = await api('/api/admin/me');
             if (me.authenticated) {
+                currentStaffRole = me.role === 'SUPPORT' ? 'SUPPORT' : 'ADMIN';
                 setStoredToken(saved, me.email || me.login || '');
-                showAdminApp(me.login || 'admin');
+                showAdminApp(me.login || 'admin', currentStaffRole);
+                if (currentStaffRole === 'SUPPORT')
+                    setTab('tickets');
                 await refreshRegistry();
             }
             else {
@@ -318,6 +341,9 @@
                 email: u.email || key,
                 userId: u.userId || '',
                 isAdmin: Boolean(u.isAdmin),
+                isSupport: Boolean(u.isSupport || u.role === 'SUPPORT'),
+                role: u.role || (u.isAdmin ? 'ADMIN' : 'CLIENT'),
+                assignedSupportIds: Array.isArray(u.assignedSupportIds) ? u.assignedSupportIds : [],
                 name: (u.name && !String(u.name).includes('@')) ? String(u.name).trim() : '',
                 position: String(u.position || u.signerPosition || '').trim(),
                 companyName: cleanOrgName(u.companyName),
@@ -348,6 +374,9 @@
                     email: licEmail || lic.licenseId,
                     userId: lic.ownerAccountId || '',
                     isAdmin: false,
+                    isSupport: false,
+                    role: 'CLIENT',
+                    assignedSupportIds: Array.isArray(lic.assignedSupportIds) ? lic.assignedSupportIds : [],
                     name: '',
                     position: '',
                     companyName: cleanOrgName(lic.customer?.name),
@@ -440,11 +469,13 @@
     }
 
     function renderAdminPanel(data = {}) {
+        applyStaffRoleVisibility(data.role || currentStaffRole);
         const licenses = data.licenses || [];
         const franchises = data.franchises || data.reservations || [];
         const orders = data.orders || [];
         const tickets = data.tickets || [];
         const users = data.users || [];
+        const supportStaff = data.supportStaff || [];
 
         const clientGroups = buildClientGroups(users, licenses);
         const activeFranchises = franchises.filter(f => f && f.status !== 'canceled' && f.status !== 'expired');
@@ -459,11 +490,13 @@
             $('#admDataDirLabel').textContent = `Папка БД: ${data.dataDir}`;
         }
 
-        renderClientsPanels(clientGroups);
-        renderFranchisersPanels(franchises, users);
-        renderOrdersTable(orders);
-        renderTicketsTable(tickets);
-        renderPortalSettings(data.settings || {});
+        renderClientsPanels(clientGroups, supportStaff);
+        if (currentStaffRole === 'ADMIN') {
+            renderFranchisersPanels(franchises, users);
+            renderOrdersTable(orders);
+            renderPortalSettings(data.settings || {});
+        }
+        renderTicketsTable(tickets, supportStaff);
         startAdminCountdowns();
     }
 
@@ -542,15 +575,17 @@
     }
 
     /* 1. Раскрывающиеся панели клиентов и вложенные серверы/лицензии */
-    function renderClientsPanels(clientGroups = []) {
+    function renderClientsPanels(clientGroups = [], supportStaff = []) {
         const root = $('#admClientsList');
         if (!root) return;
+        const isSup = currentStaffRole === 'SUPPORT';
         const q = ($('#inpFilterClients')?.value || '').trim().toLowerCase();
         const mode = $('#selFilterClients')?.value || 'all';
         const autoExpand = Boolean(q) || mode !== 'all';
 
         const filtered = clientGroups.filter(c => {
             if (mode === 'admins' && !c.isAdmin) return false;
+            if (mode === 'support' && !(c.isSupport || c.role === 'SUPPORT')) return false;
             if (mode === 'base_active' && !c.servers.some(l => l.baseActivated)) return false;
             if (mode === 'base_inactive' && !(c.servers.length === 0 || c.servers.some(l => !l.baseActivated))) return false;
             if (mode === 'hwid_bound' && !c.servers.some(l => Boolean(l.hwidBound || l.hardware?.hwidBound || l.hardware?.nodeFingerprint))) return false;
@@ -568,6 +603,8 @@
             root.innerHTML = '<div class="sec-box muted">Клиентов по заданному фильтру не найдено</div>';
             return;
         }
+
+        const supNameById = new Map((supportStaff || []).map(s => [s.userId, s.name || s.email]));
 
         root.innerHTML = filtered.map(c => {
             const isOpen = autoExpand || expandedClients.has(c.key);
@@ -590,6 +627,10 @@
             if (c.phone) metaItems.push(`<span>Тел.: <code>${esc(c.phone)}</code></span>`);
             metaItems.push(`<span>Оферта: ${c.ofertaAccepted ? `<b style="color:var(--ok)">✓ ПЭП</b> (<code>${esc(c.ofertaSignatureId)}</code>)` : 'не подписана'}</span>`);
             if (c.lastLoginAt) metaItems.push(`<span>Вход: ${fmtDateTime(c.lastLoginAt)}</span>`);
+            if ((c.assignedSupportIds || []).length) {
+                const names = c.assignedSupportIds.map(id => supNameById.get(id) || id).join(', ');
+                metaItems.push(`<span>Поддержка: <b>${esc(names)}</b></span>`);
+            }
 
             const serversRowsHtml = c.servers.map(l => {
                 const lid = l.licenseId;
@@ -600,35 +641,35 @@
 
                 const baseHtml = l.baseActivated
                     ? `<span class="tag ok">✓ Активна (${l.baseSeats || 10} вечн. + ИИ)</span>
-                       <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px;color:var(--danger)" data-adm-base="${esc(lid)}" data-activate="0">Отозвать базовую</button></div>`
+                       ${!isSup ? `<div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px;color:var(--danger)" data-adm-base="${esc(lid)}" data-activate="0">Отозвать базовую</button></div>` : ''}`
                     : `<span class="tag">Не активирована (1 сессия)</span>
-                       <div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-base="${esc(lid)}" data-activate="1">Активировать базовую</button></div>`;
+                       ${!isSup ? `<div style="margin-top:4px"><button class="btn btn-ok btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-base="${esc(lid)}" data-activate="1">Активировать базовую</button></div>` : ''}`;
 
                 const hwidHtml = hwidBound
                     ? `<span class="tag ok">Привязан</span> <code>${esc(hwid)}</code>
                        ${fp ? `<div class="small muted">Узел: <code>${esc(fp.slice(0, 18))}…</code></div>` : ''}
-                       <div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-reset-hwid="${esc(lid)}">Сбросить привязку</button></div>`
+                       ${!isSup ? `<div style="margin-top:4px"><button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-reset-hwid="${esc(lid)}">Сбросить привязку</button></div>` : ''}`
                     : `<span class="small muted">Ожидает привязки токена</span><div class="small muted"><code>${esc(hwid)}</code></div>`;
 
                 return `<tr>
                     <td>
                         <b>${esc(srvName)}</b>
                         <div class="small muted"><code>${esc(lid)}</code> · создан ${fmtDate(l.issuedAt)}</div>
-                        <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
+                        ${!isSup ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap">
                             <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-copy-tok="${esc(lid)}">Скопировать токен owk1</button>
-                        </div>
+                        </div>` : ''}
                     </td>
                     <td>${hwidHtml}</td>
                     <td>${baseHtml}</td>
                     <td>
                         <div>Всего сессий: <b>${l.totalSeats}</b> (+<b>${l.addonSeats || 0}</b> доп.)</div>
                         <div class="small muted">SLA: ${esc(l.support?.tierName || 'Enterprise')} (пакетов: ${(l.activeAddons || []).length})</div>
-                        <div style="margin-top:4px">
+                        ${!isSup ? `<div style="margin-top:4px">
                             <button class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" data-adm-open-grant="${esc(lid)}" data-srv-name="${esc(srvName)}">+ Начислить доп. места</button>
-                        </div>
+                        </div>` : ''}
                     </td>
                     <td style="text-align:right">
-                        <button class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:12px" data-cert="${esc(lid)}">.lic.json (${(l.licenseFiles || []).length})</button>
+                        ${!isSup ? `<button class="btn btn-primary btn-sm" style="padding:6px 10px;font-size:12px" data-cert="${esc(lid)}">.lic.json (${(l.licenseFiles || []).length})</button>` : '<span class="small muted">Только просмотр</span>'}
                     </td>
                 </tr>`;
             }).join('');
@@ -644,7 +685,21 @@
                     </tr></thead>
                     <tbody>${serversRowsHtml}</tbody>
                 </table>`
-                : `<div class="small muted" style="padding:8px 4px">У клиента пока нет серверов. Нажмите «+ Добавить сервер», чтобы выпустить лицензию.</div>`;
+                : `<div class="small muted" style="padding:8px 4px">У клиента пока нет серверов.</div>`;
+
+            const roleSelectHtml = !isSup ? `<select class="btn btn-ghost btn-sm" style="padding:4px 8px;font-size:12px" data-set-user-role="${esc(c.userId || c.email)}" title="Роль пользователя на портале">
+                <option value="CLIENT" ${(!c.isAdmin && !c.isSupport && c.role !== 'SUPPORT') ? 'selected' : ''}>Клиент</option>
+                <option value="SUPPORT" ${(c.isSupport || c.role === 'SUPPORT') ? 'selected' : ''}>Поддержка (SUPPORT)</option>
+                <option value="ADMIN" ${c.isAdmin ? 'selected' : ''}>Администратор (ADMIN)</option>
+            </select>` : '';
+
+            const curSupId = (c.assignedSupportIds || [])[0] || '';
+            const assignSupportHtml = (!isSup && supportStaff.length)
+                ? `<select class="btn btn-ghost btn-sm" style="padding:4px 8px;font-size:12px" data-assign-client-support="${esc(c.userId || c.email)}" title="Закрепить сотрудника поддержки за клиентом">
+                    <option value="">Без закреплённого SUPPORT</option>
+                    ${supportStaff.map(s => `<option value="${esc(s.userId)}" ${s.userId === curSupId ? 'selected' : ''}>SUPPORT: ${esc(s.name || s.email)}</option>`).join('')}
+                   </select>`
+                : '';
 
             return `<div class="adm-acc-card${isOpen ? ' open' : ''}" data-client-card="${esc(c.key)}">
                 <div class="adm-acc-head" data-adm-toggle-client="${esc(c.key)}">
@@ -656,22 +711,21 @@
                         </div>
                     </div>
                     <div class="adm-acc-badges">
-                        ${c.isAdmin ? '<span class="tag ok">Администратор</span>' : ''}
+                        ${c.isAdmin ? '<span class="tag ok">Администратор</span>' : ((c.isSupport || c.role === 'SUPPORT') ? '<span class="tag ok" style="background:rgba(14,165,233,.16);color:#38bdf8">Поддержка (SUPPORT)</span>' : '')}
                         ${c.ofertaAccepted ? `<span class="tag ok" title="ПЭП: ${esc(c.ofertaSignatureId)}">✓ ПЭП</span>` : ''}
                         <span class="tag">Серверов: <b>${c.servers.length}</b></span>
                         <span class="tag ${activeBaseCount > 0 ? 'ok' : ''}">Сессий: <b>${totalSeats}</b>${addonSeatsTotal > 0 ? ` (+${addonSeatsTotal})` : ''}</span>
-                        <button type="button" class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:12px" data-adm-add-srv-email="${esc(c.email)}" data-adm-next-num="${c.servers.length + 1}">+ Сервер</button>
+                        ${!isSup ? `<button type="button" class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:12px" data-adm-add-srv-email="${esc(c.email)}" data-adm-next-num="${c.servers.length + 1}">+ Сервер</button>` : ''}
                     </div>
                 </div>
                 <div class="adm-acc-body">
                     <div class="adm-profile-strip">
                         <div class="adm-profile-meta">${metaItems.join('')}</div>
-                        <div class="adm-profile-actions">
-                            ${c.isAdmin
-                                ? `<button type="button" class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-toggle-admin="${esc(c.userId || c.email)}" data-make-admin="0">Снять права админа</button>`
-                                : `<button type="button" class="btn btn-ghost btn-sm" style="padding:4px 10px;font-size:12px" data-toggle-admin="${esc(c.userId || c.email)}" data-make-admin="1">Сделать администратором</button>`}
+                        ${!isSup ? `<div class="adm-profile-actions">
+                            ${roleSelectHtml}
+                            ${assignSupportHtml}
                             <button type="button" class="btn btn-primary btn-sm" style="padding:4px 10px;font-size:12px" data-adm-add-srv-email="${esc(c.email)}" data-adm-next-num="${c.servers.length + 1}">+ Добавить сервер</button>
-                        </div>
+                        </div>` : ''}
                     </div>
                     ${serversTableHtml}
                 </div>
@@ -914,39 +968,90 @@
     }
 
     /* 4. Таблица тикетов SLA */
-    function renderTicketsTable(tickets = []) {
+    function renderTicketsTable(tickets = [], supportStaff = []) {
         const tbody = $('#admTicketsBody');
         if (!tbody) return;
         const mode = $('#selFilterTickets')?.value || 'all';
+        const isAdmin = currentStaffRole === 'ADMIN';
 
         const filtered = tickets.filter(t => {
             if (mode === 'open' && t.status !== 'open') return false;
+            if (mode === 'in_progress' && t.status !== 'in_progress') return false;
             if (mode === 'answered' && t.status !== 'answered') return false;
             if (mode === 'closed' && t.status !== 'closed') return false;
             return true;
         });
 
+        const mediaSrc = (url) => url + (url.includes('?') ? '&' : '?') + 'sessionKey=' + encodeURIComponent(adminToken || '');
+
         tbody.innerHTML = filtered.map(t => {
+            const renderAtts = (atts = []) => (atts || []).map(a => {
+                if (!a?.url) return '';
+                const src = mediaSrc(a.url);
+                if (a.kind === 'video') {
+                    return `<div style="margin-top:6px"><video controls preload="metadata" src="${esc(src)}" style="max-width:260px;max-height:150px;border-radius:8px;border:1px solid var(--line-strong);background:#000"></video></div>`;
+                }
+                return `<a href="javascript:void(0)" data-open-media="${esc(src)}" data-media-kind="image" data-media-title="${esc(a.name || 'Скриншот')}" style="display:inline-block;margin:6px 6px 0 0"><img src="${esc(src)}" alt="${esc(a.name || 'Скриншот')}" style="max-width:160px;max-height:100px;border-radius:6px;border:1px solid var(--line-strong);object-fit:cover"></a>`;
+            }).join('');
+
             const msgs = (t.messages || []).map(m => {
                 const isSupport = m.from === 'support' || m.role === 'engineer';
                 const author = isSupport ? (m.author || 'Инженер ODANT') : (m.author || t.userName || 'Клиент');
-                return `<div class="small"><b style="color:${isSupport ? 'var(--brand-2)' : 'var(--text)'}">${esc(author)}:</b> ${esc(m.text)}</div>`;
+                return `<div class="small" style="margin-bottom:4px">
+                    <b style="color:${isSupport ? 'var(--brand-2)' : 'var(--text)'}">${esc(author)}:</b> ${esc(m.text)}
+                    ${renderAtts(m.attachments)}
+                </div>`;
             }).join('');
+
+            const techHtml = t.techContext
+                ? `<details style="margin-top:6px"><summary class="small muted" style="cursor:pointer">Технические данные (${esc(t.techContext.version || '—')})</summary><pre class="console" style="margin:4px 0 0;max-height:140px;font-size:11px;white-space:pre-wrap">${esc(JSON.stringify(t.techContext, null, 2))}</pre></details>`
+                : '';
+
+            const stMap = {
+                open: '<span class="tag">Открыт</span>',
+                in_progress: '<span class="tag ok" style="background:rgba(14,165,233,.16);color:#38bdf8">На контроле</span>',
+                answered: '<span class="tag ok">Отвечен</span>',
+                closed: '<span class="tag">Закрыт</span>',
+            };
             const slaStatus = t.status === 'closed'
-                ? '<span class="tag">закрыт</span>'
+                ? ''
                 : t.slaMet === true
-                    ? '<span class="tag ok">✓ SLA выполнен</span>'
+                    ? '<span class="tag ok">✓ SLA</span>'
                     : t.slaMet === false
                         ? '<span class="tag bad">SLA просрочен</span>'
-                        : '<span class="tag">ожидает ответа</span>';
+                        : '<span class="tag">Ожидает SLA</span>';
+
+            const assignHtml = (isAdmin && supportStaff.length)
+                ? `<div style="margin-top:4px"><select class="btn btn-ghost btn-sm" style="padding:3px 6px;font-size:11.5px" data-assign-ticket="${esc(t.ticketId)}">
+                    <option value="">Без ответственного</option>
+                    ${supportStaff.map(s => `<option value="${esc(s.userId)}" ${s.userId === t.assignedSupportId ? 'selected' : ''}>${esc(s.name || s.email)}</option>`).join('')}
+                   </select></div>`
+                : (t.assignedSupportName ? `<div class="small muted" style="margin-top:3px">Ответственный: <b>${esc(t.assignedSupportName)}</b></div>` : '');
+
+            const remoteActive = t.remote?.state === 'active' || t.remote?.state === 'requested';
+            const remoteBtn = t.channel === 'work' && t.status !== 'closed'
+                ? `<button class="btn ${remoteActive ? 'btn-ok' : 'btn-ghost'} btn-sm" data-remote-ticket="${esc(t.ticketId)}">🖥 Удалённый экран${t.remote?.state === 'active' ? ' (активен)' : ''}</button>`
+                : '';
+
             return `<tr>
-                <td><b>${esc(t.ticketId)}</b><div><span class="tag">${esc(String(t.channel || '').toUpperCase())}</span> ${slaStatus}</div></td>
-                <td><b>${esc(t.customerName || t.userName || t.chatId)}</b><div class="small muted">Сервер: <code>${esc(t.licenseId || '—')}</code></div></td>
-                <td><span class="tag ok">${esc(t.tierName || 'Start')}</span><div class="small muted">${esc(t.reactionLabel || '')}</div></td>
-                <td style="white-space:normal;max-width:360px">${msgs}</td>
                 <td>
-                    ${t.status !== 'closed' ? `<div style="display:flex;gap:6px;flex-wrap:wrap">
-                        <input type="text" id="reply-${esc(t.ticketId)}" placeholder="Ответ инженера…" style="min-width:180px;padding:7px 10px;font-size:12.5px">
+                    <b>${esc(t.ticketId)}</b>
+                    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:3px"><span class="tag">${esc(String(t.channel || '').toUpperCase())}</span> ${stMap[t.status] || ''} ${slaStatus}</div>
+                    <div class="small muted" style="margin-top:3px">${fmtDateTime(t.createdAt)}</div>
+                </td>
+                <td>
+                    <b>${esc(t.customerName || t.userName || t.chatId)}</b>
+                    ${t.userName ? `<div class="small muted">Автор: ${esc(t.userName)}</div>` : ''}
+                    <div class="small muted">Сервер: <code>${esc(t.licenseId || t.serverId || '—')}</code></div>
+                    ${assignHtml}
+                </td>
+                <td><span class="tag ok">${esc(t.tierName || 'Start')}</span><div class="small muted">${esc(t.reactionLabel || '')}</div></td>
+                <td style="white-space:normal;max-width:420px">${msgs}${techHtml}</td>
+                <td>
+                    ${t.status !== 'closed' ? `<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+                        ${t.status === 'open' ? `<button class="btn btn-ok btn-sm" data-take-ticket="${esc(t.ticketId)}">Взять на контроль</button>` : ''}
+                        ${remoteBtn}
+                        <input type="text" id="reply-${esc(t.ticketId)}" placeholder="Ответ инженера…" style="min-width:170px;padding:7px 10px;font-size:12.5px">
                         <button class="btn btn-primary btn-sm" data-reply-ticket="${esc(t.ticketId)}">Ответить</button>
                         <button class="btn btn-ghost btn-sm" data-close-ticket="${esc(t.ticketId)}">Закрыть</button>
                     </div>` : '<span class="small muted">Обращение закрыто</span>'}
@@ -1133,12 +1238,39 @@
         catch (err) { alert(err.message); }
     }
 
-    async function adminToggleUserRole(userId, makeAdmin) {
+    async function adminSetUserRole(userId, role) {
         try {
             await api('/api/admin/users/role', {
                 userId,
-                isAdmin: Boolean(makeAdmin),
+                role: String(role || 'CLIENT').toUpperCase(),
             });
+            await refreshRegistry();
+        }
+        catch (err) { alert(err.message); }
+    }
+
+    async function adminAssignClientSupport(userId, supportId) {
+        try {
+            await api('/api/admin/clients/assign-support', {
+                userId,
+                supportIds: supportId ? [supportId] : [],
+            });
+            await refreshRegistry();
+        }
+        catch (err) { alert(err.message); }
+    }
+
+    async function adminTakeTicket(ticketId) {
+        try {
+            await api('/api/admin/tickets/' + encodeURIComponent(ticketId) + '/take', {});
+            await refreshRegistry();
+        }
+        catch (err) { alert(err.message); }
+    }
+
+    async function adminAssignTicket(ticketId, supportUserId) {
+        try {
+            await api('/api/admin/tickets/' + encodeURIComponent(ticketId) + '/assign', { supportUserId });
             await refreshRegistry();
         }
         catch (err) { alert(err.message); }
@@ -1149,8 +1281,7 @@
         const text = inp?.value.trim();
         if (!text) return;
         try {
-            await api('/api/tickets/' + encodeURIComponent(ticketId) + '/reply', {
-                engineerName: 'Дежурный инженер ODANT',
+            await api('/api/admin/tickets/' + encodeURIComponent(ticketId) + '/reply', {
                 text,
             });
             inp.value = '';
@@ -1165,6 +1296,163 @@
             await refreshRegistry();
         }
         catch (err) { alert(err.message); }
+    }
+
+    function openMediaModal(src, kind = 'image', title = 'Вложение') {
+        const body = $('#admMediaBody');
+        if (!body) return;
+        $('#admMediaTitle').textContent = title || 'Вложение';
+        if (kind === 'video') {
+            body.innerHTML = `<video controls autoplay src="${esc(src)}" style="max-width:100%;max-height:70vh;border-radius:8px"></video>`;
+        }
+        else {
+            body.innerHTML = `<img src="${esc(src)}" alt="${esc(title)}" style="max-width:100%;max-height:70vh;border-radius:8px">`;
+        }
+        $('#admMediaModal')?.classList.add('open');
+    }
+
+    /* ================= Встроенный Remote Desktop оператора ================= */
+    async function closeRemoteDesktopModal(sendEnd = true) {
+        const sess = remoteSession;
+        remoteSession = null;
+        if (sess?.pollTimer) clearInterval(sess.pollTimer);
+        if (sess?.flushTimer) clearInterval(sess.flushTimer);
+        try { sess?.pc?.close(); } catch { /* ignore */ }
+        if ($('#admRemoteVideo')) {
+            $('#admRemoteVideo').srcObject = null;
+            $('#admRemoteVideo').style.display = 'none';
+        }
+        if ($('#admRemoteImg')) {
+            $('#admRemoteImg').src = '';
+            $('#admRemoteImg').style.display = 'none';
+        }
+        if ($('#admRemotePlaceholder')) $('#admRemotePlaceholder').style.display = '';
+        $('#admRemoteModal')?.classList.remove('open');
+        if (sendEnd && sess?.ticketId) {
+            try { await api('/api/support/remote/' + encodeURIComponent(sess.ticketId) + '/operator', { action: 'end' }); } catch { /* ignore */ }
+        }
+        refreshRegistry();
+    }
+
+    function enqueueRemoteControl(ev) {
+        if (!remoteSession) return;
+        if (remoteSession.mode !== 'control' && ev.type !== 'pointer') return;
+        remoteSession.pendingEvents.push(ev);
+    }
+
+    async function openRemoteDesktopModal(ticketId) {
+        if (remoteSession)
+            await closeRemoteDesktopModal(true);
+
+        const sess = {
+            ticketId,
+            mode: 'view',
+            lastFrameSeq: 0,
+            lastAnswerSeq: 0,
+            pendingEvents: [],
+            pc: null,
+            pollTimer: null,
+            flushTimer: null,
+            hasVideoTrack: false,
+        };
+        remoteSession = sess;
+        $('#admRemoteTitle').textContent = `Удалённый экран · ${ticketId}`;
+        $('#admRemoteStatus').textContent = 'Отправка запроса пользователю…';
+        $('#admRemoteModeBadge').textContent = 'Только просмотр (указка)';
+        $('#admRemoteModeBadge').className = 'tag';
+        $('#admRemoteModal')?.classList.add('open');
+
+        try {
+            const pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+            sess.pc = pc;
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.ontrack = (e) => {
+                if (remoteSession !== sess) return;
+                const v = $('#admRemoteVideo');
+                if (v && e.streams?.[0]) {
+                    v.srcObject = e.streams[0];
+                    v.style.display = '';
+                    if ($('#admRemoteImg')) $('#admRemoteImg').style.display = 'none';
+                    if ($('#admRemotePlaceholder')) $('#admRemotePlaceholder').style.display = 'none';
+                    sess.hasVideoTrack = true;
+                }
+            };
+            pc.onicecandidate = (e) => {
+                if (e.candidate && remoteSession === sess) {
+                    api('/api/support/remote/' + encodeURIComponent(ticketId) + '/operator', {
+                        action: 'ice',
+                        candidate: e.candidate.toJSON ? e.candidate.toJSON() : e.candidate,
+                    }).catch(() => {});
+                }
+            };
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await api('/api/support/remote/' + encodeURIComponent(ticketId) + '/operator', { action: 'request' });
+            await api('/api/support/remote/' + encodeURIComponent(ticketId) + '/operator', {
+                action: 'offer',
+                offer: { type: offer.type, sdp: offer.sdp },
+            });
+            $('#admRemoteStatus').textContent = 'Ожидание согласия пользователя…';
+        }
+        catch (err) {
+            $('#admRemoteStatus').textContent = 'Запрос отправлен (режим резервной трансляции): ' + (err?.message || err);
+        }
+
+        sess.flushTimer = setInterval(async () => {
+            if (remoteSession !== sess || !sess.pendingEvents.length) return;
+            const batch = sess.pendingEvents.splice(0, 30);
+            try {
+                await api('/api/support/remote/' + encodeURIComponent(ticketId) + '/operator', {
+                    action: 'control',
+                    events: batch,
+                });
+            }
+            catch { /* ignore */ }
+        }, 120);
+
+        sess.pollTimer = setInterval(async () => {
+            if (remoteSession !== sess) return;
+            try {
+                const res = await api('/api/support/remote/' + encodeURIComponent(ticketId) + '/operator', {
+                    action: 'poll',
+                    lastFrameSeq: sess.lastFrameSeq,
+                });
+                const r = res.remote;
+                if (!r || remoteSession !== sess) return;
+                sess.mode = r.mode === 'control' ? 'control' : 'view';
+                if ($('#admRemoteModeBadge')) {
+                    $('#admRemoteModeBadge').textContent = sess.mode === 'control' ? 'Управление WORK разрешено' : 'Только просмотр (указка)';
+                    $('#admRemoteModeBadge').className = sess.mode === 'control' ? 'tag ok' : 'tag';
+                }
+                if (r.state === 'active') {
+                    $('#admRemoteStatus').textContent = sess.mode === 'control' ? 'Сессия активна · Управление WORK' : 'Сессия активна · Только просмотр';
+                }
+                else if (r.state === 'ended') {
+                    $('#admRemoteStatus').textContent = r.endReason || 'Сессия завершена';
+                    await closeRemoteDesktopModal(false);
+                    return;
+                }
+                if (r.answer && r.answer.seq !== sess.lastAnswerSeq && sess.pc) {
+                    sess.lastAnswerSeq = r.answer.seq;
+                    try { await sess.pc.setRemoteDescription(new RTCSessionDescription({ type: r.answer.type, sdp: r.answer.sdp })); } catch { /* ignore */ }
+                }
+                if (Array.isArray(r.ice) && sess.pc) {
+                    for (const cand of r.ice) {
+                        try { await sess.pc.addIceCandidate(new RTCIceCandidate(cand)); } catch { /* ignore */ }
+                    }
+                }
+                if (r.frame?.dataUrl && !sess.hasVideoTrack) {
+                    sess.lastFrameSeq = r.frame.seq;
+                    const img = $('#admRemoteImg');
+                    if (img) {
+                        img.src = r.frame.dataUrl;
+                        img.style.display = '';
+                        if ($('#admRemotePlaceholder')) $('#admRemotePlaceholder').style.display = 'none';
+                    }
+                }
+            }
+            catch { /* ignore */ }
+        }, 650);
     }
 
     function openCertModal(licenseId) {
@@ -1540,11 +1828,25 @@
             }
             if (el.dataset.payOrder) { adminConfirmOrder(el.dataset.payOrder); return; }
             if (el.dataset.cancelOrder) { adminCancelOrder(el.dataset.cancelOrder); return; }
+            if (el.dataset.takeTicket) { adminTakeTicket(el.dataset.takeTicket); return; }
+            if (el.dataset.remoteTicket) { openRemoteDesktopModal(el.dataset.remoteTicket); return; }
+            if (el.dataset.openMedia) { openMediaModal(el.dataset.openMedia, el.dataset.mediaKind || 'image', el.dataset.mediaTitle || 'Вложение'); return; }
             if (el.dataset.replyTicket) { adminReplyTicket(el.dataset.replyTicket); return; }
             if (el.dataset.closeTicket) { adminCloseTicket(el.dataset.closeTicket); return; }
-            if (el.dataset.toggleAdmin) { adminToggleUserRole(el.dataset.toggleAdmin, el.dataset.makeAdmin === '1'); return; }
+            if (el.dataset.toggleAdmin) { adminSetUserRole(el.dataset.toggleAdmin, el.dataset.makeAdmin === '1' ? 'ADMIN' : 'CLIENT'); return; }
 
             switch (el.dataset.action) {
+                case 'close-media-modal': $('#admMediaModal')?.classList.remove('open'); break;
+                case 'remote-end-close': closeRemoteDesktopModal(true); break;
+                case 'remote-send-text': {
+                    const inp = $('#admRemoteTextInput');
+                    const txt = inp?.value || '';
+                    if (txt && remoteSession) {
+                        enqueueRemoteControl({ type: 'input', text: txt, x: 0.5, y: 0.5 });
+                        inp.value = '';
+                    }
+                    break;
+                }
                 case 'adm-send-code': sendAdminOtpCode(); break;
                 case 'adm-verify-code': verifyAdminOtpCode(); break;
                 case 'adm-reset-step': resetAdmStep(); break;
@@ -1602,8 +1904,55 @@
             el.addEventListener('change', () => lastAdminData && renderAdminPanel(lastAdminData));
         });
 
+        document.addEventListener('change', (e) => {
+            const roleSel = e.target.closest?.('[data-set-user-role]');
+            if (roleSel) { adminSetUserRole(roleSel.dataset.setUserRole, roleSel.value); return; }
+            const supSel = e.target.closest?.('[data-assign-client-support]');
+            if (supSel) { adminAssignClientSupport(supSel.dataset.assignClientSupport, supSel.value); return; }
+            const tAssign = e.target.closest?.('[data-assign-ticket]');
+            if (tAssign) { adminAssignTicket(tAssign.dataset.assignTicket, tAssign.value); return; }
+        });
+
+        const stage = $('#admRemoteStage');
+        if (stage) {
+            const stageCoords = (e) => {
+                const r = stage.getBoundingClientRect();
+                if (!r.width || !r.height) return { x: 0.5, y: 0.5 };
+                return {
+                    x: Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)),
+                    y: Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)),
+                };
+            };
+            let lastMoveTs = 0;
+            stage.addEventListener('mousemove', (e) => {
+                if (!remoteSession) return;
+                const now = Date.now();
+                if (now - lastMoveTs < 90) return;
+                lastMoveTs = now;
+                enqueueRemoteControl({ type: 'pointer', ...stageCoords(e) });
+            });
+            stage.addEventListener('click', (e) => {
+                stage.focus();
+                enqueueRemoteControl({ type: 'click', ...stageCoords(e) });
+            });
+            stage.addEventListener('dblclick', (e) => enqueueRemoteControl({ type: 'dblclick', ...stageCoords(e) }));
+            stage.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                enqueueRemoteControl({ type: 'scroll', ...stageCoords(e), deltaY: e.deltaY });
+            }, { passive: false });
+            stage.addEventListener('keydown', (e) => {
+                if (!remoteSession || remoteSession.mode !== 'control') return;
+                if (['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                    e.preventDefault();
+                    enqueueRemoteControl({ type: 'keydown', key: e.key, x: 0.5, y: 0.5 });
+                }
+            });
+        }
+
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
+                if ($('#admRemoteModal')?.classList.contains('open'))
+                    closeRemoteDesktopModal(true);
                 $$('.modal.open').forEach(m => m.classList.remove('open'));
             }
         });

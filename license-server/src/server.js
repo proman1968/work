@@ -43,6 +43,7 @@ import { LicenseStore, resolvePersistentDataDir, isMaskedSecret } from './store.
 import { YooKassaService } from './yookassa.js';
 import { SupportBotsHub } from './bots.js';
 import { LicenseServerAiAgent } from './agent.js';
+import { RemoteSupportRelay } from './remote-relay.js';
 import { renderLandingPage, renderSandboxPaymentPage } from './landing.js';
 import { renderAdminPage } from './admin.js';
 
@@ -359,6 +360,7 @@ export function createLicenseServerApp(options = {}) {
         yookassa,
         fetchImpl: options.fetchImpl,
     });
+    const remoteRelay = options.remoteRelay || new RemoteSupportRelay();
 
     function extractBearerToken(req, body = null, url = null) {
         const authHeader = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
@@ -1007,12 +1009,108 @@ export function createLicenseServerApp(options = {}) {
             if (req.method === 'POST' && pathname.startsWith('/api/tickets/') && pathname.endsWith('/reply')) {
                 const ticketId = decodeURIComponent(pathname.slice('/api/tickets/'.length, -'/reply'.length));
                 const body = await readJsonBody(req);
-                const ticket = store.replyToTicket(ticketId, body);
-                await bots.deliverEngineerReply(ticket);
+                const tok = extractBearerToken(req, body, url);
+                const staff = tok ? store.getPortalStaffIdentity(tok) : null;
+                if (tok && !staff)
+                    return sendJson(res, 401, { error: 'Требуется авторизация поддержки' });
+                const existingT = store.state.tickets[ticketId];
+                if (staff && existingT && !store.canStaffAccessTicket(staff, existingT))
+                    return sendJson(res, 403, { error: 'Нет доступа к этому обращению' });
+                const ticket = store.replyToTicket(ticketId, {
+                    engineerId: staff?.userId || '',
+                    engineerName: body.engineerName || staff?.name || 'Инженер поддержки ODANT',
+                    text: body.text || '',
+                });
+                if (ticket.channel && ticket.channel !== 'work')
+                    await bots.deliverEngineerReply(ticket);
                 return sendJson(res, 200, ticket);
             }
 
-            // 12. Авторизация и защищённое API панели администратора (/admin)
+            // 11.1 API поддержки для серверов WORK (создание, синхронизация, вложения, Remote Desktop)
+            if (req.method === 'POST' && pathname === '/api/support/tickets') {
+                const body = await readJsonBody(req, 32 * 1024 * 1024);
+                const created = store.createWorkSupportTicket(body);
+                await bots?.notifyAdmins('ticket_created', { ticket: created.ticket }).catch(() => {});
+                return sendJson(res, 200, { ok: true, ...created });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/support/tickets/sync') {
+                const body = await readJsonBody(req);
+                const list = Array.isArray(body.tickets) ? body.tickets : [];
+                const synced = [];
+                for (const item of list.slice(0, 100)) {
+                    const t = store.verifyTicketAccessKey(item?.ticketId, item?.ticketAccessKey);
+                    if (!t) continue;
+                    const copy = store._sanitizeTicketForClient(t);
+                    copy.remote = remoteRelay.getSummary(t.ticketId);
+                    synced.push(copy);
+                }
+                return sendJson(res, 200, { ok: true, tickets: synced });
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/support/tickets/') && pathname.endsWith('/message')) {
+                const ticketId = decodeURIComponent(pathname.slice('/api/support/tickets/'.length, -'/message'.length));
+                const body = await readJsonBody(req, 32 * 1024 * 1024);
+                const verified = store.verifyTicketAccessKey(ticketId, body.ticketAccessKey);
+                if (!verified)
+                    return sendJson(res, 403, { error: 'Недействительный ключ доступа к тикету' });
+                const ticket = store.addClientTicketMessage(ticketId, body);
+                ticket.remote = remoteRelay.getSummary(ticketId);
+                return sendJson(res, 200, { ok: true, ticket });
+            }
+
+            if (req.method === 'GET' && pathname.startsWith('/api/support/media/')) {
+                const rest = pathname.slice('/api/support/media/'.length).split('/');
+                if (rest.length !== 2)
+                    return sendJson(res, 404, { error: 'Файл не найден' });
+                const ticketId = decodeURIComponent(rest[0]);
+                const fileName = decodeURIComponent(rest[1]);
+                const tok = extractBearerToken(req, null, url);
+                const accessKey = String(url.searchParams.get('key') || req.headers['x-ticket-key'] || '');
+                const staff = tok ? store.getPortalStaffIdentity(tok) : null;
+                const byKey = accessKey ? store.verifyTicketAccessKey(ticketId, accessKey) : null;
+                const t = store.state.tickets[ticketId];
+                if (!byKey && (!staff || !t || !store.canStaffAccessTicket(staff, t)))
+                    return sendJson(res, 403, { error: 'Доступ к медиафайлу запрещён' });
+                const media = store.getTicketMediaFile(ticketId, fileName);
+                if (!media)
+                    return sendJson(res, 404, { error: 'Файл не найден' });
+                const data = fs.readFileSync(media.fullPath);
+                res.writeHead(200, {
+                    'Content-Type': media.mime,
+                    'Content-Length': String(data.length),
+                    'Cache-Control': 'private, max-age=3600',
+                    'Access-Control-Allow-Origin': '*',
+                });
+                res.end(data);
+                return;
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/support/remote/') && pathname.endsWith('/client')) {
+                const ticketId = decodeURIComponent(pathname.slice('/api/support/remote/'.length, -'/client'.length));
+                const body = await readJsonBody(req, 4 * 1024 * 1024);
+                const verified = store.verifyTicketAccessKey(ticketId, body.ticketAccessKey);
+                if (!verified)
+                    return sendJson(res, 403, { error: 'Недействительный ключ доступа к тикету' });
+                const remote = remoteRelay.handleClient(ticketId, body);
+                return sendJson(res, 200, { ok: true, remote });
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/support/remote/') && pathname.endsWith('/operator')) {
+                const ticketId = decodeURIComponent(pathname.slice('/api/support/remote/'.length, -'/operator'.length));
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                const staff = store.getPortalStaffIdentity(tok);
+                if (!staff)
+                    return sendJson(res, 401, { error: 'Требуется авторизация поддержки' });
+                const t = store.state.tickets[ticketId];
+                if (!t || !store.canStaffAccessTicket(staff, t))
+                    return sendJson(res, 403, { error: 'Нет доступа к обращению' });
+                const remote = remoteRelay.handleOperator(ticketId, body, staff);
+                return sendJson(res, 200, { ok: true, remote });
+            }
+
+            // 12. Авторизация и защищённое API панели администратора и службы поддержки (/admin)
             if (req.method === 'POST' && pathname === '/api/admin/login') {
                 const body = await readJsonBody(req);
                 try {
@@ -1033,7 +1131,7 @@ export function createLicenseServerApp(options = {}) {
 
             if (req.method === 'GET' && pathname === '/api/admin/me') {
                 const tok = extractBearerToken(req, null, url);
-                const identity = store.getAdminIdentity(tok);
+                const identity = store.getPortalStaffIdentity(tok);
                 if (!identity?.authenticated)
                     return sendJson(res, 401, { authenticated: false });
                 return sendJson(res, 200, identity);
@@ -1044,26 +1142,74 @@ export function createLicenseServerApp(options = {}) {
                 const tok = extractBearerToken(req, body, url);
                 if (!store.verifyAdminToken(tok))
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
-                const updated = store.setUserAdminRole(body.userId || body.email, body.isAdmin !== false);
+                const targetRole = body.role ? String(body.role).toUpperCase() : (body.isAdmin !== false ? 'ADMIN' : 'CLIENT');
+                const updated = store.setUserRole(body.userId || body.email, targetRole);
+                return sendJson(res, 200, { ok: true, user: updated });
+            }
+
+            if (req.method === 'POST' && pathname === '/api/admin/clients/assign-support') {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                if (!store.verifyAdminToken(tok))
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const updated = store.assignClientSupport(body.userId || body.email, body.supportIds || []);
                 return sendJson(res, 200, { ok: true, user: updated });
             }
 
             if (req.method === 'GET' && pathname === '/api/admin/overview') {
                 const tok = extractBearerToken(req, null, url);
-                if (!store.verifyAdminToken(tok))
-                    return sendJson(res, 401, { error: 'Требуется авторизация администратора (/admin)' });
+                const staff = store.getPortalStaffIdentity(tok);
+                if (!staff?.authenticated)
+                    return sendJson(res, 401, { error: 'Требуется авторизация администратора или поддержки (/admin)' });
+                const ticketsWithRemote = store.listTicketsForStaff(staff).map(t => ({
+                    ...t,
+                    remote: remoteRelay.getSummary(t.ticketId),
+                }));
+                if (staff.role === 'SUPPORT') {
+                    const assignedClients = store.listClientsForStaff(staff);
+                    const allowedLicIds = new Set();
+                    const assignedClientLics = [];
+                    for (const c of assignedClients) {
+                        for (const s of c.servers || []) {
+                            allowedLicIds.add(s.licenseId);
+                            assignedClientLics.push(s);
+                        }
+                    }
+                    return sendJson(res, 200, {
+                        role: 'SUPPORT',
+                        staff,
+                        counts: { tickets: ticketsWithRemote.length, licenses: assignedClientLics.length, users: assignedClients.length },
+                        licenses: assignedClientLics,
+                        tickets: ticketsWithRemote,
+                        users: assignedClients,
+                        supportStaff: [],
+                        orders: [],
+                        partners: [],
+                        franchises: [],
+                        reservations: [],
+                        regions: [],
+                        settings: null,
+                    });
+                }
                 const allFranchises = store.listAllFranchises();
+                const allUsers = store.listUsers();
+                const supportStaff = allUsers
+                    .filter(u => u.role === 'SUPPORT' || u.role === 'ADMIN')
+                    .map(u => ({ userId: u.userId, email: u.email, name: u.name || u.email, role: u.role }));
                 return sendJson(res, 200, {
+                    role: 'ADMIN',
+                    staff,
                     dataDir: store.dataDir,
                     counts: store.getStoreCounts(),
                     licenses: store.listLicenses(),
-                    tickets: store.listTickets(),
+                    tickets: ticketsWithRemote,
                     orders: Object.values(store.state.orders).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)),
                     partners: store.listPartners(),
                     franchises: allFranchises,
                     reservations: allFranchises,
                     regions: store.listRegionsWithQuotas(),
-                    users: store.listUsers(),
+                    users: allUsers,
+                    supportStaff,
                     settings: store.getAdminSettingsSummary(),
                 });
             }
@@ -1357,12 +1503,66 @@ export function createLicenseServerApp(options = {}) {
                 return sendJson(res, 200, confirmed);
             }
 
-            if (req.method === 'POST' && pathname.startsWith('/api/admin/tickets/') && pathname.endsWith('/close')) {
+            if (req.method === 'POST' && pathname.startsWith('/api/admin/tickets/') && pathname.endsWith('/take')) {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                const staff = store.getPortalStaffIdentity(tok);
+                if (!staff)
+                    return sendJson(res, 401, { error: 'Требуется авторизация поддержки' });
+                const ticketId = decodeURIComponent(pathname.slice('/api/admin/tickets/'.length, -'/take'.length));
+                const existingT = store.state.tickets[ticketId];
+                if (!existingT || !store.canStaffAccessTicket(staff, existingT))
+                    return sendJson(res, 403, { error: 'Нет доступа к обращению' });
+                const updated = store.takeTicketInWork(ticketId, {
+                    engineerId: staff.userId || '',
+                    engineerName: body.engineerName || staff.name || staff.login || 'Инженер поддержки ODANT',
+                });
+                updated.remote = remoteRelay.getSummary(ticketId);
+                return sendJson(res, 200, updated);
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/admin/tickets/') && pathname.endsWith('/assign')) {
                 const body = await readJsonBody(req);
                 const tok = extractBearerToken(req, body, url);
                 if (!store.verifyAdminToken(tok))
                     return sendJson(res, 401, { error: 'Требуется авторизация администратора' });
+                const ticketId = decodeURIComponent(pathname.slice('/api/admin/tickets/'.length, -'/assign'.length));
+                const updated = store.assignTicketSupport(ticketId, body.supportUserId || '');
+                updated.remote = remoteRelay.getSummary(ticketId);
+                return sendJson(res, 200, updated);
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/admin/tickets/') && pathname.endsWith('/reply')) {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                const staff = store.getPortalStaffIdentity(tok);
+                if (!staff)
+                    return sendJson(res, 401, { error: 'Требуется авторизация поддержки' });
+                const ticketId = decodeURIComponent(pathname.slice('/api/admin/tickets/'.length, -'/reply'.length));
+                const existingT = store.state.tickets[ticketId];
+                if (!existingT || !store.canStaffAccessTicket(staff, existingT))
+                    return sendJson(res, 403, { error: 'Нет доступа к обращению' });
+                const updated = store.replyToTicket(ticketId, {
+                    engineerId: staff.userId || '',
+                    engineerName: body.engineerName || staff.name || staff.login || 'Инженер поддержки ODANT',
+                    text: body.text || '',
+                });
+                if (updated.channel && updated.channel !== 'work')
+                    await bots.deliverEngineerReply(updated);
+                updated.remote = remoteRelay.getSummary(ticketId);
+                return sendJson(res, 200, updated);
+            }
+
+            if (req.method === 'POST' && pathname.startsWith('/api/admin/tickets/') && pathname.endsWith('/close')) {
+                const body = await readJsonBody(req);
+                const tok = extractBearerToken(req, body, url);
+                const staff = store.getPortalStaffIdentity(tok);
+                if (!staff)
+                    return sendJson(res, 401, { error: 'Требуется авторизация поддержки' });
                 const ticketId = decodeURIComponent(pathname.slice('/api/admin/tickets/'.length, -'/close'.length));
+                const existingT = store.state.tickets[ticketId];
+                if (!existingT || !store.canStaffAccessTicket(staff, existingT))
+                    return sendJson(res, 403, { error: 'Нет доступа к обращению' });
                 return sendJson(res, 200, store.closeTicket(ticketId));
             }
 

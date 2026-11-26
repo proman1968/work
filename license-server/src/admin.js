@@ -59,8 +59,8 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                 <img src="/assets/odant-logo.png" alt="ODANT">
                 <div>
                     <span class="kicker">Защищённый контур</span>
-                    <h1 class="h3" style="margin:4px 0 2px;font-size:21px">Админ-панель ODANT-WORK</h1>
-                    <div class="small muted">Вход по вашему Email администратора с 6-значным кодом из письма</div>
+                    <h1 class="h3" style="margin:4px 0 2px;font-size:21px">Портал управления и поддержки ODANT-WORK</h1>
+                    <div class="small muted">Вход по вашему Email администратора или сотрудника поддержки (SUPPORT) с 6-значным кодом</div>
                 </div>
             </div>
             <div id="admStepEmail">
@@ -135,8 +135,8 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                     <button type="button" class="sec-nav-item" data-adm-tab="yookassa" id="navAdmYookassa">Платёжный шлюз ЮKassa</button>
                     <button type="button" class="sec-nav-item" data-adm-tab="bots" id="navAdmBots">Боты</button>
                     <button type="button" class="sec-nav-item" data-adm-tab="legal" id="navAdmLegal">Реквизиты оферты</button>
-                    <div class="sec-nav-sep"></div>
-                    <div style="padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:6px">
+                    <div class="sec-nav-sep" id="admNavBackupSep"></div>
+                    <div id="admNavBackupBox" style="padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;gap:6px">
                         <div class="small muted" style="font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:.04em">Резервная копия базы</div>
                         <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;font-size:12px;padding:6px 10px" data-action="admin-export-backup">📥 Скачать бэкап (.json)</button>
                         <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;font-size:12px;padding:6px 10px" data-action="admin-import-backup">📤 Восстановить из файла</button>
@@ -159,9 +159,10 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                                     <option value="base_active">Базовая лицензия активна</option>
                                     <option value="base_inactive">Без базовой лицензии</option>
                                     <option value="hwid_bound">HWID привязан</option>
-                                    <option value="admins">Администраторы</option>
+                                    <option value="support">Сотрудники поддержки (SUPPORT)</option>
+                                    <option value="admins">Администраторы (ADMIN)</option>
                                 </select>
-                                <button type="button" class="btn btn-primary btn-sm" data-action="open-create-server-modal">+ Добавить сервер</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="btnAdmOpenCreateServer" data-action="open-create-server-modal">+ Добавить сервер</button>
                             </div>
                         </div>
                         <div class="adm-acc-list" id="admClientsList">
@@ -222,11 +223,12 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
                     <!-- 4. ТИКЕТЫ ПОДДЕРЖКИ SLA -->
                     <div data-adm-sec="tickets" style="display:none">
                         <div class="sec-bar" style="margin-bottom:12px">
-                            <h2 class="sec-title">Тикеты техподдержки SLA (MAX · Telegram · VK)</h2>
+                            <h2 class="sec-title">Тикеты техподдержки SLA (WORK · MAX · Telegram · VK)</h2>
                             <div class="sec-controls">
                                 <select id="selFilterTickets">
                                     <option value="all">Все обращения</option>
                                     <option value="open">Открытые</option>
+                                    <option value="in_progress">На контроле (в работе)</option>
                                     <option value="answered">Отвеченные</option>
                                     <option value="closed">Закрытые</option>
                                 </select>
@@ -612,12 +614,56 @@ export function renderAdminPage({ publicKey = '', assetVersion = '' } = {}) {
             <div style="padding:14px 16px;border-radius:12px;border:1px solid var(--line-strong);background:var(--field);margin-bottom:14px">
                 <div class="small muted">Вы вошли как</div>
                 <div style="font-size:16px;font-weight:700;margin-top:2px" id="admProfileEmail">—</div>
-                <div style="margin-top:6px"><span class="tag ok">Администратор портала</span></div>
+                <div style="margin-top:6px"><span class="tag ok" id="admProfileRoleBadge">Администратор портала</span></div>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px">
                 <a class="btn btn-primary" href="/#addons" style="width:100%;text-decoration:none">Перейти в Личный кабинет</a>
                 <button type="button" class="btn btn-ghost" style="width:100%;color:var(--danger)" data-action="admin-logout">Выйти из аккаунта</button>
                 <button type="button" class="btn btn-ghost btn-sm" style="width:100%" data-action="close-adm-profile">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно: Просмотр скриншота / видео из обращения -->
+    <div class="modal" id="admMediaModal" role="dialog" aria-modal="true">
+        <div class="card" style="max-width:960px;width:94vw">
+            <div class="modal-head">
+                <img src="/assets/odant-logo.png" alt="">
+                <div>
+                    <h3 class="h3" id="admMediaTitle" style="margin:0">Вложение</h3>
+                    <div class="small muted" id="admMediaSub"></div>
+                </div>
+                <button class="icon-btn" data-action="close-media-modal" aria-label="Закрыть">${icon('close')}</button>
+            </div>
+            <div id="admMediaBody" style="display:flex;justify-content:center;align-items:center;max-height:74vh;overflow:auto;background:#0b1220;border-radius:10px;padding:8px"></div>
+        </div>
+    </div>
+
+    <!-- Модальное окно: Встроенный Remote Desktop оператора поддержки -->
+    <div class="modal" id="admRemoteModal" role="dialog" aria-modal="true">
+        <div class="card" style="max-width:1120px;width:96vw">
+            <div class="modal-head">
+                <img src="/assets/odant-logo.png" alt="">
+                <div>
+                    <h3 class="h3" id="admRemoteTitle" style="margin:0">Удалённый экран пользователя</h3>
+                    <div class="small muted" id="admRemoteStatus">Ожидание подключения…</div>
+                </div>
+                <div style="margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span class="tag" id="admRemoteModeBadge">Только просмотр (указка)</span>
+                    <button type="button" class="btn btn-ghost btn-sm" style="color:var(--danger)" data-action="remote-end-close">Завершить сессию</button>
+                </div>
+            </div>
+            <div id="admRemoteStage" tabindex="0" style="position:relative;width:100%;aspect-ratio:16/9;max-height:68vh;background:#090d16;border-radius:10px;overflow:hidden;border:1px solid var(--line-strong);display:flex;align-items:center;justify-content:center;cursor:crosshair;outline:none">
+                <video id="admRemoteVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:contain;display:none"></video>
+                <img id="admRemoteImg" alt="" style="width:100%;height:100%;object-fit:contain;display:none;pointer-events:none">
+                <div id="admRemotePlaceholder" class="small muted" style="text-align:center;padding:24px">
+                    Запрос на доступ к экрану отправлен пользователю. Как только пользователь нажмёт «Поделиться экраном», трансляция начнётся автоматически.
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap">
+                <input type="text" id="admRemoteTextInput" placeholder="Ввести текст в активное поле у пользователя (когда включено управление)…" style="flex:1;min-width:220px;padding:7px 10px;font-size:13px">
+                <button type="button" class="btn btn-primary btn-sm" data-action="remote-send-text">Отправить ввод</button>
+                <span class="small muted">Двигайте мышью для указки; при разрешённом управлении работают клики, скролл и ввод.</span>
             </div>
         </div>
     </div>
