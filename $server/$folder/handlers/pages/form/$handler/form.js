@@ -186,9 +186,14 @@ ODA({is: 'work-form',
                 max-width: 100%;
                 flex-shrink: 1;
             }
-            .call-btn {
+            .consultant-btn {
                 border-radius: 50%;
                 margin-right: 12px;
+                flex-shrink: 0;
+            }
+            .call-btn {
+                border-radius: 50%;
+                margin-right: 32px;
                 flex-shrink: 0;
             }
             .view-selector {
@@ -208,9 +213,12 @@ ODA({is: 'work-form',
                 flex-wrap: wrap;
                 padding-bottom: max(4px, var(--safe-bottom, 0px)) !important;
             }
-            @media (max-width: 768px) {
+            @media (max-width: 520px) {
+                .consultant-btn {
+                    margin-right: 8px;
+                }
                 .call-btn {
-                    margin-right: 2px;
+                    margin-right: 16px;
                 }
                 .form-header-inner {
                     margin: 2px;
@@ -225,7 +233,7 @@ ODA({is: 'work-form',
             <div center flex horizontal class="form-header-inner">
                 <item-node-explorer no-flex :$item="rootItem"></item-node-explorer>
                 <div flex></div>
-                <oda-button ~if="showConsultantBtn" id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info-invert style="border-radius: 50%; margin-right: 4px; flex-shrink: 0;"></oda-button>
+                <oda-button ~if="showConsultantBtn" id="consultantBtn" shadow icon="bootstrap:robot" @tap="askConsultant" title="Спросить ИИ-консультанта по текущей форме" :icon-size info class="consultant-btn"></oda-button>
                 <oda-button shadow icon="communication:call" @tap="call" title="Call..." :icon-size success class="call-btn"></oda-button>
                 <slot name="top-panel"></slot>
                 <div class="view-selector" no-flex horizontal>

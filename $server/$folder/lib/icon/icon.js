@@ -73,7 +73,7 @@ export default {
                 if (this.$item?.type === '$virtual')
                     return 'carbon:filter';
                 if (this._bossUsers)
-                    return this._bossUsers.then(list => bossAvatarInfo(list[0]).icon);
+                    return Promise.resolve(this._bossUsers).then(list => bossAvatarInfo(Array.isArray(list) ? list[0] : null).icon);
                 return this.$item?.subIcon;
             }
             return Promise.resolve(this.online).then(res => res ? 'unicon:check-circle' : '');
@@ -86,7 +86,7 @@ export default {
                 if (this.$item?.type === '$virtual')
                     return '#ede9fe';
                 if (this._bossUsers)
-                    return this._bossUsers.then(list => bossAvatarInfo(list[0]).color);
+                    return Promise.resolve(this._bossUsers).then(list => bossAvatarInfo(Array.isArray(list) ? list[0] : null).color);
                 return '';
             }
             return Promise.resolve(this.online).then(res => res ? 'lime' : '');
@@ -96,8 +96,8 @@ export default {
         $def: '',
         get() {
             if (this._bossUsers) {
-                return this._bossUsers.then(list => {
-                    if (!list.length)
+                return Promise.resolve(this._bossUsers).then(list => {
+                    if (!Array.isArray(list) || !list.length)
                         return '';
                     const names = list.map(u => bossAvatarInfo(u).label).filter(Boolean);
                     return names.length ? 'Руководитель: ' + names.join(', ') : '';
