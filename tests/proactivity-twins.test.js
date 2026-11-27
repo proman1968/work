@@ -48,6 +48,7 @@ describe('Проактивность Агентов $structure, when-преди�
         write('ORGANIZATIONS/OrgOne/$base/class.js', `export default { label: 'Орг 1', '#security': { BOSS: ['${BOSS_UID}'] } }`);
         write('ORGANIZATIONS/OrgOne/MODULES/$domain/class.js', `export default { label: 'Модули' }`);
         write('ORGANIZATIONS/OrgOne/MODULES/Reg/$module/class.js', `export default { label: 'Учёт' }`);
+        write('ORGANIZATIONS/OrgOne/MODULES/Alpha/$module/class.js', `export default { label: 'Альфа' }`);
         write('ORGANIZATIONS/OrgOne/MODULES/Reg/SALE/$operation/class.js', `export default {
             label: 'Реализация',
             METADATA: { FIELDS: [{ id: 'sum', label: 'Сумма', type: 'number' }] }
@@ -422,6 +423,13 @@ describe('Проактивность Агентов $structure, when-преди�
         const staffCtx = await sales.agent_staff_context(as(BOSS_UID));
         assert.ok(staffCtx.inheritedBoss || staffCtx.users.some(u => u.id === BOSS_UID));
         assert.ok(Array.isArray(staffCtx.baseClasses) && staffCtx.baseClasses.some(m => m.id === 'Reg'), 'в контексте роли есть модули вышестоящего $base');
+        assert.deepEqual(staffCtx.baseClasses.map(m => m.id), ['Alpha', 'Reg'], 'модули $base отсортированы по названию, а не по порядку файлов');
+        const assertSorted = (nodes) => {
+            const labels = nodes.map(n => String(n.label || n.id || ''));
+            assert.deepEqual(labels, [...labels].sort((a, b) => a.localeCompare(b, 'ru', { numeric: true, sensitivity: 'base' })), 'дочерние классы отсортированы по названию');
+            nodes.forEach(n => assertSorted(n.children || []));
+        };
+        assertSorted(staffCtx.baseClasses);
         assert.equal(staffCtx.basePath, '/ORGANIZATIONS/OrgOne');
 
         // 5. Узлы сети (/NODES) как активные участники ролей: agent_network_nodes и доступ node_principal

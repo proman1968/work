@@ -24,6 +24,13 @@ function normPath(p) {
     return s || '/';
 }
 
+/** Стабильный порядок узлов дерева прав: по названию, затем по пути. */
+const CLASS_LABEL_COLLATOR = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
+function compareClassNodes(a, b) {
+    return CLASS_LABEL_COLLATOR.compare(String(a?.label || a?.id || ''), String(b?.label || b?.id || ''))
+        || String(a?.id || '').localeCompare(String(b?.id || ''), 'ru');
+}
+
 function parseDroppedItem(e) {
     const dt = e?.dataTransfer;
     if (!dt)
@@ -1039,6 +1046,7 @@ if (typeof ODA === 'function' && !customElements.get('staff-role-node')) {
                         });
                     }
                 }
+                res.sort(compareClassNodes);
                 return res;
             };
 

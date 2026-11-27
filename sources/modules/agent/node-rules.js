@@ -15,6 +15,11 @@ import { FS } from '../../server/index.js';
 
 const ACCESS_DENIED = 'Доступ запрещён';
 const SAFE_RULE_NAME_RE = /^[A-Za-z0-9\u0400-\u04FF_-]{1,64}$/;
+/** Единый порядок классов и модулей в дереве прав: по названию, без зависимости от порядка файлов. */
+const TREE_LABEL_COLLATOR = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
+function compareTreeLabels(a, b) {
+    return TREE_LABEL_COLLATOR.compare(String(a?.label ?? a?.id ?? ''), String(b?.label ?? b?.id ?? ''));
+}
 
 async function assertBoss(storage, params = {}) {
     if (DEV_MODE || !params?.session || params.session.$user === globalThis.WORK)
@@ -892,6 +897,7 @@ export async function getNodeStaffContext(storage, params = {}) {
             if (built)
                 children.push(built);
         }
+        children.sort(compareTreeLabels);
         return {
             id: node.id,
             path: node.path,
@@ -913,6 +919,7 @@ export async function getNodeStaffContext(storage, params = {}) {
                 baseClasses.push(built);
         }
     }
+    baseClasses.sort(compareTreeLabels);
 
     // 5. Доступные эталонные модули в корневом /MODULES
     const systemModules = [];

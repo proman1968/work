@@ -204,18 +204,6 @@ await test('Система: левое боковое меню .sys-sidebar бе
                         label: 'Бухучёт',
                         icon: 'odant:module',
                         children: [{
-                            id: 'OPERATIONS',
-                            path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/OPERATIONS',
-                            label: 'Операции',
-                            icon: 'carbon:task-complete',
-                            children: [{
-                                id: 'Зарплата',
-                                path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/OPERATIONS/Зарплата',
-                                label: 'Зарплата',
-                                icon: 'odant:class',
-                                children: [],
-                            }],
-                        }, {
                             id: 'CATALOGS',
                             path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/CATALOGS',
                             label: 'Справочники',
@@ -224,6 +212,18 @@ await test('Система: левое боковое меню .sys-sidebar бе
                                 id: 'Склады',
                                 path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/CATALOGS/Склады',
                                 label: 'Склады',
+                                icon: 'odant:class',
+                                children: [],
+                            }],
+                        }, {
+                            id: 'OPERATIONS',
+                            path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/OPERATIONS',
+                            label: 'Операции',
+                            icon: 'carbon:task-complete',
+                            children: [{
+                                id: 'Зарплата',
+                                path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/OPERATIONS/Зарплата',
+                                label: 'Зарплата',
                                 icon: 'odant:class',
                                 children: [],
                             }],
@@ -278,11 +278,15 @@ await test('Система: левое боковое меню .sys-sidebar бе
     const filteredClasses = rootRoleNode.$$('.tree-row.class-row');
     assert(filteredClasses.length === 3, 'в обычном режиме сохранена иерархия Бухучёт -> Операции -> Зарплата (получено ' + filteredClasses.length + ')');
     assert(!filteredClasses.some(r => r.textContent.includes('Склады')), 'невыданный класс Склады скрыт до включения Настройки');
+    const filteredLabels = filteredClasses.map(r => r.querySelector('.class-title')?.textContent.trim()).join('|');
+    assert(filteredLabels === 'Бухучёт|Операции|Зарплата', 'дерево классов сортируется по названию независимо от порядка данных (получено ' + filteredLabels + ')');
 
     // Включаем режим "Настройка" у подгруппы Классы
     const setupBtn = rootRoleNode.$('.setup-classes-btn');
     setupBtn.click();
     await waitFor(() => rootRoleNode.$$('.tree-row.class-row')?.length === 4, () => 'в режиме Настройка видны все 4 узла (rows=' + rootRoleNode.$$('.tree-row.class-row')?.length + ')');
+    const setupLabels = rootRoleNode.$$('.tree-row.class-row .class-title').map(e => e.textContent.trim()).join('|');
+    assert(setupLabels === 'Бухучёт|Операции|Зарплата|Справочники', 'в режиме Настройка порядок классов стабилен и не зависит от порядка ответа сервера (получено ' + setupLabels + ')');
     // Раскрываем ветку Справочники кликом по стрелке — виден лист Склады (всего 5 строк)
     const catalogRow = [...rootRoleNode.$$('.tree-row.class-row')].find(r => r.textContent.includes('Справочники'));
     catalogRow.querySelector('.expander').click();
