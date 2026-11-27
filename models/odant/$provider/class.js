@@ -30,7 +30,7 @@ export default {
     },
     icon: "odant:logo",
     label: "odant",
-    form: "editor",
+    form: "system",
     async list_remote(params = {}) {
         const ai = params.$provider || params.$ai || this;
         const base = String(params.baseUrl || ai.baseUrl || ai.DATA?.baseUrl || '').trim();

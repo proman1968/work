@@ -7,7 +7,8 @@
 export default {
     icon: 'carbon:api',
     label: 'Провайдер ИИ',
-    form: 'provider',
+    form: 'system',
+    mainTreeChildren: ['$ai'],
     METADATA: {
         STATIC: [{
             id: 'protocol',

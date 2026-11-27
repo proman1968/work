@@ -9,6 +9,7 @@ export default {
     icon: 'carbon:chip',
     label: 'Local',
     protocol: 'local',
-    form: 'trainer',
+    form: 'system',
+    mainTreeChildren: ['$ai'],
     baseUrl: 'http://127.0.0.1:8731/v1/chat/completions',
 }

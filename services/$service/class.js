@@ -17,7 +17,8 @@ export default {
     icon: 'carbon:api',
     label: 'Сервисы и MCP',
     description: 'Внешние сервисы, MCP-серверы и навыки ИИ',
-    form: 'mcp',
+    form: 'system',
+    mainTreeChildren: [],
     // F23: чтение объявлено явно (имя метода больше не считается гарантией)
     ACCESS: {
         mcp_list_tools: 'read',

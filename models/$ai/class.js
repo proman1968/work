@@ -67,7 +67,7 @@ export default {
         }]
     },
     icon: "carbon:machine-learning-model",
-    form: "editor",
+    form: "system",
     label: "Модели ИИ",
     get accessToken() {
                 return this._accessToken ?? null;

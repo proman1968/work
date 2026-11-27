@@ -26,7 +26,8 @@ const _engineEnsurePromises = new Map();
 
 export default {
     icon: 'carbon:machine-learning-model',
-    form: 'trainer',
+    form: 'system',
+    mainTreeChildren: [],
     /** карточка модели для клиента: попадает в info, читается баром и usage-панелью */
     $public: {
         maxTokens: 4096,   // лимит контекста (usage / info)
