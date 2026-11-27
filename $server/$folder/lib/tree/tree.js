@@ -6,13 +6,18 @@ function rawItem(it) {
     return it?.[R]?.target || it;
 }
 
-const MAIN_TREE_ENV_TYPES = new Set(['$domain', '$structure', '$base', '$project', '$module', '$user', '$node', '$provider', '$ai', '$service']);
+const MAIN_TREE_ENV_TYPES = new Set(['$domain', '$structure', '$base', '$project', '$module', '$users', '$user', '$node', '$provider', '$ai', '$service']);
 const MAIN_TREE_LEAF_TYPES = new Set(['$project', '$module', '$user', '$ai', '$service']);
 
+function isRootSectionNode(it) {
+    const p = String(it?.path || it?.short || '').replace(/\/+$/, '');
+    return p !== '' && p !== '/' && /^\/[^/]+$/.test(p);
+}
+
 function isMainTreeLeaf(it) {
-    if (!it)
+    if (!it || it.type === '$server')
         return false;
-    if (it.parent?.type === '$server')
+    if (isRootSectionNode(it))
         return false;
     if (Array.isArray(it.DATA?.mainTreeChildren))
         return it.DATA.mainTreeChildren.length === 0;
@@ -28,6 +33,12 @@ function filterMainTreeItems(items, parent) {
         return items || [];
     if (parent.type === '$server')
         return items;
+    if (isRootSectionNode(parent)) {
+        const pPath = String(parent.path || parent.short || '');
+        if (pPath === '/SERVICES')
+            return items.filter(f => f && (MAIN_TREE_ENV_TYPES.has(f.type) || (f.type === '$folder' && !f.isType)));
+        return items.filter(f => f && MAIN_TREE_ENV_TYPES.has(f.type));
+    }
     if (isMainTreeLeaf(parent))
         return [];
     if (Array.isArray(parent.DATA?.mainTreeChildren)) {
@@ -1065,8 +1076,10 @@ ODA({is: 'oda-tree-node',
             return Promise.resolve([]);
         const sel = this.$pdp.itemsSelector;
         const loadRaw = () => {
+            const rawTarget = this.$item?.[R]?.target || this.$item;
+            const hasOwnItems = rawTarget && Object.prototype.hasOwnProperty.call(rawTarget, 'items') && Array.isArray(rawTarget.items);
             if (this.$pdp?.cleanStructure && sel === 'items' && this.$item?.type !== '$file'
-                && !Array.isArray(this.$item?.[R]?.cache?.items) && !String(this.$item?.short || '').includes('~')) {
+                && !hasOwnItems && !Array.isArray(this.$item?.[R]?.cache?.items) && !String(this.$item?.short || '').includes('~')) {
                 return WORK.fetch(location.origin + (this.$item.short || '/'), 'info', { deep: 1, tree: 'main' })
                     .then(r => {
                         if (r && typeof r === 'object' && !Array.isArray(r)) {
@@ -1074,8 +1087,7 @@ ODA({is: 'oda-tree-node',
                             Object.assign(this.$item.DATA ??= {}, meta);
                         }
                         const bound = WORK.__bind(Array.isArray(r?.items) ? r.items : []);
-                        if (this.$item[R]?.cache)
-                            this.$item[R].cache.items = Reactor.activate(bound);
+                        this.$item.items = bound;
                         return bound;
                     });
             }

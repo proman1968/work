@@ -373,7 +373,7 @@ export class $folder extends $item {
             }
             return WORK.fetch(location.origin + path + '/@' + key, '', params);
         }
-        return fn(params).then(r => WORK.__bind(r)).then(result => {
+        return Promise.resolve(fn(params)).then(r => WORK.__bind(r)).then(result => {
             return this[key] = this[R].cache[key] = Reactor.activate(result);
         }).catch(e => {
             console.warn(e)

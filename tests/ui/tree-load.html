@@ -458,6 +458,66 @@ await test('Проводник: порядок вкладок [контекст,
     eq(Boolean(dpLeftDrawer?.$('app-tabs')), false, 'app-tabs не монтируется в #left-drawer');
     dpEl.remove();
 
+    // Проверка реального рендера <item-tree clean-structure> без ошибки fn(...).then и с видимыми разделами среды
+    const rootTree = document.createElement('item-tree');
+    rootTree.cleanStructure = true;
+    rootTree.itemsSelector = 'items';
+    rootTree.style.cssText = 'width:320px;height:400px;display:flex;';
+    const mainTreeRoot = WORK.__bind({ path: '', short: '', id: 'WORK', label: 'WORK', type: '$server', hasItems: true });
+    mainTreeRoot.isAdmin = true;
+    mainTreeRoot.fetch = async () => ({});
+    const origFetch = WORK.fetch;
+    WORK.fetch = async (url, method, params) => {
+        if (method === 'info' && params?.tree === 'main') {
+            return {
+                mainTree: true,
+                hasItems: true,
+                items: [
+                    { path: '/ORGANIZATIONS', id: 'ORGANIZATIONS', label: 'Организации', type: '$domain', hasItems: true, items: [] },
+                    { path: '/MODULES', id: 'MODULES', label: 'Модули', type: '$domain', hasItems: true, items: [
+                        { path: '/MODULES/Register', id: 'Register', label: 'Учёт', type: '$module', hasItems: false, mainTreeChildren: [], items: [] },
+                    ] },
+                    { path: '/MODELS', id: 'MODELS', label: 'Модели', type: '$ai', hasItems: true, items: [
+                        { path: '/MODELS/Local', id: 'Local', label: 'Local', type: '$provider', hasItems: true, mainTreeChildren: ['$ai'], items: [
+                            { path: '/MODELS/Local/Qwen', id: 'Qwen', label: 'Qwen', type: '$ai', hasItems: false, mainTreeChildren: [] },
+                        ] },
+                    ] },
+                    { path: '/SERVICES', id: 'SERVICES', label: 'Сервисы', type: '$service', hasItems: true, items: [] },
+                ],
+            };
+        }
+        return origFetch.call(WORK, url, method, params);
+    };
+    try {
+        document.body.appendChild(rootTree);
+        rootTree.$item = mainTreeRoot;
+        mainTreeRoot.expanded = true;
+        await new Promise(r => setTimeout(r, 350));
+        const collectNodes = (host) => {
+            const out = [];
+            for (const n of host?.$$?.('oda-tree-node') || []) {
+                out.push(n);
+                out.push(...collectNodes(n));
+            }
+            return out;
+        };
+        const allNodes = collectNodes(rootTree);
+        const workNode = allNodes.find(n => n.$item?.id === 'WORK');
+        assert(!!workNode, 'узел WORK отрендерен');
+        workNode.expanded = true;
+        await new Promise(r => setTimeout(r, 250));
+        const afterNodes = collectNodes(rootTree);
+        const nodeIds = afterNodes.map(n => n.$item?.id).filter(Boolean);
+        assert(nodeIds.includes('ORGANIZATIONS') && nodeIds.includes('MODULES') && nodeIds.includes('MODELS') && nodeIds.includes('SERVICES'), 'в главном дереве WORK отображаются все корневые разделы (получено: ' + nodeIds.join(', ') + ')');
+        const modTreeNode = afterNodes.find(n => n.$item?.id === 'Register');
+        if (modTreeNode)
+            eq(Boolean(modTreeNode.expanderIcon), false, 'у модуля в главном дереве нет стрелки раскрытия');
+    }
+    finally {
+        WORK.fetch = origFetch;
+        rootTree.remove();
+    }
+
     const formMod = await import('/$server/$folder/handlers/pages/form/$handler/form.js');
     assert(formMod, 'модуль work-form загружен');
     await ODA.waitReg('work-form');

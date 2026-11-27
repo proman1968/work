@@ -121,12 +121,20 @@ describe('флаги строки дерева', () => {
         assert.deepEqual((await withR.bosses).map(u => u.id), info.roleIds.BOSS);
     });
 
-    it("tree: 'main' (главное дерево среды): скрывает классы внутри $module и $base, сохраняя $provider -> $ai", async () => {
+    it("tree: 'main' (главное дерево среды): скрывает классы внутри $module и $base, сохраняя $provider -> $ai и корень $server", async () => {
+        write('$server/$folder/$class/$structure/class.js', `export default { mainTreeChildren: ['$structure', '$base', '$project'] }`);
+        write('$server/$folder/$class/$structure/$server/class.js', `export default { label: 'WORK', mainTreeChildren: null }`);
         write('ORGANIZATIONS/$domain/class.js', `export default { label: 'Организации' }`);
         write('ORGANIZATIONS/OrgA/$base/class.js', `export default { label: 'Орг А', mainTreeChildren: ['$structure', '$base', '$project'] }`);
         write('ORGANIZATIONS/OrgA/Sales/$structure/class.js', `export default { label: 'Продажи', mainTreeChildren: ['$structure', '$base', '$project'] }`);
         write('ORGANIZATIONS/OrgA/MODULES/Reg/$module/class.js', `export default { label: 'Учёт', mainTreeChildren: [] }`);
         write('ORGANIZATIONS/OrgA/MODULES/Reg/Товары/$catalog/class.js', `export default { label: 'Товары' }`);
+
+        write('PROJECTS/$domain/class.js', `export default { label: 'Проекты' }`);
+        write('PROJECTS/P1/$project/class.js', `export default { label: 'Проект 1', mainTreeChildren: [] }`);
+        write('USERS/$users/class.js', `export default { label: 'Пользователи' }`);
+        write('NODES/$node/class.js', `export default { label: 'Сеть' }`);
+        write('NODES/n1/$node/class.js', `export default { label: 'Узел 1' }`);
 
         write('MODULES/$domain/class.js', `export default { label: 'Модули' }`);
         write('MODULES/Reg/$module/class.js', `export default { label: 'Учёт', mainTreeChildren: [] }`);
@@ -142,6 +150,15 @@ describe('флаги строки дерева', () => {
         write('SERVICES/Telegram/note.txt', 'x');
 
         WORK.reset();
+
+        const rootMain = await WORK.info({ deep: 3, branch: 'classes', tree: 'main' });
+        const rootIds = (rootMain.items || []).map(i => i.id);
+        for (const sec of ['ORGANIZATIONS', 'PROJECTS', 'USERS', 'NODES', 'MODULES', 'MODELS', 'SERVICES'])
+            assert.ok(rootIds.includes(sec), `корень WORK в главном дереве содержит ${sec} (получено: ${rootIds.join(', ')})`);
+
+        const orgInRoot = rootMain.items.find(i => i.id === 'ORGANIZATIONS')?.items?.find(i => i.id === 'OrgA');
+        assert.ok(orgInRoot, 'внутри ORGANIZATIONS видна OrgA');
+        assert.deepEqual((orgInRoot.items || []).map(i => i.id), ['Sales'], 'при обходе от корня в OrgA видны только подразделения, без MODULES');
 
         const orgTree = await (await WORK.get_item('/ORGANIZATIONS/OrgA')).info({ deep: 2, tree: 'main' });
         assert.equal(orgTree.mainTree, true);

@@ -1,6 +1,7 @@
 export default {
     isSystem: true,
     icon: './odant.png',
+    mainTreeChildren: null,
     ACCESS: {
         distro_info: 'read',
         export_distro: 'read',

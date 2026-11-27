@@ -1114,20 +1114,20 @@ export class $folder extends $item{
      * Возвращает null, если ограничений по типам нет (кроме отсечения не-средовых узлов).
      */
     _mainTreeAllowedTypes() {
-        const ENV_TYPES = new Set(['$domain', '$structure', '$base', '$project', '$module', '$user', '$node', '$provider', '$ai', '$service']);
+        const ENV_TYPES = new Set(['$domain', '$structure', '$base', '$project', '$module', '$users', '$user', '$node', '$provider', '$ai', '$service']);
+        if (this.type === '$server')
+            return null;
         if (this.parent?.type === '$server')
             return ENV_TYPES;
         if (Array.isArray(this.DATA?.mainTreeChildren))
             return new Set(this.DATA.mainTreeChildren);
-        if (this.type === '$server')
-            return null;
         if (this.type === '$base' || this.type === '$structure')
             return new Set(['$structure', '$base', '$project']);
         if (this.type === '$project' || this.type === '$module' || this.type === '$user' || this.type === '$node' || this.type === '$ai' || this.type === '$service')
             return new Set();
         if (this.type === '$provider')
             return new Set(['$ai']);
-        if (this.type === '$domain')
+        if (this.type === '$domain' || this.type === '$users')
             return ENV_TYPES;
         if (String(this.path || '').startsWith('/SERVICES/') && !(this instanceof FS.$class))
             return new Set(['$service']);
