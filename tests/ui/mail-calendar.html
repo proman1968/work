@@ -280,11 +280,15 @@ await test('Система: левое боковое меню .sys-sidebar бе
     assert(!filteredClasses.some(r => r.textContent.includes('Склады')), 'невыданный класс Склады скрыт до включения Настройки');
     const filteredLabels = filteredClasses.map(r => r.querySelector('.class-title')?.textContent.trim()).join('|');
     assert(filteredLabels === 'Бухучёт|Операции|Зарплата', 'дерево классов сортируется по названию независимо от порядка данных (получено ' + filteredLabels + ')');
+    const lockedSegs = filteredClasses.flatMap(r => [...r.querySelectorAll('.rwcd-seg')]);
+    assert(lockedSegs.length > 0 && lockedSegs.every(b => b.disabled), 'до включения Настройки кнопки RWCD заблокированы');
 
     // Включаем режим "Настройка" у подгруппы Классы
     const setupBtn = rootRoleNode.$('.setup-classes-btn');
     setupBtn.click();
     await waitFor(() => rootRoleNode.$$('.tree-row.class-row')?.length === 4, () => 'в режиме Настройка видны все 4 узла (rows=' + rootRoleNode.$$('.tree-row.class-row')?.length + ')');
+    const setupSegs = rootRoleNode.$$('.tree-row.class-row .rwcd-seg');
+    assert(setupSegs.length > 0 && setupSegs.every(b => !b.disabled), 'после включения Настройки кнопки RWCD активны');
     const setupLabels = rootRoleNode.$$('.tree-row.class-row .class-title').map(e => e.textContent.trim()).join('|');
     assert(setupLabels === 'Бухучёт|Операции|Зарплата|Справочники', 'в режиме Настройка порядок классов стабилен и не зависит от порядка ответа сервера (получено ' + setupLabels + ')');
     // Раскрываем ветку Справочники кликом по стрелке — виден лист Склады (всего 5 строк)

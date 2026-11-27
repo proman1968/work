@@ -900,11 +900,11 @@ if (typeof ODA === 'function' && !customElements.get('staff-role-node')) {
                             @tap="controller?.openClass($for.item.id)">{{$for.item.label}}</span>
 
                         <div class="rwcd-wrap">
-                            <button ~if="canEdit && $for.item.canResetInherit"
+                            <button ~if="canEdit && setupMode && $for.item.canResetInherit"
                                 type="button"
                                 class="rwcd-reset"
                                 title="Сбросить переопределение и наследовать от родителя"
-                                @tap.stop="controller?.resetClassOverride(trail, $for.item.id)">↩</button>
+                                @tap.stop="onResetAccess($for.item)">↩</button>
                             <div class="rwcd-slider"
                                 ~class="{ explicit: $for.item.isExplicit && !$for.item.isExplicitDenied, inherited: $for.item.isInherited, denied: $for.item.isExplicitDenied }"
                                 :data-access="$for.item.effectiveAccess"
@@ -912,31 +912,31 @@ if (typeof ODA === 'function' && !customElements.get('staff-role-node')) {
                                 <button type="button"
                                     class="rwcd-seg seg-none"
                                     ~class="{ 'active-none': $for.item.effectiveRank === 0 }"
-                                    :disabled="!canEdit"
+                                    :disabled="!canEdit || !setupMode"
                                     :title="$for.item.inheritedAccess ? 'Явно запретить доступ к этому классу (—)' : 'Нет доступа (—)'"
                                     @tap.stop="onSelectAccess($for.item, 'none')">—</button>
                                 <button type="button"
                                     class="rwcd-seg seg-r"
                                     ~class="{ filled: $for.item.effectiveRank >= 1 }"
-                                    :disabled="!canEdit"
+                                    :disabled="!canEdit || !setupMode"
                                     title="Чтение (R)"
                                     @tap.stop="onSelectAccess($for.item, 'read')">R</button>
                                 <button type="button"
                                     class="rwcd-seg seg-w"
                                     ~class="{ filled: $for.item.effectiveRank >= 2 }"
-                                    :disabled="!canEdit"
+                                    :disabled="!canEdit || !setupMode"
                                     title="Редактирование и проведение (W)"
                                     @tap.stop="onSelectAccess($for.item, 'write')">W</button>
                                 <button type="button"
                                     class="rwcd-seg seg-c"
                                     ~class="{ filled: $for.item.effectiveRank >= 3 }"
-                                    :disabled="!canEdit"
+                                    :disabled="!canEdit || !setupMode"
                                     title="Создание объектов и документов (C)"
                                     @tap.stop="onSelectAccess($for.item, 'create')">C</button>
                                 <button type="button"
                                     class="rwcd-seg seg-d"
                                     ~class="{ filled: $for.item.effectiveRank >= 4 }"
-                                    :disabled="!canEdit"
+                                    :disabled="!canEdit || !setupMode"
                                     title="Удаление и полный доступ к данным (D)"
                                     @tap.stop="onSelectAccess($for.item, 'delete')">D</button>
                             </div>
@@ -1097,9 +1097,14 @@ if (typeof ODA === 'function' && !customElements.get('staff-role-node')) {
             this.expandedClasses = { ...this.expandedClasses, [clsPath]: !cur };
         },
         onSelectAccess(row, level) {
-            if (!this.canEdit || !row?.id)
+            if (!this.canEdit || !this.setupMode || !row?.id)
                 return;
             this.controller?.setClassAccess(this.trail, row.id, level, row.inheritedAccess || '');
+        },
+        onResetAccess(row) {
+            if (!this.canEdit || !this.setupMode || !row?.id)
+                return;
+            this.controller?.resetClassOverride(this.trail, row.id);
         },
         onDragOver(e) {
             if (!this.canEdit)
