@@ -815,9 +815,19 @@ ODA({is: 'work-form',
             return null;
         }
     },
+    _normalizeLegacyNav(nav) {
+        if (!nav || typeof nav !== 'object')
+            return nav;
+        const legacyTabs = { folder: 'files', editor: 'requisites', provider: 'ai', trainer: 'ai', mcp: 'mcp' };
+        if (nav.view && legacyTabs[nav.view]) {
+            return { ...nav, view: 'system', tab: nav.tab || legacyTabs[nav.view] };
+        }
+        return nav;
+    },
     async applyNav(nav) {
         if (!nav || typeof nav !== 'object')
             return;
+        nav = this._normalizeLegacyNav(nav);
         if (this._initializingItem || !this._rootItem) {
             this._pendingInitialNav = nav;
             return;
@@ -902,22 +912,26 @@ ODA({is: 'work-form',
         if ((!Array.isArray(views) || !views.length) && $item && role)
             views = await this.loadFormViews($item, role);
         if (name) {
-            const inList = (views || []).find(v => v.id === name);
+            const legacyViews = { folder: 'system', editor: 'system', provider: 'system', trainer: 'system', mcp: 'system' };
+            const lookup = legacyViews[name] || name;
+            const inList = (views || []).find(v => v.id === lookup);
             if (inList)
                 return inList;
-            if ($item && name === 'object') {
-                const view = await $item.get_item(`/~/handlers//form/${name}`, undefined, { role, contextPath: $item.short });
+            if ($item && lookup === 'object') {
+                const view = await $item.get_item(`/~/handlers//form/${lookup}`, undefined, { role, contextPath: $item.short });
                 if (view)
                     return view;
             }
         }
-        const ownDefault = (views || []).find(v => v.id === $item?.form);
+        const legacyDefault = { folder: 'system', editor: 'system', provider: 'system', trainer: 'system', mcp: 'system' };
+        const ownId = legacyDefault[$item?.form] || $item?.form;
+        const ownDefault = (views || []).find(v => v.id === ownId);
         if (ownDefault)
             return ownDefault;
         const isStruct = ['$server', '$base', '$project', '$structure', '$user'].includes($item?.type);
         const preferred = isStruct
-            ? ['chat', 'calendar', 'email', 'system']
-            : ['objects', 'virtual', 'sheet', 'turnovers', 'postings', 'map', 'bpmn'];
+            ? ['chat', 'calendar', 'email', 'search', 'system']
+            : ['objects', 'virtual', 'sheet', 'turnovers', 'postings', 'map', 'bpmn', 'network', 'system'];
         for (const prefId of preferred) {
             const hit = (views || []).find(v => v.id === prefId);
             if (hit)
@@ -972,6 +986,7 @@ ODA({is: 'work-form',
                     this._noClassTreeFlag = true;
                 this._initClassTreeDrawer();
                 if (nav) {
+                    nav = this._normalizeLegacyNav(nav);
                     if (nav.view === 'objects' && nav.id)
                         nav.view = 'object';
                     if (nav.targetClassPath || nav.create || nav.copyFrom || (nav.id && this.hasClassTree)) {

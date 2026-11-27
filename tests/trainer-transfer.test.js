@@ -27,7 +27,7 @@ import {
 import { encodeTarHeader } from '../sources/modules/trainer/tar-stream.js';
 import { MEMBERS } from '../sources/server/access/gateway.js';
 import transferHandlerMeta from '../MODELS/Local/$provider/handlers/methods/transfer/$handler/class.js';
-import trainerFormMeta from '../MODELS/$ai/$folder/$class/$provider/handlers/pages/form/trainer/$handler/trainer.js';
+import trainerFormMeta from '../$server/$folder/$class/handlers/pages/form/system/$handler/tabs/ai-local.js';
 
 async function createSampleLocalRoot(rootDir) {
     const localRoot = path.join(rootDir, 'MODELS', 'Local');

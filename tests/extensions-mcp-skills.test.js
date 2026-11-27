@@ -42,12 +42,12 @@ describe('внешние навыки (SKILL.md / @skill) и управлени�
         write('$server/class.js', `export default { label: 'WORK', '#security': { BOSS: ['${BOSS}'] } }`);
         for (const p of ['$server/$folder', '$server/$folder/$class', '$server/$folder/$file'])
             write(p + '/class.js', 'export default {}');
+        write('$server/$folder/$class/handlers/pages/form/system/$handler/class.js', fs.readFileSync(path.join(ROOT, '$server/$folder/$class/handlers/pages/form/system/$handler/class.js'), 'utf-8'));
         write('$server/$folder/$class/ai/skills/grill-me/SKILL.md', fs.readFileSync(path.join(ROOT, '$server/$folder/$class/ai/skills/grill-me/SKILL.md'), 'utf-8'));
         write('$server/$folder/$class/ai/agents/analyst.md', fs.readFileSync(path.join(ROOT, '$server/$folder/$class/ai/agents/analyst.md'), 'utf-8'));
         write('$server/$folder/$class/ai/agents/explore.md', fs.readFileSync(path.join(ROOT, '$server/$folder/$class/ai/agents/explore.md'), 'utf-8'));
         write('SERVICES/$service/class.js', fs.readFileSync(path.join(ROOT, 'SERVICES/$service/class.js'), 'utf-8'));
         write('SERVICES/$service/$folder/$storage/$service/class.js', fs.readFileSync(path.join(ROOT, 'SERVICES/$service/$folder/$storage/$service/class.js'), 'utf-8'));
-        write('SERVICES/$service/$folder/$storage/$service/handlers/pages/form/mcp/$handler/class.js', fs.readFileSync(path.join(ROOT, 'SERVICES/$service/$folder/$storage/$service/handlers/pages/form/mcp/$handler/class.js'), 'utf-8'));
         write('SERVICES/Weather/$service/class.js', fs.readFileSync(path.join(ROOT, 'SERVICES/Weather/$service/class.js'), 'utf-8'));
 
         process.chdir(tmp);
@@ -128,7 +128,7 @@ describe('внешние навыки (SKILL.md / @skill) и управлени�
 
         const servicesItem = await WORK.get_item('/SERVICES');
         await servicesItem.init;
-        assert.equal(servicesItem.DATA.form, 'mcp', 'представление по умолчанию для /SERVICES — mcp');
+        assert.equal(servicesItem.DATA.form, 'system', 'представление по умолчанию для /SERVICES — system');
 
         const installRes = await servicesItem.mcp_install({
             session: { uid: BOSS },

@@ -4,6 +4,11 @@ import messengersProto from './tabs/messengers.js';
 import databaseProto from './tabs/database.js';
 import licenseProto from './tabs/license.js';
 import agentProto from './tabs/agent.js';
+import aiRootProto from './tabs/ai-root.js';
+import aiProviderProto from './tabs/ai-provider.js';
+import aiLocalProto from './tabs/ai-local.js';
+import aiModelProto from './tabs/ai-model.js';
+import './tabs/mcp.js';
 
 function cloneProto(raw) {
     const proto = Object.defineProperties(
@@ -31,6 +36,10 @@ regTab('system-tab-messengers', messengersProto);
 regTab('system-tab-database', databaseProto);
 regTab('system-tab-license', licenseProto);
 regTab('system-tab-agent', agentProto);
+regTab('system-tab-ai-root', aiRootProto);
+regTab('system-tab-ai-provider', aiProviderProto);
+regTab('system-tab-ai-local', aiLocalProto);
+regTab('system-tab-ai-model', aiModelProto);
 
 export default {
     imports: 'oda//icon, oda//button, ~/lib//editor-form, ~/lib//tree.js',
@@ -181,6 +190,11 @@ export default {
             </div>
 
             <user-profile ~if="currentTabId === 'profile'" flex></user-profile>
+            <system-tab-ai-root ~if="currentTabId === 'ai' && aiMode === 'root'" flex :$item="$item"></system-tab-ai-root>
+            <system-tab-ai-local ~if="currentTabId === 'ai' && aiMode === 'local'" flex :$item="$item"></system-tab-ai-local>
+            <system-tab-ai-provider ~if="currentTabId === 'ai' && aiMode === 'provider'" flex :$item="$item"></system-tab-ai-provider>
+            <system-tab-ai-model ~if="currentTabId === 'ai' && aiMode === 'model'" flex :$item="$item"></system-tab-ai-model>
+            <work-mcp-manager ~if="currentTabId === 'mcp'" flex :$item="$item"></work-mcp-manager>
             <system-tab-staff ~if="currentTabId === 'staff'" flex :$item="$item" :focused-trail="pendingPlace"></system-tab-staff>
             <system-tab-modules ~if="currentTabId === 'modules'" flex :$item="$item"></system-tab-modules>
             <item-tree ~if="currentTabId === 'files'" flex :$item="storageFolder" show-size hide-system items-selector="entries" hide-tops="1" hide-roots="1"></item-tree>
@@ -228,30 +242,83 @@ export default {
     get storageFolder() {
         return this.$item?.storage_folder;
     },
+    get _itemNormPath() {
+        return String(this.$item?.path || this.$item?.short || '').replace(/\/+$/, '') || '/';
+    },
+    get aiMode() {
+        const t = this.$item?.type;
+        const p = this._itemNormPath;
+        if (t === '$ai')
+            return p === '/MODELS' ? 'root' : 'model';
+        if (t === '$provider') {
+            const proto = String(this.$item?.protocol || this.$item?.DATA?.protocol || '').toLowerCase();
+            if (p === '/MODELS/Local' || p.startsWith('/MODELS/Local/') || p === '/MODELS/Halogen' || p.startsWith('/MODELS/Halogen/') || proto === 'local' || proto === 'halogen')
+                return 'local';
+            return 'provider';
+        }
+        return '';
+    },
+    get isOrgGroup() {
+        const t = this.$item?.type;
+        return t === '$server' || t === '$base' || t === '$project' || t === '$structure' || t === '$user';
+    },
+    get isServiceNode() {
+        const t = this.$item?.type;
+        const p = this._itemNormPath;
+        return t === '$service' || p === '/SERVICES' || p.startsWith('/SERVICES/');
+    },
     get mainTabs() {
         const t = this.$item?.type;
         const tabs = [];
+        if (this.aiMode) {
+            tabs.push({ id: 'ai', label: 'Модели ИИ', icon: 'carbon:chip' });
+            if (this.hasStaticFields)
+                tabs.push({ id: 'requisites', label: 'Реквизиты', icon: 'editor:mode-edit' });
+            tabs.push({ id: 'files', label: 'Файлы', icon: 'fontawesome:r-folder-open' });
+            return tabs;
+        }
+        if (this.isServiceNode) {
+            tabs.push({ id: 'mcp', label: 'Сервисы и MCP', icon: 'carbon:plug' });
+            if (this.hasStaticFields)
+                tabs.push({ id: 'requisites', label: 'Реквизиты', icon: 'editor:mode-edit' });
+            tabs.push({ id: 'files', label: 'Файлы', icon: 'fontawesome:r-folder-open' });
+            return tabs;
+        }
+        if (t === '$module') {
+            tabs.push({ id: 'modules', label: 'Классы', icon: 'odant:module' });
+            if (this.hasStaticFields)
+                tabs.push({ id: 'requisites', label: 'Реквизиты', icon: 'editor:mode-edit' });
+            tabs.push({ id: 'files', label: 'Файлы', icon: 'fontawesome:r-folder-open' });
+            return tabs;
+        }
         if (this.hasStaticFields)
             tabs.push({ id: 'requisites', label: 'Реквизиты', icon: 'editor:mode-edit' });
-        if (t === '$user')
-            tabs.push({ id: 'profile', label: 'Профиль и токены', icon: 'icons:account-circle' });
-        tabs.push({ id: 'staff', label: 'Пользователи', icon: 'icons:supervisor-account' });
-        if (t === '$base' || t === '$project')
-            tabs.push({ id: 'modules', label: 'Классы и модули', icon: 'odant:module' });
+        if (this.isOrgGroup) {
+            if (t === '$user')
+                tabs.push({ id: 'profile', label: 'Профиль и токены', icon: 'icons:account-circle' });
+            tabs.push({ id: 'staff', label: 'Пользователи', icon: 'icons:supervisor-account' });
+            if (t === '$base' || t === '$project')
+                tabs.push({ id: 'modules', label: 'Классы и модули', icon: 'odant:module' });
+        }
         tabs.push({ id: 'files', label: 'Файлы', icon: 'fontawesome:r-folder-open' });
         return tabs;
     },
     get infraTabs() {
         const t = this.$item?.type;
         const tabs = [];
-        if (t !== '$user')
-            tabs.push({ id: 'messengers', label: 'Мессенджеры', icon: 'communication:phonelink-ring' });
-        if (t !== '$user')
+        if (this.isOrgGroup) {
+            if (t !== '$user')
+                tabs.push({ id: 'messengers', label: 'Мессенджеры', icon: 'communication:phonelink-ring' });
+            if (t !== '$user')
+                tabs.push({ id: 'agent', label: 'Агент и правила', icon: 'bootstrap:robot' });
+            if (t === '$server' || t === '$base' || t === '$project')
+                tabs.push({ id: 'database', label: 'База данных', icon: 'carbon:data-base' });
+            if (t === '$server')
+                tabs.push({ id: 'license', label: 'Лицензия', icon: 'carbon:certificate' });
+            return tabs;
+        }
+        if (t && t !== '$module' && t !== '$user')
             tabs.push({ id: 'agent', label: 'Агент и правила', icon: 'bootstrap:robot' });
-        if (t === '$server' || t === '$base' || t === '$project')
-            tabs.push({ id: 'database', label: 'База данных', icon: 'carbon:data-base' });
-        if (t === '$server')
-            tabs.push({ id: 'license', label: 'Лицензия', icon: 'carbon:certificate' });
         return tabs;
     },
     get availableTabs() {
@@ -261,7 +328,7 @@ export default {
         const tabs = this.availableTabs;
         if (tabs.some(t => t.id === this.activeTab))
             return this.activeTab;
-        return tabs[0]?.id || 'staff';
+        return tabs[0]?.id || 'files';
     },
     selectTab(id) {
         this.activeTab = id;
@@ -276,7 +343,8 @@ export default {
                 window.execute(this.$item, { view: 'search', ...(nav.q ? { q: nav.q } : {}) });
                 return;
             }
-            const tabId = nav.tab === 'folder' ? 'files' : nav.tab === 'editor' ? 'requisites' : String(nav.tab);
+            const tabMap = { folder: 'files', editor: 'requisites', provider: 'ai', trainer: 'ai', mcp: 'mcp' };
+            const tabId = tabMap[nav.tab] || String(nav.tab);
             this.selectTab(tabId);
         }
     },

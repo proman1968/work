@@ -1333,11 +1333,15 @@ describe('архитектура представлений формы (VIEW п�
                     .map(i => i.id);
             };
 
-            assert.deepEqual(await viewsOf(reg, 'BOSS'), ['folder', 'journal', 'sheet'], 'Журнал проводок: у BOSS отчёты и файлы');
-            assert.deepEqual(await viewsOf(reg, 'USER'), ['journal', 'sheet'], 'Журнал проводок: у USER рабочие виды без folder');
+            assert.deepEqual(await viewsOf(reg, 'BOSS'), ['journal', 'sheet', 'system'], 'Журнал проводок: у BOSS отчёты и Система (без отдельного folder)');
+            assert.deepEqual(await viewsOf(reg, 'USER'), ['journal', 'sheet'], 'Журнал проводок: у USER рабочие виды без Системы');
 
-            assert.deepEqual(await viewsOf(acc, 'BOSS'), ['turnovers', 'analysis', 'postings', 'editor', 'folder'], 'Счёт: у BOSS Обороты, Анализ, Проводки, Свойства и Файлы');
+            assert.deepEqual(await viewsOf(acc, 'BOSS'), ['turnovers', 'analysis', 'postings', 'system'], 'Счёт: у BOSS Обороты, Анализ, Проводки и Система (без отдельных editor и folder)');
             assert.deepEqual(await viewsOf(acc, 'USER'), ['turnovers', 'analysis', 'postings'], 'Счёт: у USER Обороты, Анализ, Проводки');
+
+            const modNode = await WORK.get_item('/MODULES/Register');
+            assert.deepEqual(await viewsOf(modNode, 'BOSS'), ['system'], 'Модуль: у BOSS единое представление Система');
+            assert.deepEqual(await viewsOf(modNode, 'USER'), [], 'Модуль: для USER Система недоступна');
 
             const accBossRoot = await acc.handlers({ path: '//form', role: 'BOSS' });
             const serviceIds = (accBossRoot?.items || [])
@@ -1352,7 +1356,7 @@ describe('архитектура представлений формы (VIEW п�
 
             const fsSync = await import('node:fs');
             const pathMod = await import('node:path');
-            const sysSrc = fsSync.readFileSync(pathMod.resolve(import.meta.dirname, '../$server/$folder/$class/$structure/handlers/pages/form/system/$handler/system.js'), 'utf8');
+            const sysSrc = fsSync.readFileSync(pathMod.resolve(import.meta.dirname, '../$server/$folder/$class/handlers/pages/form/system/$handler/system.js'), 'utf8');
             assert.ok(sysSrc.includes('.sys-sidebar'), 'в представлении Система разделы расположены в левом боковом меню');
             assert.ok(!sysSrc.includes('system-tab-search'), 'Поиск вынесен из Системы в самостоятельное представление form/search');
 

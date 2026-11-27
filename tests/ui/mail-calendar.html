@@ -6,7 +6,7 @@
 await import('/sources/client.js');
 const calMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/calendar/$handler/calendar.js');
 const emailMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/email.js');
-const sysMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/system.js');
+const sysMod = await import('/$server/$folder/$class/handlers/pages/form/system/$handler/system.js');
 
 function cloneProto(src, is) {
     const proto = {};
@@ -242,7 +242,7 @@ await test('Система: левое боковое меню .sys-sidebar бе
 
     // 3. Проверка вкладки Пользователи: кликабельная плашка BOSS без кнопки Назначить, 2 подгруппы (Пользователи / Классы), RWCD-движок и иерархический пикер
     const staffEl = await waitFor(() => el.$('system-tab-staff'), 'смонтирована вкладка Пользователи');
-    assert(staffEl.$item?.set !== undefined || typeof (await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js')).default.$item?.set === 'function', '$item имеет сеттер reload');
+    assert(staffEl.$item?.set !== undefined || typeof (await import('/$server/$folder/$class/handlers/pages/form/system/$handler/tabs/staff.js')).default.$item?.set === 'function', '$item имеет сеттер reload');
     const rootRoleNode = await waitFor(() => staffEl.$('staff-role-node'), () => `единое дерево ролей (nodes=${staffEl.$$('staff-role-node')?.length}, err=${staffEl.error}, secRoles=${staffEl.security?.ROLES?.length})`);
     await waitFor(() => {
         const pill = staffEl.$('.boss-pill.inherited');
@@ -334,7 +334,7 @@ await test('Система: левое боковое меню .sys-sidebar бе
     if (el.currentTabId !== 'modules') el.selectTab('modules');
     await waitFor(() => el.$('system-tab-modules'), 'смонтирована вкладка Классы и модули');
 
-    const staffSrc = await fetch('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/staff.js').then(r => r.text());
+    const staffSrc = await fetch('/$server/$folder/$class/handlers/pages/form/system/$handler/tabs/staff.js').then(r => r.text());
     assert(!staffSrc.includes('<oda-messenger-settings'), 'нет дублирующих настроек мессенджеров на вкладке Пользователи');
     assert(staffSrc.includes('WORK.showDropdown') && staffSrc.includes('window.prompt'), 'используются штатный showDropdown и нативный prompt');
     assert(staffSrc.includes('onBossDrop') && staffSrc.includes('onRoleDrop'), 'поддержан drag&drop людей, подразделений, серверов и классов');
@@ -345,11 +345,35 @@ await test('Система: левое боковое меню .sys-sidebar бе
     if (el.currentTabId !== 'agent') el.selectTab('agent');
     const agentEl = await waitFor(() => el.$('system-tab-agent'), 'смонтирована вкладка Агент и правила');
     assert(agentEl.maskPreview.ok && agentEl.maskPreview.text.includes('5-го числа'), 'расшифровка ODANT-маски YYYY-MM-05T10:15:00: ' + agentEl.maskPreview.text);
-    const agentSrc = await fetch('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/tabs/agent.js').then(r => r.text());
+    const agentSrc = await fetch('/$server/$folder/$class/handlers/pages/form/system/$handler/tabs/agent.js').then(r => r.text());
     assert(agentSrc.includes('Системная инструкция для агента этого подразделения'), 'есть редактор системного промпта');
     assert(agentSrc.includes('Автоматические реакции'), 'блок переименован в Автоматические реакции');
     assert(agentSrc.includes('Повторять задачу'), 'можно выбрать готовую задачу в расписание');
     el.remove();
+
+    // 5. Проверка адаптации вкладок form/system для $module, /MODELS, /SERVICES и класса данных ($catalog)
+    const tabsOf = async (fakeItem) => {
+        const node = document.createElement('test-sys-view');
+        node.style.cssText = 'width:800px;height:500px;display:flex;';
+        document.body.appendChild(node);
+        node.$item = { isBoss: true, ...fakeItem };
+        const navEl = await waitFor(() => node.$('.sys-sidebar'), 'меню Системы для ' + fakeItem.path);
+        const tabLabels = [...navEl.querySelectorAll('.sys-tab')].map(b => b.textContent.trim());
+        const activeId = node.currentTabId;
+        node.remove();
+        return { tabLabels, activeId };
+    };
+    const modTabs = await tabsOf({ path: '/MODULES/Register', id: 'Register', label: 'Учёт', type: '$module', METADATA: Promise.resolve({}), fetch: async () => ({}) });
+    assert(modTabs.activeId === 'modules' && modTabs.tabLabels.includes('Классы') && modTabs.tabLabels.includes('Файлы') && !modTabs.tabLabels.includes('Пользователи'), 'у $module открывается вкладка Классы без Пользователей: ' + modTabs.tabLabels.join(', '));
+
+    const provTabs = await tabsOf({ path: '/MODELS/Local', id: 'Local', label: 'Local', type: '$provider', DATA: { protocol: 'local' }, METADATA: Promise.resolve({}), fetch: async () => ({}) });
+    assert(provTabs.activeId === 'ai' && provTabs.tabLabels.includes('Модели ИИ') && provTabs.tabLabels.includes('Агент и правила'), 'у /MODELS/Local открывается Модели ИИ: ' + provTabs.tabLabels.join(', '));
+
+    const srvTabs = await tabsOf({ path: '/SERVICES/Telegram', id: 'Telegram', label: 'Telegram', type: '$service', METADATA: Promise.resolve({}), fetch: async () => ({}) });
+    assert(srvTabs.activeId === 'mcp' && srvTabs.tabLabels.includes('Сервисы и MCP') && srvTabs.tabLabels.includes('Агент и правила'), 'у $service открывается Сервисы и MCP: ' + srvTabs.tabLabels.join(', '));
+
+    const catTabs = await tabsOf({ path: '/ORGANIZATIONS/OrgDemo/MODULES/Register/CATALOGS/Товары', id: 'Товары', label: 'Товары', type: '$catalog', METADATA: Promise.resolve({}), fetch: async () => ({}) });
+    assert(catTabs.tabLabels.includes('Файлы') && catTabs.tabLabels.includes('Агент и правила') && !catTabs.tabLabels.includes('Пользователи'), 'у $catalog доступны Файлы и Агент и правила: ' + catTabs.tabLabels.join(', '));
 });
 window.__done = true;
 </script>

@@ -267,24 +267,24 @@ describe('Локальный ИИ-контур: адаптация под реа
             }
 
             const localHandlers = await localProvider.handlers({ path: '//form', role: 'BOSS' });
-            const localViews = (localHandlers?.items || []).filter(i => i.usable !== false);
-            const trainerView = localViews.find(i => i.id === 'trainer');
-            assert.ok(trainerView, 'на /MODELS/Local доступна вкладка trainer');
-            assert.equal(trainerView.label, 'Модели ИИ', 'представление на /MODELS/Local называется «Модели ИИ»');
+            const localViews = (localHandlers?.items || []).filter(i => i.type === '$handler' && i.usable !== false);
+            assert.deepEqual(localViews.map(i => i.id), ['system'], 'на /MODELS/Local доступна единая вкладка system');
+            assert.equal(localProvider.form, 'system');
 
             const gigaHandlers = await gigaProvider.handlers({ path: '//form', role: 'BOSS' });
-            const gigaViews = (gigaHandlers?.items || []).filter(i => i.usable !== false);
-            const providerView = gigaViews.find(i => i.id === 'provider');
-            assert.ok(providerView, 'на /MODELS/GigaChat доступна вкладка provider');
-            assert.equal(providerView.label, 'Модели ИИ', 'представление на облачном провайдере единообразно называется «Модели ИИ»');
-            assert.ok(!gigaViews.some(i => i.id === 'trainer'), 'на облачном /MODELS/GigaChat вкладка trainer скрыта');
+            const gigaViews = (gigaHandlers?.items || []).filter(i => i.type === '$handler' && i.usable !== false);
+            assert.deepEqual(gigaViews.map(i => i.id), ['system'], 'на /MODELS/GigaChat доступна единая вкладка system');
+            assert.equal(gigaProvider.form, 'system');
+
+            const gigaUserHandlers = await gigaProvider.handlers({ path: '//form', role: 'USER' });
+            const gigaUserViews = (gigaUserHandlers?.items || []).filter(i => i.type === '$handler' && i.usable !== false);
+            assert.deepEqual(gigaUserViews, [], 'для USER системные настройки провайдеров скрыты');
 
             const gigaLite = await WORK.get_item('/MODELS/GigaChat/GigaChat 2 Lite');
             const modelHandlers = await gigaLite.handlers({ path: '//form', role: 'BOSS' });
-            const modelViews = (modelHandlers?.items || []).filter(i => i.usable !== false);
-            const modelCardView = modelViews.find(i => i.id === 'trainer');
-            assert.ok(modelCardView, 'при клике на конкретную модель $ai открывается карточка модели');
-            assert.equal(modelCardView.label, 'Модели ИИ');
+            const modelViews = (modelHandlers?.items || []).filter(i => i.type === '$handler' && i.usable !== false);
+            assert.deepEqual(modelViews.map(i => i.id), ['system'], 'при клике на модель $ai открывается вкладка system');
+            assert.equal(gigaLite.form, 'system');
         }
         finally {
             globalThis.WORK = prevWork;

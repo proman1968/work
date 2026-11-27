@@ -343,7 +343,15 @@ await test('Проводник: порядок вкладок [контекст,
     assert(treeProto.$public?.cleanStructure === false && treeProto.$public?.showPlaces === false, 'по умолчанию showPlaces выключен (рабочие места не светятся в дереве)');
     const orgNode = WORK.__bind({ path: '/ORGANIZATIONS/O1', id: 'O1', type: '$base', hasItems: true });
     const projNode = WORK.__bind({ path: '/PROJECTS/P1', id: 'P1', type: '$project', hasItems: true });
+    const modNode = WORK.__bind({ path: '/MODULES/Register', id: 'Register', type: '$module', hasItems: true });
+    const provNode = WORK.__bind({ path: '/MODELS/Local', id: 'Local', type: '$provider', hasItems: true, mainTreeChildren: ['$ai'] });
+    const aiNode = WORK.__bind({ path: '/MODELS/Local/Qwen3', id: 'Qwen3', type: '$ai', hasItems: true });
+    const srvNode = WORK.__bind({ path: '/SERVICES/Telegram', id: 'Telegram', type: '$service', hasItems: true });
     eq(knownHasItems(projNode, { itemsSelector: 'items', cleanStructure: true }), false, 'в cleanStructure у $project нет стрелки раскрытия');
+    eq(knownHasItems(modNode, { itemsSelector: 'items', cleanStructure: true }), false, 'в cleanStructure у $module нет стрелки раскрытия');
+    eq(knownHasItems(aiNode, { itemsSelector: 'items', cleanStructure: true }), false, 'в cleanStructure у $ai нет стрелки раскрытия');
+    eq(knownHasItems(srvNode, { itemsSelector: 'items', cleanStructure: true }), false, 'в cleanStructure у $service нет стрелки раскрытия');
+    eq(knownHasItems(provNode, { itemsSelector: 'items', cleanStructure: true }), true, 'в cleanStructure у провайдера $provider модели $ai остаются раскрываемыми');
     eq(knownHasItems(orgNode, { itemsSelector: 'items', cleanStructure: true }), undefined, 'в cleanStructure у $base стрелка определяется по дочерним $structure');
 
     const usersProto = (await import('/$server/$folder/lib/security/users/users.js')).default;

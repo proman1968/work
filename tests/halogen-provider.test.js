@@ -269,10 +269,11 @@ describe('Единый локальный контур /MODELS/Local для ма
             await fsp.rm(tmpCheck, { recursive: true, force: true });
         }
 
-        // Представление form/trainer доступно на /MODELS/Local
+        // Представление form/system доступно на /MODELS/Local для BOSS
         const handlers = await provider.handlers({ path: '//form', role: 'BOSS' });
-        const viewIds = (handlers?.items || []).filter(i => i.usable !== false).map(i => i.id);
-        assert.ok(viewIds.includes('trainer'), 'на /MODELS/Local доступна вкладка trainer');
+        const viewIds = (handlers?.items || []).filter(i => i.type === '$handler' && i.usable !== false).map(i => i.id);
+        assert.deepEqual(viewIds, ['system'], 'на /MODELS/Local доступна единая вкладка system');
+        assert.equal(provider.form, 'system');
     });
 
     it('2. План памяти computeHalogenMemoryPlan для AMD Ryzen AI Max+ PRO 495 (192 ГБ) разделяет настройки Linux (halogen-flash-server) и Windows 11 Native (Halowin Bubo / Gufo ROCm 10.0 gfx1151)', () => {

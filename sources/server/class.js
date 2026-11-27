@@ -157,6 +157,9 @@ export class $class extends $folder {
             get declaredRoles() {
                 return this._declaredRolesSync();
             },
+            get mainTreeChildren() {
+                return this.DATA?.mainTreeChildren;
+            },
             get objectCount() {
                 return this.DATA?.objectCount;
             },

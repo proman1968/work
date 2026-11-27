@@ -1,4 +1,5 @@
 export default {
+    mainTreeChildren: ['$structure', '$base', '$project'],
     ACCESS: {
         sql_databases: 'admin',
         sql_schema: 'admin',

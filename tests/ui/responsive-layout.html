@@ -12,7 +12,7 @@ await import('/$server/$folder/lib/support/support.js');
 await import('/$server/$folder/lib/calendar-form/calendar-form.js');
 const calMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/calendar/$handler/calendar.js');
 const emailMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/email/$handler/email.js');
-const sysMod = await import('/$server/$folder/$class/$structure/handlers/pages/form/system/$handler/system.js');
+const sysMod = await import('/$server/$folder/$class/handlers/pages/form/system/$handler/system.js');
 
 function cloneProto(src, is) {
     const proto = {};
@@ -223,7 +223,7 @@ await test('Мобильная адаптация Почты, Системы и 
         const viewDisplayIdle = getComputedStyle(email.$('.mail-view-pane')).display;
         assert(viewDisplayIdle === 'none', 'Почта 390px: при mode=idle панель письма скрыта');
         email.mode = 'compose';
-        await sleep(60);
+        await waitFor(() => email.$('.mail-back-btn'), 'кнопка возврата Почты');
         const listDisplayCompose = getComputedStyle(email.$('.mail-list-pane')).display;
         assert(listDisplayCompose === 'none', 'Почта 390px: при mode=compose список писем скрыт');
         assert(getComputedStyle(email.$('.mail-back-btn')).display !== 'none', 'Почта 390px: кнопка возврата «Письма» видна');

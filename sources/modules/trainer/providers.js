@@ -640,7 +640,7 @@ export function buildProviderClassScripts(preset, overrides = {}) {
     const providerObj = {
         icon,
         label,
-        form: 'provider',
+        form: 'system',
         protocol,
         baseUrl,
     };

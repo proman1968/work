@@ -146,7 +146,7 @@ export function isCoreEnginePath(relPath) {
     // Системные UI-хендлеры и базовые прототипы ИИ обновляются вместе с движком
     if (/^models\/\$ai\//i.test(rel))
         return true;
-    if (rel.startsWith('$server/$folder/handlers/') || rel.startsWith('$server/$folder/$file/') || rel.startsWith('$server/$folder/lib/'))
+    if (rel.startsWith('$server/$folder/handlers/') || rel.startsWith('$server/$folder/$class/handlers/') || rel.startsWith('$server/$folder/$file/') || rel.startsWith('$server/$folder/lib/'))
         return true;
     return false;
 }

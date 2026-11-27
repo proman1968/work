@@ -6,6 +6,44 @@ function rawItem(it) {
     return it?.[R]?.target || it;
 }
 
+const MAIN_TREE_ENV_TYPES = new Set(['$domain', '$structure', '$base', '$project', '$module', '$user', '$node', '$provider', '$ai', '$service']);
+const MAIN_TREE_LEAF_TYPES = new Set(['$project', '$module', '$user', '$ai', '$service']);
+
+function isMainTreeLeaf(it) {
+    if (!it)
+        return false;
+    if (it.parent?.type === '$server')
+        return false;
+    if (Array.isArray(it.DATA?.mainTreeChildren))
+        return it.DATA.mainTreeChildren.length === 0;
+    if (MAIN_TREE_LEAF_TYPES.has(it.type))
+        return true;
+    if (it.type === '$node' && it.id !== 'NODES')
+        return true;
+    return false;
+}
+
+function filterMainTreeItems(items, parent) {
+    if (!Array.isArray(items) || !items.length || !parent)
+        return items || [];
+    if (parent.type === '$server')
+        return items;
+    if (isMainTreeLeaf(parent))
+        return [];
+    if (Array.isArray(parent.DATA?.mainTreeChildren)) {
+        const allow = new Set(parent.DATA.mainTreeChildren);
+        return items.filter(f => f && allow.has(f.type));
+    }
+    if (parent.type === '$base' || parent.type === '$structure')
+        return items.filter(f => f && (f.type === '$structure' || f.type === '$base' || f.type === '$project'));
+    if (parent.type === '$provider')
+        return items.filter(f => f?.type === '$ai');
+    const pPath = String(parent.path || '');
+    if (pPath === '/SERVICES' || pPath.startsWith('/SERVICES/'))
+        return items.filter(f => f && (f.type === '$service' || (f.type === '$folder' && !f.isType)));
+    return items.filter(f => f && MAIN_TREE_ENV_TYPES.has(f.type));
+}
+
 /**
  * Есть ли дети по флагу сервера (hasItems), без запроса @items. undefined — флага нет
  * или он неприменим: ветка настройки достраивает детей на клиенте, фильтры дерева отсекают часть.
@@ -17,10 +55,14 @@ export function knownHasItems(it, pdp = {}) {
         return Array.isArray(it.items) ? it.items.length > 0 : false;
     if (pdp.hideSystem || pdp.hideFiles || pdp.onlyClasses || pdp.itemsSelector !== 'items')
         return undefined;
-    if (pdp.cleanStructure && it.type === '$project')
-        return false;
-    if (pdp.cleanStructure && (it.type === '$base' || it.type === '$structure'))
-        return undefined;
+    if (pdp.cleanStructure) {
+        if (isMainTreeLeaf(it))
+            return false;
+        if (it.DATA?.mainTree === true && typeof it.DATA?.hasItems === 'boolean')
+            return it.DATA.hasItems;
+        if (it.type === '$base' || it.type === '$structure')
+            return undefined;
+    }
     // __version — реактивная зависимость: после события changed флаг удаляется и пересчитывается по items
     it.__version;
     if (it.type === '$module' && (it.DATA?.enabled === false || it.DATA?.blocked === true || it.DATA?.systemBlocked === true))
@@ -493,9 +535,14 @@ export default {
         if (Array.isArray($item[R]?.cache?.items))
             return;
         try {
-            const res = await WORK.fetch(location.origin + ($item.short || '/'), 'info', { deep: this.prefetchDeep, branch: 'classes' });
+            const infoParams = { deep: this.prefetchDeep, branch: 'classes' };
+            if (this.cleanStructure)
+                infoParams.tree = 'main';
+            const res = await WORK.fetch(location.origin + ($item.short || '/'), 'info', infoParams);
             if (!Array.isArray(res?.items))
                 return;
+            if (res.mainTree && $item.DATA)
+                $item.DATA.mainTree = true;
             $item.items = WORK.__bind(res.items);
             if (typeof res.hasItems === 'boolean' && $item.DATA)
                 $item.DATA.hasItems = res.hasItems;
@@ -512,8 +559,8 @@ export default {
         // иначе предзагрузка тянет @items скрытых узлов (node_modules, USERS, файлов корня)
         if ($item?.type === '$server' && items instanceof Array && !WORK?.DEV_MODE && !(await $item.isAdmin))
             items = items.filter(f => f instanceof CORE.$class);
-        if (this.cleanStructure && ($item?.type === '$base' || $item?.type === '$structure' || $item?.type === '$project'))
-            items = Array.isArray(items) ? items.filter(f => f?.type === '$structure') : [];
+        if (this.cleanStructure)
+            items = filterMainTreeItems(items, $item);
         if (items instanceof Array && deep > 0) {
             for (let next of items) {
                 await this.getItems(next, deep - 1);
@@ -1014,7 +1061,27 @@ ODA({is: 'oda-tree-node',
     get items() {
         if (this.isModuleBlocked)
             return Promise.resolve([]);
-        return Promise.resolve(this.$item?.[this.$pdp.itemsSelector]).then(async raw => {
+        if (this.$pdp?.cleanStructure && isMainTreeLeaf(this.$item))
+            return Promise.resolve([]);
+        const sel = this.$pdp.itemsSelector;
+        const loadRaw = () => {
+            if (this.$pdp?.cleanStructure && sel === 'items' && this.$item?.type !== '$file'
+                && !Array.isArray(this.$item?.[R]?.cache?.items) && !String(this.$item?.short || '').includes('~')) {
+                return WORK.fetch(location.origin + (this.$item.short || '/'), 'info', { deep: 1, tree: 'main' })
+                    .then(r => {
+                        if (r && typeof r === 'object' && !Array.isArray(r)) {
+                            const { items: _kids, ...meta } = r;
+                            Object.assign(this.$item.DATA ??= {}, meta);
+                        }
+                        const bound = WORK.__bind(Array.isArray(r?.items) ? r.items : []);
+                        if (this.$item[R]?.cache)
+                            this.$item[R].cache.items = Reactor.activate(bound);
+                        return bound;
+                    });
+            }
+            return Promise.resolve(this.$item?.[sel]);
+        };
+        return loadRaw().then(async raw => {
             let items = applyTreeFilters(raw, this.$pdp);
             if (this.$item?.type === '$server') {
                 //const allAdmins = await this.$item?.allAdmins;
@@ -1022,8 +1089,8 @@ ODA({is: 'oda-tree-node',
                     items = items.filter(f => f instanceof CORE.$class);
                 }
             }
-            if (this.$pdp?.cleanStructure && (this.$item?.type === '$base' || this.$item?.type === '$structure' || this.$item?.type === '$project')) {
-                items = Array.isArray(items) ? items.filter(f => f?.type === '$structure') : [];
+            if (this.$pdp?.cleanStructure) {
+                items = filterMainTreeItems(items, this.$item);
             }
             if (this.$pdp?.cleanStructure && this.$item?.path === '/USERS' && Array.isArray(items) && globalThis.WORK?.uid) {
                 try {

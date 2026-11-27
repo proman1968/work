@@ -76,17 +76,19 @@ export default {
         </style>
 
         <div class="bar">
-            <span class="title">Классы и модули ({{$item?.label || $item?.id}})</span>
-            <oda-button icon="icons:add" @tap="openInstallModule($event)">Подключить модуль</oda-button>
+            <span class="title">{{barTitle}}</span>
+            <oda-button ~if="isModuleItem" :icon="isModuleEnabled ? 'icons:check-box' : 'icons:check-box-outline-blank'" @tap="toggleModuleEnabled()">{{isModuleEnabled ? 'Модуль активен' : 'Модуль заблокирован'}}</oda-button>
+            <oda-button ~if="!isModuleItem" icon="icons:add" @tap="openInstallModule($event)">Подключить модуль</oda-button>
             <oda-button icon="icons:create-new-folder" @tap="openCreateClass($event)">Создать класс</oda-button>
+            <oda-button icon="icons:open-in-new" @tap="openFocusedClass()">Открыть</oda-button>
             <oda-button icon="icons:refresh" @tap="reload()">Обновить</oda-button>
         </div>
 
         <div ~if="error" style="padding:8px 16px;color:var(--error-color, #dc2626);font-size:12.5px;">{{error}}</div>
 
         <div class="tree-wrap">
-            <item-tree ~if="modulesRoot" id="modTree" flex :$item="modulesRoot" hide-roots="1" hide-tops="1" show-status allow-focus></item-tree>
-            <div ~if="!modulesRoot && !loading" class="muted">Раздел модулей ещё не создан. Нажмите «Подключить модуль».</div>
+            <item-tree ~if="modulesRoot" id="modTree" flex :$item="modulesRoot" hide-roots="1" hide-tops="1" show-status allow-focus :execute="openTreeClass"></item-tree>
+            <div ~if="!modulesRoot && !loading" class="muted">{{emptyText}}</div>
         </div>
     `,
     $item: {
@@ -101,9 +103,47 @@ export default {
     modRootPath: '',
     loading: false,
     error: '',
+    get isModuleItem() {
+        return this.$item?.type === '$module';
+    },
+    get isModuleEnabled() {
+        this.$item?.__version;
+        return this.$item?.DATA?.enabled !== false && this.$item?.DATA?.blocked !== true && this.$item?.DATA?.systemBlocked !== true;
+    },
+    get barTitle() {
+        const name = this.$item?.DATA?.label || this.$item?.label || this.$item?.id || '';
+        return this.isModuleItem ? `Классы модуля (${name})` : `Классы и модули (${name})`;
+    },
+    get emptyText() {
+        return this.isModuleItem
+            ? 'В модуле пока нет классов. Нажмите «Создать класс».'
+            : 'Раздел модулей ещё не создан. Нажмите «Подключить модуль».';
+    },
     async attached() {
         if (this.$item)
             await this.reload();
+    },
+    openTreeClass(item) {
+        if (item && typeof window?.execute === 'function')
+            window.execute(item);
+    },
+    openFocusedClass() {
+        const focused = this.$('#modTree')?.focusedItem;
+        if (focused && typeof window?.execute === 'function')
+            window.execute(focused);
+    },
+    async toggleModuleEnabled() {
+        if (!this.isModuleItem || !this.$item?.fetch)
+            return;
+        this.error = '';
+        try {
+            await this.$item.fetch('set_enabled', { enabled: !this.isModuleEnabled });
+            this.$item.reset?.();
+            await this.reload();
+        }
+        catch (e) {
+            this.error = String(e?.message || e);
+        }
     },
     async reload() {
         this.error = '';
@@ -111,6 +151,13 @@ export default {
             return;
         this.loading = true;
         try {
+            if (this.isModuleItem) {
+                this.systemModules = [];
+                this.modRootPath = this.$item.path.replace(/\/+$/, '');
+                this.$item.reset?.();
+                this.modulesRoot = this.$item;
+                return;
+            }
             const ctx = this.$item.fetch
                 ? await this.$item.fetch('agent_staff_context').catch(() => null)
                 : null;

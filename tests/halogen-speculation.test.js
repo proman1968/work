@@ -262,7 +262,7 @@ llamacpp:spec_decode_num_accepted_tokens_total 266
             await fsp.rm(tmpWeights, { recursive: true, force: true });
         }
 
-        assert.equal(isCoreEnginePath('MODELS/$ai/$folder/$class/$ai/handlers/pages/form/trainer/$handler/trainer.js'), true);
+        assert.equal(isCoreEnginePath('$server/$folder/$class/handlers/pages/form/system/$handler/tabs/ai-model.js'), true);
         assert.equal(isCoreEnginePath('$server/$folder/handlers/pages/form/$handler/form.js'), true);
         assert.equal(isCoreEnginePath('$server/$folder/class.js'), false, 'пользовательский class.js корня остаётся защищённым');
     });
@@ -456,8 +456,8 @@ print(json.dumps({
 
         // Шаблоны ODA используют ~for="items" + $for.item (а не JS-синтаксис `p of items`)
         for (const rel of [
-            'MODELS/$ai/$folder/$class/$ai/handlers/pages/form/trainer/$handler/trainer.js',
-            'MODELS/$ai/$folder/$class/$provider/handlers/pages/form/trainer/$handler/trainer.js',
+            '$server/$folder/$class/handlers/pages/form/system/$handler/tabs/ai-model.js',
+            '$server/$folder/$class/handlers/pages/form/system/$handler/tabs/ai-local.js',
         ]) {
             const src = await fsp.readFile(path.resolve(process.cwd(), rel), 'utf8');
             assert.ok(!/~for="[^"]+\b(of|in)\b/.test(src), `${rel} не должен содержать ~for="... of/in ..."`);

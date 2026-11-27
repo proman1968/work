@@ -1109,31 +1109,86 @@ export class $folder extends $item{
         return promise;
     }
     /**
+     * Типы дочерних узлов, которые узел экспонирует в главном дереве среды WORK
+     * (сущности среды vs внутренние классы данных и файлы).
+     * Возвращает null, если ограничений по типам нет (кроме отсечения не-средовых узлов).
+     */
+    _mainTreeAllowedTypes() {
+        const ENV_TYPES = new Set(['$domain', '$structure', '$base', '$project', '$module', '$user', '$node', '$provider', '$ai', '$service']);
+        if (this.parent?.type === '$server')
+            return ENV_TYPES;
+        if (Array.isArray(this.DATA?.mainTreeChildren))
+            return new Set(this.DATA.mainTreeChildren);
+        if (this.type === '$server')
+            return null;
+        if (this.type === '$base' || this.type === '$structure')
+            return new Set(['$structure', '$base', '$project']);
+        if (this.type === '$project' || this.type === '$module' || this.type === '$user' || this.type === '$node' || this.type === '$ai' || this.type === '$service')
+            return new Set();
+        if (this.type === '$provider')
+            return new Set(['$ai']);
+        if (this.type === '$domain')
+            return ENV_TYPES;
+        if (String(this.path || '').startsWith('/SERVICES/') && !(this instanceof FS.$class))
+            return new Set(['$service']);
+        return ENV_TYPES;
+    }
+
+    _isMainTreeLeaf() {
+        const allowed = this._mainTreeAllowedTypes();
+        return allowed instanceof Set && allowed.size === 0;
+    }
+
+    _filterMainTreeItems(items) {
+        if (!Array.isArray(items) || !items.length)
+            return items || [];
+        const allowed = this._mainTreeAllowedTypes();
+        if (!allowed)
+            return items;
+        if (allowed.size === 0)
+            return [];
+        const isServicesRootOrGroup = this.path === '/SERVICES' || String(this.path || '').startsWith('/SERVICES/');
+        return items.filter(it => {
+            if (!it || it.id?.[0] === '$')
+                return false;
+            if (isServicesRootOrGroup && it.constructor === FS.$folder && !it.isType)
+                return true;
+            return allowed.has(it.type);
+        });
+    }
+
+    /**
      * Получить информацию о структуре элемента с возможностью раскрывать дочерние.
      * @param {object} [p]
      * @param {number} [p.deep] Глубина вложенности
      * @param {string} [p.mask] Фильтр по имени с * и ?
      * @param {string} [p.items] Тип элементов: items/files/folders
      * @param {string} [p.branch] 'classes' — вглубь только по классам (папки и файлы — одним уровнем)
+     * @param {string} [p.tree] 'main' — режим главного дерева среды (без прикладных классов, модулей баз и файлов)
      * @returns {Promise<object>} Данные элемента и (опц.) дочерние; у вложенных — `hasItems`
      *   (есть ли у элемента дети: дереву не нужен отдельный `@items` ради стрелки раскрытия)
      */
     async info(p = {deep: 0}){
         p.deep = +p.deep || 0;
+        const isMainTree = p.tree === 'main';
         let data = await this.json_model;
         if (!p.deep) {
             data = Object.assign({}, data);
+            if (isMainTree)
+                data.mainTree = true;
             if (p.hasItems === true)
-                data.hasItems = await this._hasItems(p.items);
+                data.hasItems = await this._hasItems(p.items, p);
             return data;
         }
         p.items ??= 'items';
         if (!['items', 'entries', 'files', 'folders', 'children'].includes(p.items))
             throw new Error('info: недопустимый список «' + p.items + '»');
-        let items =  await this[p.items];
+        let items = (isMainTree && this._isMainTreeLeaf()) ? [] : await this[p.items];
         // снаружи — только видимое субъекту (вложенные уровни — тем же фильтром; для $handler фильтр роли/allowUse работает всегда)
         if (p.session || items.some(i => i instanceof FS.$handler))
             items = await (await import('./access/gateway.js')).visibleOnly(items, p);
+        if (isMainTree)
+            items = this._filterMainTreeItems(items);
 
         if(p.mask){
             const regexpMask = p.mask
@@ -1152,11 +1207,24 @@ export class $folder extends $item{
         const flat = Object.assign({}, p, {deep: 0});
         items = items.map(i => (p.branch === 'classes' && !(i instanceof FS.$class)) ? i.info(flat) : i.info(p));
         items = await Promise.all(items);
-        return Object.assign({}, data, {[p.items]: items, hasItems: own});
+        const out = Object.assign({}, data, {[p.items]: items, hasItems: own});
+        if (isMainTree)
+            out.mainTree = true;
+        return out;
     }
     /** Есть ли у элемента дети в списке `list` (по умолчанию items — бизнес-вид дерева). */
-    async _hasItems(list = 'items'){
+    async _hasItems(list = 'items', p = {}){
         try {
+            if (p?.tree === 'main') {
+                if (this._isMainTreeLeaf())
+                    return false;
+                if (this instanceof FS.$class && this.type === '$module' && await this.isModuleBlocked())
+                    return false;
+                let items = await this[list];
+                if (p?.session)
+                    items = await (await import('./access/gateway.js')).visibleOnly(items, p);
+                return this._filterMainTreeItems(items).length > 0;
+            }
             if (this instanceof FS.$class && this.type === '$module' && await this.isModuleBlocked())
                 return false;
             const cached = this[R]?.cache?.[list];

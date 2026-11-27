@@ -1003,10 +1003,15 @@ export async function createBaseClass(storage, params = {}) {
         throw new Error('Укажите название класса');
     const selfPath = String(storage?.path || '/').replace(/\/+$/, '') || '/';
     const baseMatch = /^(\/(?:ORGANIZATIONS|PROJECTS)\/[^/]+)/.exec(selfPath);
-    if (!baseMatch)
-        throw new Error('Создание класса выполняется в контексте организации или проекта');
-    const modPrefix = `${baseMatch[1]}/MODULES`;
-    const targetParentPath = parentPath && parentPath.startsWith(modPrefix) ? parentPath : modPrefix;
+    const modMatch = /^(\/MODULES\/[^/]+)/.exec(selfPath);
+    const rootScope = baseMatch
+        ? `${baseMatch[1]}/MODULES`
+        : (storage?.type === '$module' ? selfPath : (modMatch ? modMatch[1] : ''));
+    if (!rootScope)
+        throw new Error('Создание класса выполняется в контексте организации, проекта или модуля');
+    const targetParentPath = parentPath && (parentPath === rootScope || parentPath.startsWith(rootScope + '/'))
+        ? parentPath
+        : rootScope;
     const parentItem = await globalThis.WORK.get_item(targetParentPath).catch(() => null);
     if (!parentItem || typeof parentItem.create !== 'function')
         throw new Error('Не найден родительский контейнер: ' + targetParentPath);

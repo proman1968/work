@@ -120,4 +120,50 @@ describe('флаги строки дерева', () => {
         assert.deepEqual((await withR.users).map(u => u.id), info.roleIds.USER);
         assert.deepEqual((await withR.bosses).map(u => u.id), info.roleIds.BOSS);
     });
+
+    it("tree: 'main' (главное дерево среды): скрывает классы внутри $module и $base, сохраняя $provider -> $ai", async () => {
+        write('ORGANIZATIONS/$domain/class.js', `export default { label: 'Организации' }`);
+        write('ORGANIZATIONS/OrgA/$base/class.js', `export default { label: 'Орг А', mainTreeChildren: ['$structure', '$base', '$project'] }`);
+        write('ORGANIZATIONS/OrgA/Sales/$structure/class.js', `export default { label: 'Продажи', mainTreeChildren: ['$structure', '$base', '$project'] }`);
+        write('ORGANIZATIONS/OrgA/MODULES/Reg/$module/class.js', `export default { label: 'Учёт', mainTreeChildren: [] }`);
+        write('ORGANIZATIONS/OrgA/MODULES/Reg/Товары/$catalog/class.js', `export default { label: 'Товары' }`);
+
+        write('MODULES/$domain/class.js', `export default { label: 'Модули' }`);
+        write('MODULES/Reg/$module/class.js', `export default { label: 'Учёт', mainTreeChildren: [] }`);
+        write('MODULES/Reg/CATALOGS/Склады/$catalog/class.js', `export default { label: 'Склады' }`);
+
+        write('MODELS/$ai/class.js', `export default { label: 'Модели' }`);
+        write('MODELS/Local/$provider/class.js', `export default { label: 'Local', mainTreeChildren: ['$ai'] }`);
+        write('MODELS/Local/Qwen/$ai/class.js', `export default { label: 'Qwen', mainTreeChildren: [] }`);
+        write('MODELS/Local/Qwen/readme.md', '# модель');
+
+        write('SERVICES/$service/class.js', `export default { label: 'Сервисы', mainTreeChildren: [] }`);
+        write('SERVICES/Telegram/$service/class.js', `export default { label: 'Telegram', mainTreeChildren: [] }`);
+        write('SERVICES/Telegram/note.txt', 'x');
+
+        WORK.reset();
+
+        const orgTree = await (await WORK.get_item('/ORGANIZATIONS/OrgA')).info({ deep: 2, tree: 'main' });
+        assert.equal(orgTree.mainTree, true);
+        assert.deepEqual(orgTree.items.map(i => i.id), ['Sales'], 'в главном дереве $base видны только подразделения, без MODULES');
+
+        const modRoot = await (await WORK.get_item('/MODULES')).info({ deep: 3, tree: 'main' });
+        const regInMain = modRoot.items.find(i => i.id === 'Reg');
+        assert.ok(regInMain, 'сам $module виден в /MODULES');
+        assert.equal(regInMain.hasItems, false, 'в главном дереве у $module нет вложенных классов (hasItems=false)');
+        assert.deepEqual(regInMain.items, [], 'в главном дереве у $module дети не отдаются');
+
+        const regFull = await (await WORK.get_item('/MODULES/Reg')).info({ deep: 2 });
+        assert.ok(regFull.items.some(i => i.id === 'CATALOGS'), 'без tree=main (для form/system) классы модуля видны');
+
+        const modelsRoot = await (await WORK.get_item('/MODELS')).info({ deep: 3, tree: 'main' });
+        const localProv = modelsRoot.items.find(i => i.id === 'Local');
+        assert.ok(localProv && localProv.hasItems === true, 'провайдер $provider раскрывается в главном дереве');
+        const qwen = localProv.items.find(i => i.id === 'Qwen');
+        assert.ok(qwen && qwen.hasItems === false, 'модели $ai видны внутри $provider как конечные листья');
+
+        const srvRoot = await (await WORK.get_item('/SERVICES')).info({ deep: 2, tree: 'main' });
+        const tg = srvRoot.items.find(i => i.id === 'Telegram');
+        assert.ok(tg && tg.hasItems === false, 'в /SERVICES сервисы видны, но их внутренние файлы не раскрываются');
+    });
 });

@@ -74,7 +74,7 @@ export class $folder extends $item {
                 }
             },
             '@view': {
-                form: 'folder',
+                form: '',
                 page: 'form',
             },
             role: {
